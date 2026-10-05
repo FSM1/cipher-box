@@ -1373,12 +1373,13 @@ rebases and signs above.
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
 - Late writes: a write that a revoked or downgraded writer puts in the old
-  tree after the walk leaves the queue of its own device with no notice when
-  the old tree it last read shows the write, and the dead letter of ADR 0069
-  D3 is not landed. A rename, a move or a history edit that lands in the old
-  tree after the walk is lost, because only a create, a delete and a content
-  edit stay kept. A kept op whose device sees no flip within T leaves the
-  queue at T, so a flip after T loses the write (ADR 0069).
+  tree after the walk dead-letters on its own device (ADR 0069 D3). A
+  read-only graft does not read the moved tree, so each kept op of that
+  writer dead-letters, also one that the wave carried. A rename, a move or a
+  history edit that lands in the old tree after the walk is lost, because
+  only a create, a delete and a content edit stay kept. A kept op whose device
+  sees no flip within T leaves the queue at T, so a flip after T loses the
+  write (ADR 0069).
 - Kept ops over a later writer: the op does not record its result, so the
   check cannot tell a lost op from a later change. A kept create links again
   a node that a later writer deleted, with its initial content. A kept edit

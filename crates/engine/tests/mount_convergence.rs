@@ -2201,8 +2201,8 @@ fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
 }
 
 /// A write grantee's edit stays kept after its publish. A downgrade takes the
-/// write seed, so the kept edit has no plane to read under: its rebase
-/// decides, and the edit leaves the queue rather than halt each pass.
+/// write seed, so the kept edit does not apply again: it dead-letters at the
+/// keyless budget rather than halt the queue for ever (ADR 0069 D3).
 #[test]
 fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     let world = FakeWorld::new();
@@ -2223,7 +2223,7 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
 
     let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
-    let (mut engine_r, _events_r, mut tasks_r) =
+    let (mut engine_r, mut events_r, mut tasks_r) =
         recipient_on_with_the_share(&world, &blocks, &recipient);
     write_file(
         &mut engine_r,
@@ -2260,8 +2260,17 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_t, &mut tasks_t, 2);
     // The grantee's passes see the downgrade, so the kept edit's scope is a
     // proved root with no write seed.
-    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    let _ = events_so_far(&mut events_r);
+    tick_n(&world, &engine_r, &mut tasks_r, 8);
     assert!(!holds_the_edit(), "the kept edit left the queue");
+    assert_eq!(
+        events_so_far(&mut events_r)
+            .iter()
+            .filter(|event| matches!(event, Event::DeadLetter { .. }))
+            .count(),
+        1,
+        "as a dead letter"
+    );
     let own_root = block_on(engine_r.view()).expect("a rendered view").root();
     block_on(engine_r.command(Command::Create {
         parent: own_root,
@@ -2272,4 +2281,88 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_r, &mut tasks_r, 4);
 
     assert_eq!(queued(&recipient), 0, "the later op published");
+}
+
+/// A write grantee's create lands in the old tree after the name wave of its
+/// downgrade read the folder, so the moved tree does not carry it. The grantee
+/// holds no new write seed, so the create dead-letters on its device with a
+/// notice (ADR 0069 D3).
+#[test]
+fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+    let (mut engine_r, mut events_r, mut tasks_r) =
+        recipient_on_with_the_share(&world, &blocks, &recipient);
+    block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
+        .expect("the grantee opens the folder");
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    let endpoints = world.record_store.endpoints();
+    let walked: std::collections::BTreeMap<String, Vec<u8>> = world
+        .record_store
+        .routing_keys(&endpoints[0])
+        .into_iter()
+        .filter_map(|key| {
+            let record = world.record_store.record_at(&endpoints[0], &key)?;
+            Some((key, record))
+        })
+        .collect();
+    block_on(engine_r.command(Command::Create {
+        parent: child,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the grantee's create stages");
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    assert_eq!(queued(&recipient), 0, "the create published");
+    let written: Vec<(String, Vec<u8>)> = walked
+        .into_iter()
+        .filter(|(key, record)| {
+            world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
+        })
+        .collect();
+    assert!(!written.is_empty(), "the create moved a folder record");
+
+    for (key, record) in &written {
+        world
+            .record_store
+            .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
+    }
+    assert_eq!(
+        block_on(engine_t.command(Command::ChangePermission {
+            node: shared,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for (key, _) in &written {
+        world.record_store.serve_gets_for_after(key, 0, 0, None);
+    }
+    block_on(engine_t.command(Command::SetFocus { node: Some(child) }))
+        .expect("the owner opens the folder");
+    tick_n(&world, &engine_t, &mut tasks_t, 4);
+    assert!(
+        !listed_names(&engine_t, child).contains(&"late".to_owned()),
+        "the moved tree does not carry the create"
+    );
+    let _ = events_so_far(&mut events_r);
+
+    tick_n(&world, &engine_r, &mut tasks_r, 10);
+
+    let dead: Vec<_> = events_so_far(&mut events_r)
+        .into_iter()
+        .filter(|event| matches!(event, Event::DeadLetter { .. }))
+        .collect();
+    assert_eq!(dead.len(), 1, "the create dead-letters with a notice");
+    let status = block_on(engine_r.status()).expect("the session status reads");
+    assert_eq!(status.dead_letters.len(), 1, "and the member can name it");
 }

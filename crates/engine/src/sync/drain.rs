@@ -2571,6 +2571,35 @@ where
                 .collect();
             &rest[..]
         };
+        // A kept op under a scope this device can no longer write does not
+        // apply again: it holds the head on the keyless charge and
+        // dead-letters at the budget (ADR 0069 D3).
+        let kept = self.kept_ids(scope).await?;
+        let mut unwritable = None;
+        for (index, (op_id, op)) in pending.iter().enumerate() {
+            if !kept(*op_id, op) {
+                continue;
+            }
+            if let KeptPlace::Keyless { root } = self.kept_place(scope, op).await? {
+                unwritable = Some((index, root));
+                break;
+            }
+        }
+        let pending = match unwritable {
+            Some((0, root)) => {
+                let (op_id, op) = &pending[0];
+                let halt = halt_below_another_scope_root(
+                    scope.keyless_roots,
+                    scope.charges_the_identity,
+                    root,
+                );
+                self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                    .await;
+                return Err(halt);
+            }
+            Some((index, _)) => &pending[..index],
+            None => pending,
+        };
 
         let opened = self.open_rebased_pass(scope, pending).await;
         // A newer release rewrites the anchor on each write, so its halt must
@@ -2580,7 +2609,6 @@ where
                 .await;
         }
         let (mut pass, rebased) = opened?;
-        let kept = self.kept_ids(scope).await?;
         for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -3058,7 +3086,7 @@ where
         let end = match scope.second_end() {
             Ok(Some(destination)) if destination.end.root == root => destination.end,
             _ if scope.source.root == root => scope.source,
-            _ if scope.keyless_roots.contains(&root) => return Ok(KeptPlace::Keyless),
+            _ if scope.keyless_roots.contains(&root) => return Ok(KeptPlace::Keyless { root }),
             _ => return Ok(KeptPlace::Elsewhere),
         };
         // A write cut moves every node to a name of the new seed, so a base

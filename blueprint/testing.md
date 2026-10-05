@@ -152,7 +152,10 @@ scenario fails the meta-test):
   ADR 0069 D5, a kept op with no note leaves once the live tree shows it, and a
   second apply that cannot land leaves with no notice, also a kept create
   under a refused scope root after a restart (ADR 0069,
-  `crates/engine/tests/owner_actions.rs`); a body of many
+  `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
+  grantee dead-letters on its device with a notice, also a late write that
+  the wave did not carry (ADR 0069 D3,
+  `crates/engine/tests/mount_convergence.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk

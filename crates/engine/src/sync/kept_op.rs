@@ -231,9 +231,10 @@ pub(crate) enum KeptPlace {
         live_write_epoch: u64,
         anchor_read_live: bool,
     },
-    /// The op's scope is a proved root that this device holds no write seed
-    /// for: a revoke or a downgrade took it.
-    Keyless,
+    /// The op's scope, rooted at `root`, is a proved root that this device
+    /// holds no write seed for: a revoke or a downgrade took it. The op joins
+    /// the pass, which dead-letters it rather than rebase it (ADR 0069 D3).
+    Keyless { root: NodeId },
     /// Another pass, or none this tick, answers for the op's scope.
     Elsewhere,
 }
@@ -244,7 +245,8 @@ pub(crate) enum KeptVerdict {
     /// It waits in the queue, out of this pass.
     Stay,
     /// It joins this pass, and the rebase onto the live tree decides: a landed
-    /// op drops, a lost one applies again (ADR 0069 D3, D6).
+    /// op drops, a lost one applies again (ADR 0069 D3, D6). An op under a
+    /// keyless scope dead-letters instead ([`KeptPlace::Keyless`]).
     Recheck,
     /// It waited out [`KEPT_OP_BOUND`] at its write epoch, and leaves.
     Expired,
@@ -255,7 +257,7 @@ pub(crate) enum KeptVerdict {
 /// read of the folder at its new name and does not expire.
 pub(crate) fn kept_verdict(note: KeptNote, place: KeptPlace, now: UnixMillis) -> KeptVerdict {
     match place {
-        KeptPlace::Keyless => return KeptVerdict::Recheck,
+        KeptPlace::Keyless { .. } => return KeptVerdict::Recheck,
         KeptPlace::Writes {
             root,
             live_write_epoch,
@@ -361,10 +363,16 @@ mod tests {
     }
 
     #[test]
-    fn a_scope_the_device_can_no_longer_write_sends_the_op_to_the_rebase() {
+    fn a_scope_the_device_can_no_longer_write_sends_the_op_to_the_pass() {
+        let keyless = KeptPlace::Keyless { root: SCOPE };
         assert_eq!(
-            kept_verdict(note(2), KeptPlace::Keyless, at(Duration::ZERO)),
+            kept_verdict(note(2), keyless, at(Duration::ZERO)),
             KeptVerdict::Recheck
+        );
+        assert_eq!(
+            kept_verdict(note(2), keyless, at(KEPT_OP_BOUND)),
+            KeptVerdict::Recheck,
+            "the pass, not the bound, decides"
         );
     }
 
