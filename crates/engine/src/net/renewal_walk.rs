@@ -28,8 +28,8 @@ use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::fork::{Fork, holds_renewal};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
-    Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict, RefusedRead, SignatureGate,
-    head_cid_from_value, put_and_confirm,
+    Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict,
+    RefusedRead, SignatureGate, head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
@@ -938,40 +938,21 @@ where
         }
     }
 
-    /// Sign `due` at `S + 1` when the network still serves the admitted record
-    /// and the durable floor still sits at `S`. `None` when either moved.
+    /// Renew `due` (ADR 0061 D3 steps 4 to 6), and point the renewal set at
+    /// the renewal.
     async fn renew(&self, due: &Due) -> Option<Result<Option<PublishOutcome>, PublishError>> {
-        match fanout_get_classified(self.transport, &due.name).await {
-            FanoutRecord::Found(_, live) if live == due.observed.bytes() => {}
-            FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
-            FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
-        }
-        let gate = match SignatureGate::read_for_renewal(self.floors, &due.observed, due.bar).await
-        {
-            Ok(gate) => gate,
-            Err(error) => return Some(Err(error)),
-        };
-        // No await from here to the signature.
-        if gate.sequence_floor() != Some(due.observed.sequence())
-            || self.guards.publishing.borrow().contains(due.name.as_str())
-        {
-            return None;
-        }
-        let ttl_nanos = u64::try_from(self.profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
-        let eol = renewal_eol_from(self.scheduler.now());
-        let (record_bytes, sequence) = match gate.sign(&due.signer, &due.value, ttl_nanos, &eol) {
-            Ok(signed) => signed,
-            Err(error) => return Some(Err(error)),
-        };
-        let receipt = match put_and_confirm(
+        let receipt = match renew_admitted(
             self.transport,
+            self.floors,
             self.scheduler,
             self.profile,
-            &due.name,
-            record_bytes,
-            sequence,
+            self.guards.publishing,
+            &due.observed,
+            due.bar,
+            &due.signer,
+            &due.value,
         )
-        .await
+        .await?
         {
             Ok(receipt) => receipt,
             Err(error) => return Some(Err(error)),
@@ -1002,6 +983,52 @@ where
             Some(due.observed.bytes()),
         );
     }
+}
+
+/// Sign `value` at `S + 1` for the registered name `observed` admitted at
+/// `S`, when the network still serves that record, the durable floor still
+/// sits at `S`, and the drain has no publish of the name in flight (ADR 0061
+/// D3 steps 4 to 6). `None` when any of the three moved.
+#[expect(clippy::too_many_arguments, reason = "one renewal's inputs")]
+pub(crate) async fn renew_admitted<T, F, Sch>(
+    transport: &T,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    publishing: &RefCell<BTreeSet<String>>,
+    observed: &Observed,
+    bar: PublishBar,
+    signer: &Ed25519Signer,
+    value: &[u8],
+) -> Option<Result<PublishReceipt, PublishError>>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let name = observed.name();
+    match fanout_get_classified(transport, name).await {
+        FanoutRecord::Found(_, live) if live == observed.bytes() => {}
+        FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
+        FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
+    }
+    let gate = match SignatureGate::read_for_renewal(floors, observed, bar).await {
+        Ok(gate) => gate,
+        Err(error) => return Some(Err(error)),
+    };
+    // No await from here to the signature.
+    if gate.sequence_floor() != Some(observed.sequence())
+        || publishing.borrow().contains(name.as_str())
+    {
+        return None;
+    }
+    let ttl_nanos = u64::try_from(profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
+    let eol = renewal_eol_from(scheduler.now());
+    let (record_bytes, sequence) = match gate.sign(signer, value, ttl_nanos, &eol) {
+        Ok(signed) => signed,
+        Err(error) => return Some(Err(error)),
+    };
+    Some(put_and_confirm(transport, scheduler, profile, name, record_bytes, sequence).await)
 }
 
 /// A pass that renews nothing, and reports `detail` for each owned scope root.

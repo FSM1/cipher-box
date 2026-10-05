@@ -1533,6 +1533,7 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &SyncTimingProfile::CI,
+            &Default::default(),
             &[hr],
         ));
         assert_eq!(
@@ -1779,6 +1780,7 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &SyncTimingProfile::CI,
+            &Default::default(),
             &[hr],
         ));
         assert_eq!(
@@ -1906,6 +1908,7 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &SyncTimingProfile::CI,
+            &Default::default(),
             &[hr],
         ));
         assert_eq!(
@@ -2029,6 +2032,7 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &SyncTimingProfile::CI,
+            &Default::default(),
             core::slice::from_ref(&ours),
         ));
         assert_eq!(
@@ -2081,6 +2085,7 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &SyncTimingProfile::CI,
+            &Default::default(),
             &[re_held],
         ));
         assert_eq!(

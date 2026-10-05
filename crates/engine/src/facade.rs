@@ -6600,9 +6600,16 @@ where {
                     keyless_re_put(&transport, &records).await;
                     // Surface every renewal that did not land (LostRace/PublishError)
                     // as an Event — never a silent failure (blueprint/engine.md).
-                    let renewals =
-                        eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records)
-                            .await;
+                    let renewals = eol_renew_pass(
+                        &transport,
+                        &api,
+                        &floors,
+                        &scheduler,
+                        &profile,
+                        &publishing,
+                        &records,
+                    )
+                    .await;
                     emit_renewal_failures(&events, &renewals);
                 }
                 let session_keys = pointer_keys.borrow().clone();
