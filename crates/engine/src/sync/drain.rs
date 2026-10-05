@@ -12715,9 +12715,8 @@ mod tests {
         );
     }
 
-    /// Every pass of one tick meets the same read with no answer. The tick
-    /// charges the shared walk one attempt, so the walk does not start again
-    /// within the tick.
+    /// The first pass of a tick meets a read with no answer. The tick charges
+    /// the shared walk one attempt.
     #[test]
     fn a_tick_charges_its_capture_walk_one_unanswered_read() {
         let (harness, _) = walk_harness();
