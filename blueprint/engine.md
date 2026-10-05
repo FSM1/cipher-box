@@ -150,8 +150,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   ~hourly Scheduler job keyless-re-PUTs every record the session holds, so
   actively used vaults keep themselves alive; on session start and
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
-  and below ~30 days remaining republishes the same CID at seq+1 through the
-  normal CAS path. A held node record carries its envelope version and its
+  and below ~30 days remaining republishes the same value at seq+1. A held
+  record renews through the signature path of the renewal walk (ADR 0061 D3
+  steps 4 to 6), and the loop skips a name that the drain is publishing. A
+  scope pointer name has no floor that its enrolment raises, so its renewal
+  signs when the floor is absent or equal to the held sequence, and refuses a
+  floor above it. A held node record carries its envelope version and its
   scope bar (`HeldEnvelope`): the renewal does not sign a version that this
   build does not author, or a record whose scope floors rose above the bar,
   and sends `renewalFailed` for it, as the renewal walk does. The same pass

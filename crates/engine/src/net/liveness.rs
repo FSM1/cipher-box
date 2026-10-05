@@ -12,7 +12,7 @@
 //!   on endpoints that may have dropped the record.
 //! - **Sub-EOL renewal** ([`eol_renew_pass`]): on session start and hourly,
 //!   a name with below-threshold EOL remaining is republished at seq+1 through
-//!   the normal CAS path with a fresh 90-day EOL.
+//!   the renewal walk's signature path with a fresh EOL.
 //!
 //! The renewal walk ([`super::renewal_walk`]) renews every other name of the
 //! vault. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
@@ -22,19 +22,16 @@ use core::cell::RefCell;
 use core::fmt;
 use core::future::Future;
 use core::time::Duration;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
-use super::publish::{
-    InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest,
-    publish, publish_inline,
-};
+use super::publish::{Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish};
 use super::register::register;
-use super::renewal_walk::renew_admitted;
+use super::renewal_walk::{FloorRule, RenewalSeams, renew_admitted};
 use crate::api::{ApiClient, NameRegistration};
 use crate::grants::grafted::FloorNamespace;
 use crate::profile::SyncTimingProfile;
@@ -431,21 +428,16 @@ where
         .map(|receipt| Some(receipt.outcome))
 }
 
-/// [`eol_republish`] for a held node record under its [`HeldEnvelope`],
-/// through the renewal walk's signature path (ADR 0061 D3): a foreign version
-/// is refused only once the record is due.
-#[expect(clippy::too_many_arguments, reason = "one held renewal's inputs")]
-async fn eol_renew_sealed<T, H, C, F, Sch>(
-    transport: &T,
+/// Renew one due held record through the renewal walk's signature path (ADR
+/// 0061 D3 steps 3 to 6), over the record the network serves now. A node
+/// record's [`HeldEnvelope`] also refuses a foreign version once the record is
+/// due, and signs under the scope bar. `Ok(None)` when the record is not due,
+/// or when another write superseded it.
+async fn renew_held<T, H, C, F, Sch>(
     api: &ApiClient<H, C>,
-    floors: &F,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    publishing: &RefCell<BTreeSet<String>>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
     name: &IpnsName,
     held: &HeldRecord,
-    head_cid: &str,
-    envelope: HeldEnvelope,
 ) -> Result<Option<PublishOutcome>, PublishError>
 where
     T: RecordTransport + Clone + 'static,
@@ -454,106 +446,63 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Some(held_record) = super::fork::verified(name, &held.record_bytes) else {
+    let Some((live, live_bytes)) = fanout_get_verify(seams.transport, name).await else {
         return Ok(None);
     };
-    let Some((verified, _bytes)) = fanout_get_verify(transport, name).await else {
-        return Ok(None);
+    let (value, head_cid, rule) = match &held.value {
+        HeldValue::Head(head_cid) => {
+            // A newer write supersedes the held record: re-signing its head
+            // would roll the name back.
+            let Some(held_record) = super::fork::verified(name, &held.record_bytes) else {
+                return Ok(None);
+            };
+            if live.sequence != held_record.sequence {
+                return Ok(None);
+            }
+            (held_record.value, Some(head_cid.clone()), FloorRule::Exact)
+        }
+        // Nothing gates a pointer record, so a re-point another device landed
+        // shows only as a different live value.
+        HeldValue::Inline(block) => {
+            if live.value != *block {
+                return Ok(None);
+            }
+            (block.clone(), None, FloorRule::AtMost)
+        }
     };
-    // A newer write supersedes the held record: re-signing its head would roll
-    // the name back, or tie that write with a later EOL.
-    if verified.sequence != held_record.sequence
-        || !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD)
-    {
+    if !eol::needs_renewal(seams.scheduler.now(), &live.validity, EOL_RENEW_THRESHOLD) {
         return Ok(None);
     }
-    let observed = Observed::gated(
-        name,
-        held_record.sequence,
-        envelope.version,
-        &held.record_bytes,
-    )?;
+    let observed = match held.envelope {
+        Some(envelope) => Observed::gated(name, live.sequence, envelope.version, &live_bytes)?,
+        None => Observed::admitted(name, live.sequence, &live_bytes),
+    };
     register(
         api,
         &[NameRegistration {
             ipns_name: name.as_str().to_owned(),
-            head_cid: Some(head_cid.to_owned()),
+            head_cid,
             content_cids: held.content_cids.clone(),
         }],
     )
     .await
     .map_err(PublishError::Register)?;
-    let floors = envelope.namespace.view(floors);
-    match renew_admitted(
-        transport,
-        &floors,
-        scheduler,
-        profile,
-        publishing,
-        &observed,
-        envelope.bar,
-        &held.signer,
-        &held_record.value,
-    )
-    .await
-    {
+    let floors = held
+        .envelope
+        .map_or(FloorNamespace::Own, |envelope| envelope.namespace)
+        .view(seams.floors);
+    let seams = RenewalSeams {
+        transport: seams.transport,
+        floors: &floors,
+        scheduler: seams.scheduler,
+        profile: seams.profile,
+        publishing: seams.publishing,
+    };
+    let bar = held.envelope.map(|envelope| envelope.bar);
+    match renew_admitted(&seams, &observed, bar, rule, &held.signer, &value).await {
         None => Ok(None),
         Some(receipt) => receipt.map(|receipt| Some(receipt.outcome)),
     }
-}
-
-/// Republish an inline-value record's own `value` at a fresh 90-day EOL, one
-/// sequence above the freshest record the network serves.
-///
-/// Nothing gates a pointer record, so no adopt ever raises its sequence floor
-/// and the network is the only lower bound a renewal can clear (see
-/// `WriteWaveNet::publish_pointer_record`). For the same reason a re-point another
-/// device landed is visible only here: re-signing this session's own superseded
-/// block at a higher sequence would roll the scope back to a root name that no
-/// longer holds, so a differing live `Value` refuses the renewal fail-closed.
-/// The accepted residual: an endpoint set that suppresses the freshest record
-/// denies the renewal, which is the safe half of that trade.
-#[allow(clippy::too_many_arguments)]
-async fn eol_republish_inline<T, H, C, F, Sch>(
-    transport: &T,
-    api: &ApiClient<H, C>,
-    floors: &F,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    name: &IpnsName,
-    signer: &Ed25519Signer,
-    value: &[u8],
-) -> Result<Option<PublishOutcome>, PublishError>
-where
-    T: RecordTransport + Clone + 'static,
-    H: Http,
-    C: CredentialStore,
-    F: FloorStore,
-    Sch: Scheduler + Clone + 'static,
-{
-    let Some((verified, _bytes)) = fanout_get_verify(transport, name).await else {
-        return Ok(None);
-    };
-    if verified.value != value {
-        return Ok(None);
-    }
-    if !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD) {
-        return Ok(None);
-    }
-    publish_inline(
-        transport,
-        api,
-        floors,
-        scheduler,
-        profile,
-        &InlineRecordRequest {
-            observed: &Observed::record(name, verified.sequence),
-            signer,
-            value,
-        },
-    )
-    .await
-    .map(|receipt| Some(receipt.outcome))
 }
 
 /// One held record's sub-EOL renewal outcome.
@@ -569,22 +518,16 @@ pub struct EolRenewResult {
 }
 
 /// Run one sub-EOL renewal pass over the held set: for each record still live
-/// but within [`EOL_RENEW_THRESHOLD`], republish the same CID at seq+1 through
-/// the CAS path with a fresh 90-day EOL (blueprint/engine.md "Liveness"). A
-/// record comfortably ahead of the threshold no-ops in [`eol_republish`]; a
-/// lost CAS race is reported (never silently overwritten) for a later rebase
-/// slice.
+/// but within [`EOL_RENEW_THRESHOLD`], republish the same value at seq+1
+/// through [`renew_held`] (blueprint/engine.md "Liveness"). A lost race is
+/// reported, never silently overwritten.
 ///
 /// This is the renewal-pass **body**; the ~hourly [`Scheduler`] loop that drives
 /// it alongside [`keyless_re_put`] is wired by the facade.
 #[must_use = "renewal outcomes carry LostRace/PublishError; surface them when the held set is live"]
 pub(crate) async fn eol_renew_pass<T, H, C, F, Sch>(
-    transport: &T,
     api: &ApiClient<H, C>,
-    floors: &F,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    publishing: &RefCell<BTreeSet<String>>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
     held: &[HeldRecord],
 ) -> Vec<EolRenewResult>
 where
@@ -613,43 +556,14 @@ where
         }
         // The drain's publish confirms its own record; a renewal now would sign
         // over it with the held value.
-        if publishing.borrow().contains(&hr.routing_key) {
+        if seams.publishing.borrow().contains(&hr.routing_key) {
             results.push(EolRenewResult {
                 routing_key: hr.routing_key.clone(),
                 outcome: Ok(None),
             });
             continue;
         }
-        let outcome = match (&hr.value, hr.envelope) {
-            (HeldValue::Head(head_cid), Some(envelope)) => {
-                eol_renew_sealed(
-                    transport, api, floors, scheduler, profile, publishing, &name, hr, head_cid,
-                    envelope,
-                )
-                .await
-            }
-            (HeldValue::Head(head_cid), None) => {
-                // Renewal is a normal CAS write: the sequence comes from the
-                // durable floor + 1, never the network's copy, which may carry
-                // another device's newer content.
-                let observed = Observed::unread(&name);
-                let request = PublishRequest {
-                    observed: &observed,
-                    signer: &hr.signer,
-                    head_cid: head_cid.clone(),
-                    content_cids: hr.content_cids.clone(),
-                    // A record with no envelope binds no scope epoch.
-                    bar: None,
-                };
-                eol_republish(transport, api, floors, scheduler, profile, &request).await
-            }
-            (HeldValue::Inline(block), _) => {
-                eol_republish_inline(
-                    transport, api, floors, scheduler, profile, &name, &hr.signer, block,
-                )
-                .await
-            }
-        };
+        let outcome = renew_held(api, seams, &name, hr).await;
         results.push(EolRenewResult {
             routing_key: hr.routing_key.clone(),
             outcome,
@@ -678,6 +592,7 @@ mod tests {
         BarFloor, InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome,
         PublishRequest, publish, publish_inline,
     };
+    use super::super::renewal_walk::RenewalSeams;
     use crate::api::ApiClient;
     use crate::grants::grafted::FloorNamespace;
     use crate::net::author::ENVELOPE_V;
@@ -934,12 +849,14 @@ mod tests {
             super::RE_PUT_INTERVAL,
             || async {
                 let outcomes = eol_renew_pass(
-                    &device.record_store,
                     &api,
-                    &device.floor_store,
-                    &scheduler,
-                    &profile,
-                    &Default::default(),
+                    &RenewalSeams {
+                        transport: &device.record_store,
+                        floors: &device.floor_store,
+                        scheduler: &scheduler,
+                        profile: &profile,
+                        publishing: &Default::default(),
+                    },
                     &held,
                 )
                 .await;
@@ -964,7 +881,7 @@ mod tests {
                 .verify(&name)
                 .unwrap()
                 .validity,
-            eol::eol_from(start).into_bytes(),
+            eol::renewal_eol_from(start).into_bytes(),
         );
     }
 
@@ -997,12 +914,14 @@ mod tests {
         device.http.enqueue_response(ok_200());
 
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
             &[held],
         ));
         assert!(matches!(
@@ -1035,12 +954,14 @@ mod tests {
         // At T0 both records are far from EOL: the pass no-ops for both, proving
         // the renewal decision is driven purely off the injected scheduler clock.
         let at_zero = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &profile,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &profile,
+                publishing: &Default::default(),
+            },
             &held,
         ));
         assert_eq!(
@@ -1065,12 +986,14 @@ mod tests {
         // The renewal pass then republishes only the near-expiry name at seq+1.
         device.http.enqueue_response(ok_200()); // register-first for the one renewal
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &profile,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &profile,
+                publishing: &Default::default(),
+            },
             &held,
         ));
         assert_eq!(
@@ -1148,12 +1071,14 @@ mod tests {
         scheduler.advance(Duration::from_secs(65 * DAY));
         device.http.enqueue_response(ok_200()); // register-first for the renewal
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &profile,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &profile,
+                publishing: &Default::default(),
+            },
             &held,
         ));
 
@@ -1201,12 +1126,14 @@ mod tests {
 
         scheduler.advance(Duration::from_secs(65 * DAY));
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
             &held,
         ));
 
@@ -1272,12 +1199,14 @@ mod tests {
         world.scheduler.advance(Duration::from_secs(65 * DAY));
         device.http.enqueue_response(ok_200());
         let mut results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &world.scheduler,
-            &SyncTimingProfile::CI,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
             &[held],
         ));
         let result = results.remove(0);
@@ -1371,12 +1300,14 @@ mod tests {
         world.scheduler.advance(Duration::from_secs(65 * DAY));
         device.http.enqueue_response(ok_200());
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &world.scheduler,
-            &SyncTimingProfile::CI,
-            &Default::default(),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
             &[held],
         ));
         assert_eq!(outcome_of(&results, &name).outcome, Ok(None));
@@ -1388,20 +1319,37 @@ mod tests {
         );
     }
 
-    /// A due held node record in the own namespace, with the clock inside its
-    /// renewal window.
-    fn due_sealed_node(world: &FakeWorld, device: &FakeDevice) -> (IpnsName, HeldRecord) {
-        let (name, mut held) = seeded_held(device, [5u8; 32], [6u8; 16], "bafyheld", 0);
-        held.envelope = Some(HeldEnvelope {
-            version: ENVELOPE_V,
-            bar: PublishBar {
-                scope_id: SCOPE,
-                read_epoch: 1,
-                write_epoch: None,
-                cut_epoch: None,
-            },
-            namespace: FloorNamespace::Own,
-        });
+    /// The three renewal arms of a held record.
+    #[derive(Clone, Copy)]
+    enum Arm {
+        /// A node record under its envelope.
+        Sealed,
+        /// A head record with no envelope: the settings record, the bin index.
+        Head,
+        /// A scope pointer.
+        Inline,
+    }
+
+    /// A due held record of `arm`, with the clock inside its renewal window.
+    fn due(world: &FakeWorld, device: &FakeDevice, arm: Arm) -> (IpnsName, HeldRecord) {
+        let (name, held) = match arm {
+            Arm::Sealed => {
+                let (name, mut held) = seeded_held(device, [5u8; 32], [6u8; 16], "bafyheld", 0);
+                held.envelope = Some(HeldEnvelope {
+                    version: ENVELOPE_V,
+                    bar: PublishBar {
+                        scope_id: SCOPE,
+                        read_epoch: 1,
+                        write_epoch: None,
+                        cut_epoch: None,
+                    },
+                    namespace: FloorNamespace::Own,
+                });
+                (name, held)
+            }
+            Arm::Head => seeded_held(device, [5u8; 32], [6u8; 16], "bafyheld", 0),
+            Arm::Inline => seeded_inline_held(device, [7u8; 32], b"a-repoint", b"a-repoint", 0),
+        };
         world.scheduler.advance(Duration::from_secs(65 * DAY));
         (name, held)
     }
@@ -1418,41 +1366,42 @@ mod tests {
             "http://api.test",
         );
         block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &world.scheduler,
-            &SyncTimingProfile::CI,
-            publishing,
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing,
+            },
             &[held],
         ))
         .remove(0)
     }
 
-    #[test]
-    fn a_drain_publish_that_lands_during_the_registration_is_never_signed_over() {
+    /// Another writer's record at sequence 2 lands on every endpoint while the
+    /// renewal waits for its registration; its floor is not raised yet.
+    fn a_write_lands_during_the_registration_and_stands(arm: Arm) {
         let world = FakeWorld::new();
         let device = world.device(b"me");
-        let (name, held) = due_sealed_node(&world, &device);
-        let drained = IpnsRecord::create_v2(
+        let (name, held) = due(&world, &device, arm);
+        let landed = IpnsRecord::create_v2(
             &held.signer,
-            b"/ipfs/bafydrained",
+            b"/ipfs/bafylanded",
             2,
             TTL_NANOS,
             &eol::eol_from(UnixMillis(65 * DAY * 1000)),
         )
         .marshal();
-        let (store, floors, key, landed) = (
+        let (store, key, record) = (
             device.record_store.clone(),
-            device.floor_store.clone(),
             name.as_str().to_owned(),
-            drained.clone(),
+            landed.clone(),
         );
         device.http.enqueue_derived(move |_| {
             for endpoint in store.endpoints() {
-                store.seed_record(&endpoint, &key, landed.clone());
+                store.seed_record(&endpoint, &key, record.clone());
             }
-            block_on(floors.raise_sequence_floor(key.as_bytes(), 2)).unwrap();
             Ok(ok_200())
         });
 
@@ -1461,16 +1410,17 @@ mod tests {
         let endpoint = device.record_store.endpoints()[0].clone();
         assert_eq!(
             device.record_store.record_at(&endpoint, name.as_str()),
-            Some(drained),
-            "the drain's record stands"
+            Some(landed),
+            "the landed record stands"
         );
     }
 
-    #[test]
-    fn a_floor_that_rose_during_the_registration_refuses_the_signature() {
+    /// The name's sequence floor rises to 2 while the renewal waits for its
+    /// registration.
+    fn a_floor_rise_during_the_registration_refuses_the_signature(arm: Arm) {
         let world = FakeWorld::new();
         let device = world.device(b"me");
-        let (name, held) = due_sealed_node(&world, &device);
+        let (name, held) = due(&world, &device, arm);
         let (floors, key) = (device.floor_store.clone(), name.as_str().to_owned());
         device.http.enqueue_derived(move |_| {
             block_on(floors.raise_sequence_floor(key.as_bytes(), 2)).unwrap();
@@ -1483,10 +1433,40 @@ mod tests {
     }
 
     #[test]
+    fn a_drain_publish_that_lands_during_the_registration_is_never_signed_over() {
+        a_write_lands_during_the_registration_and_stands(Arm::Sealed);
+    }
+
+    #[test]
+    fn a_floor_that_rose_during_the_registration_refuses_the_signature() {
+        a_floor_rise_during_the_registration_refuses_the_signature(Arm::Sealed);
+    }
+
+    #[test]
+    fn a_save_that_lands_during_a_head_renewal_registration_is_never_signed_over() {
+        a_write_lands_during_the_registration_and_stands(Arm::Head);
+    }
+
+    #[test]
+    fn a_floor_that_rose_during_a_head_renewal_registration_refuses_the_signature() {
+        a_floor_rise_during_the_registration_refuses_the_signature(Arm::Head);
+    }
+
+    #[test]
+    fn a_repoint_that_lands_during_a_pointer_renewal_registration_is_never_signed_over() {
+        a_write_lands_during_the_registration_and_stands(Arm::Inline);
+    }
+
+    #[test]
+    fn a_pointer_floor_that_rose_above_the_held_sequence_refuses_the_signature() {
+        a_floor_rise_during_the_registration_refuses_the_signature(Arm::Inline);
+    }
+
+    #[test]
     fn a_held_name_the_drain_is_publishing_is_not_renewed() {
         let world = FakeWorld::new();
         let device = world.device(b"me");
-        let (name, held) = due_sealed_node(&world, &device);
+        let (name, held) = due(&world, &device, Arm::Sealed);
         let publishing = RefCell::new(BTreeSet::from([name.as_str().to_owned()]));
 
         let result = renew_one(&world, &device, &publishing, held);

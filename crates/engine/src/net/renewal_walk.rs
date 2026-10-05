@@ -941,14 +941,18 @@ where
     /// Renew `due` (ADR 0061 D3 steps 4 to 6), and point the renewal set at
     /// the renewal.
     async fn renew(&self, due: &Due) -> Option<Result<Option<PublishOutcome>, PublishError>> {
+        let seams = RenewalSeams {
+            transport: self.transport,
+            floors: self.floors,
+            scheduler: self.scheduler,
+            profile: self.profile,
+            publishing: self.guards.publishing,
+        };
         let receipt = match renew_admitted(
-            self.transport,
-            self.floors,
-            self.scheduler,
-            self.profile,
-            self.guards.publishing,
+            &seams,
             &due.observed,
-            due.bar,
+            Some(due.bar),
+            FloorRule::Exact,
             &due.signer,
             &due.value,
         )
@@ -985,19 +989,34 @@ where
     }
 }
 
+/// The seams and the drain cell one renewal signature runs against.
+pub(crate) struct RenewalSeams<'a, T, F, Sch> {
+    pub(crate) transport: &'a T,
+    pub(crate) floors: &'a F,
+    pub(crate) scheduler: &'a Sch,
+    pub(crate) profile: &'a SyncTimingProfile,
+    /// The names the drain is publishing right now.
+    pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
+}
+
+/// The durable sequence floor a renewal over a record at `S` may sign above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FloorRule {
+    /// Exactly `S`: the read that admitted the record raised the floor to it.
+    Exact,
+    /// Absent or at most `S`: a pointer name, whose enrolment raises no floor.
+    AtMost,
+}
+
 /// Sign `value` at `S + 1` for the registered name `observed` admitted at
 /// `S`, when the network still serves that record, the durable floor still
-/// sits at `S`, and the drain has no publish of the name in flight (ADR 0061
+/// meets `rule`, and the drain has no publish of the name in flight (ADR 0061
 /// D3 steps 4 to 6). `None` when any of the three moved.
-#[expect(clippy::too_many_arguments, reason = "one renewal's inputs")]
 pub(crate) async fn renew_admitted<T, F, Sch>(
-    transport: &T,
-    floors: &F,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    publishing: &RefCell<BTreeSet<String>>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
     observed: &Observed,
-    bar: PublishBar,
+    bar: Option<PublishBar>,
+    rule: FloorRule,
     signer: &Ed25519Signer,
     value: &[u8],
 ) -> Option<Result<PublishReceipt, PublishError>>
@@ -1007,28 +1026,42 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     let name = observed.name();
-    match fanout_get_classified(transport, name).await {
+    match fanout_get_classified(seams.transport, name).await {
         FanoutRecord::Found(_, live) if live == observed.bytes() => {}
         FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
         FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
     }
-    let gate = match SignatureGate::read_for_renewal(floors, observed, bar).await {
+    let gate = match SignatureGate::read_for_renewal(seams.floors, observed, bar).await {
         Ok(gate) => gate,
         Err(error) => return Some(Err(error)),
     };
     // No await from here to the signature.
-    if gate.sequence_floor() != Some(observed.sequence())
-        || publishing.borrow().contains(name.as_str())
-    {
+    let floor_moved = match rule {
+        FloorRule::Exact => gate.sequence_floor() != Some(observed.sequence()),
+        FloorRule::AtMost => gate
+            .sequence_floor()
+            .is_some_and(|floor| floor > observed.sequence()),
+    };
+    if floor_moved || seams.publishing.borrow().contains(name.as_str()) {
         return None;
     }
-    let ttl_nanos = u64::try_from(profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
-    let eol = renewal_eol_from(scheduler.now());
+    let ttl_nanos = u64::try_from(seams.profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
+    let eol = renewal_eol_from(seams.scheduler.now());
     let (record_bytes, sequence) = match gate.sign(signer, value, ttl_nanos, &eol) {
         Ok(signed) => signed,
         Err(error) => return Some(Err(error)),
     };
-    Some(put_and_confirm(transport, scheduler, profile, name, record_bytes, sequence).await)
+    Some(
+        put_and_confirm(
+            seams.transport,
+            seams.scheduler,
+            seams.profile,
+            name,
+            record_bytes,
+            sequence,
+        )
+        .await,
+    )
 }
 
 /// A pass that renews nothing, and reports `detail` for each owned scope root.
@@ -1231,6 +1264,59 @@ mod tests {
                 .signer_for(&node, &derive_write_name(&old, &node))
                 .is_none(),
             "an old name is never renewed",
+        );
+    }
+
+    #[test]
+    fn a_name_the_drain_publishes_at_the_signature_is_not_signed() {
+        use cipherbox_core::ipns::IpnsRecord;
+
+        use super::super::eol::eol_from;
+        use super::super::publish::Observed;
+        use super::{FloorRule, RenewalSeams, renew_admitted};
+        use crate::seams::FloorStore;
+        use crate::testkit::{FakeWorld, block_on};
+
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let bytes =
+            IpnsRecord::create_v2(&signer, b"/ipfs/bafyheld", 1, 1, &eol_from(UnixMillis(0)))
+                .marshal();
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), bytes.clone());
+        }
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 1),
+        )
+        .unwrap();
+        let publishing = RefCell::new(BTreeSet::from([name.as_str().to_owned()]));
+        let seams = RenewalSeams {
+            transport: &device.record_store,
+            floors: &device.floor_store,
+            scheduler: &world.scheduler,
+            profile: &SyncTimingProfile::CI,
+            publishing: &publishing,
+        };
+
+        let renewal = block_on(renew_admitted(
+            &seams,
+            &Observed::admitted(&name, 1, &bytes),
+            None,
+            FloorRule::Exact,
+            &signer,
+            b"/ipfs/bafyheld",
+        ));
+        assert!(renewal.is_none(), "nothing is signed");
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert_eq!(
+            device.record_store.record_at(&endpoint, name.as_str()),
+            Some(bytes)
         );
     }
 }

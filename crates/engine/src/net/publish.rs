@@ -155,6 +155,16 @@ impl Observed {
         }
     }
 
+    /// A record-verified read of `name` at `sequence` whose `bytes` a renewal
+    /// must still find served: a plane whose record carries no envelope.
+    pub(crate) fn admitted(name: &IpnsName, sequence: u64, bytes: &[u8]) -> Self {
+        Self {
+            name: name.clone(),
+            sequence,
+            bytes: bytes.to_vec(),
+        }
+    }
+
     /// A gated read of `name` at `sequence`, whose envelope carries `version`.
     ///
     /// This build authors exactly [`ENVELOPE_V`], so re-sealing a newer
@@ -501,15 +511,18 @@ impl<'a> SignatureGate<'a> {
     pub(crate) async fn read_for_renewal<F: FloorStore>(
         floors: &F,
         observed: &'a Observed,
-        bar: PublishBar,
+        bar: Option<PublishBar>,
     ) -> Result<Self, PublishError> {
-        let at = bar.read_floors(floors).await?;
+        let bar = match bar {
+            Some(bar) => Some((bar, bar.read_floors(floors).await?)),
+            None => None,
+        };
         let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
             .await
             .map_err(PublishError::FloorRead)?;
         Ok(Self {
             observed,
-            bar: Some((bar, at)),
+            bar,
             sequence_floor,
         })
     }
@@ -894,7 +907,12 @@ mod tests {
             write_epoch: Some(1),
             cut_epoch: Some(0),
         };
-        let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, bar)).unwrap();
+        let gate = block_on(SignatureGate::read_for_renewal(
+            &floors,
+            &observed,
+            Some(bar),
+        ))
+        .unwrap();
         assert_eq!(
             gate.sequence_floor(),
             Some(8),
