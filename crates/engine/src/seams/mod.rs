@@ -64,7 +64,16 @@ use core::fmt;
 pub struct SeamError {
     message: String,
     status: Option<u16>,
-    over_cap: bool,
+    kind: SeamErrorKind,
+}
+
+/// The availability cause the engine reads off a [`SeamError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeamErrorKind {
+    Fault,
+    OverCap,
+    /// Every content source answered that it holds no such block.
+    BlockNotHeld,
 }
 
 impl SeamError {
@@ -73,7 +82,7 @@ impl SeamError {
         Self {
             message: message.into(),
             status: None,
-            over_cap: false,
+            kind: SeamErrorKind::Fault,
         }
     }
 
@@ -84,7 +93,7 @@ impl SeamError {
         Self {
             message: message.into(),
             status: Some(status),
-            over_cap: false,
+            kind: SeamErrorKind::Fault,
         }
     }
 
@@ -94,7 +103,16 @@ impl SeamError {
         Self {
             message: message.into(),
             status: None,
-            over_cap: true,
+            kind: SeamErrorKind::OverCap,
+        }
+    }
+
+    /// A content read that every source answered with "no such block".
+    pub(crate) fn block_not_held(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: None,
+            kind: SeamErrorKind::BlockNotHeld,
         }
     }
 
@@ -105,7 +123,12 @@ impl SeamError {
 
     /// Whether the endpoint served a body over the byte cap.
     pub fn is_over_cap(&self) -> bool {
-        self.over_cap
+        self.kind == SeamErrorKind::OverCap
+    }
+
+    /// Whether every content source answered that it holds no such block.
+    pub(crate) fn is_block_not_held(&self) -> bool {
+        self.kind == SeamErrorKind::BlockNotHeld
     }
 
     /// The diagnostic message.

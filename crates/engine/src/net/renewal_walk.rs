@@ -1055,7 +1055,6 @@ where
         put_and_confirm(
             seams.transport,
             seams.scheduler,
-            seams.profile,
             name,
             record_bytes,
             sequence,
