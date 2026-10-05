@@ -268,10 +268,11 @@ scenario fails the meta-test):
   `a_pre_cut_set_below_the_sequence_floor_while_an_endpoint_fails_is_reported`),
   and a rollback of a joined root to a set from before the link is a trust
   violation, not a revoked link (`tests/owner_actions.rs`
-  `a_rollback_to_a_root_from_before_the_link_is_no_revoked_link`); only no answer, a 5xx, a 408, a 429, a 3xx or a
-  timeout is a failed endpoint, and a failed body cancellation keeps the known
-  answer (`net::fanout`, the desktop record transport, the web
-  `recordTransport`). The fix tests fail on the code before ADR 0071.
+  `a_rollback_to_a_root_from_before_the_link_is_no_revoked_link`); only no
+  answer, a 5xx, a 408, a 429, a 3xx or a timeout is a failed endpoint, and a
+  failed body cancellation keeps the known answer (`net::fanout`, the desktop
+  record transport, the web `recordTransport`). The fix tests fail on the code
+  before ADR 0071.
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;

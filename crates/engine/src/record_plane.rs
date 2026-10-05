@@ -479,7 +479,6 @@ where
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
     if !lapsed && sequence < floor {
-        // ADR 0071 D1: with an endpoint failed, the newer record is withheld.
         return Err(if endpoint_failed {
             DefaultsReason::Suppressed
         } else {

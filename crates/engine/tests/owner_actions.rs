@@ -12500,7 +12500,8 @@ fn a_preview_of_a_lagging_root_while_an_endpoint_fails_is_unresolvable() {
 
 /// The sequence stage runs ahead of the link verdict: a rollback of the
 /// joined root to a set from before the link (one that commits an older link
-/// only) is a trust violation, never a revoked link. While an endpoint fails, it is unresolvable (ADR 0071 D1).
+/// only) is a trust violation, never a revoked link. While an endpoint fails,
+/// it is unresolvable (ADR 0071 D1).
 #[test]
 fn a_rollback_to_a_root_from_before_the_link_is_no_revoked_link() {
     let mut fx = GrantScenario::new();

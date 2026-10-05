@@ -349,7 +349,10 @@ struct GatedParts {
 /// record strictly below the floor while an endpoint failed (ADR 0071 D1).
 pub(crate) fn unavailable_below_floor(reason: &RejectionReason, endpoint_failed: bool) -> bool {
     endpoint_failed
-        && matches!(reason, RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor)
+        && matches!(
+            reason,
+            RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor
+        )
 }
 
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
