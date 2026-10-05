@@ -122,13 +122,15 @@ export async function exportLoginSecret(exporter: LoginSecretExporter): Promise<
 export async function handOffLoginSecret(
   facade: LoginFacade,
   exporter: LoginSecretExporter,
-  identity: StartIdentity | null = null
+  identity: StartIdentity | null = null,
+  signal?: AbortSignal
 ): Promise<void> {
   // Read before the export, so a session that cannot name its account never
   // mints a secret buffer.
   const accountId = exporter.accountId();
   const secret = await exportLoginSecret(exporter);
   try {
+    signal?.throwIfAborted();
     // The clock is read after the export, the last await before the start.
     await facade.start(secret, accountId, presentableToken(identity));
   } finally {
