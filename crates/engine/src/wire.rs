@@ -476,6 +476,15 @@ pub enum QueueHold {
         #[tsify(type = "Uint8Array")]
         node: NodeId,
     },
+    /// Held over a record at an envelope version this build does not read.
+    NewerRelease {
+        /// The held op.
+        op_id: OpId,
+        /// The node the held op targets.
+        #[serde(serialize_with = "node_id::serialize")]
+        #[tsify(type = "Uint8Array")]
+        node: NodeId,
+    },
 }
 
 impl From<facade::QueueHold> for QueueHold {
@@ -494,6 +503,7 @@ impl From<facade::QueueHold> for QueueHold {
             },
             QueueHoldReason::BinIndex(check) => Self::BinIndex { op_id, node, check },
             QueueHoldReason::DeletePlane => Self::DeletePlane { op_id, node },
+            QueueHoldReason::NewerRelease => Self::NewerRelease { op_id, node },
         }
     }
 }

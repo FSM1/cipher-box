@@ -52,7 +52,7 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, EventStream, GatewayConfig,
-    LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
+    LoginSecret, NodeId, NodeKind, QueueHoldReason, StoragePolicy, SyncTimingProfile,
 };
 use core::cell::RefCell;
 
@@ -492,7 +492,12 @@ fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
 /// newer client last wrote is never re-sealed under this build's version.
 #[test]
 fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
-    let (served, after, queued, _) = create_under_a_folder_at_newer_version(1);
+    let NewerVersionRun {
+        served,
+        after,
+        queued,
+        ..
+    } = create_under_a_folder_at_newer_version(1);
 
     assert_eq!(
         after,
@@ -504,17 +509,23 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
 
 /// A folder at another envelope version charges no attempt: past the attempt
 /// budget and one pass short of the unattributed budget, the op is still
-/// queued with no dead letter.
+/// queued with no dead letter, on a hold that tells the member to update.
 #[test]
 fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
-    let (served, after, queued, dead_letters) =
-        create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1);
+    let NewerVersionRun {
+        served,
+        after,
+        queued,
+        dead_letters,
+        hold,
+    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1);
 
     assert_eq!(
         (queued, dead_letters),
         (1, Vec::new()),
         "the op is held, not dead-lettered"
     );
+    assert_eq!(hold, Some(QueueHoldReason::NewerRelease));
     assert_eq!(
         after,
         Some(served),
@@ -526,22 +537,38 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
 /// the member to update this app.
 #[test]
 fn a_drain_op_under_a_folder_at_another_envelope_version_dead_letters_as_a_newer_release() {
-    let (served, after, queued, dead_letters) =
-        create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize + 1);
+    let NewerVersionRun {
+        served,
+        after,
+        queued,
+        dead_letters,
+        hold,
+    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize + 1);
 
     assert_eq!(
         (queued, dead_letters),
         (0, vec![DeadLetterReason::NewerRelease])
     );
+    assert_eq!(hold, None, "the dead letter ends the hold");
     assert_eq!(after, Some(served), "the folder was never republished");
 }
 
+/// What [`create_under_a_folder_at_newer_version`] saw.
+struct NewerVersionRun {
+    /// The folder's record before the passes.
+    served: Vec<u8>,
+    /// The folder's record after them.
+    after: Option<Vec<u8>>,
+    /// The ops still queued.
+    queued: usize,
+    dead_letters: Vec<DeadLetterReason>,
+    /// The reason of the queue hold.
+    hold: Option<QueueHoldReason>,
+}
+
 /// Stage a create under a folder sealed at the next envelope version and run
-/// `passes` drain passes: the folder's record before and after, the ops still
-/// queued, and the dead letters' reasons.
-fn create_under_a_folder_at_newer_version(
-    passes: usize,
-) -> (Vec<u8>, Option<Vec<u8>>, usize, Vec<DeadLetterReason>) {
+/// `passes` drain passes.
+fn create_under_a_folder_at_newer_version(passes: usize) -> NewerVersionRun {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -604,17 +631,18 @@ fn create_under_a_folder_at_newer_version(
     for _ in 0..passes {
         tick(&world, &engine, &mut tasks);
     }
-    (
-        record,
-        record_at(&world, &name),
-        queued(&device),
-        block_on(engine.status())
-            .expect("the session status reads")
+    let status = block_on(engine.status()).expect("the session status reads");
+    NewerVersionRun {
+        served: record,
+        after: record_at(&world, &name),
+        queued: queued(&device),
+        dead_letters: status
             .dead_letters
             .into_iter()
             .map(|letter| letter.reason)
             .collect(),
-    )
+        hold: status.queue_hold.map(|hold| hold.reason),
+    }
 }
 
 fn dead_letters(engine: &Engine<FakeSeamTypes>) -> usize {

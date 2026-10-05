@@ -331,6 +331,7 @@ function checkQueueHold(hold: QueueHoldDescriptor | null): void {
       known(BIN_INDEX_HOLD_CHECKS, hold.check, 'bin-index hold check');
       break;
     case 'delete-plane':
+    case 'newer-release':
       break;
     default:
       throw new Error(`unknown WASM queue hold reason: ${(hold as { reason: unknown }).reason}`);

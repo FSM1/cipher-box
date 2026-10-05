@@ -223,6 +223,13 @@ fn a_queue_hold_names_its_reason_and_carries_only_that_reasons_figure() {
     assert_eq!(keys(&bin_index), ["reason", "opId", "node", "check"]);
     assert_eq!(field(&bin_index, "reason"), JsValue::from_str("bin-index"));
     assert_eq!(field(&bin_index, "check"), JsValue::from_str("suppressed"));
+
+    let newer_release = hold(QueueHoldReason::NewerRelease);
+    assert_eq!(keys(&newer_release), ["reason", "opId", "node"]);
+    assert_eq!(
+        field(&newer_release, "reason"),
+        JsValue::from_str("newer-release")
+    );
 }
 
 /// Each hold crosses under the check name of the rule that refused: every

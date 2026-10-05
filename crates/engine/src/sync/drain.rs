@@ -795,6 +795,11 @@ pub enum QueueHoldReason {
     /// Reported for the same reason as [`Self::BinIndex`]: a party who
     /// withholds the target's record otherwise stops the queue in silence.
     DeletePlane,
+    /// A record the op builds on is at an envelope version this build does
+    /// not read ([`Halt::ForeignVersion`]). The exit is a pass whose head
+    /// meets no such record; the bound and the `newerRelease` dead letter
+    /// stay the unattributed budget's.
+    NewerRelease,
 }
 
 /// The queue head is held over rather than failed: it keeps its place and its
@@ -816,7 +821,8 @@ pub struct QueueHold {
 }
 
 /// Whether a halt frees a hold whose exit is the pass itself:
-/// [`QueueHoldReason::BinIndex`] or [`QueueHoldReason::DeletePlane`].
+/// [`QueueHoldReason::BinIndex`], [`QueueHoldReason::DeletePlane`] or
+/// [`QueueHoldReason::NewerRelease`].
 ///
 /// The exit is a classified verdict on the held op itself. A pass whose scope
 /// does not author that op takes [`Halt::Unclassified`] for it and knows
@@ -830,6 +836,7 @@ fn probed_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool 
     let still_held = match hold.reason {
         QueueHoldReason::BinIndex(_) => matches!(halt, Halt::HeldByBinIndex(_)),
         QueueHoldReason::DeletePlane => halt == Halt::DeletePlaneUnavailable,
+        QueueHoldReason::NewerRelease => halt == Halt::ForeignVersion,
         QueueHoldReason::Quota { .. } | QueueHoldReason::Settings(_) => return false,
     };
     hold.op_id == halted && !still_held && halt != Halt::Unclassified
@@ -2773,10 +2780,15 @@ where
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
             Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope | Halt::ForeignVersion => {
+                let newer_release = halt == Halt::ForeignVersion;
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
+                    if newer_release {
+                        self.hold_head(op_id, op, QueueHoldReason::NewerRelease);
+                    }
                     return;
                 }
-                let reason = if halt == Halt::ForeignVersion {
+                let reason = if newer_release {
+                    self.release_hold();
                     DeadLetterReason::NewerRelease
                 } else {
                     DeadLetterReason::AttemptsExhausted
@@ -2902,11 +2914,14 @@ where
                         return false;
                     }
                 }
-                // The bin index load and the delete's plane proof are their
-                // own probes, so neither reason stops a pass nor clears before
-                // one: [`Self::apply_valve`] is the exit of both, and
+                // The bin index load, the delete's plane proof and the
+                // envelope version read are their own probes, so none of these
+                // reasons stops a pass nor clears before one:
+                // [`Self::apply_valve`] is the exit of each, and
                 // [`Self::establish_bin_index`] also frees a bin index hold.
-                QueueHoldReason::BinIndex(_) | QueueHoldReason::DeletePlane => return true,
+                QueueHoldReason::BinIndex(_)
+                | QueueHoldReason::DeletePlane
+                | QueueHoldReason::NewerRelease => return true,
             }
         }
         self.release_hold();
@@ -10609,6 +10624,15 @@ mod tests {
             report.dead_letters.is_empty(),
             "one pass is inside the budget"
         );
+        assert_eq!(
+            *drain.cells.hold.borrow(),
+            Some(QueueHold {
+                op_id,
+                node: NodeId([9; 16]),
+                reason: QueueHoldReason::NewerRelease,
+            }),
+            "and the head waits on a reported hold"
+        );
         // The budget's passes but the last, as earlier ticks spend them.
         for _ in 1..UNATTRIBUTED_BUDGET - 1 {
             attempts.charge_unattributed(op_id);
@@ -10620,6 +10644,23 @@ mod tests {
             vec![DeadLetterReason::NewerRelease]
         );
         assert!(harness.queued_op_ids().is_empty());
+        assert_eq!(*drain.cells.hold.borrow(), None, "the dead letter ends it");
+    }
+
+    /// The newer-release hold exits on the pass whose head meets no record
+    /// at another envelope version, and only a pass that authors the head
+    /// can say so.
+    #[test]
+    fn a_newer_release_hold_exits_on_the_next_classified_halt_at_its_head() {
+        let held = Some(QueueHold {
+            op_id: OpId(3),
+            node: NodeId([9; 16]),
+            reason: QueueHoldReason::NewerRelease,
+        });
+        assert!(!probed_hold_exits(held, OpId(3), Halt::ForeignVersion));
+        assert!(!probed_hold_exits(held, OpId(3), Halt::Unclassified));
+        assert!(!probed_hold_exits(held, OpId(4), Halt::Attempt));
+        assert!(probed_hold_exits(held, OpId(3), Halt::Attempt));
     }
 
     fn dead_letter_reasons(report: &DrainReport) -> Vec<DeadLetterReason> {

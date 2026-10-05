@@ -38,7 +38,8 @@ const BIN_INDEX_CAUSES: Record<BinIndexHoldCheck, string> = {
 
 /**
  * The held queue head, when the member's own settings refused it, the owner's
- * bin index did not resolve for it, or a delete's target record did not arrive.
+ * bin index did not resolve for it, a delete's target record did not arrive, or
+ * a record it builds on is at an envelope version this build does not read.
  * The over-quota hold is the upload panel's, which renders the figure it
  * carries. A hold clears, so the notice follows the snapshot and goes when the
  * hold does.
@@ -51,7 +52,9 @@ export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
       ? `${held(view, hold.node)} waits on your settings: ${SETTINGS_CAUSES[hold.check]}.`
       : hold.reason === 'bin-index'
         ? `${held(view, hold.node)} waits on your bin: ${BIN_INDEX_CAUSES[hold.check]}.`
-        : `the delete of ${held(view, hold.node)} waits: the record of the item did not arrive, so this device cannot yet tell whether it is shared.`;
+        : hold.reason === 'newer-release'
+          ? `${held(view, hold.node)} waits: another device runs a newer release. update this app.`
+          : `the delete of ${held(view, hold.node)} waits: the record of the item did not arrive, so this device cannot yet tell whether it is shared.`;
 
   return (
     <div className="queue-hold-notice" role="status" data-testid="queue-hold-notice">

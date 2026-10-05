@@ -131,6 +131,9 @@ export type BinIndexHoldDescriptor = Extract<QueueHold, { reason: 'bin-index' }>
 /** The queue head held until the delete's target record proves its plane. */
 export type DeletePlaneHoldDescriptor = Extract<QueueHold, { reason: 'delete-plane' }>;
 
+/** The queue head held over a record at an envelope version this build does not read. */
+export type NewerReleaseHoldDescriptor = Extract<QueueHold, { reason: 'newer-release' }>;
+
 /** The one held queue head: the engine `QueueHold`. A host dispatches on `reason`. */
 export type QueueHoldDescriptor = QueueHold;
 

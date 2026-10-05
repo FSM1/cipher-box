@@ -1052,7 +1052,9 @@ it, only new uploads fail fast; metadata ops queue unbounded).
 An op over a record at an envelope version this build does not read is charged
 no attempt on any path, the bin read included; a spent unattributed budget
 dead-letters it as `newerRelease`, so the member is told to update (owner
-decision of 2026-10-02).
+decision of 2026-10-02). While it waits, it is a reported `newer-release` hold
+that tells the member to update; the next pass tries the head again, and the
+hold comes back if the version refusal does.
 
 ## Rotation primitives
 

@@ -102,6 +102,17 @@ describe('the queue hold notice', () => {
     );
   });
 
+  it('tells the member to update when a newer release holds the head', () => {
+    render(
+      <QueueHoldNotice
+        view={listing({ queueHold: { reason: 'newer-release', opId: 8n, node: NODE } })}
+      />
+    );
+    expect(screen.getByTestId('queue-hold-notice').textContent).toContain(
+      '"child-0" waits: another device runs a newer release. update this app.'
+    );
+  });
+
   it('reports a hold on a node this folder does not list without naming one', () => {
     render(
       <QueueHoldNotice
