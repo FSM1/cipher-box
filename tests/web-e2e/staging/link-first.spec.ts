@@ -60,7 +60,7 @@ async function join(
   await invite.name.fill(name);
   await invite.join();
   await invite.expectFolderOpened(180_000);
-  expect(new URL(page.url()).hash).toBe('');
+  expect(invite.holdsLink(), 'the join left the link in the address').toBe(false);
 }
 
 test('the link-first flow runs across two owner devices', async ({

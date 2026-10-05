@@ -16,9 +16,16 @@ import { coldStart, nodeOf } from './vault';
 /** The recipient's own folder, whose share dialog carries the contact import. */
 const RECIPIENT_FOLDER = 'recipient-own';
 
-/** Cold-starts a vault, publishes `folder`, and mints a link on it. */
-export async function mint(page: Page, folder: string): Promise<URL> {
-  const { files, vault } = await coldStart(page);
+/**
+ * Signs a vault in, publishes `folder`, and mints a link on it. The default
+ * `start` cold-starts a vault nobody else shares.
+ */
+export async function mint(
+  page: Page,
+  folder: string,
+  start: () => Promise<{ files: FilesPage; vault: VaultPage }> = () => coldStart(page)
+): Promise<URL> {
+  const { files, vault } = await start();
   await files.createFolder(folder);
   await vault.settled();
   const share = new SharePage(page);
@@ -66,7 +73,7 @@ export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promis
   await invite.expectFolderOpened();
   // The join takes the capability out of the address, so a reload cannot spend
   // it a second time.
-  expect(new URL(page.url()).hash).toBe('');
+  expect(invite.holdsLink(), 'the join left the link in the address').toBe(false);
 }
 
 /**
