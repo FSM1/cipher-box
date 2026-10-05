@@ -19,6 +19,19 @@ function draw(client: ReturnType<typeof fakeEngine>['client']) {
   );
 }
 
+/** Reports `scopeRoot`'s unfinished write cut and presses the notice action. */
+async function finishFromNotice(
+  engine: ReturnType<typeof fakeEngine>,
+  scopeRoot = new Uint8Array(16).fill(9)
+) {
+  await act(async () => {
+    engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+  });
+}
+
 describe('engine warnings', () => {
   it('renders a withheld-update escalation as a warning, never as staleness', async () => {
     const engine = fakeEngine();
@@ -112,13 +125,8 @@ describe('engine warnings', () => {
     const engine = fakeEngine();
     draw(engine.client);
     const scopeRoot = new Uint8Array(16).fill(9);
-    await act(async () => {
-      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
-    });
 
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
-    });
+    await finishFromNotice(engine, scopeRoot);
 
     expect(engine.writeCuts).toEqual([scopeRoot]);
     expect(screen.queryByTestId('notification-toast')).toBeNull();
@@ -128,13 +136,8 @@ describe('engine warnings', () => {
     const engine = fakeEngine();
     engine.refuseWriteCut(new Error('rotation-work-owed'));
     draw(engine.client);
-    await act(async () => {
-      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
-    });
 
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
-    });
+    await finishFromNotice(engine);
 
     const notices = screen.getAllByTestId('notification-notice');
     expect(notices).toHaveLength(2);
@@ -151,13 +154,8 @@ describe('engine warnings', () => {
     engine.refuseWriteCut(new EngineRequestError('the root failed the gate', 'trustViolation'));
     draw(engine.client);
     const scopeRoot = new Uint8Array(16).fill(9);
-    await act(async () => {
-      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
-    });
 
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
-    });
+    await finishFromNotice(engine, scopeRoot);
     await act(async () => {
       engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
     });
@@ -173,15 +171,10 @@ describe('engine warnings', () => {
     const engine = fakeEngine();
     engine.refuseWriteCut(new Error('unavailable'));
     draw(engine.client);
-    await act(async () => {
-      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
-    });
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
-    });
+    await finishFromNotice(engine);
     expect(screen.getAllByTestId('notification-notice')).toHaveLength(2);
 
-    engine.refuseWriteCut(null as unknown as Error);
+    engine.refuseWriteCut(null);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '[finish it here]' }));
     });
@@ -193,12 +186,7 @@ describe('engine warnings', () => {
     const engine = fakeEngine();
     engine.holdWriteCut();
     const { unmount } = draw(engine.client);
-    await act(async () => {
-      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
-    });
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
-    });
+    await finishFromNotice(engine);
 
     unmount();
     await act(async () => {

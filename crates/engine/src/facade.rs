@@ -7669,9 +7669,7 @@ where {
     }
 
     /// Run a write-scope cut of the scope root at `node` from its published
-    /// state. Owed work of this device at the scope refuses it, retryably: the
-    /// sync pass re-drives that work. No root read of the command falls back
-    /// to the last copy, so a refused root is a trust violation.
+    /// state ([`Command::RotateWriteNow`]).
     async fn rotate_write_now(&self, node: NodeId) -> Result<(), EngineError> {
         // The cold-start floor has no bar for a vault anchor that a write cut
         // moved.
@@ -7680,7 +7678,6 @@ where {
                 check: "rotate-write-target-is-the-vault-root",
             });
         }
-        let check = "rotate-write-target-is-not-a-scope-root";
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let pass_keys = self.pass_keys(session)?;
@@ -7698,12 +7695,22 @@ where {
             }
         }
         let keys = OwnerActionKeys::new(session);
-        let gated = self.gated_owner_scope(&keys, node, check).await?;
+        let gated = self
+            .gated_owner_scope(&keys, node, "rotate-write-target-is-not-a-scope-root")
+            .await?;
+        let (scope_root_name, cut) = self.write_scope_cut(&gated.target, &gated.current)?;
         // A wave that stops after the cut set lands is owed work, which the
         // owed event already reported (ADR 0063 D5).
-        self.owed_write_scope_cut(node, &gated.target, &gated.current, true)
-            .await
-            .map(|_| ())
+        self.drive_owed_cut(
+            node,
+            &gated.target,
+            &scope_root_name,
+            &cut,
+            gated.current.write_epoch,
+            true,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Revoke a recipient's grant at `node`'s scope root.
@@ -9107,32 +9114,19 @@ where {
         target: &OwnerScope,
         current: &CascadeTarget,
     ) -> Result<OwnerScope, EngineError> {
+        let (scope_root_name, cut) = self.write_scope_cut(target, current)?;
         let report = self
-            .owed_write_scope_cut(node, target, current, false)
+            .drive_owed_cut(
+                node,
+                target,
+                &scope_root_name,
+                &cut,
+                current.write_epoch,
+                false,
+            )
             .await?
             .ok_or_else(EngineError::rotation_work_owed)?;
         moved_scope(node, target, report)
-    }
-
-    /// The write-scope cut over the set `current` publishes at `target`, under
-    /// an owed entry ([`Self::drive_owed_cut`]).
-    async fn owed_write_scope_cut(
-        &self,
-        node: NodeId,
-        target: &OwnerScope,
-        current: &CascadeTarget,
-        strict_root: bool,
-    ) -> Result<Option<CutRotationReport>, EngineError> {
-        let (scope_root_name, cut) = self.write_scope_cut(target, current)?;
-        self.drive_owed_cut(
-            node,
-            target,
-            &scope_root_name,
-            &cut,
-            current.write_epoch,
-            strict_root,
-        )
-        .await
     }
 
     /// [`Self::moved_by_write_cut`] for a mint, whose own entry owes the cut.

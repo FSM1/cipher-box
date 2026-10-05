@@ -128,7 +128,7 @@ export function fakeEngine() {
     refreshes: () => refreshes,
     refuseRefresh: (error: Error) => (refuseRefresh = error),
     writeCuts,
-    refuseWriteCut: (error: Error) => (refuseWriteCut = error),
+    refuseWriteCut: (error: Error | null) => (refuseWriteCut = error),
     /** Holds the next write cut open until `refuseHeldWriteCut`. */
     holdWriteCut: () => (holdWriteCut = true),
     refuseHeldWriteCut: (error: Error) => heldWriteCut?.(error),

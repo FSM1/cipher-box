@@ -13134,8 +13134,9 @@ fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
     );
 }
 
-/// The owed record the owner device holds now, or `None` when none is staged.
-fn staged_owed_record(fx: &GrantScenario) -> Option<OwedRecord> {
+/// The owner device's owed entry at the granted folder, from the record it
+/// holds now.
+fn owed_entry(fx: &GrantScenario) -> Option<OwedEntry> {
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(11));
     block_on(
@@ -13144,14 +13145,11 @@ fn staged_owed_record(fx: &GrantScenario) -> Option<OwedRecord> {
             .staged_bytes(&owed_rotation_key(&enc)),
     )
     .expect("the store answers")
-    .map(|blob| {
-        open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob).expect("the record opens")
+    .and_then(|blob| {
+        open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob)
+            .expect("the record opens")
+            .remove(&fx.folder)
     })
-}
-
-/// The owner device's owed entry at the granted folder.
-fn owed_entry(fx: &GrantScenario) -> Option<OwedEntry> {
-    staged_owed_record(fx).and_then(|mut record| record.remove(&fx.folder))
 }
 
 /// A share run again over its standing mint keeps the time the entry first

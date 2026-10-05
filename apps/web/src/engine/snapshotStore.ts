@@ -258,21 +258,22 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       const scope = toHex(event.scopeRoot);
       const key = `unfinished:${scope}`;
       const failed = `unfinished-failed:${scope}`;
+      const clear = () => {
+        notificationStore.dismiss(key);
+        notificationStore.dismiss(failed);
+      };
       notificationStore.warn(key, WRITE_CUT_UNFINISHED, {
         label: FINISH_WRITE_CUT,
         run: () =>
           client.facade.rotateWriteNow(event.scopeRoot).then(
             () => {
-              if (disposed) return;
-              notificationStore.dismiss(key);
-              notificationStore.dismiss(failed);
+              if (!disposed) clear();
             },
             (refusal: unknown) => {
               if (disposed) return;
               if (refusal instanceof EngineRequestError && refusal.code === 'trustViolation') {
                 // The same key, so a later report of the scope offers no retry.
-                notificationStore.dismiss(key);
-                notificationStore.dismiss(failed);
+                clear();
                 notificationStore.warn(key, WRITE_CUT_TRUST_STOP);
               } else {
                 notificationStore.warn(failed, WRITE_CUT_FAILED);

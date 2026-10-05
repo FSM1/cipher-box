@@ -340,8 +340,6 @@ where
         }
     }
 
-    /// [`Self::net`] for an owner cut's read of `target`'s root, which runs on
-    /// the last copy of a root the gate refuses (ADR 0068 D1).
     /// How long a root read of this pass waits before it falls back.
     pub(super) fn root_wait<'b>(&self, command: bool, bound: &'b dyn NodeBound) -> RootWait<'b> {
         if self.strict_root {
@@ -353,6 +351,8 @@ where
         }
     }
 
+    /// [`Self::net`] for an owner cut's read of `target`'s root, which runs on
+    /// the last copy of a root the gate refuses (ADR 0068 D1).
     pub(super) fn cut_net<'b>(
         &'b self,
         target: &OwnerScope,

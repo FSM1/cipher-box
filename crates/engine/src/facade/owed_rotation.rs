@@ -363,17 +363,17 @@ where
                 return Ok(None);
             }
             Err(error) => {
-                return match self.cut_set_published(target, cut, command).await {
+                // A strict command cuts no set from a root it cannot read.
+                let published = self
+                    .cut_set_published(target, cut, command)
+                    .await
+                    .or_else(|| self.strict_root.then_some(false));
+                return match published {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(error)).await;
                         Ok(None)
                     }
                     Some(false) => {
-                        let _ = self.owed().clear(node).await;
-                        Err(EngineError::from_cut_rotation(error))
-                    }
-                    // A strict command cuts no set from a root it cannot read.
-                    None if self.strict_root => {
                         let _ = self.owed().clear(node).await;
                         Err(EngineError::from_cut_rotation(error))
                     }
