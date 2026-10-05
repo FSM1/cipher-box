@@ -251,6 +251,15 @@ where
             if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
             }
+            // A cut that moves no cut epoch past the root's was authorized over
+            // a set the root no longer carries, so publishing it would drop the
+            // rows written since.
+            if cut.commitment.cut_epoch <= current.commitment.cut_epoch {
+                return Err(CascadeError::Publish {
+                    scope_id: scope_root.0,
+                    error: RotationPublishError::LostRace,
+                });
+            }
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
             }

@@ -1,3 +1,4 @@
+import { EngineRequestError } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NotificationToast } from '../components/NotificationToast';
@@ -143,6 +144,68 @@ describe('engine warnings', () => {
       'disabled',
       false
     );
+  });
+
+  it('shows a trust refusal of the write cut as a stop and offers no retry', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new EngineRequestError('the root failed the gate', 'trustViolation'));
+    draw(engine.client);
+    const scopeRoot = new Uint8Array(16).fill(9);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+    });
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+    });
+
+    const notices = screen.getAllByTestId('notification-notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain('failed verification');
+    expect(notices[0].textContent).not.toContain('try again');
+    expect(screen.queryByRole('button', { name: '[finish it here]' })).toBeNull();
+  });
+
+  it('clears the failure notice once a later write cut lands', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new Error('unavailable'));
+    draw(engine.client);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+    });
+    expect(screen.getAllByTestId('notification-notice')).toHaveLength(2);
+
+    engine.refuseWriteCut(null as unknown as Error);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '[finish it here]' }));
+    });
+
+    expect(screen.queryByTestId('notification-toast')).toBeNull();
+  });
+
+  it('raises no notice for a write cut that settles after the engine went away', async () => {
+    const engine = fakeEngine();
+    engine.holdWriteCut();
+    const { unmount } = draw(engine.client);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+    });
+
+    unmount();
+    await act(async () => {
+      engine.refuseHeldWriteCut(new Error('unavailable'));
+    });
+
+    expect(notificationStore.getState()).toHaveLength(0);
   });
 
   it('collapses a scope that escalates on every tick', async () => {

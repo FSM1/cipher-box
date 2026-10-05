@@ -372,6 +372,11 @@ where
                         let _ = self.owed().clear(node).await;
                         Err(EngineError::from_cut_rotation(error))
                     }
+                    // A strict command cuts no set from a root it cannot read.
+                    None if self.strict_root => {
+                        let _ = self.owed().clear(node).await;
+                        Err(EngineError::from_cut_rotation(error))
+                    }
                     // Unknown: the entry stands, and the re-drive drops it if
                     // the published root never carried the cut.
                     None => Err(EngineError::from_cut_rotation(error)),
@@ -452,11 +457,7 @@ where
         command: bool,
     ) -> Option<bool> {
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
-        let wait = if command {
-            RootWait::Command
-        } else {
-            RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
-        };
+        let wait = self.root_wait(command, bound.as_ref().map_or(&NoBound, |b| b));
         let current = self
             .cut_net(target, wait)
             .resolve_anchored(&target.scope)
@@ -804,11 +805,7 @@ where
         };
         let bound = self.owed_bound(node).await;
         let net = if cut {
-            let wait = if sites.command() {
-                RootWait::Command
-            } else {
-                RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
-            };
+            let wait = self.root_wait(sites.command(), bound.as_ref().map_or(&NoBound, |b| b));
             self.cut_net(&target, wait)
         } else {
             self.net(&target, PointerConsultArm::Refused)

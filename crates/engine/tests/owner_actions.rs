@@ -13134,18 +13134,24 @@ fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
     );
 }
 
-/// The owed record the owner device holds now.
-fn staged_owed_record(fx: &GrantScenario) -> OwedRecord {
+/// The owed record the owner device holds now, or `None` when none is staged.
+fn staged_owed_record(fx: &GrantScenario) -> Option<OwedRecord> {
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(11));
-    let blob = block_on(
+    block_on(
         fx.owner_device
             .staging_store
             .staged_bytes(&owed_rotation_key(&enc)),
     )
     .expect("the store answers")
-    .expect("a record is staged");
-    open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob).expect("the record opens")
+    .map(|blob| {
+        open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob).expect("the record opens")
+    })
+}
+
+/// The owner device's owed entry at the granted folder.
+fn owed_entry(fx: &GrantScenario) -> Option<OwedEntry> {
+    staged_owed_record(fx).and_then(|mut record| record.remove(&fx.folder))
 }
 
 /// A share run again over its standing mint keeps the time the entry first
@@ -13156,31 +13162,17 @@ fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
     let root = write_name(ROOT);
     fx.world.record_store.fail_put_for(root.as_str());
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let first = staged_owed_record(&fx)[&fx.folder].first_stop;
+    let first = owed_entry(&fx).expect("an entry is staged").first_stop;
     assert!(first.is_some(), "the stalled move set the first stop");
 
     fx.world.scheduler.advance(Duration::from_secs(60));
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
 
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the move is still owed");
-    assert_eq!(staged_owed_record(&fx)[&fx.folder].first_stop, first);
-}
-
-/// Whether the owner device's staged owed record holds an entry at `scope`.
-fn owes_at(fx: &GrantScenario, scope: NodeId) -> bool {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(11));
-    block_on(
-        fx.owner_device
-            .staging_store
-            .staged_bytes(&owed_rotation_key(&enc)),
-    )
-    .expect("the store answers")
-    .is_some_and(|blob| {
-        open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob)
-            .expect("the record opens")
-            .contains_key(&scope)
-    })
+    assert_eq!(
+        owed_entry(&fx).expect("an entry is staged").first_stop,
+        first
+    );
 }
 
 /// Seal `record` as the owner's owed rotation record on the owner device, for
@@ -13759,7 +13751,7 @@ fn another_owner_device_finishes_a_stalled_write_revoke() {
     assert_the_revoke_finished(&fx, &revokee_seed);
     let landed = fx.granted_scope_repoint();
     assert!(
-        owes_at(&fx, fx.folder),
+        owed_entry(&fx).is_some(),
         "the first device still owes the cut"
     );
 
@@ -13771,7 +13763,7 @@ fn another_owner_device_finishes_a_stalled_write_revoke() {
         landed,
         "the first device's re-drive cut nothing again"
     );
-    assert!(!owes_at(&fx, fx.folder), "and cleared its entry");
+    assert!(owed_entry(&fx).is_none(), "and cleared its entry");
     assert!(fx.owed_scopes().is_empty(), "and reports nothing owed");
 }
 
@@ -13806,6 +13798,114 @@ fn another_owner_device_finishes_a_stalled_write_scope_cut() {
         moved,
         "the first device's re-drive cut nothing again"
     );
+}
+
+/// The owner's second device appends a row after this device's command read
+/// the root. The cut set the command read no longer stands, so the command
+/// publishes nothing, and the appended row survives.
+#[test]
+fn a_write_rotate_now_over_a_stale_read_keeps_a_row_another_device_appended() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let before = fx.granted_scope_repoint();
+    let root = before.current_root.clone();
+    let read = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+    block_on(other.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(other.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the other device appends a row"
+    );
+    serve_the_walk_one_cut_behind(&fx, &root, read);
+    let folder = fx.folder;
+
+    let outcome = command_across_retries(&mut fx, Command::RotateWriteNow { node: folder });
+
+    assert!(outcome.is_err(), "the stale cut is refused: {outcome:?}");
+    assert_eq!(fx.granted_scope_repoint(), before, "no wave ran");
+    let bystander_tag = recipient_blinded_tag(
+        &kdf::enc_subkey(&BYSTANDER_SECRET),
+        &kdf::enc_subkey(&SECRET).public(),
+        root.as_str().as_bytes(),
+    )
+    .expect("a contributory owner key");
+    assert!(
+        published_grant_section_at(&fx.world, &fx.blocks, &root)
+            .expect("the root")
+            .commitment
+            .entries
+            .iter()
+            .any(|entry| entry.tag == bystander_tag),
+        "the appended row survives"
+    );
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// A write rotate-now reads no root from its last copy: a root the gate
+/// refuses at a cut read, after the command read it whole, is a trust
+/// violation, and nothing is cut or owed.
+#[test]
+fn a_write_rotate_now_refuses_a_planted_root_without_the_last_copy() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let before = fx.granted_scope_repoint();
+    let root = before.current_root.clone();
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    assert_eq!(plant_root_at(&fx, &revokee_seed, sequence), root);
+    let planted = published_value(&fx.world, &root);
+    // The command's own read meets the honest root; the cut reads meet the
+    // planted one.
+    serve_the_walk_one_cut_behind(&fx, &root, honest);
+    let folder = fx.folder;
+
+    let outcome = command_across_retries(&mut fx, Command::RotateWriteNow { node: folder });
+
+    assert!(
+        matches!(outcome, Err(EngineError::TrustViolation { .. })),
+        "{outcome:?}"
+    );
+    assert_eq!(fx.granted_scope_repoint(), before, "no wave ran");
+    assert_eq!(
+        published_value(&fx.world, &before.current_root),
+        planted,
+        "nothing published at the root name"
+    );
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// Owed work of this device at the scope refuses a write rotate-now,
+/// retryably: the sync pass re-drives that work.
+#[test]
+fn a_write_rotate_now_over_owed_work_of_this_device_is_refused() {
+    let mut fx = GrantScenario::new();
+    let _ = strand_a_write_revoke(&mut fx);
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        work_owed()
+    );
+    assert!(owed_entry(&fx).is_some(), "the entry stands for the pass");
 }
 
 /// A write rotate-now on a scope with no owed work moves the write plane one

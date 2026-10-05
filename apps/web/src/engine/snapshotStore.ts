@@ -98,6 +98,10 @@ const FINISH_WRITE_CUT = 'finish it here';
 const WRITE_CUT_FAILED =
   'the write-access change of a shared folder did not finish on this device - try again later';
 
+/** The write cut met a record that failed verification; no retry clears that. */
+const WRITE_CUT_TRUST_STOP =
+  'the write-access change of a shared folder stopped because a record in that folder failed verification - CipherBox will not finish it while that record stands';
+
 const IDLE: SnapshotState = { view: null, error: null };
 
 /** A store-shaped no-op for consumers mounted before the engine client exists. */
@@ -253,12 +257,27 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     } else if (event.kind === 'writeCutUnfinished') {
       const scope = toHex(event.scopeRoot);
       const key = `unfinished:${scope}`;
+      const failed = `unfinished-failed:${scope}`;
       notificationStore.warn(key, WRITE_CUT_UNFINISHED, {
         label: FINISH_WRITE_CUT,
         run: () =>
           client.facade.rotateWriteNow(event.scopeRoot).then(
-            () => notificationStore.dismiss(key),
-            () => notificationStore.warn(`unfinished-failed:${scope}`, WRITE_CUT_FAILED)
+            () => {
+              if (disposed) return;
+              notificationStore.dismiss(key);
+              notificationStore.dismiss(failed);
+            },
+            (refusal: unknown) => {
+              if (disposed) return;
+              if (refusal instanceof EngineRequestError && refusal.code === 'trustViolation') {
+                // The same key, so a later report of the scope offers no retry.
+                notificationStore.dismiss(key);
+                notificationStore.dismiss(failed);
+                notificationStore.warn(key, WRITE_CUT_TRUST_STOP);
+              } else {
+                notificationStore.warn(failed, WRITE_CUT_FAILED);
+              }
+            }
           ),
       });
     } else if (event.kind === 'attributableAbuse') {

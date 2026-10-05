@@ -462,6 +462,8 @@ pub(crate) enum RootWait<'a> {
     Command,
     /// A re-drive: the read waits for the bound of ADR 0065 D3.
     Bound(&'a dyn NodeBound),
+    /// A command whose refused root read stays a trust violation.
+    Never,
 }
 
 impl<'a> RootFallback<'a> {
@@ -483,7 +485,7 @@ impl<'a> RootFallback<'a> {
     /// [`RootGateVerdict::after_fanout`], falls back. A transport or local
     /// fault never does.
     fn admits(&self, scope_id: &[u8; 16], verdict: RootGateVerdict) -> bool {
-        if *scope_id != self.scope_id {
+        if *scope_id != self.scope_id || matches!(self.wait, RootWait::Never) {
             return false;
         }
         match verdict {
@@ -497,6 +499,7 @@ impl<'a> RootFallback<'a> {
             | RootGateVerdict::HeadBlockRefused
             | RootGateVerdict::BelowFloor => match self.wait {
                 RootWait::Command => true,
+                RootWait::Never => false,
                 RootWait::Bound(bound) => {
                     bound.held(scope_id);
                     bound.past(scope_id, true)

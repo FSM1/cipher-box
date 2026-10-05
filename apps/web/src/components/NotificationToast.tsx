@@ -14,7 +14,10 @@ export function NotificationToast() {
   const act = (notice: Notice) => {
     if (notice.action === undefined) return;
     setRunning(notice.key);
-    void notice.action.run().finally(() => setRunning(null));
+    void notice.action
+      .run()
+      .catch(() => undefined)
+      .finally(() => setRunning(null));
   };
 
   return (

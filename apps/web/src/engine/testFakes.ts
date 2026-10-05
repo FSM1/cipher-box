@@ -65,6 +65,8 @@ export function fakeEngine() {
   let refuseRefresh: Error | null = null;
   const writeCuts: Uint8Array[] = [];
   let refuseWriteCut: Error | null = null;
+  let heldWriteCut: ((error: Error) => void) | null = null;
+  let holdWriteCut = false;
 
   const client = {
     facade: {
@@ -93,6 +95,11 @@ export function fakeEngine() {
       },
       rotateWriteNow(node: Uint8Array) {
         writeCuts.push(node);
+        if (holdWriteCut) {
+          return new Promise((_resolve, reject) => {
+            heldWriteCut = reject;
+          });
+        }
         return refuseWriteCut === null
           ? Promise.resolve({ kind: 'done' })
           : Promise.reject(refuseWriteCut);
@@ -122,6 +129,9 @@ export function fakeEngine() {
     refuseRefresh: (error: Error) => (refuseRefresh = error),
     writeCuts,
     refuseWriteCut: (error: Error) => (refuseWriteCut = error),
+    /** Holds the next write cut open until `refuseHeldWriteCut`. */
+    holdWriteCut: () => (holdWriteCut = true),
+    refuseHeldWriteCut: (error: Error) => heldWriteCut?.(error),
     subscriberCount: () => listeners.size,
   };
 }

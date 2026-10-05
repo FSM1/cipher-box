@@ -219,7 +219,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
   root whose name its write seed does not derive, it emits
   `writeCutUnfinished`, so every owner device shows a write cut that did not
-  finish.
+  finish and can finish it.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
@@ -1721,10 +1721,11 @@ Accepted by ADRs 0023 to 0028 and ADR 0063:
   (ADR 0024 E1).
 - Owed rotation work is local: only the device that holds the entry re-drives
   it. On another owner device, a revoked writer keeps the old write seed until
-  the first device runs a pass; an owner action there runs a write-scope cut
-  from the published state. A lost first device leaves a revoke and an interior
-  move owed for ever. No manual "rotate write keys now" action exists yet
-  (ADR 0063 consequence 6).
+  the first device runs a pass, or until the owner runs "rotate write keys now"
+  (`RotateWriteNow`) there: any owner device runs that write-scope cut from the
+  published state, below the vault root, with no root read from its last copy.
+  A lost first device leaves an owed read cut and an interior move owed for
+  ever (ADR 0063 consequence 6).
 
 ## Mailbox logic
 

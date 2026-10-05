@@ -1203,10 +1203,9 @@ fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
     assert_eq!(listed_names(&engine, ROOT), ["reports"]);
 }
 
-/// A write grant and a write rotate-now, the commands that cut a write scope
-/// with no grant in place, are refused at the vault root. A write grant, a
-/// downgrade and a revoke below it leave the vault pointer on the same root at
-/// the same write epoch.
+/// A write grant, the one command that cuts a write scope with no grant in
+/// place, is refused at the vault root. A write grant, a downgrade and a revoke
+/// below it leave the vault pointer on the same root at the same write epoch.
 #[test]
 fn no_command_runs_a_write_cut_of_the_vault_root() {
     let world = FakeWorld::new();
@@ -1241,12 +1240,6 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
             })
         ),
         "a write grant at the vault root: {refused:?}"
-    );
-    assert_eq!(
-        block_on(engine.command(Command::RotateWriteNow { node: ROOT })),
-        Err(EngineError::UnsupportedTarget {
-            check: "rotate-write-target-is-the-vault-root"
-        }),
     );
     for command in [downgrade(reports), revoke(reports)] {
         grant_to_recipient_at(&mut engine, reports, Permission::Write);

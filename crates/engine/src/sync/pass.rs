@@ -1376,6 +1376,7 @@ where
             counts: &state.pending_invite_claims,
             running: &state.conversion_running,
             owed: &state.owed_rotation,
+            strict_root: false,
         };
         let sites = TickSites {
             boundaries,

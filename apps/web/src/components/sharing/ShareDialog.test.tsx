@@ -30,6 +30,9 @@ const CLAIMANT_SEED = 5;
 
 const NO_LINKS: SharingInviteLinkDescriptor[] = [];
 
+/** The epochs of a scope root that holds a write grant. */
+const EPOCHS: ScopeEpochsDescriptor = { readEpoch: 3n, writeEpoch: 1n };
+
 /** The tag of the link a seed names. */
 function linkTag(seed: number): Uint8Array {
   return new Uint8Array(32).fill(seed);
@@ -247,6 +250,14 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         return outcome;
       })
     ),
+    rotateWriteNow: vi.fn(() =>
+      answer('rotateWriteNow', { kind: 'done' as const }).then((outcome) => {
+        if (state.epochs !== null) {
+          state.epochs = { ...state.epochs, writeEpoch: state.epochs.writeEpoch + 1n };
+        }
+        return outcome;
+      })
+    ),
   };
 
   const client = {
@@ -362,6 +373,34 @@ describe('the people table', () => {
     await share();
 
     expect(screen.queryByTestId('share-epochs')).toBeNull();
+    expect(screen.queryByTestId('share-rotate-write')).toBeNull();
+  });
+
+  it("rotates the scope's write keys and shows the epoch the engine reports", async () => {
+    const engine = await share(
+      sharingEngine({}, held([1], [{ seed: 1, permission: 'write' }], { epochs: EPOCHS }))
+    );
+
+    await click('share-rotate-write');
+
+    expect(engine.facade.rotateWriteNow).toHaveBeenCalledWith(DOCS);
+    expect(screen.getByTestId('share-epochs').textContent).toBe('// read epoch 3 · write epoch 2');
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+  });
+
+  it('shows a trust refusal of the write-key rotation in the engine words', async () => {
+    const refusal = new EngineRequestError('the scope root did not verify', 'trustViolation');
+    await share(
+      sharingEngine(
+        { rotateWriteNow: refusal },
+        held([1], [{ seed: 1, permission: 'write' }], { epochs: EPOCHS })
+      )
+    );
+
+    await click('share-rotate-write');
+
+    expect(screen.getByTestId('dialog-error').textContent).toBe('the scope root did not verify');
+    expect(screen.getByTestId('share-epochs').textContent).toBe('// read epoch 3 · write epoch 1');
   });
 
   it('does not draw a scope the engine could not reach as one shared with nobody', async () => {

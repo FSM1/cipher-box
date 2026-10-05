@@ -86,6 +86,17 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               {`// read epoch ${scope.epochs.readEpoch} · write epoch ${scope.epochs.writeEpoch}`}
             </p>
           )}
+          {scope?.epochs && (
+            <button
+              type="button"
+              className="dialog-button"
+              onClick={() => void actions.rotateWriteKeys()}
+              disabled={busy}
+              data-testid="share-rotate-write"
+            >
+              {actions.busy === 'rotateWriteNow' ? 'rotating...' : 'rotate write keys'}
+            </button>
+          )}
           <PeopleTable
             grants={scope?.grants ?? null}
             links={scope?.inviteLinks ?? []}

@@ -206,6 +206,8 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(crate) running: &'a Cell<bool>,
     /// The session's owed rotation record (ADR 0063 D1).
     pub(crate) owed: &'a OwedCell,
+    /// No root read of this pass falls back to the last copy.
+    pub(crate) strict_root: bool,
 }
 
 /// Holds [`ConversionPass::running`] and clears it however the holder ends.
@@ -340,6 +342,17 @@ where
 
     /// [`Self::net`] for an owner cut's read of `target`'s root, which runs on
     /// the last copy of a root the gate refuses (ADR 0068 D1).
+    /// How long a root read of this pass waits before it falls back.
+    pub(super) fn root_wait<'b>(&self, command: bool, bound: &'b dyn NodeBound) -> RootWait<'b> {
+        if self.strict_root {
+            RootWait::Never
+        } else if command {
+            RootWait::Command
+        } else {
+            RootWait::Bound(bound)
+        }
+    }
+
     pub(super) fn cut_net<'b>(
         &'b self,
         target: &OwnerScope,
@@ -471,11 +484,7 @@ where
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
             bound,
-            root_wait: if command {
-                RootWait::Command
-            } else {
-                RootWait::Bound(bound)
-            },
+            root_wait: self.root_wait(command, bound),
             root_reports: self.owed.root_reports(),
             root_reads: CutRootReads::default(),
         };

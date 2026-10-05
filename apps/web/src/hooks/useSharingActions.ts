@@ -25,7 +25,8 @@ export type SharingCommand =
   | 'createInviteLink'
   | 'revokeInviteLink'
   | 'convertInviteClaims'
-  | 'dismissRefusedClaims';
+  | 'dismissRefusedClaims'
+  | 'rotateWriteNow';
 
 /** How long the "joined" notice stays up. */
 export const JOINED_NOTICE_MS = 8_000;
@@ -78,6 +79,8 @@ export interface SharingActions {
   revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
   /** Drops the claims this scope's links refused at a cap from this device's record. */
   dismissRefusedClaims(): Promise<boolean>;
+  /** Cuts this scope's write keys now, which finishes a write cut another device left. */
+  rotateWriteKeys(): Promise<boolean>;
 }
 
 /**
@@ -280,6 +283,14 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       () =>
         run('dismissRefusedClaims', async (facade) => {
           await facade.dismissRefusedClaims(target);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    rotateWriteKeys: useCallback(
+      () =>
+        run('rotateWriteNow', async (facade) => {
+          await facade.rotateWriteNow(target);
           await read(facade);
         }),
       [run, read, target]
