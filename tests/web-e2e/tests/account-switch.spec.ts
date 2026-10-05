@@ -14,7 +14,6 @@ import { expect, test } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { SettingsPage } from '../page-objects/settings.page';
-import { SharePage } from '../page-objects/share.page';
 import { claim, mint } from '../sharing';
 
 const DRAFT = 'draft';
@@ -22,8 +21,9 @@ const FOLDER_A = 'shared-by-a';
 const FOLDER_B = 'shared-by-b';
 
 /** The suffixes of the containers one account names (`accountStores.ts`, `stagingStore.ts`). */
-const DATABASES = ['floors', 'snapshot-cache', 'staging'] as const;
 const SNAPSHOT_CACHE = 'snapshot-cache';
+const STAGING = 'staging';
+const DATABASES = ['floors', SNAPSHOT_CACHE, STAGING] as const;
 const STAGED_DIRECTORY = 'staging-staged';
 const OPS_STORE = 'ops';
 const TEMP_PREFIX = '.cbtmp.';
@@ -40,7 +40,7 @@ interface AccountStores {
 
 async function storesOf(page: Page, accountId: string): Promise<AccountStores> {
   return page.evaluate(
-    async ({ accountId, suffixes, stagedSuffix, opsStore, tempPrefix }) => {
+    async ({ accountId, suffixes, stagingSuffix, stagedSuffix, opsStore, tempPrefix }) => {
       const spelled = (suffix: string) => `-${accountId}-${suffix}`;
       const listed = (await indexedDB.databases()).flatMap(({ name }) => (name ? [name] : []));
       const databases = suffixes.filter((suffix) =>
@@ -48,7 +48,7 @@ async function storesOf(page: Page, accountId: string): Promise<AccountStores> {
       );
 
       let queued = 0;
-      const stagingDb = listed.find((name) => name.endsWith(spelled('staging')));
+      const stagingDb = listed.find((name) => name.endsWith(spelled(stagingSuffix)));
       if (stagingDb !== undefined) {
         // An erase can land between the listing and this open, and an open of
         // an absent name must not create it again.
@@ -88,7 +88,8 @@ async function storesOf(page: Page, accountId: string): Promise<AccountStores> {
     },
     {
       accountId,
-      suffixes: [...DATABASES],
+      suffixes: DATABASES,
+      stagingSuffix: STAGING,
       stagedSuffix: STAGED_DIRECTORY,
       opsStore: OPS_STORE,
       tempPrefix: TEMP_PREFIX,
@@ -146,11 +147,10 @@ test('@full owner-local state survives an account switch, and a forget erases on
   const profile = await Device.open(browser, a, b);
   const page = await profile.page();
 
-  const link = await test.step('1. account A mints an invite link and signs out', async () => {
-    return mintAndSignOut(profile, a, FOLDER_A);
-  });
+  const link = await test.step('1. account A mints an invite link and signs out', () =>
+    mintAndSignOut(profile, a, FOLDER_A));
   const aBefore = await storesUntil(page, a.accountId, (stores) => {
-    expect(stores.databases).toEqual([...DATABASES]);
+    expect(stores.databases).toEqual(DATABASES);
     expect(stores.stagedDirectory).toBe(true);
     expect(stores.staged).toBeGreaterThan(0);
     expect(stores.queued).toBe(0);
@@ -161,18 +161,16 @@ test('@full owner-local state survives an account switch, and a forget erases on
       await mintAndSignOut(profile, b, FOLDER_B);
       await storesUntil(page, a.accountId, (stores) => expect(stores).toEqual(reclaimed(aBefore)));
       return storesUntil(page, b.accountId, (stores) => {
-        expect(stores.databases).toEqual([...DATABASES]);
+        expect(stores.databases).toEqual(DATABASES);
         expect(stores.staged).toBeGreaterThan(0);
       });
     });
 
-  const recipient = await test.step('3. the recipient claims the link of A', async () => {
-    return claim(browser, link);
-  });
+  const recipient = await test.step('3. the recipient claims the link of A', () =>
+    claim(browser, link));
 
   await test.step('4. account A signs back in, still holds its link, and converts the claim', async () => {
-    await profile.online(a);
-    const share = new SharePage(page);
+    const { share } = await profile.online(a);
     await share.openUntilLinks(FOLDER_A, 1);
     await share.openUntilGranted(FOLDER_A, 1);
     await expect(share.permission).toHaveValue('read');
