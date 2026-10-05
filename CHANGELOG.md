@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.4](https://github.com/FSM1/cipher-box/compare/v2.12.3...v2.12.4) (2026-10-05)
+
+
+### Bug Fixes
+
+* **auth:** retry transient saved-session export failures ([#2317](https://github.com/FSM1/cipher-box/issues/2317)) ([7c23278](https://github.com/FSM1/cipher-box/commit/7c23278d5d28f1daaabc5669382ffcab42984427))
+
 ## [2.12.3](https://github.com/FSM1/cipher-box/compare/v2.12.2...v2.12.3) (2026-10-04)
 
 
