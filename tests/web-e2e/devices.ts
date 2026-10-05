@@ -15,7 +15,7 @@ import { SharePage } from './page-objects/share.page';
 import type { VaultPage } from './page-objects/vault.page';
 import { coldStart } from './vault';
 
-/** The binding a device context answers with its held login secret. */
+/** The binding a device context answers with the held secret of the account it names. */
 const SECRET_BINDING = '__cipherboxE2eLoginSecret';
 
 /** One account's login: the secret, and the store namespace its devices use. */
@@ -44,18 +44,28 @@ export interface Tab {
  * One device: a browser context of its own, so its own engine, its own stores
  * and its own tick. A second page of one context shares the origin's
  * `BroadcastChannel` and `navigator.locks`, so it is a second tab, not a
- * second device.
+ * second device. A device that holds several logins is one browser profile
+ * that each of those accounts signs in on, over one origin's stores.
  */
 export class Device {
   private constructor(
     readonly context: BrowserContext,
-    readonly login: Login
+    private readonly logins: readonly [Login, ...Login[]]
   ) {}
 
-  static async open(browser: Browser, login: Login): Promise<Device> {
+  static async open(browser: Browser, ...logins: [Login, ...Login[]]): Promise<Device> {
     const context = await browser.newContext();
-    await context.exposeFunction(SECRET_BINDING, () => login.secret);
-    return new Device(context, login);
+    await context.exposeFunction(SECRET_BINDING, (accountId: string) => {
+      const held = logins.find((login) => login.accountId === accountId);
+      if (held === undefined) throw new Error(`the device holds no login for ${accountId}`);
+      return held.secret;
+    });
+    return new Device(context, logins);
+  }
+
+  /** The login this device signs in on when a caller names none. */
+  get login(): Login {
+    return this.logins[0];
   }
 
   /** This device's open page, or a new one when it has none. */
@@ -64,23 +74,25 @@ export class Device {
   }
 
   /** Starts a session in `page`, a page of this device, on whatever route it holds. */
-  async signIn(page: Page): Promise<void> {
+  async signIn(page: Page, login: Login = this.login): Promise<void> {
     await page.evaluate(
       async ({ account, binding }) => {
-        const held = (window as unknown as Record<string, () => Promise<string>>)[binding];
-        await window.__CIPHERBOX_ENGINE__!.signIn(await held(), account);
+        const held = (window as unknown as Record<string, (id: string) => Promise<string>>)[
+          binding
+        ];
+        await window.__CIPHERBOX_ENGINE__!.signIn(await held(account), account);
       },
-      { account: this.login.accountId, binding: SECRET_BINDING }
+      { account: login.accountId, binding: SECRET_BINDING }
     );
   }
 
   /** Signs a tab in and waits for the settled vault root. */
-  async online(): Promise<Tab> {
+  async online(login: Login = this.login): Promise<Tab> {
     const page = await this.page();
     const { vault, files } = await coldStart(page, async () => {
-      await this.signIn(page);
+      await this.signIn(page, login);
       await page.waitForURL('**/files');
-      return this.login.accountId;
+      return login.accountId;
     });
     return { page, vault, files, share: new SharePage(page) };
   }
