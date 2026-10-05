@@ -43,8 +43,8 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::adopter::{
-    HEAD_BLOCK_NOT_FOUND, LocalHead, RecoveredScopeRoot, RecoveredSeeds, RootAdopter,
-    fetch_head_block, open_write_scope_seed_at, root_bar,
+    LocalHead, RecoveredScopeRoot, RecoveredSeeds, RootAdopter, fetch_head_block,
+    open_write_scope_seed_at, root_bar,
 };
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -1118,7 +1118,7 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
                 seeds,
             ))))
         }
-        Err(GateError::Seam(seam)) if seam.status() == Some(HEAD_BLOCK_NOT_FOUND) => {
+        Err(GateError::Seam(seam)) if seam.is_block_not_held() => {
             Err(RootGateVerdict::HeadBlockAbsent)
         }
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
@@ -8688,6 +8688,24 @@ mod tests {
         }
 
         fn resolved(&self, _node_id: &[u8; 16]) {}
+    }
+
+    #[test]
+    fn a_root_whose_head_block_no_source_holds_is_head_block_absent() {
+        let (harness, root, _) = staged_cut();
+        let not_found = ScriptedHttp::with_route(|_| {
+            Some(Ok(HttpResponse {
+                status: 404,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            }))
+        });
+        let mut net = harness.net(&[]);
+        net.http = &not_found;
+
+        let read = block_on(net.gated_root(SCOPE, &root.name)).map(|_| ());
+
+        assert_eq!(read, Err(RootGateVerdict::HeadBlockAbsent));
     }
 
     /// ADR 0068 D1: a refusal in the record bytes falls back at once; a cause
