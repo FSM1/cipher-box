@@ -1737,8 +1737,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still read for capture walks, shared out across its
     /// scope passes ([`MAX_CAPTURE_WALK_READS`]).
     capture_reads: RefCell<TickShare>,
-    /// Whether a pass of this tick charged the capture walk an unanswered
-    /// read, so the walk's attempts count ticks, not passes.
+    /// Whether a capture walk read of this tick went unanswered. The later
+    /// passes of the tick read no more, so the walk's attempts count ticks.
     walk_unanswered: Cell<bool>,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
@@ -5622,13 +5622,14 @@ where
             WalkStep::Unfinished => proofs.walk = Some(walk),
             WalkStep::Restart => {}
             WalkStep::Overflowed => {
-                let own = (!eligible.is_empty()).then_some(scope_root);
-                for root in walk.cohort.keys().copied().chain(own) {
+                for root in walk.cohort.keys().copied() {
                     let overflowed = proofs.scope_mut(root);
                     overflowed.overflowed = true;
                     overflowed.proved.clear();
                 }
-                self.take_captures(scope_root, eligible);
+                if walk.cohort.contains_key(&scope_root) {
+                    self.take_captures(scope_root, eligible);
+                }
             }
             WalkStep::Settled => {
                 for (root, keys) in walk.cohort {
@@ -5689,7 +5690,7 @@ where
             if walk.pending.is_empty() && (walk.blind || walk.confirmed == walk.read.len()) {
                 break WalkStep::Settled;
             }
-            if spent == share {
+            if spent == share || self.walk_unanswered.get() {
                 break WalkStep::Unfinished;
             }
             spent += 1;
@@ -5711,9 +5712,8 @@ where
                 Ok(read) => read,
                 Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
                 Err(WalkReadFault::Unanswered) => {
-                    if !self.walk_unanswered.replace(true) {
-                        walk.unanswered += 1;
-                    }
+                    self.walk_unanswered.set(true);
+                    walk.unanswered += 1;
                     break if walk.unanswered >= MAX_CAPTURE_READ_ATTEMPTS {
                         WalkStep::Restart
                     } else {
@@ -12634,6 +12634,85 @@ mod tests {
         let proofs = harness.state.capture_proofs.borrow();
         assert!(proofs.scopes[&HARNESS_ROOT].overflowed);
         assert!(!proofs.scopes.contains_key(&interior.root));
+    }
+
+    /// The interior scope starts a walk while the vault scope holds only
+    /// proved captures. The walk passes its bound on the vault scope's pass,
+    /// which it does not serve, so only the interior scope is marked.
+    #[test]
+    fn an_overflow_on_the_pass_of_a_scope_it_does_not_serve_leaves_that_scope() {
+        let (mut harness, mut blocks) = walk_harness_of(&[WALK_FOLDER, NodeId([0x49; 16])]);
+        let interior = OtherEnd::interior(0x30);
+        interior.serve(&mut harness, &mut blocks);
+        harness.scope_roots.push(interior.root);
+        let proved = capture(&harness.write_scope_seed);
+        harness
+            .state
+            .capture_proofs
+            .borrow_mut()
+            .scope_mut(HARNESS_ROOT)
+            .proved
+            .insert(capture_key(&proved));
+        harness
+            .state
+            .observed_unlinks
+            .borrow_mut()
+            .push(UnlinkedChild {
+                scope_id: interior.root.0,
+                ..capture_of(&harness.write_scope_seed, NodeId([0x4A; 16]))
+            });
+        let vault = harness.scope();
+        let inner = DrainScope {
+            source: interior.end(),
+            ..vault
+        };
+        let ends = [vault.source, inner.source];
+
+        block_on(
+            harness
+                .drain()
+                .with_capture_walk_bounds(0, MAX_CAPTURE_WALK_NODES)
+                .adopt_observed_unlinks(&inner, &ends),
+        );
+        block_on(
+            harness
+                .drain()
+                .with_capture_walk_bounds(MAX_CAPTURE_WALK_READS, 2)
+                .adopt_observed_unlinks(&vault, &ends),
+        );
+
+        let proofs = harness.state.capture_proofs.borrow();
+        assert!(proofs.scopes[&interior.root].overflowed);
+        assert!(!proofs.scopes[&HARNESS_ROOT].overflowed);
+        assert!(
+            held_nodes(&harness).contains(&proved.node),
+            "the vault scope keeps its capture"
+        );
+    }
+
+    /// A walk read with no answer on the first pass of a tick is the tick's
+    /// one attempt: the later passes of the tick do not read again.
+    #[test]
+    fn a_tick_makes_one_walk_read_that_does_not_answer() {
+        let (harness, _) = walk_harness();
+        harness
+            .seams
+            .transport
+            .fail_get_for(derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &WALK_FOLDER.0).as_str());
+        let drain = harness.drain();
+
+        block_on(drain.adopt_observed_unlinks(&harness.scope(), &[]));
+        let first = reads_of(&harness, WALK_FOLDER);
+        for _ in 1..3 {
+            block_on(drain.adopt_observed_unlinks(&harness.scope(), &[]));
+        }
+
+        assert!(first > 0, "the first pass reads the folder");
+        assert_eq!(
+            reads_of(&harness, WALK_FOLDER),
+            first,
+            "the later passes of the tick do not read it again"
+        );
     }
 
     /// Every pass of one tick meets the same read with no answer. The tick
