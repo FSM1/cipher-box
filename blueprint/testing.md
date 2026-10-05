@@ -150,8 +150,10 @@ scenario fails the meta-test):
   and a content edit. A rename, a move and a version restore leave at publish,
   so a later writer's change stays. A kept op leaves after the bound of
   ADR 0069 D5, a kept op with no note leaves once the live tree shows it, and a
-  second apply that cannot land leaves with no notice, also a kept create
-  under a refused scope root after a restart (ADR 0069,
+  second apply that a rebase or a permanent halt refuses leaves with no notice;
+  a second apply that loses a tie once lands on a later pass, one under a
+  refused parent dead-letters with a notice, and a kept create under a refused
+  scope root waits uncharged after a restart and leaves at the bound (ADR 0069,
   `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, also a late write that
   the wave did not carry (ADR 0069 D3,

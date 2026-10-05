@@ -2578,9 +2578,7 @@ where
                 .collect();
             &rest[..]
         };
-        // A kept op under a scope this device can no longer write does not
-        // apply again: it holds the head on the keyless charge and
-        // dead-letters at the budget (ADR 0069 D3).
+        // A kept op under a keyless scope does not apply again ([`KeptPlace::Keyless`]).
         let kept = self.kept_ids(scope).await?;
         let mut unwritable = None;
         for (index, (op_id, op)) in pending.iter().enumerate() {
@@ -2747,25 +2745,15 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
-        // The bin index load and the delete's plane proof are their own probes,
-        // so their holds exit here, on a classified halt at the held op. Every
-        // other reason has an exit the pre-pass gate can try.
+        // Each probed hold exits here, on a classified halt at the held op
+        // ([`probed_hold_exits`]). Every other reason has an exit the pre-pass
+        // gate can try.
         if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
-        // A kept op leaves with no notice, as its rebase dead letter does, and
-        // a charged halt spends no budget on a version that landed once. A
-        // scope this device can no longer write is the dead letter of ADR 0069
-        // D3, so it keeps its charge.
-        if matches!(
-            halt,
-            Halt::Permanent(_)
-                | Halt::Attempt
-                | Halt::UploadAttempt
-                | Halt::RecordRefused
-                | Halt::HeadOversized
-                | Halt::ScopeRootNotResealable
-        ) && keeps(&op.kind)
+        // A kept op leaves with no notice, as its rebase dead letter does.
+        if matches!(halt, Halt::Permanent(_))
+            && keeps(&op.kind)
             && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))
         {
             if self.dequeue_op(op_id).await.is_ok() {
@@ -3087,15 +3075,24 @@ where
             OpKind::Restore { into, .. } => *into,
             _ => op.target,
         };
-        let (nearest, anchor_name) = {
+        let (nearest, nearest_known, anchor_name) = {
             let base = self.cells.base.borrow();
             let Some(meta) = base.node(anchor) else {
                 return Ok(KeptPlace::Elsewhere);
             };
             let nearest = enclosing_scope_root(&base, anchor, scope.scope_roots);
-            (nearest, meta.ipns_name.clone())
+            let known: Vec<NodeId> = scope
+                .scope_roots
+                .iter()
+                .chain(scope.known_scope_roots)
+                .copied()
+                .collect();
+            let nearest_known = enclosing_scope_root(&base, anchor, &known);
+            (nearest, nearest_known, meta.ipns_name.clone())
         };
-        let Some(root) = nearest else {
+        // A known root this walk did not prove, a gate-refused one included,
+        // is no flip: the root above it would read as one.
+        let Some(root) = nearest.filter(|root| nearest_known == Some(*root)) else {
             return Ok(KeptPlace::Elsewhere);
         };
         let end = match scope.second_end() {

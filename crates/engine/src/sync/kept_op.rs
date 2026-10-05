@@ -232,8 +232,9 @@ pub(crate) enum KeptPlace {
         anchor_read_live: bool,
     },
     /// The op's scope, rooted at `root`, is a proved root that this device
-    /// holds no write seed for: a revoke or a downgrade took it. The op joins
-    /// the pass, which dead-letters it rather than rebase it (ADR 0069 D3).
+    /// holds no write seed for: a revoke or a downgrade took it. The op does
+    /// not apply again: the pass takes it out before the rebase, and the valve
+    /// charges it on the keyless charge until it dead-letters (ADR 0069 D3).
     Keyless { root: NodeId },
     /// Another pass, or none this tick, answers for the op's scope.
     Elsewhere,
@@ -245,8 +246,8 @@ pub(crate) enum KeptVerdict {
     /// It waits in the queue, out of this pass.
     Stay,
     /// It joins this pass, and the rebase onto the live tree decides: a landed
-    /// op drops, a lost one applies again (ADR 0069 D3, D6). An op under a
-    /// keyless scope dead-letters instead ([`KeptPlace::Keyless`]).
+    /// op drops, a lost one applies again (ADR 0069 D3, D6). See
+    /// [`KeptPlace::Keyless`] for an op under a keyless scope.
     Recheck,
     /// It waited out [`KEPT_OP_BOUND`] at its write epoch, and leaves.
     Expired,

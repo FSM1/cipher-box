@@ -2264,10 +2264,7 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_r, &mut tasks_r, 8);
     assert!(!holds_the_edit(), "the kept edit left the queue");
     assert_eq!(
-        events_so_far(&mut events_r)
-            .iter()
-            .filter(|event| matches!(event, Event::DeadLetter { .. }))
-            .count(),
+        dead_letter_events(&mut events_r).len(),
         1,
         "as a dead letter"
     );
@@ -2281,6 +2278,14 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_r, &mut tasks_r, 4);
 
     assert_eq!(queued(&recipient), 0, "the later op published");
+}
+
+/// The dead-letter notices on `events` since the last read.
+fn dead_letter_events(events: &mut EventStream) -> Vec<Event> {
+    events_so_far(events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::DeadLetter { .. }))
+        .collect()
 }
 
 /// A write grantee's create lands in the old tree after the name wave of its
@@ -2358,11 +2363,11 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
 
     tick_n(&world, &engine_r, &mut tasks_r, 10);
 
-    let dead: Vec<_> = events_so_far(&mut events_r)
-        .into_iter()
-        .filter(|event| matches!(event, Event::DeadLetter { .. }))
-        .collect();
-    assert_eq!(dead.len(), 1, "the create dead-letters with a notice");
+    assert_eq!(
+        dead_letter_events(&mut events_r).len(),
+        1,
+        "the create dead-letters with a notice"
+    );
     let status = block_on(engine_r.status()).expect("the session status reads");
     assert_eq!(status.dead_letters.len(), 1, "and the member can name it");
 }

@@ -43,7 +43,9 @@ and, if it holds the new write seed, applies the op again under that seed.** An 
 the seed from the owner write blob, and a surviving write grantee gets it from its grant blob. The
 op applies again through the standard rebase of "Sync core", in FIFO order before the later queued
 ops, and the per-op rebase rules apply unchanged. A revoked or downgraded party holds no new write
-seed, so its op does not apply again and takes the dead-letter path of "Sync core".
+seed, so its op does not apply again and takes the dead-letter path of "Sync core". Amended on
+2026-10-03: that dead letter is not landed. Its kept op reads the old tree and leaves with no notice
+(FSM1/cipher-box#2272). Amended on 2026-10-05: the dead letter landed.
 
 Amended on 2026-10-03: the owner ruled the three Residuals: the kept op, T = 7 days, and an
 amendment of this ADR in place. D4 to D7 record the rulings. Each sentence that starts with
@@ -100,7 +102,9 @@ Only the drain reads a kept op again, and the cancel command refuses it.
    check at a new write epoch, and the second apply through the rebase.
 2. `blueprint/engine.md` "rotateScopeWrite" adds one sentence after the gated-read sentence:
    the writer carries such a write (D1). "Residuals" states that the late write of a revoked
-   writer dead-letters on its own device.
+   writer dead-letters on its own device. Amended on 2026-10-03: until that dead letter lands
+   (FSM1/cipher-box#2272), "Residuals" states that the kept op of a revoked writer leaves its
+   queue with no notice. Amended on 2026-10-05: the dead letter landed.
 3. `CONTEXT.md` "Op queue" states that a published op stays until it is visible from the live
    root, and "Name wave" states that the writer carries a write that lands after the walk.
    Amended on 2026-10-03: "Op queue" names the kept kinds, and "Pending-op overlay" states that
@@ -109,6 +113,7 @@ Only the drain reads a kept op again, and the cancel command refuses it.
    probe of `InMemoryRecordStore::seed_record_after_put`: after the writer's next pass, the new
    tree names the new child at its new name and the child opens there, and the op of a revoked
    writer dead-letters. Amended on 2026-10-03: the probe serves the walk the record from before
-   the write, for each kept kind. D5 and D6 each have a test, and each kind that is not kept has
-   a test that a later writer's change stays.
+   the write, for each kept kind. The revoked-writer half waits for that dead letter
+   (FSM1/cipher-box#2272). Amended on 2026-10-05: the dead letter landed. D5 and D6 each have a
+   test, and each kind that is not kept has a test that a later writer's change stays.
 5. `blueprint/core.md` "Owner-local seals" adds the `kept-ops` kind (D4).
