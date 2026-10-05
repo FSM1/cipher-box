@@ -553,6 +553,7 @@ describe('ending the session across a host with more than one context', () => {
     const held = parts.flow.resume();
 
     try {
+      await vi.waitUntil(() => starts === 2);
       // The serialization gate refuses an end that collided with a restore.
       await expect(parts.flow.logout()).rejects.toThrow();
 
@@ -584,6 +585,7 @@ describe('ending the session across a host with more than one context', () => {
     await parts.flow.loginWithGoogle('id-token');
     const held = parts.flow.resume();
 
+    await vi.waitUntil(() => starts === 2);
     await expect(parts.flow.logout()).rejects.toThrow();
     release();
     await held;

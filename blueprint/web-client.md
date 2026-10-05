@@ -217,6 +217,12 @@ all living in `packages/client` and running inside the engine worker realm:
   transferred buffer, and zeroes its own copy. Everything derives in-engine
   via the KDF catalog: identity key, encryption subkey, pointer chain, vault
   entry.
+- **Saved-session export retries recognized Web3Auth refusals** before ending
+  the session, with delayed, jittered attempts admitted within two minutes.
+  An in-flight SDK export must settle before another starts. Logout cancels
+  the retry and prevents a late export from reaching the engine. Expired
+  sessions, malformed key material, unknown failures and engine refusals
+  remain terminal.
 - **The engine owns the token lifecycle** (FSM1/cipher-box-next#28 D5): challenge-signature login
   through its API client; access JWT in engine memory; refresh cookie rides
   the Http seam. This is a distinct authentication from unlocking the Core Kit,

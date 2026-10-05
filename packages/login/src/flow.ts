@@ -8,6 +8,7 @@
 import { collectedMethods, type CollectedMaterial, type CredentialCollector } from './collector';
 import type { IdentityCredential, IdentityExchange, IdentityMethod } from './identity';
 import { handOffLoginSecret, type LoginFacade } from './secret';
+import { exportRestoredSecret } from './restore';
 import {
   RecoveryRequiredError,
   type AccountRecord,
@@ -95,6 +96,8 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
 let inFlight = false;
 let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promise<void> } | null =
   null;
+/** Belongs to the active handoff, even if a replacement facade updates the restore latch. */
+let restoreAbort: AbortController | null = null;
 /**
  * The provider session a session end retired, or `'any'` where the end could not
  * name one because none was built yet. Cleared by the next deliberate login.
@@ -124,6 +127,8 @@ let exchanged: {
 export function resetLoginFlowLatches(): void {
   inFlight = false;
   restore = null;
+  restoreAbort?.abort();
+  restoreAbort = null;
   retired = null;
   exchanged = null;
 }
@@ -184,7 +189,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
    *
    * The credential is spent here, whichever way the start goes.
    */
-  const handOff = async (): Promise<void> => {
+  const handOff = async (restoring?: AbortSignal): Promise<void> => {
     const held = exchanged?.session === session ? exchanged : null;
     exchanged = null;
     if (!facade || !session) throw new Error('the engine is not ready to accept a login');
@@ -195,13 +200,19 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     try {
       await handOffLoginSecret(
         facade,
-        session,
+        restoring
+          ? {
+              accountId: () => session.accountId(),
+              _UNSAFE_exportTssKey: () => exportRestoredSecret(session, restoring, host.now),
+            }
+          : session,
         held && {
           token: held.credential.token,
           receivedAt: held.receivedAt,
           expiresIn: held.credential.expiresIn,
           now: host.now,
-        }
+        },
+        restoring
       );
       // The end latches while this export is in flight, and its own teardown is
       // the leg the serialization gate refuses; signing in here would re-enter
@@ -264,6 +275,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     // well before this one releases what they would race for.
     retired = session ?? 'any';
     secrets?.use(null);
+    restoreAbort?.abort(new Error('the session ended before this sign-in finished'));
     restore = null;
     exchanged = null;
     account.signedOut();
@@ -363,9 +375,15 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
         return restore.done;
       }
       // A restore follows no exchange, so it presents no token.
-      const done = exclusively(() => {
-        exchanged = null;
-        return handOff();
+      const done = exclusively(async () => {
+        const abort = new AbortController();
+        restoreAbort = abort;
+        try {
+          exchanged = null;
+          await handOff(abort.signal);
+        } finally {
+          restoreAbort = null;
+        }
       }).catch(() => undefined);
       restore = { session, facade, done };
       return done;
