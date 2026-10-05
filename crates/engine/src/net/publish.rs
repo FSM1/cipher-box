@@ -36,7 +36,12 @@ const IPFS_PREFIX: &str = "/ipfs/";
 /// Liveness is backstopped by the ~hourly keyless re-PUT job and the API
 /// republisher, so this loop stays short — it closes the common transient gap,
 /// not a durability guarantee.
-const MAX_REPUT_ATTEMPTS: u32 = 3;
+const MAX_REPUT_ATTEMPTS: u32 = 5;
+
+/// The wait before the first background re-PUT; each later wait doubles it.
+/// A public endpoint can lag the accelerator by about 90 s, so the schedule
+/// spans that window from its first seconds.
+const REPUT_BASE_DELAY: Duration = Duration::from_secs(10);
 
 /// The durable epoch floors one record must clear at its signature.
 ///
@@ -729,7 +734,6 @@ where
     put_and_confirm(
         transport,
         scheduler,
-        profile,
         request.observed.name(),
         record_bytes,
         sequence,
@@ -742,7 +746,6 @@ where
 pub(crate) async fn put_and_confirm<T, Sch>(
     transport: &T,
     scheduler: &Sch,
-    profile: &SyncTimingProfile,
     name: &IpnsName,
     record_bytes: Vec<u8>,
     sequence: u64,
@@ -766,7 +769,6 @@ where
             key.to_owned(),
             record_bytes.clone(),
             fanout.not_acked,
-            profile.poll_cadence,
         );
     }
 
@@ -798,28 +800,29 @@ where
     })
 }
 
-/// Spawn the background re-PUT for endpoints that missed the first ack: sleep a
-/// poll cadence, re-PUT the still-missing endpoints (idempotent), repeat up to
-/// [`MAX_REPUT_ATTEMPTS`]. Fire-and-forget on the [`Scheduler`] — the publish
-/// already succeeded on the first ack.
+/// Spawn the background re-PUT for endpoints that missed the first ack: sleep
+/// [`REPUT_BASE_DELAY`], re-PUT the still-missing endpoints (idempotent), and
+/// repeat with a doubled wait, up to [`MAX_REPUT_ATTEMPTS`]. Fire-and-forget on
+/// the [`Scheduler`] — the publish already succeeded on the first ack.
 fn spawn_background_reput<T, Sch>(
     transport: T,
     scheduler: Sch,
     key: String,
     record_bytes: Vec<u8>,
     mut remaining: Vec<EndpointId>,
-    retry_delay: Duration,
 ) where
     T: RecordTransport + 'static,
     Sch: Scheduler + Clone + 'static,
 {
     let task_scheduler = scheduler.clone();
     scheduler.spawn(Box::pin(async move {
+        let mut delay = REPUT_BASE_DELAY;
         for _ in 0..MAX_REPUT_ATTEMPTS {
             if remaining.is_empty() {
                 return;
             }
-            task_scheduler.sleep(retry_delay).await;
+            task_scheduler.sleep(delay).await;
+            delay = delay.saturating_mul(2);
             let mut still_missing = Vec::new();
             for endpoint in remaining {
                 if transport
@@ -850,7 +853,84 @@ pub(crate) fn head_cid_from_value(value: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::seams::SeamResult;
-    use crate::testkit::{block_on, fakes::InMemoryFloorStore};
+    use crate::testkit::{
+        block_on,
+        fakes::{InMemoryFloorStore, VirtualScheduler},
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Logs each PUT at the scheduler's time. `lagging` refuses every PUT;
+    /// any other endpoint refuses only its first background PUT.
+    #[derive(Clone)]
+    struct LoggedPuts {
+        scheduler: VirtualScheduler,
+        lagging: EndpointId,
+        puts: Rc<RefCell<Vec<(EndpointId, u64)>>>,
+    }
+
+    impl RecordTransport for LoggedPuts {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            Vec::new()
+        }
+
+        async fn get_record(
+            &self,
+            _: &EndpointId,
+            _: &str,
+            _: usize,
+            _: Option<&str>,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        async fn put_record(&self, endpoint: &EndpointId, _: &str, _: &[u8]) -> SeamResult<()> {
+            let mut puts = self.puts.borrow_mut();
+            let earlier = puts.iter().filter(|(put, _)| put == endpoint).count();
+            puts.push((endpoint.clone(), self.scheduler.now().0));
+            if *endpoint == self.lagging || earlier == 0 {
+                return Err(SeamError::new("lagging"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_background_re_put_backs_off_from_its_base_delay() {
+        let scheduler = VirtualScheduler::new().with_auto_advance();
+        let lagging = EndpointId::new("lagging");
+        let healing = EndpointId::new("healing");
+        let transport = LoggedPuts {
+            scheduler: scheduler.clone(),
+            lagging: lagging.clone(),
+            puts: Rc::default(),
+        };
+
+        spawn_background_reput(
+            transport.clone(),
+            scheduler.clone(),
+            "k51-name".to_owned(),
+            vec![1, 2, 3],
+            vec![lagging.clone(), healing.clone()],
+        );
+        for task in scheduler.take_spawned_tasks() {
+            block_on(task);
+        }
+
+        let puts = transport.puts.borrow();
+        let at = |endpoint: &EndpointId| -> Vec<u64> {
+            puts.iter()
+                .filter(|(put, _)| put == endpoint)
+                .map(|(_, at)| *at)
+                .collect()
+        };
+        assert_eq!(at(&lagging), [10_000, 30_000, 70_000, 150_000, 310_000]);
+        assert_eq!(
+            at(&healing),
+            [10_000, 30_000],
+            "an ack ends that endpoint's tries"
+        );
+    }
 
     struct ConcurrentAdopt {
         inner: InMemoryFloorStore,
