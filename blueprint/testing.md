@@ -153,7 +153,8 @@ scenario fails the meta-test):
   second apply that a rebase or a permanent halt refuses leaves with no notice;
   a second apply that loses a tie once lands on a later pass, one under a
   refused parent dead-letters with a notice and keeps a file's bytes across a
-  restart, a kept create under a refused scope root waits uncharged after a
+  restart, a kept edit under a refused file record dead-letters with a notice
+  and frees the queue, a kept create under a refused scope root waits uncharged after a
   restart and leaves at the bound, and one under a moved root the walk cannot
   prove waits past the bound and applies again once the walk proves it (ADR 0069,
   `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write

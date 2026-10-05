@@ -142,6 +142,7 @@ struct Assembly {
     grafted_scope_roots: BookmarkedScopeRoots,
     grafted_contested: ContestedNodes,
     proved_roots: Vec<NodeId>,
+    granted_namespaces: Vec<(NodeId, FloorNamespace)>,
     descendants: Vec<DescendantScopeRoot>,
 }
 
@@ -1068,6 +1069,22 @@ where
             .chain(grafted.iter().map(|pass| pass.root))
             .chain(read_only_grafts.iter().copied())
             .collect();
+        let granted_namespaces = {
+            let sharers = state.grafted_sharers.borrow();
+            sharers
+                .keys()
+                .filter_map(|scope_id| {
+                    let namespace = floor_namespace(
+                        &sharers,
+                        &pass.contact_label_seed,
+                        &self.root_id,
+                        &scopes.proved,
+                        scope_id,
+                    )?;
+                    (namespace != FloorNamespace::Own).then_some((NodeId(*scope_id), namespace))
+                })
+                .collect()
+        };
         Assembly {
             write_seed,
             grafted,
@@ -1075,6 +1092,7 @@ where
             grafted_scope_roots,
             grafted_contested,
             proved_roots,
+            granted_namespaces,
             descendants,
         }
     }
@@ -1112,6 +1130,7 @@ where
             grafted_scope_roots,
             grafted_contested,
             proved_roots,
+            granted_namespaces,
             descendants,
         } = assembly;
         let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
@@ -1204,6 +1223,7 @@ where
             }),
             scope_roots: &proved_roots,
             known_scope_roots: &known_scope_roots,
+            granted_namespaces: &granted_namespaces,
             keyless_roots: &keyless_roots,
             charges_the_identity: false,
             enc_secret: enc_subkey,
@@ -1218,6 +1238,7 @@ where
                 destination: None,
                 scope_roots: &proved_roots,
                 known_scope_roots: &known_scope_roots,
+                granted_namespaces: &granted_namespaces,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
                 enc_secret: enc_subkey,
@@ -1236,6 +1257,7 @@ where
                 destination: None,
                 scope_roots: &proved_roots,
                 known_scope_roots: &known_scope_roots,
+                granted_namespaces: &granted_namespaces,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
                 enc_secret: enc_subkey,

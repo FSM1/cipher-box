@@ -1298,6 +1298,9 @@ pub(crate) struct DrainScope<'a> {
     pub(crate) scope_roots: &'a [NodeId],
     /// Includes boundaries whose material the current walk could not prove.
     pub(crate) known_scope_roots: &'a [NodeId],
+    /// The floor namespace of each scope root another identity granted. Every
+    /// other root reads its floors in this identity's own namespace.
+    pub(crate) granted_namespaces: &'a [(NodeId, FloorNamespace)],
     /// The proved scope roots whose own records carry no write plane this
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
@@ -2603,13 +2606,21 @@ where
         let pending = &pending[..end];
 
         let opened = self.open_rebased_pass(scope, pending).await;
-        // A newer release rewrites the anchor on each write, so its halt must
-        // reach the valve to be bounded and named.
-        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, pending.first()) {
-            self.apply_valve(scope, *op_id, op, *halt, attempts, report)
-                .await;
+        // A newer release rewrites the anchor on each write, and a kept edit's
+        // head read halts on its own op, so both halts must reach the valve to
+        // be bounded and named.
+        if let Err((halt, at)) = &opened {
+            let charged = match at {
+                Some(at) => pending.iter().find(|(op_id, _)| op_id == at),
+                None if *halt == Halt::ForeignVersion => pending.first(),
+                None => None,
+            };
+            if let Some((op_id, op)) = charged {
+                self.apply_valve(scope, *op_id, op, *halt, attempts, report)
+                    .await;
+            }
         }
-        let (mut pass, rebased) = opened?;
+        let (mut pass, rebased) = opened.map_err(|(halt, _)| halt)?;
         for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2993,12 +3004,12 @@ where
                     let mut place = self.kept_place(scope, &op).await?;
                     // This pass cannot check the op, so the floor of the root
                     // it published under decides whether the bound runs. A
-                    // delete whose node a proved root no longer holds leaves
-                    // at the bound (ADR 0069 D6).
+                    // delete whose node the base does not hold leaves at the
+                    // bound (ADR 0069 D6).
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = notes.note_at(op_id, now).scope
                         && (!matches!(op.kind, OpKind::Delete { .. })
-                            || !scope.scope_roots.contains(&root))
+                            || self.cells.base.borrow().node(op.target).is_some())
                     {
                         place = self.unchecked_place(scope, root).await?;
                     }
@@ -3123,13 +3134,19 @@ where
         })
     }
 
-    /// [`KeptPlace::Unchecked`] at `root`, under its durable write-epoch floor.
+    /// [`KeptPlace::Unchecked`] at `root`, under its durable write-epoch floor
+    /// in the namespace of `root`, whichever pass reads it.
     async fn unchecked_place(
         &self,
         scope: &DrainScope<'_>,
         root: NodeId,
     ) -> Result<KeptPlace, Halt> {
-        let floors = scope.source.floors(&self.seams.floors);
+        let namespace = scope
+            .granted_namespaces
+            .iter()
+            .find(|(granted, _)| *granted == root)
+            .map_or(FloorNamespace::Own, |(_, namespace)| *namespace);
+        let floors = namespace.view(&self.seams.floors);
         Ok(KeptPlace::Unchecked {
             root,
             live_write_epoch: floor::write_epoch_floor(&floors, &root.0)
@@ -3188,23 +3205,39 @@ where
     /// step 7). The pass then builds on a gated record of the scope root, or of
     /// a folder the head op writes, that the head op does not read as applied
     /// on, or on the resolved records when there is none.
+    ///
+    /// A halt names the op it stopped at when a kept edit's head read raised
+    /// it.
     async fn open_rebased_pass(
         &self,
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
-    ) -> Result<(Pass, ReplayReport), Halt> {
-        let (resolved, others) = self.scope_root_candidates(scope).await?;
-        let mut pass = self.open_pass(scope, &resolved).await?;
+    ) -> Result<(Pass, ReplayReport), (Halt, Option<OpId>)> {
+        let unattributed = |halt| (halt, None);
+        let (resolved, others) = self
+            .scope_root_candidates(scope)
+            .await
+            .map_err(unattributed)?;
+        let mut pass = self
+            .open_pass(scope, &resolved)
+            .await
+            .map_err(unattributed)?;
         let landed = self.read_kept_heads(scope, &mut pass, queued).await?;
         if landed.is_empty() {
-            return self.rebase_on_pass(scope, pass, &others, queued).await;
+            return self
+                .rebase_on_pass(scope, pass, &others, queued)
+                .await
+                .map_err(unattributed);
         }
         let rest: Vec<(OpId, Op)> = queued
             .iter()
             .filter(|(op_id, _)| !landed.contains(op_id))
             .cloned()
             .collect();
-        let (pass, mut rebased) = self.rebase_on_pass(scope, pass, &others, &rest).await?;
+        let (pass, mut rebased) = self
+            .rebase_on_pass(scope, pass, &others, &rest)
+            .await
+            .map_err(unattributed)?;
         rebased.dropped.extend(
             landed
                 .into_iter()
@@ -3255,17 +3288,18 @@ where
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         queued: &[(OpId, Op)],
-    ) -> Result<BTreeSet<OpId>, Halt> {
-        let kept = self.kept_ids(scope).await?;
+    ) -> Result<BTreeSet<OpId>, (Halt, Option<OpId>)> {
+        let kept = self.kept_ids(scope).await.map_err(|halt| (halt, None))?;
         let mut landed = BTreeSet::new();
         for (op_id, op) in queued {
             if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
                 continue;
             }
+            let at = |halt| (halt, Some(*op_id));
             // Only a folder the base read at its live name shows the history;
             // any other edit is left to its rebase.
             if !matches!(
-                self.kept_place(scope, op).await?,
+                self.kept_place(scope, op).await.map_err(at)?,
                 KeptPlace::Writes {
                     anchor_read_live: true,
                     ..
@@ -3273,19 +3307,15 @@ where
             ) {
                 continue;
             }
-            let plane = self
-                .ensure_folder(scope, pass, self.published_parent(op.target)?)
-                .await?;
+            let parent = self.published_parent(op.target).map_err(at)?;
+            let plane = self.ensure_folder(scope, pass, parent).await.map_err(at)?;
+            let anchor = pass.anchor_for(&plane).map_err(at)?;
             let loaded = self
-                .load_child_node(
-                    &plane,
-                    pass.anchor_for(&plane)?,
-                    op.target,
-                    ResolveMode::NoCache,
-                )
-                .await?;
+                .load_child_node(&plane, anchor, op.target, ResolveMode::NoCache)
+                .await
+                .map_err(at)?;
             let ReadBody::File { versions, .. } = &loaded.body else {
-                return Err(Halt::Unclassified);
+                return Err(at(Halt::Unclassified));
             };
             if let Some(content) = op.staged_content()
                 && versions
@@ -9481,6 +9511,7 @@ mod tests {
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
             known_scope_roots: roots,
+            granted_namespaces: &[],
             keyless_roots: &[],
             charges_the_identity: true,
             enc_secret: &seams.enc_secret,
@@ -11062,6 +11093,7 @@ mod tests {
         write_scope_seed: Zeroizing<[u8; 32]>,
         scope_roots: Vec<NodeId>,
         known_scope_roots: Vec<NodeId>,
+        granted_namespaces: Vec<(NodeId, FloorNamespace)>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -11111,6 +11143,7 @@ mod tests {
                 destination: None,
                 scope_roots: &self.scope_roots,
                 known_scope_roots: &self.known_scope_roots,
+                granted_namespaces: &self.granted_namespaces,
                 keyless_roots: &self.keyless_roots,
                 charges_the_identity: false,
                 enc_secret: &self.enc_secret,
@@ -11256,6 +11289,7 @@ mod tests {
             write_scope_seed,
             scope_roots: vec![HARNESS_ROOT],
             known_scope_roots: vec![HARNESS_ROOT],
+            granted_namespaces: Vec::new(),
             keyless_roots: Vec::new(),
             enc_secret,
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
@@ -11755,6 +11789,84 @@ mod tests {
     /// A contact whose grant this vault holds, and the label its floors ratchet
     /// under.
     const SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
+
+    /// A kept create under `root`, noted at write epoch 2, with `root`'s write
+    /// floor raised to 3 in `namespace` and the clock past the kept-op bound.
+    /// Returns the op's id.
+    fn kept_create_past_the_bound_after_a_cut(
+        harness: &DrainHarness,
+        root: NodeId,
+        namespace: FloorNamespace,
+    ) -> OpId {
+        let op = Op::create(
+            NodeId([0x62; 16]),
+            NodeId([0x63; 16]),
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        let op_id = harness.queue_an_op(&op);
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let mut notes = KeptNotes::default();
+        notes.insert(
+            op_id,
+            KeptNote {
+                scope: Some(root),
+                write_epoch: 2,
+                published_at: harness.seams.scheduler.now(),
+            },
+        );
+        block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
+        block_on(floor::advance_write_epoch_on_sight(
+            &namespace.view(&harness.seams.floors),
+            &root.0,
+            3,
+        ))
+        .expect("the floor rises");
+        harness
+            .seams
+            .scheduler
+            .advance(crate::sync::kept_op::KEPT_OP_BOUND);
+        op_id
+    }
+
+    /// A grafted pass reads an own root's write floor in the owner's own
+    /// namespace, so a seen cut keeps the op past the bound.
+    #[test]
+    fn a_grafted_pass_reads_an_own_roots_floor_in_the_own_namespace() {
+        let mut harness = grafted_harness();
+        let root = NodeId([0x61; 16]);
+        harness.known_scope_roots.push(root);
+        let op_id = kept_create_past_the_bound_after_a_cut(&harness, root, FloorNamespace::Own);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// An own pass reads a granted root's write floor in its sharer's
+    /// namespace, so a seen cut keeps the grantee's op past the bound.
+    #[test]
+    fn an_own_pass_reads_a_granted_roots_floor_in_the_sharers_namespace() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x64; 16]);
+        let namespace = FloorNamespace::GrantedBy(sharer_label());
+        harness.known_scope_roots.push(root);
+        harness.granted_namespaces.push((root, namespace));
+        let op_id = kept_create_past_the_bound_after_a_cut(&harness, root, namespace);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
 
     fn sharer_label() -> crate::seams::ContactLabel {
         crate::seams::ContactLabel::of(

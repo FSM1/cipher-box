@@ -1678,6 +1678,18 @@ impl SurvivorApply {
 /// A write-granted child, a second write grantee, and a create in the child
 /// that the cut of that second grantee does not carry.
 fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> SurvivorApply {
+    second_apply_of(fx, "late", |fx, child| {
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "late")
+    })
+}
+
+/// [`second_apply_under_a_survivor`], with `write` the create of `name` in the
+/// child, which returns the created node.
+fn second_apply_of(
+    fx: &mut GrantScenario,
+    name: &str,
+    write: impl FnOnce(&mut GrantScenario, NodeId) -> NodeId,
+) -> SurvivorApply {
     let (child, _) = write_granted_child(fx);
     assert_eq!(
         fx.grant_bystander(Permission::Write),
@@ -1690,15 +1702,7 @@ fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> SurvivorApply {
     cut_by_demoting_after_a_write_the_walk_misses(
         fx,
         &[&child_name],
-        |fx| {
-            late = Some(create_published_folder(
-                &fx.world,
-                &mut fx.engine,
-                &mut fx._tasks,
-                child,
-                "late",
-            ));
-        },
+        |fx| late = Some(write(fx, child)),
         bystander_identity(),
     );
     let late = late.expect("the write ran");
@@ -1707,7 +1711,7 @@ fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> SurvivorApply {
     let moved_child = live_child(fx, &moved, fx.folder, "child");
     assert_eq!(derive_write_name(&survivor_seed, &child.0), moved_child);
     assert!(
-        !live_names(fx, &moved_child, child).contains(&"late".to_owned()),
+        !live_names(fx, &moved_child, child).contains(&name.to_owned()),
         "the moved tree does not carry the create"
     );
     let _ = dead_letter_events(&mut fx._events);
@@ -1793,7 +1797,23 @@ fn a_second_apply_under_a_refused_parent_dead_letters_with_a_notice() {
 fn kept_create_past_the_bound_under_a_refused_moved_root(
     fx: &mut GrantScenario,
 ) -> (SurvivorApply, Vec<u8>) {
-    let survivor = second_apply_under_a_survivor(fx);
+    let survivor = second_apply_of(fx, "late.bin", |fx, child| {
+        write_version(
+            fx,
+            WriteTarget::NewFile {
+                parent: child,
+                name: "late.bin".into(),
+            },
+            &[7u8; 96],
+        );
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(child)
+            .into_iter()
+            .find(|row| row.name == "late.bin")
+            .expect("the file is listed")
+            .id
+    });
     let moved = fx.granted_scope_repoint().current_root;
     let honest = fx
         .world
@@ -1827,9 +1847,20 @@ fn a_kept_op_under_a_refused_moved_root_waits_past_the_bound() {
     let mut fx = GrantScenario::new();
     let (survivor, _) = kept_create_past_the_bound_under_a_refused_moved_root(&mut fx);
 
+    let held = queued_mine(&fx.owner_device)
+        .into_iter()
+        .find(|op| op.target == survivor.late)
+        .expect("the op is still queued");
+    let root_cid = held
+        .staged_content()
+        .expect("the create stages a version")
+        .root_cid
+        .clone();
     assert!(
-        queued_targets(&fx.owner_device).contains(&survivor.late),
-        "the op is still queued"
+        block_on(fx.owner_device.staging_store.staged_bytes(&root_cid))
+            .expect("the store reads")
+            .is_some(),
+        "its staged version is still held"
     );
     assert!(
         dead_letter_events(&mut fx._events).is_empty(),
@@ -1865,7 +1896,7 @@ fn a_kept_op_under_a_moved_root_applies_again_once_the_walk_proves_it() {
     passes_after_the_flip(&mut fx);
 
     assert!(
-        live_names(&fx, &survivor.moved_child, survivor.child).contains(&"late".to_owned()),
+        live_names(&fx, &survivor.moved_child, survivor.child).contains(&"late.bin".to_owned()),
         "the write landed in the moved tree"
     );
     assert!(dead_letter_events(&mut fx._events).is_empty());
@@ -1989,6 +2020,93 @@ fn a_kept_file_create_under_a_refused_parent_keeps_its_bytes_across_a_restart() 
     assert!(
         block_on(fx.engine.read_content(recovered)).expect("the file reads") == bytes,
         "the preserved version publishes the create's bytes"
+    );
+}
+
+/// A kept edit whose head read meets a record the gate refuses at the moved
+/// file's name is charged, so it dead-letters with a notice at the budget and
+/// the op behind it publishes.
+#[test]
+fn a_kept_edit_under_a_refused_file_record_dead_letters_and_frees_the_queue() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    let (root, _) = live_scope(&fx);
+    let doc_name = live_child(
+        &fx,
+        &live_child(&fx, &root, fx.folder, "child"),
+        child,
+        "doc.bin",
+    );
+    cut_by_demoting_after_a_write_the_walk_misses(
+        &mut fx,
+        &[&doc_name],
+        |fx| publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]),
+        bystander_identity(),
+    );
+    let survivor_seed = survivor_write_seed(&fx);
+    let moved_doc = derive_write_name(&survivor_seed, &doc.0);
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: [0xee; 16],
+        scope_id: fx.folder.0,
+        epoch: 1,
+        read_key: &[0x13; 32],
+        nonce: &[0x5e; 24],
+        body: &folder_body(Vec::new()),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted record seals");
+    fx.blocks.put(planted.block.clone());
+    let refused = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&survivor_seed, &doc.0).as_bytes()),
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence_at(&fx.world, &moved_doc) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, moved_doc.as_str(), refused.clone());
+    }
+    let _ = dead_letter_events(&mut fx._events);
+
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        dead_letter_events(&mut fx._events).len(),
+        1,
+        "the edit dead-letters with a notice"
+    );
+    assert!(
+        !queued_targets(&fx.owner_device).contains(&doc),
+        "and leaves the queue"
+    );
+
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: "after the edit".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a later create queues");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &write_name(ROOT),
+        &read_key_of(ROOT),
+        "after the edit",
     );
 }
 

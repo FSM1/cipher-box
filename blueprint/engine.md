@@ -1022,7 +1022,7 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. A delete whose node a proved root no longer holds still leaves at T. A
+  it. A delete whose node the base does not hold still leaves at T. A
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
