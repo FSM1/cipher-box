@@ -4982,7 +4982,7 @@ where
     /// [`MAX_BIN_ADOPTIONS`] captures ride it, so a peer that unlinks a large
     /// folder cannot spend the tick.
     async fn adopt_observed_unlinks<'e>(&self, scope: &DrainScope<'e>, ends: &[ScopeEnd<'e>]) {
-        let eligible = self.prune_captures(scope);
+        let eligible = self.prune_captures(scope, ends);
         let overflowed = self
             .cells
             .capture_proofs
@@ -5083,7 +5083,10 @@ where
             }
             index.entries.push(BinEntry::new(
                 unlinked.node.0,
-                unlinked.ipns_name.clone(),
+                end.write_name(&unlinked.node.0)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
                 unlinked.kind,
                 unlinked.parent.0,
                 unlinked.name.clone(),
@@ -5166,10 +5169,7 @@ where
             .map(|bytes| cipherbox_core::suite::hash::hash(&bytes));
         let mut others: Vec<&ScopeEnd<'e>> = ends
             .iter()
-            .filter(|end| {
-                end.root != scope.source.root
-                    && end.write_name(&node.0).as_str().as_bytes() == unlinked.ipns_name
-            })
+            .filter(|end| end.root != scope.source.root && end.write_name(&node.0) == name)
             .collect();
         let mut search = self.sealer_search(scope, node);
         if search.record != record {
@@ -5417,10 +5417,17 @@ where
     /// this scope may still bin. A node held twice keeps its first capture.
     ///
     /// A node the base still links did not leave the tree, and binning it would
-    /// seal a live node under a key no reader derives. A capture of a scope
-    /// root, proved or by its name, drops unbinned ([`in_this_scope`]). A name
-    /// longer than this build ever authors is a peer's, and no entry carries it.
-    fn prune_captures(&self, scope: &DrainScope<'_>) -> BTreeSet<CaptureKey> {
+    /// seal a live node under a key no reader derives. A capture of a proved
+    /// scope root drops unbinned. A name longer than this build ever authors
+    /// is a peer's, and no entry carries it. So is an `ipnsName` that no own
+    /// end derives for the node. One that another own end derives, as a write
+    /// grant's name wave leaves it, waits for [`Self::sealing_end`] to read
+    /// the record at the name the capture's scope derives.
+    fn prune_captures(
+        &self,
+        scope: &DrainScope<'_>,
+        ends: &[ScopeEnd<'_>],
+    ) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
         let mut eligible = BTreeSet::new();
         self.cells.observed_unlinks.borrow_mut().retain(|unlinked| {
@@ -5436,12 +5443,9 @@ where
                 || scope.scope_roots.contains(&unlinked.node)
                 || names_node(&eligible, unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES
-                || scope
-                    .source
-                    .write_name(&unlinked.node.0)
-                    .as_str()
-                    .as_bytes()
-                    != unlinked.ipns_name
+                || !std::iter::once(&scope.source).chain(ends).any(|end| {
+                    end.write_name(&unlinked.node.0).as_str().as_bytes() == unlinked.ipns_name
+                })
             {
                 return false;
             }

@@ -805,16 +805,18 @@ the grantee that removed it stops reading it.
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
-  the destination before the source. A capture of a scope root, proved or by
-  its name, drops before any read.
+  the destination before the source. A capture of a proved scope root, or one
+  at a name that no own scope derives for the node, drops before any read.
 - **The record decides the capture's scope.** A grant can leave a node sealed
   in a scope other than the one whose folder it left, and no tree rule names
-  the sealing scope on every device. Before the re-key, the drain opens the
-  node's record through the gate under the capture's own scope, then, on a
-  seal-open refusal only, under each other own scope whose write seed derives
-  the captured name. A node a re-key already moved opens under the bin's held
-  key, at any epoch. The scope that opens the record is the one the node
-  re-keys and bins under. Any other refusal under the capture's own scope
+  the sealing scope on every device. A write grant's name wave can also leave
+  a capture at the name the node had before the wave. Before the re-key, the
+  drain opens the node's record through the gate at the name the capture's own
+  scope derives, then, on a seal-open refusal only, under each other own scope
+  whose write seed derives that name. A node a re-key already moved opens
+  under the bin's held key, at any epoch. The scope that opens the record is
+  the one the node re-keys and bins under, and the bin entry carries the name
+  that scope derives. Any other refusal under the capture's own scope
   sends one trust violation and drops the capture. When no own scope opens it,
   the drain sends one trust violation and drops the capture; a read with no
   answer keeps the capture for a later pass. One pass spends at most 64 such
