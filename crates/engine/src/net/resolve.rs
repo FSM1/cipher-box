@@ -1537,7 +1537,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[hr],
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -1787,7 +1787,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[hr],
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -1918,7 +1918,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[hr],
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -2040,7 +2040,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            core::slice::from_ref(&ours),
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), ours.clone())])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -2093,7 +2093,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[re_held],
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), re_held)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),

@@ -401,7 +401,6 @@ where
 /// ([`EOL_RENEW_THRESHOLD`]). Returns `Ok(None)` when the record's EOL is
 /// comfortably ahead (no renewal needed) or when no current record can be
 /// resolved to inspect. A lapsed record is out of scope here — that is revival.
-/// The renewal loop does not use it, and it carries no renewal guards.
 pub async fn eol_republish<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
@@ -449,10 +448,21 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
+    // The drain's publish confirms its own record; a renewal now would sign
+    // over it with the held value.
+    if seams.publishing.borrow().contains(&held.routing_key) {
+        return Ok(None);
+    }
     let Some(admitted) = super::fork::verified(name, &held.record_bytes) else {
         return Ok(None);
     };
-    if admitted.value != held.value.record_value() {
+    if admitted.value != held.value.record_value()
+        || !eol::needs_renewal(
+            seams.scheduler.now(),
+            &admitted.validity,
+            EOL_RENEW_THRESHOLD,
+        )
+    {
         return Ok(None);
     }
     // Only the record the device admitted renews (ADR 0061 D3 step 4). A
@@ -462,40 +472,38 @@ where
         Some((_, served)) if served == held.record_bytes => {}
         _ => return Ok(None),
     }
-    if !eol::needs_renewal(
-        seams.scheduler.now(),
-        &admitted.validity,
-        EOL_RENEW_THRESHOLD,
-    ) {
-        return Ok(None);
-    }
-    let (head_cid, rule) = match &held.value {
-        HeldValue::Head(head_cid) => (Some(head_cid.clone()), FloorRule::Exact),
-        HeldValue::Inline(_) => (None, FloorRule::AtMost),
+    let rule = match held.value {
+        HeldValue::Head(_) => FloorRule::Exact,
+        HeldValue::Inline(_) => FloorRule::AtMost,
     };
-    let observed = match held.envelope {
-        Some(envelope) => Observed::gated(
-            name,
-            admitted.sequence,
-            envelope.version,
-            &held.record_bytes,
-        )?,
-        None => Observed::admitted(name, admitted.sequence, &held.record_bytes),
+    let (observed, namespace, bar) = match held.envelope {
+        Some(envelope) => (
+            Observed::gated(
+                name,
+                admitted.sequence,
+                envelope.version,
+                &held.record_bytes,
+            )?,
+            envelope.namespace,
+            Some(envelope.bar),
+        ),
+        None => (
+            Observed::admitted(name, admitted.sequence, &held.record_bytes),
+            FloorNamespace::Own,
+            None,
+        ),
     };
     register(
         api,
         &[NameRegistration {
             ipns_name: name.as_str().to_owned(),
-            head_cid,
+            head_cid: held.head_cid().map(str::to_owned),
             content_cids: held.content_cids.clone(),
         }],
     )
     .await
     .map_err(PublishError::Register)?;
-    let floors = held
-        .envelope
-        .map_or(FloorNamespace::Own, |envelope| envelope.namespace)
-        .view(seams.floors);
+    let floors = namespace.view(seams.floors);
     let seams = RenewalSeams {
         transport: seams.transport,
         floors: &floors,
@@ -503,7 +511,6 @@ where
         profile: seams.profile,
         publishing: seams.publishing,
     };
-    let bar = held.envelope.map(|envelope| envelope.bar);
     let Some(receipt) =
         renew_admitted(&seams, &observed, bar, rule, &held.signer, &admitted.value).await
     else {
@@ -530,41 +537,15 @@ pub struct EolRenewResult {
     /// renewal), `Ok(Some(_))` on a seq+1 republish (including a reported lost
     /// CAS race), `Err` on a fail-closed publish failure.
     pub outcome: Result<Option<PublishOutcome>, PublishError>,
-    /// The record a [`PublishOutcome::Published`] renewal signed and confirmed.
-    pub signed: Option<Vec<u8>>,
-}
-
-/// Point each held entry that a renewal in `results` replaced at the record it
-/// signed, while the entry still holds the record of `renewed` that the pass
-/// read. Without it, the next pass finds a pick that is not the held record
-/// and never renews the name again.
-pub(crate) fn follow_renewals(
-    held: &RefCell<HeldRecords>,
-    renewed: &[HeldRecord],
-    results: &[EolRenewResult],
-) {
-    for result in results {
-        let Some(signed) = &result.signed else {
-            continue;
-        };
-        let Some(prior) = renewed
-            .iter()
-            .find(|record| record.routing_key == result.routing_key)
-        else {
-            continue;
-        };
-        for entry in held.borrow_mut().values_mut() {
-            if entry.routing_key == prior.routing_key && entry.record_bytes == prior.record_bytes {
-                entry.record_bytes.clone_from(signed);
-            }
-        }
-    }
 }
 
 /// Run one sub-EOL renewal pass over the held set: for each record still live
 /// but within [`EOL_RENEW_THRESHOLD`], republish the same value at seq+1
-/// through [`renew_held`] (blueprint/engine.md "Liveness"). A lost race is
-/// reported, never silently overwritten.
+/// through [`renew_held`] (blueprint/engine.md "Liveness"), and point the
+/// held entry at the renewal while it still holds the record the pass read.
+/// Without that, the next pass finds a pick that is not the held record and
+/// never renews the name again. A lost race is reported, never silently
+/// overwritten.
 ///
 /// This is the renewal-pass **body**; the ~hourly [`Scheduler`] loop that drives
 /// it alongside [`keyless_re_put`] is wired by the facade.
@@ -572,7 +553,7 @@ pub(crate) fn follow_renewals(
 pub(crate) async fn eol_renew_pass<T, H, C, F, Sch>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
-    held: &[HeldRecord],
+    held: &RefCell<HeldRecords>,
 ) -> Vec<EolRenewResult>
 where
     T: RecordTransport + Clone + 'static,
@@ -581,8 +562,13 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let mut results = Vec::with_capacity(held.len());
-    for hr in held {
+    let records: Vec<(HeldKey, HeldRecord)> = held
+        .borrow()
+        .iter()
+        .map(|(key, record)| (*key, record.clone()))
+        .collect();
+    let mut results = Vec::with_capacity(records.len());
+    for (key, hr) in records {
         // A routing key that no longer parses to its IPNS name is not renewable
         // — skip fail-closed rather than publish under a malformed name.
         let Ok(name) = IpnsName::parse(&hr.routing_key) else {
@@ -598,29 +584,25 @@ where
         if hr.head_cid() == Some("") {
             continue;
         }
-        // The drain's publish confirms its own record; a renewal now would sign
-        // over it with the held value.
-        if seams.publishing.borrow().contains(&hr.routing_key) {
-            results.push(EolRenewResult {
-                routing_key: hr.routing_key.clone(),
-                outcome: Ok(None),
-                signed: None,
-            });
-            continue;
-        }
-        let (outcome, signed) = match renew_held(api, seams, &name, hr).await {
-            Ok(Some(receipt)) => {
-                let signed = matches!(receipt.outcome, PublishOutcome::Published { .. })
-                    .then_some(receipt.record_bytes);
-                (Ok(Some(receipt.outcome)), signed)
-            }
-            Ok(None) => (Ok(None), None),
-            Err(error) => (Err(error), None),
-        };
+        let outcome = renew_held(api, seams, &name, &hr).await.map(|receipt| {
+            receipt.map(|receipt| {
+                if matches!(receipt.outcome, PublishOutcome::Published { .. }) {
+                    hold_if_unchanged(
+                        held,
+                        key,
+                        HeldRecord {
+                            record_bytes: receipt.record_bytes,
+                            ..hr.clone()
+                        },
+                        Some(&hr.record_bytes),
+                    );
+                }
+                receipt.outcome
+            })
+        });
         results.push(EolRenewResult {
-            routing_key: hr.routing_key.clone(),
+            routing_key: hr.routing_key,
             outcome,
-            signed,
         });
     }
     results
@@ -630,7 +612,7 @@ where
 mod tests {
     use super::{
         EolRenewResult, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, eol_renew_pass,
-        follow_renewals, keyless_re_put,
+        keyless_re_put,
     };
 
     use core::cell::RefCell;
@@ -731,6 +713,16 @@ mod tests {
             headers: Vec::new(),
             body: Vec::new().into(),
         }
+    }
+
+    /// `records` as a held set, each under a node key of its own, in order.
+    fn held_set(records: impl IntoIterator<Item = HeldRecord>) -> RefCell<HeldRecords> {
+        RefCell::new(
+            (0u8..)
+                .zip(records)
+                .map(|(index, record)| (HeldKey::Node([index; 16]), record))
+                .collect(),
+        )
     }
 
     fn outcome_of<'a>(results: &'a [EolRenewResult], name: &IpnsName) -> &'a EolRenewResult {
@@ -911,7 +903,7 @@ mod tests {
                         profile: &profile,
                         publishing: &Default::default(),
                     },
-                    &held,
+                    &held_set(held.clone()),
                 )
                 .await;
                 assert!(outcomes.iter().all(|result| result.outcome.is_ok()));
@@ -1016,7 +1008,7 @@ mod tests {
                 profile: &profile,
                 publishing: &Default::default(),
             },
-            &held,
+            &held_set(held.clone()),
         ));
         assert_eq!(
             outcome_of(&at_zero, &below).outcome.as_ref().unwrap(),
@@ -1048,7 +1040,7 @@ mod tests {
                 profile: &profile,
                 publishing: &Default::default(),
             },
-            &held,
+            &held_set(held.clone()),
         ));
         assert_eq!(
             outcome_of(&results, &below).outcome.as_ref().unwrap(),
@@ -1133,7 +1125,7 @@ mod tests {
                 profile: &profile,
                 publishing: &Default::default(),
             },
-            &held,
+            &held_set(held.clone()),
         ));
 
         assert_eq!(
@@ -1188,7 +1180,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &held,
+            &held_set(held.clone()),
         ));
 
         assert_eq!(
@@ -1261,7 +1253,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[held],
+            &held_set([held]),
         ));
         let result = results.remove(0);
         (device, name, result)
@@ -1362,7 +1354,7 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing: &Default::default(),
             },
-            &[held],
+            &held_set([held]),
         ));
         assert_eq!(outcome_of(&results, &name).outcome, Ok(None));
         let endpoint = device.record_store.endpoints()[0].clone();
@@ -1428,9 +1420,20 @@ mod tests {
                 profile: &SyncTimingProfile::CI,
                 publishing,
             },
-            &[held],
+            &held_set([held]),
         ))
         .remove(0)
+    }
+
+    /// Seed `record` on every endpoint when the renewal registers its name.
+    fn land_at_the_registration(device: &FakeDevice, name: &IpnsName, record: Vec<u8>) {
+        let (store, key) = (device.record_store.clone(), name.as_str().to_owned());
+        device.http.enqueue_derived(move |_| {
+            for endpoint in store.endpoints() {
+                store.seed_record(&endpoint, &key, record.clone());
+            }
+            Ok(ok_200())
+        });
     }
 
     /// Another writer's record at sequence 2 lands on every endpoint while the
@@ -1447,17 +1450,7 @@ mod tests {
             &eol::eol_from(UnixMillis(65 * DAY * 1000)),
         )
         .marshal();
-        let (store, key, record) = (
-            device.record_store.clone(),
-            name.as_str().to_owned(),
-            landed.clone(),
-        );
-        device.http.enqueue_derived(move |_| {
-            for endpoint in store.endpoints() {
-                store.seed_record(&endpoint, &key, record.clone());
-            }
-            Ok(ok_200())
-        });
+        land_at_the_registration(&device, &name, landed.clone());
 
         let result = renew_one(&world, &device, &RefCell::default(), held);
         assert_eq!(result.outcome, Ok(None));
@@ -1570,17 +1563,7 @@ mod tests {
             &eol::eol_from(UnixMillis(DAY * 1000)),
         )
         .marshal();
-        let (store, key, record) = (
-            device.record_store.clone(),
-            name.as_str().to_owned(),
-            third.clone(),
-        );
-        device.http.enqueue_derived(move |_| {
-            for endpoint in store.endpoints() {
-                store.seed_record(&endpoint, &key, record.clone());
-            }
-            Ok(ok_200())
-        });
+        land_at_the_registration(&device, &name, third.clone());
 
         let result = renew_one(&world, &device, &RefCell::default(), held);
         assert_eq!(result.outcome, Ok(None));
@@ -1605,7 +1588,6 @@ mod tests {
         let (name, record) = due(&world, &device, arm);
         let held = RefCell::new(HeldRecords::from([(key, record)]));
         let pass = || {
-            let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
             device.http.enqueue_response(ok_200());
             let results = block_on(eol_renew_pass(
                 &api,
@@ -1616,9 +1598,8 @@ mod tests {
                     profile: &SyncTimingProfile::CI,
                     publishing: &RefCell::default(),
                 },
-                &records,
+                &held,
             ));
-            follow_renewals(&held, &records, &results);
             results.into_iter().next().unwrap().outcome
         };
 
