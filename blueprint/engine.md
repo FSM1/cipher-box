@@ -795,7 +795,7 @@ the grantee that removed it stops reading it.
   captures of every scope. Residual: the walk bound of 65,536 nodes applies to
   the whole vault. The walk starts
   after the device saw the departure and proves only that departure. The walk
-  makes one attempt at a read on each pass, up to three attempts. A refused
+  makes one attempt at a read on each tick, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
   third attempt with no answer starts the walk again on a later pass. The drain
   bins only a capture that a settled walk proved, that no folder names and that
@@ -808,7 +808,9 @@ the grantee that removed it stops reading it.
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
   the destination before the source. A capture of a proved scope root, or one
-  at a name that no own scope derives for the node, drops before any read.
+  at a name that no own scope derives for the node, drops before any read. A
+  tick with no vault scope may lack the scope that derives the name, so it holds
+  such a capture for a tick that has the vault scope.
 - **The record decides the capture's scope.** A grant can leave a node sealed
   in a scope other than the one whose folder it left, and no tree rule names
   the sealing scope on every device. A write grant's name wave can also leave
@@ -818,7 +820,10 @@ the grantee that removed it stops reading it.
   whose write seed derives that name. A node a re-key already moved opens
   under the bin's held key, at any epoch. The scope that opens the record is
   the one the node re-keys and bins under, and the bin entry carries the name
-  that scope derives. Any other refusal under the capture's own scope
+  that scope derives. The re-key seals the record that decided the scope, and
+  a re-key that loses its race to a record its target key does not open sends
+  no violation: the next pass decides that record. Any other refusal under the
+  capture's own scope
   sends one trust violation and drops the capture. When no own scope opens it,
   the drain sends one trust violation and drops the capture; a read with no
   answer keeps the capture for a later pass. One pass spends at most 64 such

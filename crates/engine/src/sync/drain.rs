@@ -217,6 +217,14 @@ fn deletes_a_known_scope_root(scope: &DrainScope<'_>, op: &Op) -> bool {
         && scope.known_scope_roots.contains(&op.target)
 }
 
+/// The pass's own end, then the tick's own ends, which may hold it again.
+fn own_ends<'s, 'e>(
+    scope: &'s DrainScope<'e>,
+    ends: &'s [ScopeEnd<'e>],
+) -> impl Iterator<Item = &'s ScopeEnd<'e>> {
+    std::iter::once(&scope.source).chain(ends)
+}
+
 /// Whether `child` is a node of this scope rather than a scope root. A granted
 /// root keeps the name its parent derives, so only `scope_roots` marks it.
 fn in_this_scope(end: &ScopeEnd<'_>, scope_roots: &[NodeId], child: &ChildRef) -> bool {
@@ -860,7 +868,7 @@ const MAX_SEALER_READS: usize = 64;
 const MAX_SEALER_READS_PER_CAPTURE: usize = 16;
 
 /// The unanswered attempts a capture walk makes at one node read, one for each
-/// pass, before it starts again.
+/// tick, before it starts again.
 const MAX_CAPTURE_READ_ATTEMPTS: u8 = 3;
 
 /// Purges one tick queues for expired bin entries. A retention deadline can
@@ -944,6 +952,9 @@ const MAX_CAPTURE_WALK_NODES: usize = 65_536;
 /// so a later departure of the same node needs a proof of its own.
 type CaptureKey = (NodeId, u64);
 
+/// The captures one walk proves, by the scope root that holds them.
+type Cohort = BTreeMap<NodeId, BTreeSet<CaptureKey>>;
+
 fn capture_key(unlinked: &UnlinkedChild) -> CaptureKey {
     (unlinked.node, unlinked.deleted_at)
 }
@@ -965,6 +976,11 @@ pub(crate) struct CaptureProofs {
 impl CaptureProofs {
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// The proofs of the scope at `root`, made empty when it has none.
+    fn scope_mut(&mut self, root: NodeId) -> &mut ScopeProofs {
+        self.scopes.entry(root).or_default()
     }
 
     #[cfg(test)]
@@ -1054,8 +1070,7 @@ struct SealerSearch {
 /// another record moved during the walk, so the walk is not a snapshot and
 /// starts again.
 struct CaptureWalk {
-    /// The captures the walk proves, by the scope root that holds them.
-    cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>,
+    cohort: Cohort,
     /// Each node still to read, with the scope root whose end reads it.
     pending: Vec<(NodeId, NodeId)>,
     seen: BTreeSet<NodeId>,
@@ -1133,21 +1148,15 @@ impl CaptureWalk {
     /// A walk of the whole vault from its root, so a link in a scope above or
     /// beside a capture's own scope counts. With no vault end this tick, the
     /// walk reads the pass's own scope and proves nothing.
-    fn from_vault_root(
-        scope: &DrainScope<'_>,
-        ends: &[ScopeEnd<'_>],
-        cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>,
-    ) -> Self {
-        let vault = std::iter::once(&scope.source)
-            .chain(ends)
-            .find(|end| end.ascent_node_seed.is_none());
+    fn from_vault_root(scope: &DrainScope<'_>, ends: &[ScopeEnd<'_>], cohort: Cohort) -> Self {
+        let vault = own_ends(scope, ends).find(|end| end.ascent_node_seed.is_none());
         let mut walk = Self::new(vault.map_or(scope.source.root, |end| end.root), cohort);
         walk.blind = vault.is_none();
         walk
     }
 
     /// Keep, of the captures of the scope at `root`, only those in `held`.
-    fn keep(&mut self, root: NodeId, held: &BTreeSet<CaptureKey>) {
+    fn retain_scope(&mut self, root: NodeId, held: &BTreeSet<CaptureKey>) {
         if let Some(keys) = self.cohort.get_mut(&root) {
             keys.retain(|key| held.contains(key));
             if keys.is_empty() {
@@ -1156,7 +1165,7 @@ impl CaptureWalk {
         }
     }
 
-    fn new(root: NodeId, cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>) -> Self {
+    fn new(root: NodeId, cohort: Cohort) -> Self {
         Self {
             cohort,
             pending: vec![(root, root)],
@@ -1731,6 +1740,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still read for capture walks, shared out across its
     /// scope passes ([`MAX_CAPTURE_WALK_READS`]).
     capture_reads: RefCell<TickShare>,
+    /// Whether a pass of this tick charged the capture walk an unanswered
+    /// read, so the walk's attempts count ticks, not passes.
+    walk_unanswered: Cell<bool>,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
     /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
@@ -1760,6 +1772,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             established_bin_index: RefCell::new(None),
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
+            walk_unanswered: Cell::new(false),
             capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
             sealer_reads: MAX_SEALER_READS,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
@@ -2051,6 +2064,13 @@ impl LoadedRoot {
     }
 }
 
+/// A record [`Drain::load_under_either`] opened under one of its two keys.
+struct Opened {
+    node: LoadedNode,
+    /// The second key opened it: a re-key toward that key already moved it.
+    already_moved: bool,
+}
+
 /// One node's record as loaded for re-authoring: the envelope fields a
 /// republish must carry forward byte-stable (#27 D10) plus the opened body.
 struct LoadedNode {
@@ -2082,9 +2102,25 @@ impl ChildFault {
     /// The record does not open under the plane's key: another scope may seal
     /// it.
     fn seal_open_failed(&self) -> bool {
-        matches!(self, Self::Refused(rejection)
-            if rejection.reason == RejectionReason::Trust(TrustViolation::SealOpenFailed.into()))
+        matches!(self, Self::Refused(rejection) if seal_open_failed(rejection))
     }
+}
+
+fn seal_open_failed(rejection: &GateRejection) -> bool {
+    rejection.reason == RejectionReason::Trust(TrustViolation::SealOpenFailed.into())
+}
+
+/// What a publish that lost its race makes of a winner its plane's key does
+/// not open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LostWinner {
+    /// The plane's key is the one the name's records seal under, so the
+    /// refusal is reported.
+    Verdict,
+    /// A re-key, whose winner may seal under the other key of the move. A
+    /// seal-open refusal is no verdict: the next pass reads the record again
+    /// through the gate under each candidate key and reports there.
+    Candidate,
 }
 
 /// The seed a record below the read-epoch floor opens under.
@@ -2122,11 +2158,7 @@ impl SealerPass {
 enum Sealer<'e> {
     /// The end, with its root when it is not the capture's own scope, and the
     /// record that opened, which the re-key seals rather than reading again.
-    End(
-        ScopeEnd<'e>,
-        Option<Rc<LoadedRoot>>,
-        Box<(LoadedNode, bool)>,
-    ),
+    End(ScopeEnd<'e>, Option<Rc<LoadedRoot>>, Box<Opened>),
     /// A read did not land, so a later pass decides.
     Unanswered,
     /// The pass spent its reads before the search ended.
@@ -4137,6 +4169,7 @@ where
                 // The parent's record below is this plan's last: a mark raised
                 // here would drop an op on restart whose child no parent names.
                 None,
+                LostWinner::Verdict,
             )
             .await
             .map_err(Halt::from)?;
@@ -5172,9 +5205,7 @@ where
             self.cells
                 .capture_proofs
                 .borrow_mut()
-                .scopes
-                .entry(scope.source.root)
-                .or_default()
+                .scope_mut(scope.source.root)
                 .stopped
                 .extend(stopped.iter().map(capture_key));
         }
@@ -5325,7 +5356,7 @@ where
         search: Option<SealerSearch>,
     ) {
         let mut proofs = self.cells.capture_proofs.borrow_mut();
-        let proofs = proofs.scopes.entry(scope.source.root).or_default();
+        let proofs = proofs.scope_mut(scope.source.root);
         match search {
             Some(search) => proofs.sealer_search.insert(node, search),
             None => proofs.sealer_search.remove(&node),
@@ -5341,7 +5372,7 @@ where
         anchor: Anchor<'_>,
         node: NodeId,
         deleted_at: u64,
-    ) -> Result<(LoadedNode, bool), ChildFault> {
+    ) -> Result<Opened, ChildFault> {
         let held = self.inputs.bin_keys.held_key(&node.0, deleted_at);
         let binned = plane.held_plane(&held);
         self.load_under_either(plane, &binned, anchor, node).await
@@ -5357,12 +5388,17 @@ where
         to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
-    ) -> Result<(LoadedNode, bool), ChildFault> {
+    ) -> Result<Opened, ChildFault> {
         let fault = match self
             .load_child_node_unreported(from, anchor, node, ResolveMode::CacheFirst)
             .await
         {
-            Ok(loaded) => return Ok((loaded, false)),
+            Ok(node) => {
+                return Ok(Opened {
+                    node,
+                    already_moved: false,
+                });
+            }
             // A refusal for another reason does not open under another key.
             Err(fault @ ChildFault::Refused(_)) if !fault.seal_open_failed() => return Err(fault),
             Err(fault) => fault,
@@ -5371,7 +5407,10 @@ where
             .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst)
             .await
         {
-            Ok(loaded) => Ok((loaded, true)),
+            Ok(node) => Ok(Opened {
+                node,
+                already_moved: true,
+            }),
             Err(ChildFault::Halt(halt)) => Err(ChildFault::Halt(halt)),
             Err(ChildFault::Refused(_)) => Err(fault),
         }
@@ -5484,13 +5523,18 @@ where
     /// is a peer's, and no entry carries it. So is an `ipnsName` that no own
     /// end derives for the node. One that another own end derives, as a write
     /// grant's name wave leaves it, waits for [`Self::sealing_end`] to read
-    /// the record at the name the capture's scope derives.
+    /// the record at the name the capture's scope derives. With no vault end
+    /// this tick, an end that derives the name may be missing, so such a
+    /// capture is held, not eligible, for a tick that has the vault end.
     fn prune_captures(
         &self,
         scope: &DrainScope<'_>,
         ends: &[ScopeEnd<'_>],
     ) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
+        // A grafted pass adopts nothing, so it holds nothing for a later tick.
+        let vault_held =
+            scope.is_grafted() || own_ends(scope, ends).any(|end| end.ascent_node_seed.is_none());
         let mut eligible = BTreeSet::new();
         self.cells.observed_unlinks.borrow_mut().retain(|unlinked| {
             // A capture belongs to whichever pass names its scope. One that no
@@ -5505,14 +5549,16 @@ where
                 || scope.scope_roots.contains(&unlinked.node)
                 || names_node(&eligible, unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES
-                || !std::iter::once(&scope.source).chain(ends).any(|end| {
-                    end.write_name(&unlinked.node.0).as_str().as_bytes() == unlinked.ipns_name
-                })
             {
                 return false;
             }
-            eligible.insert(capture_key(unlinked));
-            true
+            let derived = own_ends(scope, ends).any(|end| {
+                end.write_name(&unlinked.node.0).as_str().as_bytes() == unlinked.ipns_name
+            });
+            if derived {
+                eligible.insert(capture_key(unlinked));
+            }
+            derived || !vault_held
         });
         eligible
     }
@@ -5551,7 +5597,7 @@ where
                 proofs.scopes.remove(&scope_root);
                 BTreeSet::new()
             } else {
-                let own = proofs.scopes.entry(scope_root).or_default();
+                let own = proofs.scope_mut(scope_root);
                 own.proved.retain(|key| eligible.contains(key));
                 own.sealer_search
                     .retain(|node, _| names_node(eligible, *node));
@@ -5559,7 +5605,7 @@ where
                 eligible.difference(&own.proved).copied().collect()
             };
             let walk = proofs.walk.take().and_then(|mut walk| {
-                walk.keep(scope_root, &unproved);
+                walk.retain_scope(scope_root, &unproved);
                 (!walk.cohort.is_empty()).then_some(walk)
             });
             match walk {
@@ -5577,10 +5623,11 @@ where
             WalkStep::Unfinished => proofs.walk = Some(walk),
             WalkStep::Restart => {}
             WalkStep::Overflowed => {
-                for root in walk.cohort.keys().copied().chain([scope_root]) {
-                    let served = proofs.scopes.entry(root).or_default();
-                    served.overflowed = true;
-                    served.proved.clear();
+                let own = (!eligible.is_empty()).then_some(scope_root);
+                for root in walk.cohort.keys().copied().chain(own) {
+                    let overflowed = proofs.scope_mut(root);
+                    overflowed.overflowed = true;
+                    overflowed.proved.clear();
                 }
                 self.take_captures(scope_root, eligible);
             }
@@ -5591,7 +5638,7 @@ where
                         .partition(|(node, _)| walk.linked.contains(node));
                     self.take_captures(root, &linked);
                     if !walk.blind && !proved.is_empty() {
-                        proofs.scopes.entry(root).or_default().proved.extend(proved);
+                        proofs.scope_mut(root).proved.extend(proved);
                     }
                 }
             }
@@ -5607,7 +5654,7 @@ where
         scope_root: NodeId,
         own: BTreeSet<CaptureKey>,
         ends: &[ScopeEnd<'_>],
-    ) -> BTreeMap<NodeId, BTreeSet<CaptureKey>> {
+    ) -> Cohort {
         let mut cohort = BTreeMap::from([(scope_root, own)]);
         for unlinked in self.cells.observed_unlinks.borrow().iter() {
             let root = NodeId(unlinked.scope_id);
@@ -5650,10 +5697,7 @@ where
                 Some(next) => *next,
                 None => walk.read[walk.confirmed].0,
             };
-            let end = std::iter::once(&scope.source)
-                .chain(ends)
-                .find(|end| end.root == at)
-                .copied();
+            let end = own_ends(scope, ends).find(|end| end.root == at).copied();
             let anchor = walk.anchors.get(&at).map(WalkAnchor::anchor);
             let read = match end {
                 Some(end) => self
@@ -5666,7 +5710,9 @@ where
                 Ok(read) => read,
                 Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
                 Err(WalkReadFault::Unanswered) => {
-                    walk.unanswered += 1;
+                    if !self.walk_unanswered.replace(true) {
+                        walk.unanswered += 1;
+                    }
                     break if walk.unanswered >= MAX_CAPTURE_READ_ATTEMPTS {
                         WalkStep::Restart
                     } else {
@@ -5871,7 +5917,7 @@ where
         anchor: Anchor<'_>,
         root: NodeId,
         deleted_at: u64,
-        opened: Option<(LoadedNode, bool)>,
+        opened: Option<Opened>,
     ) -> Result<(), Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = plane.held_plane(&held);
@@ -5902,7 +5948,7 @@ where
         to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         root: NodeId,
-        mut opened: Option<(LoadedNode, bool)>,
+        mut opened: Option<Opened>,
     ) -> Result<(), Halt> {
         let mut seen = BTreeSet::new();
         let mut pending = vec![root];
@@ -5912,7 +5958,10 @@ where
             if !seen.insert(node.0) {
                 continue;
             }
-            let (loaded, already_moved) = match opened.take() {
+            let Opened {
+                node: loaded,
+                already_moved,
+            } = match opened.take() {
                 Some(opened) => opened,
                 None => self.load_doomed(from, to, anchor, node).await?,
             };
@@ -5957,6 +6006,7 @@ where
                     envelope_unknown,
                     epoch_tag_unknown,
                     None,
+                    LostWinner::Candidate,
                 )
                 .await
                 .map_err(Halt::from)?;
@@ -5974,7 +6024,7 @@ where
         to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
-    ) -> Result<(LoadedNode, bool), Halt> {
+    ) -> Result<Opened, Halt> {
         self.load_under_either(from, to, anchor, node)
             .await
             .map_err(|fault| self.report_fault(&from.end.write_name(&node.0), fault))
@@ -6684,6 +6734,7 @@ where
                     node_loaded.envelope_unknown,
                     node_loaded.epoch_tag_unknown,
                     None,
+                    LostWinner::Verdict,
                 )
                 .await
                 .map_err(Halt::from)?;
@@ -6977,6 +7028,7 @@ where
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
                 Some(Completion::of(applied.op_id)),
+                LostWinner::Verdict,
             )
             .await
             .map_err(Halt::from)?;
@@ -7100,6 +7152,7 @@ where
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
                 Some(Completion::of(applied.op_id)),
+                LostWinner::Verdict,
             )
             .await
             .map_err(Halt::from)?;
@@ -7239,6 +7292,7 @@ where
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
                 Some(Completion::of(applied.op_id)),
+                LostWinner::Verdict,
             )
             .await
             .map_err(Halt::from)?;
@@ -7329,6 +7383,7 @@ where
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
                 Some(Completion::of(applied.op_id)),
+                LostWinner::Verdict,
             )
             .await
             .map_err(Halt::from)?;
@@ -8083,6 +8138,7 @@ where
                 envelope_unknown,
                 epoch_tag_unknown,
                 completes,
+                LostWinner::Verdict,
             )
             .await?;
 
@@ -8203,6 +8259,7 @@ where
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
         completes: Option<Completion<'_>>,
+        lost_winner: LostWinner,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
@@ -8290,7 +8347,9 @@ where
                     let adopted = self
                         .adopt_node_record(scope, plane, node, name, is_scope_root, &winner, None)
                         .await;
-                    if let Err(GateError::Rejected(rejection)) = adopted {
+                    if let Err(GateError::Rejected(rejection)) = adopted
+                        && !(lost_winner == LostWinner::Candidate && seal_open_failed(&rejection))
+                    {
                         refuse_record(&self.seams.events, name, &rejection);
                     }
                 }
@@ -12542,6 +12601,68 @@ mod tests {
         );
     }
 
+    /// The walk the vault scope's captures started passes its bound on the
+    /// pass of a scope that holds none. Only the scope the walk served is
+    /// marked overflowed.
+    #[test]
+    fn an_overflow_marks_only_the_scopes_the_walk_served() {
+        let (mut harness, mut blocks) = walk_harness_of(&[WALK_FOLDER, NodeId([0x49; 16])]);
+        let interior = OtherEnd::interior(0x30);
+        interior.serve(&mut harness, &mut blocks);
+        harness.scope_roots.push(interior.root);
+        let vault = harness.scope();
+        let inner = DrainScope {
+            source: interior.end(),
+            ..vault
+        };
+        let ends = [vault.source, inner.source];
+
+        block_on(
+            harness
+                .drain()
+                .with_capture_walk_bounds(0, MAX_CAPTURE_WALK_NODES)
+                .adopt_observed_unlinks(&vault, &ends),
+        );
+        block_on(
+            harness
+                .drain()
+                .with_capture_walk_bounds(MAX_CAPTURE_WALK_READS, 2)
+                .adopt_observed_unlinks(&inner, &ends),
+        );
+
+        let proofs = harness.state.capture_proofs.borrow();
+        assert!(proofs.scopes[&HARNESS_ROOT].overflowed);
+        assert!(!proofs.scopes.contains_key(&interior.root));
+    }
+
+    /// Every pass of one tick meets the same read with no answer. The tick
+    /// charges the shared walk one attempt, so the walk does not start again
+    /// within the tick.
+    #[test]
+    fn a_tick_charges_its_capture_walk_one_unanswered_read() {
+        let (harness, _) = walk_harness();
+        harness
+            .seams
+            .transport
+            .fail_get_for(harness.root_name.as_str());
+        let drain = harness.drain();
+
+        for _ in 0..MAX_CAPTURE_READ_ATTEMPTS {
+            block_on(drain.adopt_observed_unlinks(&harness.scope(), &[]));
+        }
+
+        assert_eq!(
+            harness
+                .state
+                .capture_proofs
+                .borrow()
+                .walk
+                .as_ref()
+                .map(|walk| walk.unanswered),
+            Some(1)
+        );
+    }
+
     /// A tick shares its capture walk reads across its passes, so one scope's
     /// walk reads only its pass's share.
     #[test]
@@ -12584,6 +12705,9 @@ mod tests {
         /// Set for an interior scope root, whose record carries an ascent
         /// link under this seed.
         ascent_node_seed: Option<Zeroizing<[u8; 32]>>,
+        /// The seed this end's nodes are named under. Its root keeps the
+        /// name the harness seed derives, as a granted root does.
+        write_scope_seed: Zeroizing<[u8; 32]>,
     }
 
     impl OtherEnd {
@@ -12595,6 +12719,7 @@ mod tests {
                 read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),
                 read_seed_stamp: Some(OWNER_ROOT_EPOCH),
                 ascent_node_seed: None,
+                write_scope_seed: Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED),
             }
         }
 
@@ -12606,13 +12731,13 @@ mod tests {
             }
         }
 
-        fn end<'h>(&'h self, harness: &'h DrainHarness) -> ScopeEnd<'h> {
+        fn end(&self) -> ScopeEnd<'_> {
             ScopeEnd {
                 root: self.root,
                 root_name: &self.root_name,
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: self.read_seed_stamp,
-                write_scope_seed: &harness.write_scope_seed,
+                write_scope_seed: &self.write_scope_seed,
                 ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: FloorNamespace::Own,
             }
@@ -12695,16 +12820,14 @@ mod tests {
             })
             .expect("a child folder record");
             let record = IpnsRecord::create_v2(
-                &kdf::ipns_keypair(
-                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &node.0).as_bytes(),
-                ),
+                &kdf::ipns_keypair(kdf::write_seed(&self.write_scope_seed, &node.0).as_bytes()),
                 format!("/ipfs/{}", head.cid).as_bytes(),
                 sequence,
                 HARNESS_TTL_NANOS,
                 HARNESS_EOL,
             )
             .marshal();
-            let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node.0);
+            let name = derive_write_name(&self.write_scope_seed, &node.0);
             for endpoint in harness.seams.transport.endpoints() {
                 harness
                     .seams
@@ -12758,7 +12881,7 @@ mod tests {
         reads: usize,
         per_capture: usize,
     ) -> (Option<NodeId>, usize) {
-        let ends: Vec<ScopeEnd<'_>> = others.iter().map(|other| other.end(harness)).collect();
+        let ends: Vec<ScopeEnd<'_>> = others.iter().map(|other| other.end()).collect();
         let drain = harness.drain().with_sealer_reads(reads, per_capture);
         let scope = harness.scope();
         let root = block_on(drain.load_scope_root(&scope.source)).expect("the root loads");
@@ -12784,7 +12907,7 @@ mod tests {
     /// One capture pass over `others` under sealer bounds of `reads` for the
     /// pass and `per_capture` for each capture.
     fn sealer_pass(harness: &DrainHarness, others: &[&OtherEnd], reads: usize, per_capture: usize) {
-        let ends: Vec<ScopeEnd<'_>> = others.iter().map(|other| other.end(harness)).collect();
+        let ends: Vec<ScopeEnd<'_>> = others.iter().map(|other| other.end()).collect();
         block_on(
             harness
                 .drain()
@@ -12804,20 +12927,23 @@ mod tests {
     }
 
     /// A [`walk_harness`] whose capture's record is published in the harness
-    /// scope, with its node read again from the snapshot cache, and the bytes
-    /// of another record at that name that only another end opens.
-    fn resealed_capture_harness() -> (DrainHarness, IpnsName, Vec<u8>) {
+    /// scope at sequence 1, with its node read again from the snapshot cache,
+    /// and the bytes of the record at sequence 2 that `winner` publishes at
+    /// that name.
+    fn raced_capture_harness(
+        winner: impl FnOnce(&mut DrainHarness, &mut BTreeMap<String, Vec<u8>>, NodeId),
+    ) -> (DrainHarness, IpnsName, Vec<u8>) {
         let (mut harness, mut blocks) = walk_harness();
         accept_uploads(&mut harness);
         let target = capture(&harness.write_scope_seed).node;
         let name = derive_write_name(&harness.write_scope_seed, &target.0);
         let endpoint = harness.seams.transport.endpoints()[0].clone();
-        OtherEnd::new(0x30).seal(&mut harness, &mut blocks, target, 2);
-        let resealed = harness
+        winner(&mut harness, &mut blocks, target);
+        let raced = harness
             .seams
             .transport
             .record_at(&endpoint, name.as_str())
-            .expect("the other end's record is served");
+            .expect("the winner is served");
         publish_harness_folder(&mut harness, &mut blocks, target, 1, Vec::new());
         let record = harness
             .seams
@@ -12831,16 +12957,17 @@ mod tests {
                 .put(name.as_str().as_bytes(), &record),
         )
         .expect("the record caches");
-        (harness, name, resealed)
+        (harness, name, raced)
     }
 
-    /// A read after the scope decision serves a record only another end
-    /// opens. The re-key seals the record that decided the scope rather than
-    /// reading the node again.
-    #[test]
-    fn a_capture_re_key_seals_the_record_that_decided_its_scope() {
+    /// One capture pass whose every read of the capture's name after the
+    /// scope decision serves the record `winner` publishes, so the re-key
+    /// loses its race. Answers the attributable abuse events the pass sent.
+    fn raced_capture_pass(
+        winner: impl Fn(&mut DrainHarness, &mut BTreeMap<String, Vec<u8>>, NodeId),
+    ) -> usize {
         let decision_reads = {
-            let (harness, name, _) = resealed_capture_harness();
+            let (harness, name, _) = raced_capture_harness(&winner);
             sealing_root(
                 &harness,
                 &[],
@@ -12850,12 +12977,12 @@ mod tests {
             harness.seams.transport.get_count(name.as_str())
         };
         assert!(decision_reads > 0, "the scope decision reads the record");
-        let (harness, name, resealed) = resealed_capture_harness();
+        let (mut harness, name, raced) = raced_capture_harness(&winner);
         harness.seams.transport.serve_gets_for_after(
             name.as_str(),
             decision_reads,
-            decision_reads,
-            Some(resealed),
+            usize::MAX,
+            Some(raced),
         );
 
         walk_pass(&harness, MAX_CAPTURE_WALK_READS, MAX_CAPTURE_WALK_NODES);
@@ -12873,6 +13000,108 @@ mod tests {
                 .sequence,
             2,
             "the re-key publishes over the record that decided the scope"
+        );
+        assert_eq!(
+            held_nodes(&harness),
+            vec![capture(&harness.write_scope_seed).node],
+            "the re-key lost its race, so the capture waits"
+        );
+        drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count()
+    }
+
+    /// The re-key seals the record that decided the scope. It loses its race
+    /// to a record only another end opens, which is no verdict.
+    #[test]
+    fn a_capture_re_key_seals_the_record_that_decided_its_scope() {
+        let reported = raced_capture_pass(|harness, blocks, target| {
+            OtherEnd::new(0x30).seal(harness, blocks, target, 2);
+        });
+
+        assert_eq!(reported, 0, "no record is reported");
+    }
+
+    /// A re-key loses its race to a record whose head does not decode. That
+    /// refusal is a verdict under any key, so it is reported.
+    #[test]
+    fn a_re_key_that_loses_to_a_malformed_record_reports_it() {
+        let reported = raced_capture_pass(|harness, blocks, target| {
+            let block = b"not an envelope".to_vec();
+            let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &target.0).as_bytes(),
+                ),
+                format!("/ipfs/{cid}").as_bytes(),
+                2,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &target.0);
+            for endpoint in harness.seams.transport.endpoints() {
+                harness
+                    .seams
+                    .transport
+                    .seed_record(&endpoint, name.as_str(), record.clone());
+            }
+            blocks.insert(cid, block);
+            harness.seams.http = serve_walk_blocks(blocks);
+        });
+
+        assert_eq!(reported, 1, "the malformed record is reported once");
+    }
+
+    /// A write grant's name wave leaves an interior scope's capture at the
+    /// name the vault end derives. A tick with no vault end holds it, and a
+    /// later tick with that end bins it.
+    #[test]
+    fn a_capture_only_the_vault_end_names_waits_for_a_tick_with_that_end() {
+        let (mut harness, mut blocks) = walk_harness();
+        accept_uploads(&mut harness);
+        let interior = OtherEnd {
+            write_scope_seed: Zeroizing::new([0x6B; 32]),
+            ..OtherEnd::interior(0x30)
+        };
+        interior.serve(&mut harness, &mut blocks);
+        harness.scope_roots.push(interior.root);
+        let target = capture(&harness.write_scope_seed).node;
+        interior.seal(&mut harness, &mut blocks, target, 1);
+        *harness.state.observed_unlinks.borrow_mut() = vec![UnlinkedChild {
+            scope_id: interior.root.0,
+            ..capture(&harness.write_scope_seed)
+        }];
+        let vault = harness.scope();
+        let inner = DrainScope {
+            source: interior.end(),
+            ..vault
+        };
+
+        block_on(
+            harness
+                .drain()
+                .adopt_observed_unlinks(&inner, &[inner.source]),
+        );
+        assert_eq!(
+            held_nodes(&harness),
+            vec![target],
+            "a tick with no vault end holds the capture"
+        );
+
+        let drain = harness.drain();
+        for scope in [&vault, &inner] {
+            block_on(drain.adopt_observed_unlinks(scope, &[vault.source, inner.source]));
+        }
+        assert!(held_nodes(&harness).is_empty(), "the capture settles");
+        assert!(
+            harness
+                .state
+                .held_records
+                .borrow()
+                .contains_key(&HeldKey::BinIndex),
+            "and the node bins"
         );
     }
 
@@ -12897,7 +13126,7 @@ mod tests {
             });
         let vault = harness.scope();
         let inner = DrainScope {
-            source: interior.end(&harness),
+            source: interior.end(),
             ..vault
         };
         let ends = [vault.source, inner.source];
