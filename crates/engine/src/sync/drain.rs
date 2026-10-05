@@ -2580,31 +2580,27 @@ where
         };
         // A kept op under a keyless scope does not apply again ([`KeptPlace::Keyless`]).
         let kept = self.kept_ids(scope).await?;
-        let mut unwritable = None;
+        let mut end = pending.len();
         for (index, (op_id, op)) in pending.iter().enumerate() {
             if !kept(*op_id, op) {
                 continue;
             }
             if let KeptPlace::Keyless { root } = self.kept_place(scope, op).await? {
-                unwritable = Some((index, root));
+                if index == 0 {
+                    let halt = halt_below_another_scope_root(
+                        scope.keyless_roots,
+                        scope.charges_the_identity,
+                        root,
+                    );
+                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                        .await;
+                    return Err(halt);
+                }
+                end = index;
                 break;
             }
         }
-        let pending = match unwritable {
-            Some((0, root)) => {
-                let (op_id, op) = &pending[0];
-                let halt = halt_below_another_scope_root(
-                    scope.keyless_roots,
-                    scope.charges_the_identity,
-                    root,
-                );
-                self.apply_valve(scope, *op_id, op, halt, attempts, report)
-                    .await;
-                return Err(halt);
-            }
-            Some((index, _)) => &pending[..index],
-            None => pending,
-        };
+        let pending = &pending[..end];
 
         let opened = self.open_rebased_pass(scope, pending).await;
         // A newer release rewrites the anchor on each write, so its halt must
@@ -3075,24 +3071,25 @@ where
             OpKind::Restore { into, .. } => *into,
             _ => op.target,
         };
-        let (nearest, nearest_known, anchor_name) = {
+        let (nearest, anchor_name) = {
             let base = self.cells.base.borrow();
             let Some(meta) = base.node(anchor) else {
                 return Ok(KeptPlace::Elsewhere);
             };
-            let nearest = enclosing_scope_root(&base, anchor, scope.scope_roots);
             let known: Vec<NodeId> = scope
                 .scope_roots
                 .iter()
                 .chain(scope.known_scope_roots)
                 .copied()
                 .collect();
-            let nearest_known = enclosing_scope_root(&base, anchor, &known);
-            (nearest, nearest_known, meta.ipns_name.clone())
+            (
+                enclosing_scope_root(&base, anchor, &known),
+                meta.ipns_name.clone(),
+            )
         };
         // A known root this walk did not prove, a gate-refused one included,
         // is no flip: the root above it would read as one.
-        let Some(root) = nearest.filter(|root| nearest_known == Some(*root)) else {
+        let Some(root) = nearest.filter(|root| scope.scope_roots.contains(root)) else {
             return Ok(KeptPlace::Elsewhere);
         };
         let end = match scope.second_end() {

@@ -1,4 +1,9 @@
-import type { BinIndexHoldCheck, SettingsHoldCheck, SnapshotDescriptor } from '@cipherbox/client';
+import type {
+  BinIndexHoldCheck,
+  QueueHoldDescriptor,
+  SettingsHoldCheck,
+  SnapshotDescriptor,
+} from '@cipherbox/client';
 import { sameNode } from '../../lib/nodeId';
 import { displayName } from '../../vault/displayName';
 
@@ -47,14 +52,7 @@ const BIN_INDEX_CAUSES: Record<BinIndexHoldCheck, string> = {
 export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
   const hold = view?.queueHold ?? null;
   if (view == null || hold === null || hold.reason === 'quota') return null;
-  const text =
-    hold.reason === 'settings'
-      ? `${held(view, hold.node)} waits on your settings: ${SETTINGS_CAUSES[hold.check]}.`
-      : hold.reason === 'bin-index'
-        ? `${held(view, hold.node)} waits on your bin: ${BIN_INDEX_CAUSES[hold.check]}.`
-        : hold.reason === 'newer-release'
-          ? `${held(view, hold.node)} waits: another device runs a newer release. update this app.`
-          : `the delete of ${held(view, hold.node)} waits: the record of the item did not arrive, so this device cannot yet tell whether it is shared.`;
+  const text = holdText(view, hold);
 
   return (
     <div className="queue-hold-notice" role="status" data-testid="queue-hold-notice">
@@ -64,6 +62,22 @@ export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
       </ul>
     </div>
   );
+}
+
+function holdText(
+  view: SnapshotDescriptor,
+  hold: Exclude<QueueHoldDescriptor, { reason: 'quota' }>
+): string {
+  switch (hold.reason) {
+    case 'settings':
+      return `${held(view, hold.node)} waits on your settings: ${SETTINGS_CAUSES[hold.check]}.`;
+    case 'bin-index':
+      return `${held(view, hold.node)} waits on your bin: ${BIN_INDEX_CAUSES[hold.check]}.`;
+    case 'newer-release':
+      return `${held(view, hold.node)} waits: another device runs a newer release. update this app.`;
+    case 'delete-plane':
+      return `the delete of ${held(view, hold.node)} waits: the record of the item did not arrive, so this device cannot yet tell whether it is shared.`;
+  }
 }
 
 /** The held op's own node, named from the listing when this folder lists it. */

@@ -1616,24 +1616,18 @@ fn a_write_the_name_wave_did_not_carry_applies_again_after_the_flip() {
 #[test]
 fn a_second_apply_that_loses_a_tie_once_lands_on_a_later_pass() {
     let mut fx = GrantScenario::new();
-    let (child, late, survivor_seed, moved_child) = second_apply_under_a_survivor(&mut fx);
-    let current = fx
-        .world
-        .record_store
-        .record_at(&fx.world.record_store.endpoints()[0], moved_child.as_str())
-        .expect("the moved parent has a record");
-    let value = IpnsRecord::unmarshal(&current)
-        .and_then(|record| record.verify(&moved_child))
-        .expect("the moved parent verifies")
-        .value;
-    let sibling = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&survivor_seed, &child.0).as_bytes()),
-        &value,
-        sequence_at(&fx.world, &moved_child) + 1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
+    let survivor = second_apply_under_a_survivor(&mut fx);
+    let SurvivorApply {
+        child,
+        late,
+        ref moved_child,
+        ..
+    } = survivor;
+    let cid = published_head_cid(&fx.world, moved_child).expect("the moved parent has a record");
+    let sibling = survivor.record(
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, moved_child) + 1,
+    );
     // The survivor's record lands at the second apply's own sequence just
     // after its PUT, so the confirm reads a tie it lost.
     fx.world.record_store.seed_record_after_put(
@@ -1646,7 +1640,7 @@ fn a_second_apply_that_loses_a_tie_once_lands_on_a_later_pass() {
     passes_after_the_flip(&mut fx);
 
     assert!(
-        live_names(&fx, &moved_child, child).contains(&"late".to_owned()),
+        live_names(&fx, moved_child, child).contains(&"late".to_owned()),
         "the write landed in the moved tree"
     );
     assert!(
@@ -1656,11 +1650,34 @@ fn a_second_apply_that_loses_a_tie_once_lands_on_a_later_pass() {
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// What [`second_apply_under_a_survivor`] set up.
+struct SurvivorApply {
+    child: NodeId,
+    /// The create's node.
+    late: NodeId,
+    /// The surviving grantee's new write scope seed.
+    survivor_seed: [u8; 32],
+    /// The moved child's name.
+    moved_child: IpnsName,
+}
+
+impl SurvivorApply {
+    /// A record at the moved child's name, signed by the surviving grantee.
+    fn record(&self, value: &[u8], sequence: u64) -> Vec<u8> {
+        IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&self.survivor_seed, &self.child.0).as_bytes()),
+            value,
+            sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal()
+    }
+}
+
 /// A write-granted child, a second write grantee, and a create in the child
-/// that the cut of that second grantee does not carry. Returns the child, the
-/// create's node, the surviving grantee's new write scope seed, and the moved
-/// child's name.
-fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8; 32], IpnsName) {
+/// that the cut of that second grantee does not carry.
+fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> SurvivorApply {
     let (child, _) = write_granted_child(fx);
     assert_eq!(
         fx.grant_bystander(Permission::Write),
@@ -1696,7 +1713,12 @@ fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8
         "the moved tree does not carry the create"
     );
     let _ = dead_letter_events(&mut fx._events);
-    (child, late, survivor_seed, moved_child)
+    SurvivorApply {
+        child,
+        late,
+        survivor_seed,
+        moved_child,
+    }
 }
 
 /// A surviving write grantee plants a record the gate refuses at the moved
@@ -1705,9 +1727,14 @@ fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8
 #[test]
 fn a_second_apply_under_a_refused_parent_dead_letters_with_a_notice() {
     let mut fx = GrantScenario::new();
-    let (child, late, survivor_seed, moved_child) = second_apply_under_a_survivor(&mut fx);
+    let survivor = second_apply_under_a_survivor(&mut fx);
+    let SurvivorApply {
+        late,
+        ref moved_child,
+        ..
+    } = survivor;
     let epoch = decode_envelope(
-        &published_head(&fx.world, &fx.blocks, &moved_child).expect("the moved parent"),
+        &published_head(&fx.world, &fx.blocks, moved_child).expect("the moved parent"),
     )
     .expect("the head decodes")
     .epoch;
@@ -1723,18 +1750,14 @@ fn a_second_apply_under_a_refused_parent_dead_letters_with_a_notice() {
     })
     .expect("the planted record seals");
     fx.blocks.put(planted.block.clone());
-    let refused = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&survivor_seed, &child.0).as_bytes()),
+    let refused = survivor.record(
         format!("/ipfs/{}", planted.cid).as_bytes(),
-        sequence_at(&fx.world, &moved_child) + 2,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
+        sequence_at(&fx.world, moved_child) + 2,
+    );
     // The plant lands once the second apply has put the create's own record,
     // so the pass reads the moved parent first and then meets the plant.
     fx.world.record_store.seed_record_after_put(
-        derive_write_name(&survivor_seed, &late.0).as_str(),
+        derive_write_name(&survivor.survivor_seed, &late.0).as_str(),
         moved_child.as_str(),
         refused,
     );
