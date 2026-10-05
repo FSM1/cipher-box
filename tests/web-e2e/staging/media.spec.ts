@@ -34,8 +34,12 @@ async function streamUrl(page: Page, testId: string): Promise<string> {
   // A ticket is a bearer token, so the origin is part of the assertion: a
   // `/stream/` path on a foreign origin would hand the ticket away.
   const ticket = new URL(url);
-  expect(ticket.origin, `${testId} origin ${url}`).toBe(new URL(page.url()).origin);
-  expect(ticket.pathname.startsWith(STREAM_PATH), `${testId} src ${url}`).toBe(true);
+  expect(ticket.origin === new URL(page.url()).origin, `${testId} src is on a foreign origin`).toBe(
+    true
+  );
+  expect(ticket.pathname.startsWith(STREAM_PATH), `${testId} src is not a stream ticket`).toBe(
+    true
+  );
   return url;
 }
 
@@ -67,7 +71,11 @@ test('every fixture kind previews on the surface its kind renders', async ({ pag
   await files.openPreview(fixtures.document.name);
   const pdf = page.getByTestId('preview-pdf');
   await expect(pdf).toBeVisible({ timeout: 120_000 });
-  await expect(pdf).toHaveAttribute('src', /^blob:/);
+  await expect
+    .poll(() => pdf.evaluate((node) => (node as HTMLIFrameElement).src.startsWith('blob:')), {
+      message: 'the PDF did not get a blob',
+    })
+    .toBe(true);
   await files.closePreview();
 
   // One second of 8 kHz mono, so a decoded WAV reports about one second.
