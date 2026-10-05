@@ -110,8 +110,9 @@ command on the same scope while its entry stands re-drives the entry. It does no
    old write seed until the first device runs a pass, and an owner action runs a write-scope cut
    from the published state. When the first device is lost, a revoke and an interior move stay
    owed for ever. A manual "rotate write keys now" action, which any owner device runs from the
-   published state, was built on 2026-10-05: `RotateWriteNow` runs that write-scope
-   cut on any owner device, below the vault root.
+   published state, was built on 2026-10-05: `RotateWriteNow` runs one write wave on any owner
+   device, below the vault root, by the re-drive of that device's own entry or by a new cut, and
+   refuses retryably while work stays owed.
 7. `blueprint/deploy.md` "Release management" states the two-step landing of ADR 0020: the new
    staging prefix enters the orphan-sweep bookkeeping list (`is_bookkeeping`) one release before
    the first entry is written, so a one-release rollback keeps the record.

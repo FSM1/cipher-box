@@ -1971,8 +1971,9 @@ pub enum Command {
     },
     /// Run a write-scope cut of a scope below the vault root from its
     /// published state (owner-only), so any owner device finishes a write cut
-    /// another device left owed (ADR 0063 consequence 6). It re-drives this
-    /// device's own owed work at the scope first (ADR 0063 D5).
+    /// another device left owed (ADR 0063 consequence 6). It runs one write
+    /// wave in the call, by the re-drive of this device's own entry (ADR 0063
+    /// D5) or by a new cut, and refuses retryably while work stays owed.
     RotateWriteNow {
         /// The scope root to cut.
         #[cfg_attr(
@@ -7670,8 +7671,8 @@ where {
 
     /// Run a write-scope cut of the scope root at `node` from its published
     /// state ([`Command::RotateWriteNow`]), after this device re-drives its own
-    /// entry there (ADR 0063 D5). A finished entry that owed a write cut is
-    /// the cut, so a second one does not run. The command read falls back to
+    /// entry there (ADR 0063 D5). A re-drive that ran a wave is the cut, so a
+    /// second one does not run. The command read falls back to
     /// the last copy as every owner command's does (ADR 0068 D1), and a cut
     /// from that copy keeps no grant row (ADR 0068 D5).
     async fn rotate_write_now(&self, node: NodeId) -> Result<(), EngineError> {
@@ -7687,25 +7688,14 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let pass_keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &pass_keys);
-        let owed_wave = {
-            let _hold = pass.hold_owed(node)?;
-            pass.owed()
-                .entry(node)
-                .await
-                .map_err(EngineError::from_seam)?
-                .is_some_and(|entry| {
-                    entry
-                        .steps
-                        .iter()
-                        .any(|step| matches!(step, OwedStep::WriteCut { .. }))
-                })
-        };
+        // One write wave runs in this call: the re-drive's own, or the cut below.
         match pass.redrive_scope(&self.sites(session, api), node).await? {
-            Redriven::Finished if owed_wave => return Ok(()),
-            Redriven::StillOwed | Redriven::NotLanded => {
-                return Err(EngineError::rotation_work_owed());
-            }
-            Redriven::Finished | Redriven::NoEntry | Redriven::Dropped => {}
+            Redriven::Finished { waved: true } => return Ok(()),
+            Redriven::StillOwed => return Err(EngineError::rotation_work_owed()),
+            Redriven::Finished { waved: false }
+            | Redriven::NoEntry
+            | Redriven::Dropped
+            | Redriven::NotLanded => {}
         }
         let keys = OwnerActionKeys::new(session);
         let target = self
@@ -8187,7 +8177,7 @@ where {
             Box::pin(pass.redrive_scope(&sites, node)).await?,
             owed_delivery,
         ) {
-            (Redriven::Finished, Some(recipient)) => {
+            (Redriven::Finished { .. }, Some(recipient)) => {
                 self.contact_store(session)
                     .vouch(&recipient)
                     .await
@@ -8209,7 +8199,10 @@ where {
             }
             (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
             (
-                Redriven::NoEntry | Redriven::Finished | Redriven::Dropped | Redriven::NotLanded,
+                Redriven::NoEntry
+                | Redriven::Finished { .. }
+                | Redriven::Dropped
+                | Redriven::NotLanded,
                 _,
             ) => {}
         }
