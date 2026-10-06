@@ -14863,6 +14863,43 @@ fn a_revoke_whose_root_publish_fails_before_the_put_owes_nothing() {
     assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
 }
 
+/// A revoke whose root publish is refused at the floor gate of the signature,
+/// after register-first and before the PUT: the cut-epoch floor rises inside
+/// the publish window. No PUT goes out, and nothing is owed (ADR 0063 D5).
+#[test]
+fn a_revoke_refused_at_the_publish_floor_gate_sends_no_put_and_owes_nothing() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let puts = fx.world.record_store.put_count(root.as_str());
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.owner_device
+        .floor_store
+        .raise_epoch_floor_on_sequence_read_after(
+            &floor_label(root.as_str().as_bytes()),
+            &floor_label(&cut_epoch_floor),
+            u64::from(u32::MAX),
+            2,
+        );
+
+    // The third sequence-floor read of the root name is the signature's
+    // floor gate, after register-first.
+    let outcome = revoke_the_recipient(&mut fx);
+
+    assert!(
+        matches!(&outcome, Err(EngineError::TrustViolation { message })
+            if message.contains("cascade publish")),
+        "the root publish stops at its floor gate: {outcome:?}"
+    );
+    assert_eq!(
+        fx.world.record_store.put_count(root.as_str()),
+        puts,
+        "no PUT went out"
+    );
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
 /// A cut from the last copy keeps no row. Its root PUT goes out and fails,
 /// and the read after it falls back to this device's own copy from before
 /// the PUT. The copy does not show whether the PUT landed, so the entry
@@ -14948,6 +14985,12 @@ fn a_redrive_that_drops_a_row_granted_after_a_silent_cut_tells_the_host_once() {
 
     let _ = revoke_the_recipient(&mut fx);
     let mut events = events_so_far(&mut fx._events);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
+        "the revoke asked for the only row, so it tells nothing"
+    );
     assert!(owed_entry(&fx).is_some(), "the cut is owed");
 
     for endpoint in &endpoints {
@@ -19169,15 +19212,23 @@ fn owes_any(events: &[Event]) -> bool {
         .any(|event| matches!(event, Event::RotationWorkOwed { .. }))
 }
 
-/// The events that report work owed at `scope`, or abandoned there. The
-/// notice of rows a cut from the last copy dropped is not abandoned work.
+/// Whether `events` drop owed work at `scope`. The re-drive cannot tell the
+/// rows the owner asked to remove from the others, so its rows-dropped notice
+/// is not counted.
+fn drops_owed_work(events: &[Event], scope: NodeId) -> bool {
+    events.iter().any(|event| {
+        matches!(event, Event::RotationWorkAbandoned { scope_root, detail }
+            if *scope_root == scope && detail != "owed-grants-dropped-from-last-copy")
+    })
+}
+
+/// The events that report work owed at `scope`, or abandoned there.
 fn owed_or_abandoned(events: &[Event], scope: NodeId) -> (bool, bool) {
     let owed = events.iter().any(
         |event| matches!(event, Event::RotationWorkOwed { scope_root, .. } if *scope_root == scope),
     );
     let abandoned = events.iter().any(|event| {
-        matches!(event, Event::RotationWorkAbandoned { scope_root, detail }
-            if *scope_root == scope && detail != "owed-grants-dropped-from-last-copy")
+        matches!(event, Event::RotationWorkAbandoned { scope_root, .. } if *scope_root == scope)
     });
     (owed, abandoned)
 }
@@ -19197,9 +19248,8 @@ fn a_first_wave_that_stops_leaves_a_cut_the_redrive_finishes_past_the_bound() {
     let _ = revoke_the_recipient(&mut fx);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let events = events_so_far(&mut fx._events);
-    assert_eq!(
-        owed_or_abandoned(&events, fx.folder),
-        (true, false),
+    assert!(
+        owed_or_abandoned(&events, fx.folder).0 && !drops_owed_work(&events, fx.folder),
         "the cut is owed, and the re-drive keeps it"
     );
 
@@ -19216,10 +19266,7 @@ fn a_first_wave_that_stops_leaves_a_cut_the_redrive_finishes_past_the_bound() {
             .any(|drop| drop == (fx.folder, grandchild, DropCause::NoHeadBlock)),
         "the node drops past the bound"
     );
-    assert!(
-        !owed_or_abandoned(&events, fx.folder).1,
-        "nothing is dropped"
-    );
+    assert!(!drops_owed_work(&events, fx.folder), "nothing is dropped");
     assert_the_revokee_is_cut(&fx, &revokee_seed);
     assert_no_grant_at(&fx, &fx.granted_scope_repoint().current_root);
 }
@@ -19253,7 +19300,7 @@ fn a_rerun_keeps_the_first_stop_so_an_unserved_node_drops_past_the_bound() {
         "the node drops past the bound"
     );
     assert!(
-        !owed_or_abandoned(&events, fx.folder).1,
+        !drops_owed_work(&events, fx.folder),
         "no entry is abandoned"
     );
     assert_eq!(fx.granted_scope_repoint().write_epoch, 3);

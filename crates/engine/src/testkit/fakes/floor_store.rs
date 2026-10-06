@@ -35,7 +35,7 @@ struct Inner {
     raise_report_skew: u64,
     /// An epoch raise the next sequence-floor read of a name fires: the name,
     /// the epoch floor key, and the epoch.
-    raise_on_sequence_read: Option<(Vec<u8>, Vec<u8>, u64)>,
+    raise_on_sequence_read: Option<(Vec<u8>, Vec<u8>, u64, u32)>,
 }
 
 impl Inner {
@@ -174,8 +174,21 @@ impl InMemoryFloorStore {
         epoch_key: &[u8],
         epoch: u64,
     ) {
+        self.raise_epoch_floor_on_sequence_read_after(ipns_name, epoch_key, epoch, 0);
+    }
+
+    /// [`raise_epoch_floor_on_sequence_read`](Self::raise_epoch_floor_on_sequence_read)
+    /// on the sequence-floor read naming `ipns_name` after `skipped` more of
+    /// them, so the raise lands in a later publish window than the first.
+    pub fn raise_epoch_floor_on_sequence_read_after(
+        &self,
+        ipns_name: &[u8],
+        epoch_key: &[u8],
+        epoch: u64,
+        skipped: u32,
+    ) {
         self.inner.lock().expect("lock").raise_on_sequence_read =
-            Some((ipns_name.to_vec(), epoch_key.to_vec(), epoch));
+            Some((ipns_name.to_vec(), epoch_key.to_vec(), epoch, skipped));
     }
 
     /// Restore every injected floor fault, the clear's and the commit's
@@ -314,7 +327,7 @@ impl FloorStore for InMemoryFloorStore {
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
         let mut inner = self.inner.lock().expect("lock");
-        if let Some((name, epoch_key, epoch)) = inner.raise_on_sequence_read.take() {
+        if let Some((name, epoch_key, epoch, skipped)) = inner.raise_on_sequence_read.take() {
             let tag = if ipns_name == name.as_slice() {
                 Some(&[][..])
             } else {
@@ -324,6 +337,9 @@ impl FloorStore for InMemoryFloorStore {
                     .map(|(tag, _)| tag)
             };
             match tag {
+                Some(_) if skipped > 0 => {
+                    inner.raise_on_sequence_read = Some((name, epoch_key, epoch, skipped - 1));
+                }
                 Some(tag) => {
                     raise(
                         &mut inner.epoch,
@@ -331,7 +347,7 @@ impl FloorStore for InMemoryFloorStore {
                         epoch,
                     );
                 }
-                None => inner.raise_on_sequence_read = Some((name, epoch_key, epoch)),
+                None => inner.raise_on_sequence_read = Some((name, epoch_key, epoch, skipped)),
             }
         }
         if inner.failing_reads {

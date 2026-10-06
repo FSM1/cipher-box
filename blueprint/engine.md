@@ -1374,7 +1374,9 @@ rebases and signs above.
   the bound of a cut that never landed runs from its first stop, and the
   re-drive can drop the entry early with `rotationWorkAbandoned` (ADR 0068).
   The rows-dropped notice mark is in memory too, so after a restart the
-  re-drive sends the notice again; the command path sends it first.
+  re-drive sends the notice again. The re-drive cannot know which rows the
+  owner asked to remove, so when the command sent no notice, the re-drive sends
+  it for every row it drops, also in the same session.
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).
