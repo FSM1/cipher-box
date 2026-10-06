@@ -3840,7 +3840,6 @@ pub(crate) async fn memoized_scan<St: StagingStore + QueueGeneration>(
 fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
     sweeper: Sweeper,
     scheduler: Sch,
-    events: mpsc::UnboundedSender<Event>,
     times: Rc<RotationTimes>,
 ) -> SweepTaskFactory {
     let cut = {
@@ -3848,27 +3847,30 @@ fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
         let times = times.clone();
         Rc::new(move |scope_id| times.cut(scope_id, scheduler.now()))
     };
-    let task = Rc::new(move |scope: ChildScopeRef, parent_node_seed| {
-        let scope_id = scope.scope_id;
-        times.cut(scope_id, scheduler.now());
-        let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
-        let scheduler = scheduler.clone();
-        let events = events.clone();
-        let times = times.clone();
-        Box::pin(async move {
-            if let SweepRun::Swept(Ok(outcome)) = run.await {
-                times.report(&events, scope_id, &outcome, scheduler.now());
-            }
-        }) as crate::seams::BoxedTask
-    });
-    SweepTaskFactory { task, cut }
+    SweepTaskFactory {
+        cut,
+        task: Rc::new(move |scope: ChildScopeRef, parent_node_seed| {
+            let scope_id = scope.scope_id;
+            times.cut(scope_id, scheduler.now());
+            let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
+            let scheduler = scheduler.clone();
+            let times = times.clone();
+            Box::pin(async move {
+                if let SweepRun::Swept(Ok(outcome)) = run.await {
+                    times.report(scope_id, &outcome, scheduler.now());
+                }
+            })
+        }),
+    }
 }
 
 /// When this session last cut each scope's read epoch, and when a sweep run
 /// last re-sealed a node of it. A cascade notes each scope once its floor is
 /// durable. Session memory only: a restart starts empty.
-#[derive(Default)]
-struct RotationTimes(RefCell<BTreeMap<[u8; 16], ScopeTimes>>);
+struct RotationTimes {
+    events: mpsc::UnboundedSender<Event>,
+    scopes: RefCell<BTreeMap<[u8; 16], ScopeTimes>>,
+}
 
 #[derive(Default, Clone, Copy)]
 struct ScopeTimes {
@@ -3877,27 +3879,28 @@ struct ScopeTimes {
 }
 
 impl RotationTimes {
+    fn new(events: mpsc::UnboundedSender<Event>) -> Self {
+        Self {
+            events,
+            scopes: RefCell::default(),
+        }
+    }
+
     fn cut(&self, scope_id: [u8; 16], at: UnixMillis) {
-        self.0.borrow_mut().entry(scope_id).or_default().cut_at = Some(at);
+        self.scopes.borrow_mut().entry(scope_id).or_default().cut_at = Some(at);
     }
 
     /// Sends the [`Event::SweepConvergence`] one sweep run's `outcome` reports.
-    fn report(
-        &self,
-        events: &mpsc::UnboundedSender<Event>,
-        scope_id: [u8; 16],
-        outcome: &SweepOutcome,
-        at: UnixMillis,
-    ) {
+    fn report(&self, scope_id: [u8; 16], outcome: &SweepOutcome, at: UnixMillis) {
         let times = {
-            let mut all = self.0.borrow_mut();
+            let mut all = self.scopes.borrow_mut();
             let times = all.entry(scope_id).or_default();
             if !outcome.converged.is_empty() {
                 times.last_reseal_at = Some(at);
             }
             *times
         };
-        let _ = events.unbounded_send(Event::SweepConvergence {
+        let _ = self.events.unbounded_send(Event::SweepConvergence {
             scope_root: NodeId(scope_id),
             read_epoch: outcome.scope_read_epoch,
             old_epoch_nodes: saturating_count(outcome.old_epoch_nodes()),
@@ -5757,12 +5760,11 @@ impl<T: SeamTypes> Engine<T> {
 
         self.spawn_liveness_loop(api.clone());
         let sweeper = self.build_sweeper(api.clone());
-        let rotation_times = Rc::new(RotationTimes::default());
+        let rotation_times = Rc::new(RotationTimes::new(self.events.clone()));
         *self.state.sweep_tasks.borrow_mut() = sweeper.clone().map(|sweeper| {
             sweep_task_factory(
                 sweeper,
                 self.seams.scheduler.clone(),
-                self.events.clone(),
                 rotation_times.clone(),
             )
         });
@@ -6652,7 +6654,6 @@ where {
         let read_seeds = self.state.scope_read_seeds.clone();
         let write_seeds = self.state.scope_write_seeds.clone();
         let cadence = self.profile.sweep_cadence;
-        let events = self.events.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             let read_epoch_converged_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
             run_sweep_job(
@@ -6698,7 +6699,7 @@ where {
                     let Ok(outcome) = result else {
                         return;
                     };
-                    times.report(&events, target.scope.scope_id, outcome, scheduler.now());
+                    times.report(target.scope.scope_id, outcome, scheduler.now());
                     if !outcome.worth_another_pass() {
                         read_epoch_converged_at
                             .borrow_mut()
