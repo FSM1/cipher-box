@@ -10879,11 +10879,7 @@ where {
         // A kept op is never a retained record, so the unfiltered scan answers.
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        let retained_records =
-            memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
-                .await
-                .map_err(EngineError::from_seam)?
-                .retained;
+        let retained_records = self.durable_scan(&reader).await?.retained;
         Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
             queue_hold: *self.state.queue_hold.borrow(),
@@ -11963,6 +11959,13 @@ where {
             .0
     }
 
+    /// The memoized queue scan, kept ops included.
+    async fn durable_scan(&self, reader: &RecordReader<'_>) -> Result<QueueScan, EngineError> {
+        memoized_scan(&self.seams.staging_store, reader, &self.state.queue_scan)
+            .await
+            .map_err(EngineError::from_seam)
+    }
+
     /// Scan the durable staging store's queue for this session. Undecodable
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
@@ -11983,9 +11986,7 @@ where {
         if let Some(scan) = hit {
             return Ok(scan);
         }
-        let mut scan = memoized_scan(staging, &reader, &self.state.queue_scan)
-            .await
-            .map_err(EngineError::from_seam)?;
+        let mut scan = self.durable_scan(&reader).await?;
         self.retain_pending_ops(session, &mut scan.mine)
             .await
             .map_err(EngineError::from_seam)?;

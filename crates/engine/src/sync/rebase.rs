@@ -343,9 +343,8 @@ pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> Queue
 /// authentication included.
 pub(crate) type QueueScanMemo = ScanMemo<QueueKey>;
 
-/// A memo of a [`QueueScan`] with its kept ops dropped (ADR 0069 D7). The
-/// published-op mark and the kept-op notes are not in the queue, so the key adds
-/// their own generation ([`QueueGeneration::kept_generation`]).
+/// A memo of a [`QueueScan`] with its kept ops dropped (ADR 0069 D7), keyed on
+/// [`QueueGeneration::kept_generation`] too.
 ///
 /// [`QueueGeneration::kept_generation`]: crate::seams::QueueGeneration::kept_generation
 pub(crate) type PendingScanMemo = ScanMemo<(QueueKey, u64)>;

@@ -417,6 +417,13 @@ impl InMemoryRecordStore {
             .expect("lock")
             .contains(routing_key)
     }
+
+    fn get_failing_at(&self, endpoint: &EndpointId, routing_key: &str) -> bool {
+        self.get_failing_at
+            .lock()
+            .expect("lock")
+            .contains(&(endpoint.clone(), routing_key.to_owned()))
+    }
 }
 
 impl RecordTransport for InMemoryRecordStore {
@@ -474,13 +481,7 @@ impl RecordTransport for InMemoryRecordStore {
                 *status,
             ));
         }
-        if self.get_failing_key(routing_key)
-            || self
-                .get_failing_at
-                .lock()
-                .expect("lock")
-                .contains(&(endpoint.clone(), routing_key.to_owned()))
-        {
+        if self.get_failing_key(routing_key) || self.get_failing_at(endpoint, routing_key) {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
         let record = match self.swapped(routing_key) {

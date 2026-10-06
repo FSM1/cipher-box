@@ -11376,6 +11376,18 @@ fn a_restart_with_a_dark_root_paints_the_last_known_good_root() {
     assert!(write.is_ok(), "a write into deep is accepted: {write:?}");
 }
 
+/// Alice's device after one session that created and published `deep`.
+fn alice_with_published_deep(world: &FakeWorld, blocks: &Blocks) -> FakeDevice {
+    let alice = world.device(b"alice");
+    {
+        let (mut engine, _events, mut tasks) = boot(world, blocks, &alice, 42);
+        create(&mut engine, "deep");
+        tick(world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+    alice
+}
+
 /// A local fault on the read of the owner seed cache means no copy: the dark
 /// start still runs, with nothing painted.
 #[test]
@@ -11383,13 +11395,7 @@ fn a_dark_restart_with_an_unreadable_owner_seed_cache_still_starts() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    {
-        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-        create(&mut engine, "deep");
-        tick(&world, &engine, &mut tasks);
-    }
-    drop(world.scheduler.take_spawned_tasks());
+    let alice = alice_with_published_deep(&world, &blocks);
 
     world.record_store.fail_get_for(write_name(ROOT).as_str());
     alice
@@ -11412,13 +11418,7 @@ fn a_restart_that_reads_a_replay_beside_a_failed_endpoint_paints_the_confirmed_c
     let blocks = Blocks::default();
     let root_name = seed_account(&world, &blocks);
     let seeded = root_record(&world, 0);
-    let alice = world.device(b"alice");
-    {
-        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-        create(&mut engine, "deep");
-        tick(&world, &engine, &mut tasks);
-    }
-    drop(world.scheduler.take_spawned_tasks());
+    let alice = alice_with_published_deep(&world, &blocks);
     let floor = || {
         block_on(
             alice
@@ -11451,13 +11451,7 @@ fn a_restart_that_reads_a_replayed_root_is_still_a_trust_violation() {
     let blocks = Blocks::default();
     let root_name = seed_account(&world, &blocks);
     let seeded = root_record(&world, 0);
-    let alice = world.device(b"alice");
-    {
-        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-        create(&mut engine, "deep");
-        tick(&world, &engine, &mut tasks);
-    }
-    drop(world.scheduler.take_spawned_tasks());
+    let alice = alice_with_published_deep(&world, &blocks);
 
     for endpoint in world.record_store.endpoints() {
         world

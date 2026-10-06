@@ -271,20 +271,18 @@ where
             let mut at_floor = resolved.current_at_floor;
             // A dark root paints the confirmed owner copy: a kept op stays out
             // of the overlay until the base shows it (ADR 0069 D7).
-            if at_floor.is_none() && matches!(outcome, ResolveOutcome::NoUpdate) {
-                // A local fault means no copy, as in `resolve_gated`.
-                let dark = adopter
+            // A local fault means no copy, as in `resolve_gated`.
+            if at_floor.is_none()
+                && matches!(outcome, ResolveOutcome::NoUpdate)
+                && let Ok(Some(material)) = adopter
                     .recover_dark_root(&adoption.repoint.current_root)
                     .await
-                    .ok()
-                    .flatten();
-                if let Some(material) = dark {
-                    read_scope_seed = Some(material.read_scope_seed);
-                    write_scope_seed = material
-                        .write_scope_seed
-                        .map(|seed| (material.node_id, seed));
-                    at_floor = Some(material.at_floor);
-                }
+            {
+                read_scope_seed = Some(material.read_scope_seed);
+                write_scope_seed = material
+                    .write_scope_seed
+                    .map(|seed| (material.node_id, seed));
+                at_floor = Some(material.at_floor);
             }
             let mut base = base;
             if let Some(at_floor) = &at_floor {
