@@ -44,13 +44,6 @@ pub mod register;
 pub mod renewal_walk;
 pub mod resolve;
 pub mod retire;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the session-start and walk callers are not landed"
-    )
-)]
 pub(crate) mod revival;
 pub mod rotation;
 
@@ -96,4 +89,6 @@ pub use rotation::{
     GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
     PointerConsultArm, WriteWaveNet,
 };
-pub(crate) use vault_pointer::{VaultPointerVoucher, VouchedRoot};
+pub(crate) use vault_pointer::{
+    VaultPointerRead, VaultPointerVoucher, VouchedRoot, revive_vault_pointer_chain,
+};

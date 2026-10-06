@@ -32,10 +32,12 @@ use crate::content::Gateway;
 use crate::gate::{GateError, floor};
 use crate::grants::owner_entry::OwnerSeedCache;
 use crate::profile::SyncTimingProfile;
+use crate::rotation::derive_write_name;
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
     SeamResult, SnapshotCache, UnixMillis,
 };
+use crate::session::SessionIdentity;
 use crate::sync::tick::ResolveMode;
 
 /// A record the read of its plane admitted, and the floors its signature
@@ -43,14 +45,18 @@ use crate::sync::tick::ResolveMode;
 pub(crate) struct Admitted {
     pub(crate) observed: Observed,
     pub(crate) bar: Option<PublishBar>,
+    /// The signer the read recovered with the record, for a name whose seed
+    /// only the admitted body carries.
+    pub(crate) signer: Option<Ed25519Signer>,
 }
 
 impl Admitted {
     /// A record admitted under no scope's floors.
-    fn unbarred(name: &IpnsName, sequence: u64, bytes: &[u8]) -> Self {
+    pub(crate) fn unbarred(name: &IpnsName, sequence: u64, bytes: &[u8]) -> Self {
         Self {
             observed: Observed::admitted(name, sequence, bytes),
             bar: None,
+            signer: None,
         }
     }
 
@@ -62,6 +68,7 @@ impl Admitted {
         Ok(Self {
             observed: observed.map_err(|refused| PlaneRefusal::Unsignable(refused.error))?,
             bar: Some(bar),
+            signer: None,
         })
     }
 }
@@ -103,7 +110,9 @@ pub(crate) trait PlaneRead {
 /// One lapsed name to revive: the name, its signer, and the read of its plane.
 pub(crate) struct ReviveRequest<'a, P> {
     pub(crate) name: &'a IpnsName,
-    pub(crate) signer: &'a Ed25519Signer,
+    /// `None` when only the admitted record carries the seed of the name,
+    /// as for a scope root after a write rotation.
+    pub(crate) signer: Option<&'a Ed25519Signer>,
     pub(crate) plane: P,
 }
 
@@ -274,7 +283,7 @@ async fn corroborate<T: RecordTransport>(
 /// A lapsed name that passed steps 1 to 3.
 struct Lapsed<'a> {
     name: &'a IpnsName,
-    signer: &'a Ed25519Signer,
+    signer: Ed25519Signer,
     admitted: Admitted,
     value: Vec<u8>,
     restored: bool,
@@ -344,7 +353,9 @@ where
     P: PlaneRead,
 {
     let name = request.name;
-    if IpnsName::from_public_key(&request.signer.verifying_key()) != *name {
+    let signs_for =
+        |signer: &Ed25519Signer| IpnsName::from_public_key(&signer.verifying_key()) == *name;
+    if request.signer.is_some_and(|signer| !signs_for(signer)) {
         return Err(ReviveError::WrongSigner);
     }
     pace.slot(seams.scheduler).await;
@@ -383,7 +394,7 @@ where
         key: name.as_str(),
         record: &bytes,
     };
-    let admitted = request
+    let mut admitted = request
         .plane
         .admit(&served, name, &recovered, &bytes)
         .await
@@ -393,13 +404,19 @@ where
             PlaneRefusal::Unsignable(error) => ReviveError::Publish(error),
             PlaneRefusal::Mismatch => ReviveError::PlaneMismatch,
         })?;
+    let signer = request
+        .signer
+        .cloned()
+        .or_else(|| admitted.signer.take())
+        .filter(|signer| signs_for(signer))
+        .ok_or(ReviveError::WrongSigner)?;
     // D2: the value the plane admitted, unchanged.
     let value = super::fork::verified(name, admitted.observed.bytes())
         .ok_or(ReviveError::TrustViolation)?
         .value;
     Ok(Lapsed {
         name,
-        signer: request.signer,
+        signer,
         admitted,
         value,
         restored,
@@ -430,7 +447,7 @@ where
         observed,
         lapsed.admitted.bar,
         FloorRule::AtMost,
-        lapsed.signer,
+        &lapsed.signer,
         &lapsed.value,
     )
     .await
@@ -484,7 +501,15 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ScopeRootRead<'_, H
             | ScopeRootAdmission::Gone
             | ScopeRootAdmission::HeadBlockAbsent => PlaneRefusal::Unavailable,
         })?;
-        Admitted::gated(admitted.observed, admitted.bar)
+        let signer = admitted
+            .write_scope_seed
+            .as_ref()
+            .filter(|seed| derive_write_name(seed, &self.scope_id) == *name)
+            .map(|seed| SessionIdentity::write_name_signer(seed, &self.scope_id));
+        Ok(Admitted {
+            signer,
+            ..Admitted::gated(admitted.observed, admitted.bar)?
+        })
     }
 }
 
@@ -759,7 +784,7 @@ mod tests {
             device,
             &[ReviveRequest {
                 name: &name,
-                signer,
+                signer: Some(signer),
                 plane,
             }],
         )
@@ -1134,7 +1159,7 @@ mod tests {
             .zip(&names)
             .map(|(signer, name)| ReviveRequest {
                 name,
-                signer,
+                signer: Some(signer),
                 plane: Admits,
             })
             .collect();
@@ -1166,7 +1191,7 @@ mod tests {
             &device,
             &[ReviveRequest {
                 name: &name,
-                signer: &signer,
+                signer: Some(&signer),
                 plane: Admits,
             }],
         );
@@ -1678,7 +1703,7 @@ mod tests {
             &pace,
             &[ReviveRequest {
                 name: &name,
-                signer: &signer,
+                signer: Some(&signer),
                 plane: Admits,
             }],
         )

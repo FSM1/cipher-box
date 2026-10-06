@@ -9,18 +9,29 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 
-use super::fanout::{TiedFetch, fanout_get_tied_classified};
+use cipherbox_core::ipns::VerifiedRecord;
+use cipherbox_core::kdf;
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+
+use super::fanout::{FanoutRecord, TiedFetch, fanout_get_classified, fanout_get_tied_classified};
 use super::publish::Observed;
+use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
+use super::revival::{
+    Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived, revive,
+};
 use super::rotation::{PointerPipeline, publish_pointer_over};
-use crate::api::ApiClient;
+use crate::api::{ApiClient, ApiError};
 use crate::entropy::Entropy;
 use crate::gate::GateError;
 use crate::gate::floor::{self, PointerPlane, Strictness};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
-use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
-use crate::sync::pointer::{PointerError, SessionRole, open_repoint, seal_repoint};
+use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamResult};
+use crate::sync::pointer::{
+    MAX_VAULT_POINTER_PROBE, PointerError, SessionRole, open_repoint, seal_repoint,
+    vault_pointer_name,
+};
 use cipherbox_core::ipns::IpnsName;
 
 /// The vault pointer at the index this session adopted, and the owner material
@@ -227,6 +238,149 @@ where
             .vouch_read_epoch(&record.ipns_name, record.read_epoch)
             .await
     }
+}
+
+/// `open_repoint` and the vault-pointer bar of one index of the chain (ADR
+/// 0062 D1 step 3).
+pub(crate) struct VaultPointerRead<'a, F> {
+    pub(crate) floors: &'a F,
+    pub(crate) pointer_read_key: &'a [u8; 32],
+    pub(crate) owner_identity: &'a EcdsaVerifier,
+    /// The session's root scope, the scope the vault pointer names.
+    pub(crate) scope_id: [u8; 16],
+    pub(crate) payload_version: u64,
+}
+
+impl<F> Clone for VaultPointerRead<'_, F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<F> Copy for VaultPointerRead<'_, F> {}
+
+impl<F> VaultPointerRead<'_, F> {
+    fn open(&self, value: &[u8]) -> Result<RepointObject, PointerError> {
+        open_repoint(
+            self.pointer_read_key,
+            self.payload_version,
+            &self.scope_id,
+            self.owner_identity,
+            value,
+        )
+    }
+}
+
+impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
+    async fn admit<T: RecordTransport>(
+        &self,
+        _: &T,
+        name: &IpnsName,
+        recovered: &VerifiedRecord,
+        bytes: &[u8],
+    ) -> Result<Admitted, PlaneRefusal> {
+        let repoint = self
+            .open(&recovered.value)
+            .map_err(|_| PlaneRefusal::Rejected)?;
+        match floor::repoint_regression(
+            self.floors,
+            &repoint,
+            &self.scope_id,
+            PointerPlane::VaultPointer,
+        )
+        .await
+        {
+            Ok(None) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
+            Ok(Some(_)) => Err(PlaneRefusal::Rejected),
+            Err(_) => Err(PlaneRefusal::Unavailable),
+        }
+    }
+
+    /// A device that never walked the chain holds no index floor.
+    async fn floorless<G: FloorStore>(&self, floors: &G, _: &IpnsName) -> SeamResult<bool> {
+        Ok(floor::vault_pointer_index_floor(floors, &self.scope_id)
+            .await?
+            .is_none())
+    }
+}
+
+/// What the session-start pass over the vault pointer chain found.
+#[derive(Default)]
+pub(crate) struct ChainRevival {
+    /// The re-point at the last index, when the chain ended cleanly: the
+    /// recovery endpoint holds no record one index past it.
+    pub(crate) last: Option<RepointObject>,
+    /// Each revival the pass ran, by routing key.
+    pub(crate) revivals: Vec<(String, Result<Revived, ReviveError>)>,
+}
+
+/// Revive each lapsed index of the vault pointer chain, from the durable index
+/// floor up, before `resolve_vault_pointer` reads it (ADR 0062 D3). An index
+/// that the fan-out reads `Absent` revives from the recovery endpoint. The
+/// first index the recovery endpoint holds no record for ends the chain, as
+/// the probe one index past the last does.
+pub(crate) async fn revive_vault_pointer_chain<T, H, C, F, Sch>(
+    api: &ApiClient<H, C>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
+    login_secret: &[u8],
+    read: VaultPointerRead<'_, F>,
+) -> ChainRevival
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let mut pass = ChainRevival::default();
+    // An index below the floor is abandoned, so its revival would re-sign a
+    // superseded pointer.
+    let Ok(floor) = floor::vault_pointer_index_floor(seams.floors, &read.scope_id).await else {
+        return pass;
+    };
+    let mut last = None;
+    let mut revived = None;
+    let mut index = floor.unwrap_or(0);
+    while index < MAX_VAULT_POINTER_PROBE {
+        let name = vault_pointer_name(login_secret, index);
+        let value = match fanout_get_classified(seams.transport, &name).await {
+            FanoutRecord::Found(record, _) => record.value,
+            FanoutRecord::Absent if revived != Some(index) => {
+                let signer = kdf::vault_pointer_index(login_secret, index);
+                let request = ReviveRequest {
+                    name: &name,
+                    signer: Some(&signer),
+                    plane: read,
+                };
+                let result = revive(api, seams, pace, &[request]).await.remove(0);
+                let ended = matches!(
+                    result,
+                    Err(ReviveError::Recovery(ApiError::Status { status: 404, .. }))
+                );
+                let signed = result.is_ok();
+                pass.revivals.push((name.as_str().to_owned(), result));
+                if ended {
+                    pass.last = last;
+                    return pass;
+                }
+                if !signed {
+                    return pass;
+                }
+                // The next read opens the record the endpoints now serve.
+                revived = Some(index);
+                continue;
+            }
+            FanoutRecord::Absent | FanoutRecord::Unavailable(_) => return pass,
+        };
+        match read.open(&value) {
+            Ok(repoint) => last = Some(repoint),
+            Err(_) => return pass,
+        }
+        index += 1;
+    }
+    pass.last = last;
+    pass
 }
 
 /// The standing re-point's sequence check on rule 6's axis: a record below the

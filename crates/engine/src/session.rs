@@ -45,6 +45,7 @@ use crate::grants::grafted::{
 use crate::grants::received_status::ReceivedVerdicts;
 use crate::net::HeldRecords;
 use crate::net::retire::{OrphanHeads, ReclaimStall};
+use crate::net::revival::RecoveryPace;
 use crate::net::rotation::OnAccessMisses;
 use crate::rotation::{SweepKeys, SweepTaskFactory, WalkedReadEpochs};
 use crate::scope_seeds::ScopeSeeds;
@@ -316,6 +317,9 @@ pub(crate) struct SessionState {
     pub(crate) pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
     /// The names the drain is publishing right now (`DrainCells::publishing`).
     pub(crate) publishing: Rc<RefCell<BTreeSet<String>>>,
+    /// The session's one recovery pace, which the session-start revival and
+    /// the renewal walk share (ADR 0062 consequence 2).
+    pub(crate) recovery_pace: Rc<RecoveryPace>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](crate::facade::Engine::snapshot)
     /// classifies at read time off the same cell.
@@ -605,6 +609,7 @@ impl SessionState {
             held_records: Rc::new(RefCell::new(HeldRecords::new())),
             pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
             publishing: Rc::new(RefCell::new(BTreeSet::new())),
+            recovery_pace: Rc::new(RecoveryPace::default()),
             sync_status: Rc::new(RefCell::new(SyncStatus::default())),
             scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
             scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),

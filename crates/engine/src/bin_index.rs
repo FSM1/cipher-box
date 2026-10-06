@@ -200,6 +200,11 @@ impl BinIndexKeys {
         &self.name
     }
 
+    /// The signer of the bin index record.
+    pub(crate) fn signer(&self) -> &Ed25519Signer {
+        &self.signer
+    }
+
     /// The seed the doomed subtree rooted at `node_id` re-seals under, which is
     /// the whole of the access cut: no scope seed of any epoch is an input, so
     /// key regression cannot reach it (ADR 0010 item 3).

@@ -36,7 +36,7 @@ pub(crate) const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// owner-authored (each index needs the owner's identity signature to open),
 /// so a valid chain is finite; this only guards against a misbehaving fetch
 /// never returning "unresolvable".
-const MAX_VAULT_POINTER_PROBE: u64 = 1 << 16;
+pub(crate) const MAX_VAULT_POINTER_PROBE: u64 = 1 << 16;
 
 /// Who is driving this session — the owner-plane write gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

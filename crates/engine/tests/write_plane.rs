@@ -5158,7 +5158,8 @@ fn a_genesis_publish_that_failed_before_its_put_is_retried_by_the_same_device() 
 
 /// The gate is the device's own durable marks, which decide what a resolve
 /// would: an account that already holds the record spends no publish, and the
-/// start pays no network round trip to find that out.
+/// load pays no network round trip to find that out. The start reads the name
+/// once, for the session-start revival check (ADR 0062 D3).
 #[test]
 fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let world = FakeWorld::new();
@@ -5174,10 +5175,11 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let (mut engine, _events) = engine_on_api(&alice, 43);
     block_on(engine.start(secret(), None)).expect("the second session starts");
 
+    let revival_check = resolves + world.record_store.endpoints().len();
     assert_eq!(
         world.record_store.get_count(bin_name().as_str()),
-        resolves,
-        "the durable mark answered, so the start resolved nothing",
+        revival_check,
+        "the durable mark answered, so the start resolved the name for the revival check only",
     );
     assert_eq!(
         standing_bin_record(&world),
@@ -5192,7 +5194,7 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     poll_tasks_until_parked(&mut tasks);
     assert_eq!(
         world.record_store.get_count(bin_name().as_str()),
-        resolves,
+        revival_check,
         "and the session spawned no resolve of the name either",
     );
     assert_eq!(
@@ -5206,8 +5208,9 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let carol = world.device(b"alice-third-install");
     let (_engine, _tasks) = start_on_api(&world, &blocks, &carol, 44);
     assert!(
-        world.record_store.get_count(bin_name().as_str()) > resolves,
-        "an unmarked device resolves the name once",
+        world.record_store.get_count(bin_name().as_str())
+            > revival_check + world.record_store.endpoints().len(),
+        "an unmarked device resolves the name for its load too",
     );
 }
 
@@ -18415,7 +18418,8 @@ fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
 
 /// [`serve_http`], with the record-recovery route answering `record` for `name`
 /// — the API cache that still knows a vault this device's own fan-out cannot
-/// resolve yet.
+/// resolve yet. The first fetch answers 429, so the session-start revival
+/// signs nothing and the vacancy probe meets the cached record.
 fn serve_http_with_cached_record(
     device: &FakeDevice,
     blocks: &Blocks,
@@ -18424,11 +18428,20 @@ fn serve_http_with_cached_record(
     record: Vec<u8>,
 ) {
     let route = format!("/recovery/{}", name.as_str());
+    let throttled = Arc::new(AtomicBool::new(false));
     for _ in 0..calls {
         let blocks = blocks.clone();
         let route = route.clone();
         let record = record.clone();
+        let throttled = throttled.clone();
         device.http.enqueue_derived(move |request| {
+            if request.url.ends_with(&route) && !throttled.swap(true, Ordering::Relaxed) {
+                return Ok(HttpResponse {
+                    status: 429,
+                    headers: Vec::new(),
+                    body: Vec::new().into(),
+                });
+            }
             if request.url.ends_with(&route) {
                 return Ok(HttpResponse {
                     status: 200,

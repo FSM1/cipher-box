@@ -99,7 +99,6 @@ use crate::grants::{
 };
 use crate::mailbox::poll_verified;
 use crate::name::{check_emittable, validate_name};
-use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::publish::refuse_foreign_version;
@@ -108,6 +107,9 @@ use crate::net::renewal_walk::{
     BinRoot, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
 };
 use crate::net::retire::{ReclaimStall, retire};
+use crate::net::revival::{
+    BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, revive,
+};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, RootFallback, RootWait, RotationAncestry, SweptScopeState,
@@ -120,6 +122,10 @@ use crate::net::{
     ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
     run_liveness_loop,
+};
+use crate::net::{
+    FanoutRecord, VaultPointerRead, VaultPointerVoucher, fanout_get_classified,
+    revive_vault_pointer_chain,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -163,7 +169,9 @@ use crate::sync::kept_op::retain_pending;
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::owed_rotation::{OWED_ROTATION_PREFIX, OwedEntry, OwedRotation, OwedStep};
+use crate::sync::owed_rotation::{
+    OWED_ROTATION_PREFIX, OwedCell, OwedEntry, OwedRotation, OwedStep,
+};
 use crate::sync::pass::{LegScopes, ScopeLegContext, TickPass};
 use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, PointerFetch, vault_pointer_name};
 use crate::sync::project::{map_kind, project_child_version};
@@ -4615,6 +4623,66 @@ async fn bin_roots<S: SnapshotCache>(snapshot_cache: &S, keys: &BinIndexKeys) ->
         .collect()
 }
 
+/// The scopes whose owed rotation entry is within its bound, whose names no
+/// renewal or revival signs (ADR 0063 D4). A record that does not read owes
+/// nothing, as the renewal walk reads it.
+async fn owed_scopes_within_bound<St: StagingStore>(
+    staging: &St,
+    enc_secret: &X25519Secret,
+    entropy: &RefCell<Box<dyn Entropy>>,
+    owed: &OwedCell,
+    now: UnixMillis,
+) -> BTreeSet<[u8; 16]> {
+    OwedRotation::new(
+        staging,
+        BookkeepingSeal::new(enc_secret, entropy),
+        enc_secret,
+        owed,
+    )
+    .scopes_within_bound(now)
+    .await
+    .map(|scopes| scopes.into_iter().map(|scope| scope.0).collect())
+    .unwrap_or_default()
+}
+
+/// Report each revival that did not land. A refusal of the bytes a plane served
+/// is a trust violation; a name the recovery endpoint holds no record for has
+/// nothing to revive.
+pub(crate) fn emit_revival_failures(
+    events: &mpsc::UnboundedSender<Event>,
+    revivals: Vec<(String, Result<Revived, ReviveError>)>,
+) {
+    for (routing_key, result) in revivals {
+        let outcome = match result {
+            Ok(revived) => Ok(Some(revived.outcome)),
+            Err(ReviveError::Publish(error)) => Err(error),
+            Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => continue,
+            Err(ReviveError::TrustViolation) => {
+                emit_trust_violation(
+                    events,
+                    &routing_key,
+                    "the read of its plane refused the recovered record",
+                );
+                continue;
+            }
+            Err(error) => {
+                let _ = events.unbounded_send(Event::RenewalFailed {
+                    routing_key,
+                    detail: format!("the revival did not sign: {error:?}"),
+                });
+                continue;
+            }
+        };
+        emit_renewal_failures(
+            events,
+            &[EolRenewResult {
+                routing_key,
+                outcome,
+            }],
+        );
+    }
+}
+
 /// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
 /// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
 /// republished record emits nothing. Best-effort over the in-process channel: a
@@ -5474,6 +5542,8 @@ impl<T: SeamTypes> Engine<T> {
         // degrades to the anchored root with no error.
         let root = self.state.snapshot.borrow().root;
         let root_scope_id = root.0;
+        // Before the first-run probe: a lapsed genesis pointer is no first run.
+        self.revive_anchors(&api, root_scope_id).await;
         let first_run_name = self.first_run_pointer_name(&api, root_scope_id).await;
         let first_run_name = first_run_name.as_ref();
         let mut outcome = self.cold_start_or_clear(root, first_run_name).await?;
@@ -6211,6 +6281,108 @@ impl<T: SeamTypes> Engine<T> {
         matches!(api.name_registered(&name).await, Ok(false)).then_some(name)
     }
 
+    /// Revive the names no parent body names before anything reads them
+    /// (ADR 0062 D3): the vault pointer chain, the vault root its last index
+    /// names, then the bin index. Only a name the fan-out reads `Absent`
+    /// revives, and the vault root not while its scope owes rotation work.
+    async fn revive_anchors(
+        &self,
+        api: &ApiClient<T::Http, T::CredentialStore>,
+        root_scope_id: [u8; 16],
+    ) {
+        if self.api_base_url.configured().is_none() {
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let seams = RenewalSeams {
+            transport: &self.record_transport,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            publishing: &self.state.publishing,
+        };
+        let pace = &*self.state.recovery_pace;
+        let identity = session.owner_identity();
+        let owner_seed = kdf::owner_pointer_seed(session.login_secret());
+        let pointer_read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &root_scope_id);
+        let chain = revive_vault_pointer_chain(
+            api,
+            &seams,
+            pace,
+            session.login_secret(),
+            VaultPointerRead {
+                floors: &self.seams.floor_store,
+                pointer_read_key: pointer_read_key.as_bytes(),
+                owner_identity: &identity,
+                scope_id: root_scope_id,
+                payload_version: POINTER_PAYLOAD_VERSION,
+            },
+        )
+        .await;
+        let mut revivals = chain.revivals;
+        let lapsed = async |name: &IpnsName| {
+            matches!(
+                fanout_get_classified(&self.record_transport, name).await,
+                FanoutRecord::Absent
+            )
+        };
+        let owed = owed_scopes_within_bound(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+            &self.state.owed_rotation,
+            self.seams.scheduler.now(),
+        )
+        .await;
+        if let Some(last) = chain.last
+            && !owed.contains(&root_scope_id)
+            && lapsed(&last.current_root).await
+        {
+            let read = ScopeRootRead {
+                gateway: &self.gateway,
+                http: &self.seams.http,
+                floors: &self.seams.floor_store,
+                snapshot_cache: &self.seams.snapshot_cache,
+                owner_seed_cache: Some(
+                    session.owner_seed_cache(&self.seams.staging_store, &self.entropy),
+                ),
+                enc_secret: session.enc_subkey(),
+                identity: &identity,
+                scope_id: root_scope_id,
+                ascent: None,
+            };
+            let request = ReviveRequest {
+                name: &last.current_root,
+                signer: None,
+                plane: read,
+            };
+            let result = revive(api, &seams, pace, &[request]).await.remove(0);
+            revivals.push((last.current_root.as_str().to_owned(), result));
+        }
+        let keys = BinIndexKeys::derive(session.login_secret());
+        if lapsed(keys.name()).await {
+            let read = BinIndexRead {
+                gateway: &self.gateway,
+                http: &self.seams.http,
+                floors: &self.seams.floor_store,
+                snapshots: &self.seams.snapshot_cache,
+                scheduler: &self.seams.scheduler,
+                profile: &self.profile,
+                keys: &keys,
+            };
+            let request = ReviveRequest {
+                name: keys.name(),
+                signer: Some(keys.signer()),
+                plane: read,
+            };
+            let result = revive(api, &seams, pace, &[request]).await.remove(0);
+            revivals.push((keys.name().as_str().to_owned(), result));
+        }
+        emit_revival_failures(&self.events, revivals);
+    }
+
     /// Fail-closed symmetry with the login path: clear the derived session and
     /// the placement decision beside it, so the engine reports unstarted. The
     /// access token login already stored outlives the dropped client in the
@@ -6559,6 +6731,7 @@ where {
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
         let owed_rotation = self.state.owed_rotation.clone();
         let descendant_scope_roots = self.state.descendant_scope_roots.clone();
+        let recovery_pace = self.state.recovery_pace.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
@@ -6579,6 +6752,14 @@ where {
                     // or the pointer lapses at its EOL.
                     let session_keys = pointer_keys.borrow().clone();
                     if let Some(keys) = session_keys {
+                        let owed = owed_scopes_within_bound(
+                            &staging,
+                            &keys.enc_secret,
+                            &entropy,
+                            &owed_rotation,
+                            scheduler.now(),
+                        )
+                        .await;
                         let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
                             owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                             api: &api,
@@ -6599,6 +6780,9 @@ where {
                             payload_version: POINTER_PAYLOAD_VERSION,
                             walked: &scope_tree_walked,
                             on_access_misses: &on_access_misses,
+                            publishing: &publishing,
+                            pace: &recovery_pace,
+                            owed: &owed,
                         })
                         .await;
                         // The consult advances a sighted scope's write-epoch floor,
@@ -6692,6 +6876,7 @@ where {
                         },
                         unfinished_write_cuts: &unfinished,
                         owed: &owed_rotation,
+                        pace: &recovery_pace,
                     };
                     // A scope this session minted holds seeds before the next
                     // boundary walk names it.

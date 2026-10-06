@@ -67,7 +67,9 @@ use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use super::register::register;
+use super::renewal_walk::RenewalSeams;
 use super::retire::{retire, root_retire_ready};
+use super::revival::{RecoveryPace, ReviveRequest, ScopePointerRead, revive};
 use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
 use crate::content::dag::decode_root;
@@ -75,7 +77,9 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
+use crate::facade::{
+    Event, NodeId, emit_revival_failures, emit_trust_violation, report_unattested_row,
+};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, PendingAdoption, RejectionReason, floor,
@@ -6222,6 +6226,13 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub payload_version: u64,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub on_access_misses: &'a OnAccessMisses,
+    /// The names the drain is publishing right now, which no revival signs.
+    pub publishing: &'a RefCell<BTreeSet<String>>,
+    /// The session's recovery pace, which each revival waits for.
+    pub pace: &'a RecoveryPace,
+    /// The scopes whose owed rotation entry is within its bound, whose
+    /// pointer no revival signs (ADR 0063 D4).
+    pub owed: &'a BTreeSet<[u8; 16]>,
 }
 
 /// Hold every scope pointer this owner session owns for renewal.
@@ -6248,6 +6259,9 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
 /// nothing after it. A retryable failure leaves the latch open, and the next
 /// tick walks again.
 ///
+/// A scope the walk proves whose pointer reads `Absent` revives from the
+/// recovery endpoint before it is held (ADR 0062 D3).
+///
 /// Returns the scopes this pass consulted. A consult can raise a scope's durable
 /// write-epoch floor, which retires a seed a cache cell still holds, so the
 /// caller pairs the pass with the same floor refresh the focus tick pairs its
@@ -6257,11 +6271,11 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
 ) -> Vec<[u8; 16]>
 where
     K: OwnerScopeKeys + OwnerPointerSign,
-    T: RecordTransport,
+    T: RecordTransport + Clone + 'static,
     H: Http,
     C: CredentialStore,
     F: FloorStore,
-    Sch: Scheduler,
+    Sch: Scheduler + Clone + 'static,
     E: Entropy,
     S: SnapshotCache,
 {
@@ -6355,6 +6369,12 @@ where
         match consult.run(pass.transport, pass.floors, &scope_id).await {
             Ok(consulted) => {
                 consulted_scopes.push(scope_id);
+                let consulted = match consulted {
+                    None if !pass.owed.contains(&scope_id) => {
+                        revive_scope_pointer(&pass, &consult, scope_id).await
+                    }
+                    consulted => consulted,
+                };
                 if let Some(consulted) = consulted {
                     enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
                 }
@@ -6365,6 +6385,60 @@ where
     }
     pass.walked.set(complete);
     consulted_scopes
+}
+
+/// Revive the lapsed pointer of the owned scope `scope_id` through
+/// `open_repoint` and the pointer bar, then consult it again. `None` when no
+/// revival signed, or the consult does not read it back.
+async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
+    pass: &ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
+    consult: &PointerConsult<'_>,
+    scope_id: [u8; 16],
+) -> Option<ConsultedPointer>
+where
+    K: OwnerScopeKeys + OwnerPointerSign,
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let name = pass.keys.pointer_name(&scope_id);
+    let signer = pass.keys.pointer_signer(&scope_id);
+    let read = ScopePointerRead {
+        consult: PointerConsult {
+            scope_keys: consult.scope_keys,
+            owner_identity: consult.owner_identity,
+            payload_version: consult.payload_version,
+        },
+        floors: pass.floors,
+        scope_id,
+    };
+    let seams = RenewalSeams {
+        transport: pass.transport,
+        floors: pass.floors,
+        scheduler: pass.scheduler,
+        profile: pass.profile,
+        publishing: pass.publishing,
+    };
+    let request = ReviveRequest {
+        name: &name,
+        signer: Some(&signer),
+        plane: read,
+    };
+    let result = revive(pass.api, &seams, pass.pace, &[request])
+        .await
+        .remove(0);
+    let signed = result.is_ok();
+    emit_revival_failures(pass.events, vec![(name.as_str().to_owned(), result)]);
+    if !signed {
+        return None;
+    }
+    consult
+        .run(pass.transport, pass.floors, &scope_id)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -17033,6 +17107,9 @@ mod tests {
             payload_version: PAYLOAD_VERSION,
             walked,
             on_access_misses: &harness.on_access_misses,
+            publishing: &RefCell::default(),
+            pace: &RecoveryPace::default(),
+            owed: &BTreeSet::new(),
         }))
     }
 
