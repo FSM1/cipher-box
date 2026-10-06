@@ -7,6 +7,7 @@
 use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
+use crate::net::cut::CutRootReads;
 use crate::rotation::{
     NoBound, RotateOnCutError, WriteRotateError, owed_read_cut, recut_from_last_copy,
 };
@@ -140,7 +141,7 @@ const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
 const OWED_CUT_REPLACED: &str = "owed-cut-replaced";
 /// A re-drive read the last copy of the root, so its cut removed every grant
 /// row and grant delivery (ADR 0068 D5).
-const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy";
+pub(super) const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy";
 /// The folder answers as no scope root, and nothing owner-signed proves the
 /// promotion never ran.
 const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
@@ -329,14 +330,16 @@ where
             command,
         )
         .await?;
+        let reads = CutRootReads::default();
         let report = match self
-            .rotate_planes(
+            .rotate_planes_reading(
                 node,
                 target,
                 scope_root_name,
                 cut,
                 vault_pointer_signer,
                 command,
+                &reads,
             )
             .await
         {
@@ -374,7 +377,10 @@ where
                 return Ok(None);
             }
             Err(error) => {
-                return match self.cut_set_published(target, cut, command).await {
+                return match self
+                    .cut_set_published(target, cut, command, reads.put_sent())
+                    .await
+                {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(error)).await;
                         Ok(None)
@@ -383,8 +389,9 @@ where
                         let _ = self.owed().clear(node).await;
                         Err(EngineError::from_cut_rotation(error))
                     }
-                    // Unknown: the entry stands, and the re-drive drops it if
-                    // the published root never carried the cut.
+                    // Unknown: the entry stands. The re-drive drops it if the
+                    // root never carried the cut, or cuts again with no row
+                    // over a last copy (ADR 0068 D5).
                     None => Err(EngineError::from_cut_rotation(error)),
                 };
             }
@@ -461,6 +468,7 @@ where
         target: &OwnerScope,
         cut: &RevokedCommittedSet,
         command: bool,
+        put_sent: bool,
     ) -> Option<bool> {
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
         let wait = if command {
@@ -470,9 +478,11 @@ where
         };
         let net = self.cut_net(target, wait);
         let current = net.resolve_anchored(&target.scope).await.ok()?;
-        // A last copy proves nothing about a cut that keeps rows (ADR 0068 D5).
+        // A last copy proves nothing about a cut that keeps rows (ADR 0068
+        // D5): with no PUT in this call the cut did not land, and after one it
+        // is unknown.
         if net.fell_back() && !cut.commitment.entries.is_empty() {
-            return None;
+            return (!put_sent).then_some(false);
         }
         Some(current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger)
     }
@@ -721,7 +731,7 @@ where
         } else {
             None
         };
-        let steps = [OwedStep::ReadCut].into_iter().chain(write).collect();
+        let steps: Vec<OwedStep> = [OwedStep::ReadCut].into_iter().chain(write).collect();
         let Some(standing) = self
             .owed()
             .entry(scope)
@@ -730,25 +740,23 @@ where
         else {
             return Ok(());
         };
+        let recut = OwedEntry {
+            cut_epoch: cut.commitment.cut_epoch,
+            first_stop: None,
+            steps,
+        };
+        // The first re-sign replaces the entry; a later pass meets the same
+        // entry, signs the same cut again and tells nothing new.
+        let first = standing.cut_epoch != recut.cut_epoch || standing.steps != recut.steps;
         self.owed()
-            .rerun(
-                scope,
-                &standing,
-                OwedEntry {
-                    cut_epoch: cut.commitment.cut_epoch,
-                    first_stop: None,
-                    steps,
-                },
-            )
+            .rerun(scope, &standing, recut)
             .await
             .map_err(|e| stop(EngineError::from_owed_record(e)))?;
-        // The first re-sign moves the entry to the new cut epoch; a later pass
-        // signs the same cut again and tells nothing new.
         let drops = !cut.revoked_recipients.is_empty()
             || remaining
                 .iter()
                 .any(|step| matches!(step, OwedStep::DeliverGrant { .. }));
-        if drops && standing.cut_epoch != cut.commitment.cut_epoch {
+        if drops && first {
             let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
                 scope_root: scope,
                 detail: OWED_GRANTS_DROPPED.to_owned(),

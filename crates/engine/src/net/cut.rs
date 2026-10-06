@@ -101,7 +101,7 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// The refused root records this session already reported.
     pub root_reports: &'a RootReports,
     /// What this cut's own root reads met ([`CutRootReads`]).
-    pub root_reads: CutRootReads,
+    pub root_reads: &'a CutRootReads,
 }
 
 /// Whether a root read of one cut fell back to the last copy, and the root a
@@ -110,6 +110,14 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
 pub(crate) struct CutRootReads {
     fell_back: Cell<bool>,
     moved_root: RefCell<Option<IpnsName>>,
+    put_sent: Cell<bool>,
+}
+
+impl CutRootReads {
+    /// Whether this cut sent a PUT at its scope root.
+    pub(crate) fn put_sent(&self) -> bool {
+        self.put_sent.get()
+    }
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
@@ -308,6 +316,7 @@ where
                 scope_id: scope_root.0,
                 error,
             })?;
+            self.root_reads.put_sent.set(true);
             net.publish_scope_root(&ResealedScopeRoot {
                 scope_id: scope_root.0,
                 ipns_name: self.scope_root_name.as_str().as_bytes().to_vec(),
@@ -363,6 +372,7 @@ where
             } else {
                 (&cut.commitment, &cut.commitment_sig, &cut.grant_ledger)
             };
+            self.root_reads.put_sent.set(true);
             cascade_rotate_scope(
                 &mut SharedEntropy(self.entropy),
                 self.floors,

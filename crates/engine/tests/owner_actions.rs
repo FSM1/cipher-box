@@ -13980,7 +13980,7 @@ fn a_write_rotate_now_cuts_a_planted_root_from_its_last_copy() {
 }
 
 /// ADR 0068 D5: a writer plants at the root name after the command read the
-/// root whole and published the cut set. The wave's root read falls back to
+/// root whole, and the root already carried the cut set. The wave's root read falls back to
 /// the last copy, and a cut that keeps rows does not run over a copy, so the
 /// wave stays owed. The next call re-drives it as a cut from the last copy
 /// that keeps no row.
@@ -14419,22 +14419,24 @@ fn a_write_rotate_now_over_a_later_set_in_the_last_copy_is_refused() {
         "no wave ran, so the writer got no fresh write seed"
     );
     assert!(
-        owed_entry(&fx).is_some(),
-        "a last copy does not tell whether the cut set landed, so the entry stands"
+        owed_entry(&fx).is_none(),
+        "device A sent no PUT, so it owes nothing"
     );
 }
 
 /// Device A reads the root before device B revokes the writer, and the writer
 /// plants at the root before A's first plane read. A's cut keeps the writer's
 /// row and its plane reads fall back to a last copy, so the cut is refused,
-/// retryably (ADR 0068 D5), and the writer gets no fresh write seed. The next
-/// call cuts from the last copy and keeps no row.
+/// retryably (ADR 0068 D5), owes nothing, and the writer gets no fresh write
+/// seed. The next call cuts from the last copy, keeps no row, and tells the
+/// host once.
 #[test]
 fn a_write_rotate_now_over_a_root_planted_before_its_plane_reads_is_refused() {
     let mut fx = GrantScenario::new();
     let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
     drop(fx.world.scheduler.take_spawned_tasks());
-    let (mut device_a, _a_events, _a_tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let (mut device_a, mut a_events, _a_tasks) =
+        boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     let (mut device_b, _b_events, _b_tasks) = fx.second_owner_device();
     let granted = fx.granted_scope_repoint();
     let root = granted.current_root.clone();
@@ -14491,11 +14493,12 @@ fn a_write_rotate_now_over_a_root_planted_before_its_plane_reads_is_refused() {
     );
     assert_eq!(published_value(&fx.world, &root), planted);
     assert!(
-        owed_entry(&fx).is_some(),
-        "a last copy does not tell whether the cut set landed, so the entry stands"
+        owed_entry(&fx).is_none(),
+        "device A sent no PUT, so it owes nothing"
     );
+    assert!(abandoned(&mut a_events).is_empty());
 
-    // The next call re-drives the entry as a cut from the last copy.
+    // The next call's own read falls back, so it cuts from the last copy.
     assert_eq!(
         run_across_retries(
             &fx.world,
@@ -14517,6 +14520,11 @@ fn a_write_rotate_now_over_a_root_planted_before_its_plane_reads_is_refused() {
             .entries
             .is_empty(),
         "the cut from the last copy keeps no row"
+    );
+    assert_eq!(
+        abandoned(&mut a_events),
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())],
+        "the host hears once that the rows went"
     );
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }
@@ -14603,6 +14611,78 @@ fn a_revoke_over_a_later_set_at_the_root_is_refused() {
         owed_entry(&fx).is_none(),
         "device A published nothing it owes"
     );
+}
+
+/// Two writers share the scope, and a writer plants at the root before the
+/// first plane read of a downgrade. The downgrade keeps rows, so the first
+/// call is refused retryably and owes nothing. The second call reads the last
+/// copy, cuts every row, and tells the host once (ADR 0068 D5).
+#[test]
+fn a_downgrade_over_a_root_planted_before_its_plane_reads_cuts_every_row_on_the_next_call() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second writer's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "a second writer"
+    );
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let granted = fx.granted_scope_repoint();
+    let root = granted.current_root.clone();
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    assert_eq!(plant_root_at(&fx, &writer_seed, sequence), root);
+    // The command read meets the honest root; the plane reads meet the plant.
+    serve_the_walk_one_cut_behind(&fx, &root, honest);
+    let _ = abandoned(&mut fx._events);
+    let folder = fx.folder;
+    let downgrade = || Command::ChangePermission {
+        node: folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Read,
+    };
+
+    let first = command_across_retries(&mut fx, downgrade());
+    assert!(
+        matches!(first, Err(EngineError::Seam { .. })),
+        "a retryable refusal: {first:?}"
+    );
+    assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
+    assert_eq!(fx.granted_scope_repoint(), granted, "no wave ran");
+    assert!(abandoned(&mut fx._events).is_empty());
+
+    assert_eq!(
+        command_across_retries(&mut fx, downgrade()),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())],
+        "the host hears once that the rows went"
+    );
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, granted.write_epoch + 1);
+    assert!(
+        published_grant_section_at(&fx.world, &fx.blocks, &after.current_root)
+            .expect("the moved root")
+            .commitment
+            .entries
+            .is_empty(),
+        "the cut from the last copy keeps no row"
+    );
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }
 
 /// The re-drive runs the owed wave, and the owed delivery after it names a

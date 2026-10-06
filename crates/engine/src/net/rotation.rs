@@ -5468,8 +5468,17 @@ where
             }
             self.authorized_ledger
         } else {
+            // A set at the cut's cut epoch or above is another owner cut that
+            // landed after the write plane's read: a race. One below it is a
+            // root that never carried the cut.
             if plane.section.commitment != *self.authorized_commitment {
-                return Err(WritePublishError::Rejected);
+                return Err(
+                    if plane.section.commitment.cut_epoch >= self.authorized_commitment.cut_epoch {
+                        WritePublishError::Superseded
+                    } else {
+                        WritePublishError::Rejected
+                    },
+                );
             }
             &plane.write_body.grant_ledger
         };
@@ -12880,6 +12889,7 @@ mod tests {
         .expect("a contributory sharer key");
         let mut plan = root.grant_section.commitment.clone();
         plan.entries.retain(|e| e.tag != revokee);
+        plan.cut_epoch += 1;
         assert_ne!(
             plan.entries.len(),
             root.grant_section.commitment.entries.len(),
@@ -12898,6 +12908,34 @@ mod tests {
             !published_at(&harness, &moved.new_name),
             "nothing is published, so the revokee never receives a re-minted blob",
         );
+    }
+
+    #[test]
+    fn the_wave_refuses_a_root_another_owner_cut_moved_on_as_a_race() {
+        // The root carries another set at the cut's own cut epoch: another
+        // owner device's cut landed after the write plane's read. A retry
+        // reads it again, so the refusal is retryable.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let revokee = recipient_blinded_tag(
+            &write_grantee(),
+            &owner_enc().public(),
+            root.name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let mut plan = root.grant_section.commitment.clone();
+        plan.entries.retain(|e| e.tag != revokee);
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &plan);
+        enumerate_root(&net);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        let refused = block_on(net.republish(&moved));
+        assert_eq!(refused, Err(WritePublishError::Superseded));
+        assert!(refused.unwrap_err().is_retryable());
+        assert!(!published_at(&harness, &moved.new_name));
     }
 
     #[test]
@@ -12922,6 +12960,7 @@ mod tests {
             assert_eq!(entry.permission, Permission::Write);
             entry.permission = Permission::Read;
         }
+        plan.cut_epoch += 1;
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &plan);

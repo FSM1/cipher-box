@@ -7724,8 +7724,11 @@ where {
             &cut,
             gated.current.write_epoch,
         )
-        .await
-        .map(|_| ())
+        .await?;
+        if gated.net.fell_back() && !gated.current.commitment.entries.is_empty() {
+            self.notice_rows_dropped(node);
+        }
+        Ok(())
     }
 
     /// Revoke a recipient's grant at `node`'s scope root.
@@ -7931,6 +7934,11 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
+        // The rows the owner asked to remove; a downgrade keeps its row.
+        let asked = match kind {
+            CutKind::Revoke(tags) => tags.len(),
+            CutKind::Downgrade(_) => 0,
+        };
         let cut = match kind {
             CutKind::Revoke(tags) if from_last_copy => cut_from_last_copy(&plan, tags),
             CutKind::Downgrade(tag) if from_last_copy => {
@@ -7943,8 +7951,21 @@ where {
         }
         .map_err(EngineError::from_revoke)?;
         self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
-            .await
-            .map(|_| ())
+            .await?;
+        if from_last_copy && current.commitment.entries.len() > asked {
+            self.notice_rows_dropped(node);
+        }
+        Ok(())
+    }
+
+    /// Tell the host that a cut from the last copy removed grant rows the
+    /// owner did not ask to remove (ADR 0068 D5). The cut ran or stands owed,
+    /// and an owed re-drive of it tells nothing new.
+    fn notice_rows_dropped(&self, scope_root: NodeId) {
+        let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+            scope_root,
+            detail: owed_rotation::OWED_GRANTS_DROPPED.to_owned(),
+        });
     }
 
     /// Drive an authorized cut at `target` through the planes it demands
