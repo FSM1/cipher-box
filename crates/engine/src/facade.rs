@@ -155,10 +155,10 @@ use crate::seams::{
 use crate::session::{SessionIdentity, SessionSecrets, SessionState};
 use crate::settings::{
     Placement, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad, SettingsOrigin,
-    SettingsPublishError, VaultSettings, VaultSettingsSummary, adopt_settings_summary,
-    bin_retention_days, decide_placement, load_settings, placement_of, publish_settings_above,
-    reason_after_failed_save, report_settings_verdict, resolve_kept_bearer, settings_name,
-    sign_above, summarize_settings,
+    SettingsPublishError, SettingsRevivalRead, VaultSettings, VaultSettingsSummary,
+    adopt_settings_summary, bin_retention_days, decide_placement, load_settings, placement_of,
+    publish_settings_above, reason_after_failed_save, report_settings_verdict, resolve_kept_bearer,
+    settings_name, sign_above, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
@@ -4667,7 +4667,12 @@ pub(crate) fn emit_revival_failures(
         let outcome = match result {
             Ok(revived) => Ok(Some(revived.outcome)),
             Err(ReviveError::Publish(error)) => Err(error),
-            Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => continue,
+            // No record to revive, or a device that takes the settings
+            // ladder of ADR 0034 rather than a revival (ADR 0062 D4).
+            Err(
+                ReviveError::Recovery(ApiError::Status { status: 404, .. })
+                | ReviveError::NotAtFloor,
+            ) => continue,
             Err(ReviveError::TrustViolation) => {
                 emit_trust_violation(
                     events,
@@ -5522,22 +5527,7 @@ impl<T: SeamTypes> Engine<T> {
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
         // where their own node is (blueprint/engine.md "Vault settings load").
-        let observed = observed_at(&self.state.held_records, HeldKey::VaultSettings);
-        let settings = load_settings(
-            &self.record_transport,
-            &self.gateway,
-            &self.seams.http,
-            &self.seams.floor_store,
-            &self.seams.snapshot_cache,
-            &self.seams.scheduler,
-            &self.profile,
-            secret.expose(),
-        )
-        .await
-        .enrol(&self.state.held_records, observed);
-        report_settings_verdict(&self.events, &settings);
-        *self.state.placement.borrow_mut() = Some(decide_placement(&settings));
-        *self.state.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
+        self.load_session_settings(secret.expose()).await;
         // The secret zeroizes on drop here, at its terminal owner.
         drop(secret);
 
@@ -5560,6 +5550,12 @@ impl<T: SeamTypes> Engine<T> {
         let mut outcome = self.cold_start_or_clear(root, first_run_name).await?;
         if self.revive_vault_root(&api, &outcome, root_scope_id).await {
             outcome = self.cold_start_or_clear(root, None).await?;
+        }
+        if self.revive_settings(&api).await
+            && let Some(session) = self.session.as_ref()
+        {
+            // The settings load comes first (ADR 0034 D1), so it runs again.
+            self.load_session_settings(session.login_secret()).await;
         }
         self.revive_bin_index(&api).await;
         // An empty chain is an account that has never published: mint its genesis
@@ -6393,6 +6389,63 @@ impl<T: SeamTypes> Engine<T> {
         let request = ReviveRequest {
             name,
             signer: None,
+            plane: read,
+        };
+        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
+            .await
+            .remove(0);
+        let signed = result.is_ok();
+        emit_revival_failures(&self.events, vec![(name.as_str().to_owned(), result)]);
+        signed
+    }
+
+    /// Load the vault settings, enrol them, and set the placement they decide.
+    async fn load_session_settings(&self, login_secret: &[u8]) {
+        let observed = observed_at(&self.state.held_records, HeldKey::VaultSettings);
+        let settings = load_settings(
+            &self.record_transport,
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            login_secret,
+        )
+        .await
+        .enrol(&self.state.held_records, observed);
+        report_settings_verdict(&self.events, &settings);
+        *self.state.placement.borrow_mut() = Some(decide_placement(&settings));
+        *self.state.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
+    }
+
+    /// Revive the lapsed settings record, only at its floor (ADR 0062 D4).
+    /// `true` when the revival signed.
+    async fn revive_settings(&self, api: &ApiClient<T::Http, T::CredentialStore>) -> bool {
+        let (Some(seams), Some(session)) = (self.revival_seams(), self.session.as_ref()) else {
+            return false;
+        };
+        let signer = kdf::settings_ipns_keypair(session.login_secret());
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        if !matches!(
+            fanout_get_classified(&self.record_transport, &name).await,
+            FanoutRecord::Absent
+        ) {
+            return false;
+        }
+        let read = SettingsRevivalRead {
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            snapshots: &self.seams.snapshot_cache,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            enc_secret: session.enc_subkey(),
+            signer: &signer,
+        };
+        let request = ReviveRequest {
+            name: &name,
+            signer: Some(&signer),
             plane: read,
         };
         let result = revive(api, &seams, &self.state.recovery_pace, &[request])

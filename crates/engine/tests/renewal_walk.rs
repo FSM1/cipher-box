@@ -24,6 +24,7 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, RetireLedger,
     Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
+use cipherbox_engine::settings::{VaultSettings, settings_name};
 use cipherbox_engine::sync::pointer::vault_pointer_name;
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
@@ -1855,4 +1856,51 @@ fn a_lapsed_vault_revives_at_the_recovery_pace() {
             "each file revives once the pace allows",
         );
     }
+}
+
+/// ADR 0062 D3 and D4 at session start: the settings record revives only on a
+/// device whose floor equals the recovered sequence, and the session loads
+/// the settings again. A new device takes the ADR 0034 ladder and signs
+/// nothing at the settings name.
+#[test]
+fn the_settings_record_revives_at_session_start_only_at_its_floor() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let owner = world.device(b"the device that saved the settings");
+    let (mut engine, _events, tasks) = boot(&world, &blocks, &owner, 1);
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            bin_retention_days: 7,
+            ..VaultSettings::default()
+        },
+    }))
+    .expect("the settings publish");
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+    let name = settings_name(&SECRET);
+    let saved = record_at(&world, &name);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let fresh = world.device(b"a new device");
+    let (_fresh, _events, _tasks) = boot(&world, &blocks, &fresh, 2);
+    assert!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], name.as_str())
+            .is_none(),
+        "a device with no floor does not revive the settings record",
+    );
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 3);
+    let revived = record_at(&world, &name);
+    assert_eq!(revived.sequence, saved.sequence + 1);
+    assert_eq!(revived.value, saved.value, "the same sealed body");
+    let storage = block_on(engine.vault_storage()).expect("the session loaded its settings");
+    assert_eq!(
+        storage.settings.bin_retention_days, 7,
+        "the load after the revival reads the saved settings"
+    );
 }

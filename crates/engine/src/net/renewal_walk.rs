@@ -976,7 +976,8 @@ where
                 ReviveError::WrongSigner
                 | ReviveError::Unrecoverable
                 | ReviveError::StaleSource { .. }
-                | ReviveError::PlaneMismatch,
+                | ReviveError::PlaneMismatch
+                | ReviveError::NotAtFloor,
             ) => {
                 pass.report.failed.push((routing_key, REVIVAL_REFUSED));
                 return false;

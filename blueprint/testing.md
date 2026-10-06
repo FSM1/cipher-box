@@ -111,7 +111,9 @@ offline, with every name lapsed, revives the vault pointer, the vault root
 and the bin index before the first tick, lists the vault, and the walk
 revives a lapsed folder before the file below it, each at `S + 1`; and a
 session spends at most 25 recovery fetches in its first minute and revives
-the rest when the pace allows. `net::vault_pointer` revives the chain up to
+the rest when the pace allows. At session start the settings record revives
+only on the device whose floor equals the recovered sequence, and the
+settings load after it reads the saved settings. `net::vault_pointer` revives the chain up to
 the probe one index past the last and never below the index floor, and
 `net::rotation` revives a lapsed owned scope pointer, but not in a scope
 that has an owed rotation entry.

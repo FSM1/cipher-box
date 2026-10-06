@@ -167,7 +167,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   vault pointer chain from its index floor up to the probe one index past the
   last, before `resolve_vault_pointer` runs; the vault root after the cold
   seed, whose write floor opens the owner write blob that carries the root's
-  signer, and then the cold start runs again; the bin index before its load;
+  signer, and then the cold start runs again; the settings record, only at
+  its floor (D4), and then the settings load runs again; the bin index before
+  its load;
   then each owned scope pointer when the hourly enrolment proves its scope.
   The session-start revival and the walk share one recovery pace of 25
   fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
