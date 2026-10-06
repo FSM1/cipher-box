@@ -497,7 +497,7 @@ fn run_over<E: Entropy, F: FloorStore>(
             &net,
             &plan,
             || Box::pin(async {}),
-            &|_| {},
+            &|_, _| {},
         )
         .await
     });
@@ -1412,7 +1412,8 @@ fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
             &net,
             &RootFx::new(net.clone()).plan(&plan_root),
             || Box::pin(async {}),
-            &|scope_id| {
+            &|scope_id, epoch| {
+                assert_eq!(epoch, 5, "the hook names the new epoch");
                 let floor = block_on(floors.epoch_floor(&scope_id)).expect("the floor reads");
                 assert_eq!(
                     floor,

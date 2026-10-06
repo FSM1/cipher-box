@@ -3835,8 +3835,9 @@ pub(crate) async fn memoized_scan<St: StagingStore + QueueGeneration>(
 }
 
 /// The task a rotation enqueues once its cut is durable: [`SWEEP_MAX_PASSES`]
-/// passes, and whatever it leaves is the idle sweep job's. Each durable floor
-/// sets the cut time [`RotationTimes`] holds, through [`SweepTaskFactory::cut`].
+/// passes, and whatever it leaves is the idle sweep job's. Each cut, once its
+/// epoch floor is durable, sets the cut time [`RotationTimes`] holds, through
+/// [`SweepTaskFactory::cut`].
 fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
     sweeper: Sweeper,
     scheduler: Sch,
@@ -3845,7 +3846,7 @@ fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
     let cut = {
         let scheduler = scheduler.clone();
         let times = times.clone();
-        Rc::new(move |scope_id| times.cut(scope_id, scheduler.now()))
+        Rc::new(move |scope_id, epoch| times.cut(scope_id, epoch, scheduler.now()))
     };
     SweepTaskFactory {
         cut,
@@ -3864,8 +3865,8 @@ fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
 }
 
 /// When this session last cut each scope's read epoch, and when a sweep run
-/// last re-sealed a node of it after that cut. Session memory only: a restart
-/// starts empty.
+/// at that epoch or later last re-sealed a node of it. Session memory only: a
+/// restart starts empty.
 struct RotationTimes {
     events: mpsc::UnboundedSender<Event>,
     scopes: RefCell<BTreeMap<[u8; 16], ScopeTimes>>,
@@ -3873,7 +3874,9 @@ struct RotationTimes {
 
 #[derive(Default, Clone, Copy)]
 struct ScopeTimes {
+    cut_epoch: u64,
     cut_at: Option<UnixMillis>,
+    reseal_epoch: u64,
     last_reseal_at: Option<UnixMillis>,
 }
 
@@ -3885,14 +3888,19 @@ impl RotationTimes {
         }
     }
 
-    fn cut(&self, scope_id: [u8; 16], at: UnixMillis) {
-        self.scopes.borrow_mut().insert(
-            scope_id,
-            ScopeTimes {
-                cut_at: Some(at),
-                last_reseal_at: None,
-            },
-        );
+    /// A re-seal a run at `epoch` or later already reported stays: a sweep
+    /// can land one while the cut waits on its floor write.
+    fn cut(&self, scope_id: [u8; 16], epoch: u64, at: UnixMillis) {
+        let mut all = self.scopes.borrow_mut();
+        let times = all.entry(scope_id).or_default();
+        if times.cut_at.is_some() && epoch < times.cut_epoch {
+            return;
+        }
+        times.cut_epoch = epoch;
+        times.cut_at = Some(at);
+        if times.reseal_epoch < epoch {
+            times.last_reseal_at = None;
+        }
     }
 
     /// Sends the [`Event::SweepConvergence`] one sweep run's `outcome` reports.
@@ -3900,7 +3908,9 @@ impl RotationTimes {
         let times = {
             let mut all = self.scopes.borrow_mut();
             let times = all.entry(scope_id).or_default();
-            if !outcome.converged.is_empty() {
+            // A run at an epoch below the cut re-sealed for the cut before it.
+            if !outcome.converged.is_empty() && outcome.scope_read_epoch >= times.cut_epoch {
+                times.reseal_epoch = outcome.scope_read_epoch;
                 times.last_reseal_at = Some(at);
             }
             *times
@@ -7865,19 +7875,20 @@ where {
                 target.ancestry(),
                 PointerConsultArm::Refused,
             );
-            flat_root_cut(
+            let outcome = flat_root_cut(
                 &net,
                 anchor.as_ref(),
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),
                     make_sweep: || {
-                        (sweep.cut)(target.scope.scope_id);
                         (sweep.task)(target.scope.clone(), target.parent_node_seed.clone())
                     },
                 },
             )
-            .await
+            .await?;
+            (sweep.cut)(target.scope.scope_id, outcome.new_read_epoch);
+            Ok(outcome)
         })
         .await
         .map(|_| ())
@@ -13034,23 +13045,20 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
-    /// A second cut of a scope starts its times again: a run that re-seals
-    /// no node after it reports no re-seal time older than the cut.
-    #[test]
-    fn a_second_cut_drops_the_re_seal_time_of_the_first() {
-        let (events, mut stream) = mpsc::unbounded();
-        let times = RotationTimes::new(events);
-        let scope = [7; 16];
-        let resealed = SweepOutcome {
-            converged: vec![[8; 16]],
+    /// A run at `epoch` that re-sealed a node, or none.
+    fn sweep_run(epoch: u64, resealed: bool) -> SweepOutcome {
+        SweepOutcome {
+            scope_read_epoch: epoch,
+            converged: if resealed { vec![[8; 16]] } else { Vec::new() },
             ..SweepOutcome::default()
-        };
-        times.cut(scope, UnixMillis(1));
-        times.report(scope, &resealed, UnixMillis(2));
-        times.cut(scope, UnixMillis(3));
-        times.report(scope, &SweepOutcome::default(), UnixMillis(4));
+        }
+    }
 
-        let reports: Vec<_> = core::iter::from_fn(|| stream.try_recv().ok())
+    /// The `(cut_at, last_reseal_at)` pairs `stream` holds.
+    fn reported_times(
+        stream: &mut mpsc::UnboundedReceiver<Event>,
+    ) -> Vec<(Option<UnixMillis>, Option<UnixMillis>)> {
+        core::iter::from_fn(|| stream.try_recv().ok())
             .map(|event| match event {
                 Event::SweepConvergence {
                     cut_at,
@@ -13059,13 +13067,63 @@ mod tests {
                 } => (cut_at, last_reseal_at),
                 other => panic!("only sweep reports, not {other:?}"),
             })
-            .collect();
+            .collect()
+    }
+
+    /// A second cut of a scope starts its times again: a run that re-seals
+    /// no node after it reports no re-seal time older than the cut.
+    #[test]
+    fn a_second_cut_drops_the_re_seal_time_of_the_first() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.cut(scope, 2, UnixMillis(1));
+        times.report(scope, &sweep_run(2, true), UnixMillis(2));
+        times.cut(scope, 3, UnixMillis(3));
+        times.report(scope, &sweep_run(3, false), UnixMillis(4));
+
         assert_eq!(
-            reports,
+            reported_times(&mut stream),
             vec![
                 (Some(UnixMillis(1)), Some(UnixMillis(2))),
                 (Some(UnixMillis(3)), None),
             ]
+        );
+    }
+
+    /// A run at the new epoch can end while the cut waits on its floor write:
+    /// the cut keeps that re-seal time.
+    #[test]
+    fn a_cut_keeps_a_re_seal_at_its_own_epoch_that_landed_first() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.report(scope, &sweep_run(3, true), UnixMillis(5));
+        times.cut(scope, 3, UnixMillis(6));
+        times.report(scope, &sweep_run(3, false), UnixMillis(7));
+
+        assert_eq!(
+            reported_times(&mut stream),
+            vec![
+                (None, Some(UnixMillis(5))),
+                (Some(UnixMillis(6)), Some(UnixMillis(5))),
+            ]
+        );
+    }
+
+    /// A run at the old epoch can end after the cut: its re-seal belongs to
+    /// the cut before, so the new cut reports none.
+    #[test]
+    fn a_run_below_the_cut_epoch_sets_no_re_seal_time() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.cut(scope, 3, UnixMillis(1));
+        times.report(scope, &sweep_run(2, true), UnixMillis(2));
+
+        assert_eq!(
+            reported_times(&mut stream),
+            vec![(Some(UnixMillis(1)), None)]
         );
     }
 

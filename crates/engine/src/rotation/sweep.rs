@@ -67,8 +67,8 @@ pub(crate) type SweepTask = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>
 pub(crate) struct SweepTaskFactory {
     /// The sweep task a rotation enqueues.
     pub(crate) task: SweepTask,
-    /// Notes that a read cut of this scope is durable.
-    pub(crate) cut: Rc<dyn Fn([u8; 16])>,
+    /// Notes that a read cut of this scope to this epoch is durable.
+    pub(crate) cut: Rc<dyn Fn([u8; 16], u64)>,
 }
 
 /// The session material a spawned sweep opens and re-seals under, held in a cell
