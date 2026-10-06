@@ -23,8 +23,8 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use zeroize::Zeroizing;
 
 use crate::facade::{Event, NodeId};
-use crate::gate::GateRejection;
 use crate::gate::floor::{self, ColdSeedError, FloorRegression};
+use crate::gate::{GateError, GateRejection};
 use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
@@ -245,8 +245,8 @@ where
     // record passes the gate; a rejection is fail-closed.
     let GatedResolve {
         resolved,
-        read_scope_seed,
-        hold: write_scope_seed,
+        mut read_scope_seed,
+        hold: mut write_scope_seed,
         ..
     } = resolve_gated(
         transport,
@@ -267,13 +267,31 @@ where
             (RootResolve::Adopted, base, Some(adopted.epoch))
         }
         // Availability staleness, so it paints without claiming an adoption.
-        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
+        outcome @ (ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. }) => {
+            let mut at_floor = resolved.current_at_floor;
+            // A dark root paints the confirmed owner copy: a kept op stays out
+            // of the overlay until the base shows it (ADR 0069 D7).
+            if at_floor.is_none() && matches!(outcome, ResolveOutcome::NoUpdate) {
+                let dark = adopter
+                    .recover_dark_root(&adoption.repoint.current_root)
+                    .await
+                    .map_err(|e| match e {
+                        GateError::Seam(seam) => ColdStartError::Seam(seam),
+                        GateError::Rejected(rejection) => ColdStartError::RootAdoption(rejection),
+                    })?;
+                if let Some(material) = dark {
+                    read_scope_seed = Some(material.read_scope_seed);
+                    write_scope_seed = material
+                        .write_scope_seed
+                        .map(|seed| (material.node_id, seed));
+                    at_floor = Some(material.at_floor);
+                }
+            }
             let mut base = base;
-            if let Some(at_floor) = &resolved.current_at_floor {
+            if let Some(at_floor) = &at_floor {
                 project_root(&mut base, params.root, at_floor);
             }
-            let at_floor_epoch = resolved.current_at_floor.as_ref().map(|at| at.epoch);
-            (RootResolve::NoUpdate, base, at_floor_epoch)
+            (RootResolve::NoUpdate, base, at_floor.map(|at| at.epoch))
         }
         ResolveOutcome::TrustViolation(rejection) => {
             let Some(recovered) = resolved.recovered_owner else {

@@ -115,6 +115,14 @@ pub trait Adopter {
         Ok(None)
     }
 
+    /// Recover the confirmed owner copy when no endpoint served a record.
+    async fn recover_dark_root(
+        &self,
+        _name: &IpnsName,
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
+        Ok(None)
+    }
+
     /// Whether `record_bytes`, tied with a pick this read already gated, passes
     /// the gate at the durable floor the pick left: only such a tie is the
     /// other side of a same-sequence fork (ADR 0066 D1). Moves no floor and
