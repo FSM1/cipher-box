@@ -802,8 +802,10 @@ fn a_bin_record_whose_floor_did_not_advance_is_not_offered_for_renewal() {
     reader
         .floor_store
         .fail_floor_raises_for(name().as_str().as_bytes());
+    let faulted = read(&world, &reader, &blocks, &keys());
+    assert!(matches!(faulted.load, BinIndexLoad::Resolved(_)));
     assert!(
-        read(&world, &reader, &blocks, &keys()).renewable.is_none(),
+        faulted.renewable.is_none(),
         "a record above the floor is not this device's to re-sign",
     );
 

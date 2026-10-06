@@ -523,11 +523,11 @@ where
     // Advancing behind the open, never ahead of it, is the floor law: a record
     // that will not open must not raise the bar the next resolve is held to.
     // Neither store failing is a verdict on a record we just authenticated.
-    let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
+    let stored = floors.raise_sequence_floor(key, sequence).await;
     let _ = floor::advance_sequence_on_unseal(floors, &plane.adopted_key, opened.revision).await;
     // Both bars are behind this point. A renewal signs only at an exact floor,
     // so a record whose floor did not advance to it is not enrolled.
-    let advanced = floor::sequence_floor(floors, key).await.ok().flatten() == Some(sequence);
+    let advanced = stored == Ok(sequence);
     let renewable = durable
         .filter(|_| advanced)
         .and_then(|_| head_cid_from_value(&verified.value))
