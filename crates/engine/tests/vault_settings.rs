@@ -1936,7 +1936,8 @@ fn a_register_first_refusal_retires_the_settings_head_it_uploaded() {
         "http://api.test",
     );
     blocks.refuse_register(Vec::new());
-    serve_http(&device, &blocks, 4);
+    // A first save on a device with no floor reads the recovery endpoint first.
+    serve_http(&device, &blocks, 5);
     let orphans = OrphanHeads::default();
 
     let outcome = block_on(publish_settings(
@@ -2758,4 +2759,132 @@ fn a_save_lands_over_a_revision_rollback_this_device_holds_no_copy_past() {
         load(&world, &device, &blocks, &SECRET),
         SettingsLoad::Resolved(configured()),
     );
+}
+
+// ---------------------------------------------------------------------------
+// The first save on a device with no floor (ADR 0062 D4)
+// ---------------------------------------------------------------------------
+
+/// A lapsed settings record at `sequence`, as the recovery endpoint keeps it.
+fn recovered_settings_record(sequence: u64) -> Vec<u8> {
+    IpnsRecord::create_v2(
+        &kdf::settings_ipns_keypair(&SECRET),
+        b"/ipfs/bafyrecovered",
+        sequence,
+        TTL_NANOS,
+        "2000-01-01T00:00:00Z",
+    )
+    .marshal()
+}
+
+/// Save `configured()` from a device with no floor, the recovery endpoint
+/// answering `recovery` first.
+fn first_save(recovery: HttpResponse) -> (FakeDevice, Result<HeldRecord, SettingsPublishError>) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"new");
+    let served = blocks.clone();
+    device.http.enqueue_derived(move |request| {
+        if request.url.contains("/recovery/") {
+            Ok(recovery)
+        } else {
+            served.reply(request)
+        }
+    });
+    serve_http(&device, &blocks, 4);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    let outcome = block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(3),
+        &OrphanHeads::default(),
+        &SECRET,
+        &configured(),
+    ));
+    (device, outcome)
+}
+
+fn answer(status: u16, body: Vec<u8>) -> HttpResponse {
+    HttpResponse {
+        status,
+        headers: Vec::new(),
+        body: body.into(),
+    }
+}
+
+fn first_save_floor(device: &FakeDevice) -> Option<u64> {
+    let name = settings_name(&SECRET);
+    block_on(device.floor_store.sequence_floor(name.as_str().as_bytes())).expect("read")
+}
+
+/// A device with no floor whose network lost the lapsed record signs its first
+/// save above the recovered sequence, not at 1, so an older device at that
+/// sequence does not report `RolledBack`.
+#[test]
+fn a_first_save_with_no_floor_signs_above_the_recovered_sequence() {
+    let (device, outcome) = first_save(answer(200, recovered_settings_record(5)));
+    outcome.expect("the save lands");
+
+    let name = settings_name(&SECRET);
+    let served = device
+        .record_store
+        .record_at(&device.record_store.endpoints()[0], name.as_str())
+        .expect("the save is served");
+    let record = IpnsRecord::unmarshal(&served)
+        .and_then(|record| record.verify(&name))
+        .expect("the save verifies");
+    assert_eq!(record.sequence, 6);
+    assert_eq!(
+        first_save_floor(&device),
+        Some(6),
+        "the floor rises on the confirm"
+    );
+}
+
+/// A recovery answer the save cannot sign above refuses the save before the
+/// mint, so nothing publishes at sequence 1. A 404 is no record, and the save
+/// lands at 1.
+#[test]
+fn a_first_save_with_no_recovery_answer_to_sign_above_is_refused() {
+    let other = IpnsRecord::create_v2(
+        &kdf::settings_ipns_keypair(&OTHER_SECRET),
+        b"/ipfs/bafyother",
+        5,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for (label, recovery) in [
+        ("a server error", answer(500, Vec::new())),
+        ("a throttle", answer(429, Vec::new())),
+        ("a record of another name", answer(200, other)),
+        ("bytes that are no record", answer(200, b"garbage".to_vec())),
+    ] {
+        let (device, outcome) = first_save(recovery);
+        assert!(
+            matches!(outcome, Err(SettingsPublishError::Recovery(_))),
+            "{label}: the save is refused"
+        );
+        let name = settings_name(&SECRET);
+        assert!(
+            device
+                .record_store
+                .record_at(&device.record_store.endpoints()[0], name.as_str())
+                .is_none(),
+            "{label}: nothing published"
+        );
+        assert_eq!(first_save_floor(&device), None, "{label}: no floor");
+    }
+
+    let (device, outcome) = first_save(answer(404, Vec::new()));
+    outcome.expect("no recovery record is a first run");
+    assert_eq!(first_save_floor(&device), Some(1));
 }

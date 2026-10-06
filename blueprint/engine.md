@@ -246,8 +246,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
-  and reports that it restored the server copy (D5). A session makes at most
-  25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
+  and reports that it restored the server copy (D5). The settings record
+  carries a bearer credential, so a device revives it only when its floor
+  equals the recovered sequence (`Strictness::AtFloor`); that read alone sets
+  the EOL rule aside, and any other device takes the ADR 0034 ladder (D4).
+  A session makes at most 25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
   for each account; a fetch over the pace waits for the next slot. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
@@ -511,10 +514,16 @@ its degraded outcome applies a different policy rather than showing stale data.
   record the network serves, including one captured before the member rotated
   a BYO `access_token` the engine would then present as a bearer credential.
   The lapse degrades through the last-known-good path like every other
-  reason. The encode side needs no matching guard: the EOL is `now + 90 days`
-  off the injected clock, so a publish structurally cannot mint an
+  reason. The one exception is the revival read on a device whose floor
+  equals the recovered sequence (ADR 0062 D4, "Revival" above). The encode
+  side needs no matching guard: the EOL is `now + 90 days` off the injected
+  clock, so a publish structurally cannot mint an
   already-expired record.
-- **A save signs above a lapsed or unreadable record.** When the load reports
+- **A save signs above a lapsed or unreadable record.** A first save on a
+  device with no floor signs above the recovery endpoint's record, verified
+  under the settings name, so it does not publish at sequence 1 and an older
+  device does not report `RolledBack`. A 404 answer means no record; another
+  failure, or bytes that do not verify, refuses the save. When the load reports
   `Expired` or `Unreadable` for a record that verified under the account's own
   settings key, a save signs above that record's sequence, and the floor rises
   only on a confirm. A body that a newer release wrote refuses the save

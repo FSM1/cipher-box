@@ -17359,8 +17359,9 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
 
-    // No HTTP is scripted, so the head-block upload fails and nothing is ever
-    // published at the settings name.
+    // Only the recovery fetch of a first save is scripted, so the head-block
+    // upload fails and nothing is ever published at the settings name.
+    serve_http(&alice, &blocks, 1);
     let api = ApiClient::new(
         alice.http.clone(),
         alice.credential_store.clone(),
