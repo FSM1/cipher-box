@@ -410,6 +410,26 @@ impl Attempts {
     }
 }
 
+/// A halt that opening a pass raised, with the op the valve charges for it:
+/// the op a kept edit's head read stopped at, or the head of the ops the
+/// rebase read for a record at a newer envelope version. `None` for a halt
+/// the valve does not attribute.
+struct HeadHalt {
+    halt: Halt,
+    at: Option<OpId>,
+}
+
+impl HeadHalt {
+    /// A newer release rewrites the anchor on each write, so its halt is
+    /// charged to `head` to be bounded and named.
+    fn at_head(halt: Halt, head: Option<OpId>) -> Self {
+        Self {
+            halt,
+            at: head.filter(|_| halt == Halt::ForeignVersion),
+        }
+    }
+}
+
 /// What stopped a drain pass, and what the valve does about it. Strict
 /// FIFO throughout: the op that stopped the pass keeps its place at the head of
 /// the durable queue.
@@ -2607,21 +2627,15 @@ where
         let pending = &pending[..end];
 
         let opened = self.open_rebased_pass(scope, pending).await;
-        // A newer release rewrites the anchor on each write, and a kept edit's
-        // head read halts on its own op, so both halts must reach the valve to
-        // be bounded and named.
-        if let Err((halt, at)) = &opened {
-            let charged = match at {
-                Some(at) => pending.iter().find(|(op_id, _)| op_id == at),
-                None if *halt == Halt::ForeignVersion => pending.first(),
-                None => None,
-            };
-            if let Some((op_id, op)) = charged {
-                self.apply_valve(scope, *op_id, op, *halt, attempts, report)
-                    .await;
-            }
+        // A halt that names its op reaches the valve to be bounded and named
+        // ([`HeadHalt`]).
+        if let Err(HeadHalt { halt, at: Some(at) }) = &opened
+            && let Some((op_id, op)) = pending.iter().find(|(op_id, _)| op_id == at)
+        {
+            self.apply_valve(scope, *op_id, op, *halt, attempts, report)
+                .await;
         }
-        let (mut pass, rebased) = opened.map_err(|(halt, _)| halt)?;
+        let (mut pass, rebased) = opened.map_err(|head| head.halt)?;
         for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -3005,12 +3019,13 @@ where
                     let mut place = self.kept_place(scope, &op).await?;
                     // This pass cannot check the op, so the floor of the root
                     // it published under decides whether the bound runs. A
-                    // delete whose node the base does not hold leaves at the
-                    // bound (ADR 0069 D6).
+                    // delete whose node the base does not hold under a proved
+                    // root leaves at the bound (ADR 0069 D6).
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = notes.note_at(op_id, now).scope
                         && (!matches!(op.kind, OpKind::Delete { .. })
-                            || self.cells.base.borrow().node(op.target).is_some())
+                            || self.cells.base.borrow().node(op.target).is_some()
+                            || !scope.scope_roots.contains(&root))
                     {
                         place = self.unchecked_place(scope, root).await?;
                     }
@@ -3206,29 +3221,29 @@ where
     /// step 7). The pass then builds on a gated record of the scope root, or of
     /// a folder the head op writes, that the head op does not read as applied
     /// on, or on the resolved records when there is none.
-    ///
-    /// A halt names the op it stopped at when a kept edit's head read raised
-    /// it.
     async fn open_rebased_pass(
         &self,
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
-    ) -> Result<(Pass, ReplayReport), (Halt, Option<OpId>)> {
-        let unattributed = |halt| (halt, None);
+    ) -> Result<(Pass, ReplayReport), HeadHalt> {
+        let at_head = |queued: &[(OpId, Op)]| {
+            let head = queued.first().map(|(op_id, _)| *op_id);
+            move |halt| HeadHalt::at_head(halt, head)
+        };
         let (resolved, others) = self
             .scope_root_candidates(scope)
             .await
-            .map_err(unattributed)?;
+            .map_err(at_head(queued))?;
         let mut pass = self
             .open_pass(scope, &resolved)
             .await
-            .map_err(unattributed)?;
+            .map_err(at_head(queued))?;
         let landed = self.read_kept_heads(scope, &mut pass, queued).await?;
         if landed.is_empty() {
             return self
                 .rebase_on_pass(scope, pass, &others, queued)
                 .await
-                .map_err(unattributed);
+                .map_err(at_head(queued));
         }
         let rest: Vec<(OpId, Op)> = queued
             .iter()
@@ -3238,7 +3253,7 @@ where
         let (pass, mut rebased) = self
             .rebase_on_pass(scope, pass, &others, &rest)
             .await
-            .map_err(unattributed)?;
+            .map_err(at_head(&rest))?;
         rebased.dropped.extend(
             landed
                 .into_iter()
@@ -3289,14 +3304,20 @@ where
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         queued: &[(OpId, Op)],
-    ) -> Result<BTreeSet<OpId>, (Halt, Option<OpId>)> {
-        let kept = self.kept_ids(scope).await.map_err(|halt| (halt, None))?;
+    ) -> Result<BTreeSet<OpId>, HeadHalt> {
+        let kept = self
+            .kept_ids(scope)
+            .await
+            .map_err(|halt| HeadHalt { halt, at: None })?;
         let mut landed = BTreeSet::new();
         for (op_id, op) in queued {
             if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
                 continue;
             }
-            let at = |halt| (halt, Some(*op_id));
+            let at = |halt| HeadHalt {
+                halt,
+                at: Some(*op_id),
+            };
             // Only a folder the base read at its live name shows the history;
             // any other edit is left to its rebase.
             if !matches!(
@@ -11807,7 +11828,17 @@ mod tests {
             1,
             UnixMillis(0),
         );
-        let op_id = harness.queue_an_op(&op);
+        kept_op_past_the_bound_after_a_cut(harness, &op, root, namespace)
+    }
+
+    /// [`kept_create_past_the_bound_after_a_cut`] for `op`.
+    fn kept_op_past_the_bound_after_a_cut(
+        harness: &DrainHarness,
+        op: &Op,
+        root: NodeId,
+        namespace: FloorNamespace,
+    ) -> OpId {
+        let op_id = harness.queue_an_op(op);
         let drain = harness.drain();
         let scope = harness.scope();
         let mut notes = KeptNotes::default();
@@ -11850,8 +11881,9 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// An own pass reads a granted root's write floor in its sharer's
-    /// namespace, so a seen cut keeps the grantee's op past the bound.
+    /// An own pass looks up a granted root's write floor in its sharer's
+    /// namespace. The test checks the lookup only: the floor it raises there
+    /// stands in for one the grafted legs keep.
     #[test]
     fn an_own_pass_reads_a_granted_roots_floor_in_the_sharers_namespace() {
         let mut harness = drain_harness(Some(harness_root_envelope()));
@@ -11864,6 +11896,66 @@ mod tests {
 
         let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
             .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A kept delete under `root` after a seen cut, read by a pass anchored
+    /// at another root, so that pass cannot check it.
+    fn kept_delete_read_elsewhere(
+        harness: &DrainHarness,
+        root: NodeId,
+    ) -> (OpId, Queue, DrainReport) {
+        let target = NodeId([0x65; 16]);
+        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
+        let op_id = kept_op_past_the_bound_after_a_cut(harness, &op, root, FloorNamespace::Own);
+        let mut report = DrainReport::default();
+        let scope = harness.own_scope_at(NodeId([0x70; 16]));
+        let queue =
+            block_on(harness.drain().queued_ops(&scope, &mut report)).expect("the queue reads");
+        (op_id, queue, report)
+    }
+
+    /// The base still holds the deleted node, so the delete is not shown to
+    /// have landed, and a seen cut keeps it past the bound (ADR 0069 D5).
+    #[test]
+    fn a_kept_delete_of_a_node_the_base_holds_waits_past_the_bound() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        link_in_base(
+            &harness,
+            HARNESS_ROOT,
+            NodeId([0x65; 16]),
+            crate::facade::NodeKind::Folder,
+        );
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT);
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A proved root's base no longer holds the deleted node, so the delete
+    /// leaves at the bound (ADR 0069 D6).
+    #[test]
+    fn a_kept_delete_of_a_node_a_proved_base_lacks_leaves_at_the_bound() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT);
+
+        assert!(queue.kept.is_empty());
+        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
+    }
+
+    /// A base without the deleted node shows nothing under a root the walk
+    /// did not prove, so a seen cut keeps the delete past the bound.
+    #[test]
+    fn a_kept_delete_under_an_unproved_root_waits_past_the_bound() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x66; 16]);
+        harness.known_scope_roots.push(root);
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, root);
 
         assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
         assert!(report.dropped.is_empty());
