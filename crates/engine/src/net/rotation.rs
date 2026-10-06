@@ -2185,6 +2185,10 @@ pub(crate) enum ScopeRootAdmission {
     Unavailable,
     /// The endpoints agree the name holds no record.
     Gone,
+    /// Every block source answered that it holds no head block for the
+    /// record. The renewal walk reads it as [`Self::Rejected`]; a revival
+    /// reads it as a body that is not available (ADR 0062 D1).
+    HeadBlockAbsent,
 }
 
 /// Gate the owned scope root `scope_id` at `name` through the root adopter,
@@ -2238,10 +2242,10 @@ where
             RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
                 ScopeRootAdmission::Unavailable
             }
+            RootGateVerdict::HeadBlockAbsent => ScopeRootAdmission::HeadBlockAbsent,
             RootGateVerdict::Rejected
             | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
-            | RootGateVerdict::HeadBlockAbsent
             | RootGateVerdict::HeadBlockRefused
             | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
         },

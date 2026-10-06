@@ -10,6 +10,7 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::VecDeque;
 
+use cipherbox_core::content::decode_content_cid_str;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -51,6 +52,8 @@ pub(crate) enum PlaneRefusal {
     Unavailable,
     /// The read admitted the record, and the publish basis refused it.
     Unsignable(PublishError),
+    /// The caller built the read for another name or another scope.
+    Mismatch,
 }
 
 /// The read of the plane a lapsed name lives on (ADR 0062 D1 step 3).
@@ -105,7 +108,7 @@ pub(crate) enum ReviveError {
     /// No endpoint answer corroborates the recovered record.
     Uncorroborated,
     /// The fan-out serves a record above the recovered one, or another record
-    /// after the registration: the recovered record is superseded.
+    /// at its sequence: the recovered record is superseded.
     Superseded {
         /// The sequence the fan-out served.
         sequence: u64,
@@ -123,6 +126,9 @@ pub(crate) enum ReviveError {
     TrustViolation,
     /// The read of the plane could not reach what it needs.
     Unavailable,
+    /// The caller built the read of the plane for another name or another
+    /// scope, so no read ran.
+    PlaneMismatch,
     /// The durable floor rose above the admitted sequence, or the drain
     /// publishes the name, before the signature.
     Moved,
@@ -217,6 +223,20 @@ impl RecoveryPace {
     }
 }
 
+/// Steps 2 and 5: the fan-out reads `Absent`, or serves a record below `S`,
+/// which the signature at `S + 1` supersedes, or exactly the record at `S`.
+fn corroborates(fanout: FanoutRecord, sequence: u64, bytes: &[u8]) -> Result<(), ReviveError> {
+    match fanout {
+        FanoutRecord::Absent => Ok(()),
+        FanoutRecord::Found(served, _) if served.sequence < sequence => Ok(()),
+        FanoutRecord::Found(served, live) if served.sequence == sequence && live == bytes => Ok(()),
+        FanoutRecord::Found(served, _) => Err(ReviveError::Superseded {
+            sequence: served.sequence,
+        }),
+        FanoutRecord::Unavailable(_) => Err(ReviveError::Uncorroborated),
+    }
+}
+
 /// A lapsed name that passed steps 1 to 3.
 struct Lapsed<'a> {
     name: &'a IpnsName,
@@ -306,15 +326,11 @@ where
         .and_then(|record| record.verify(name))
         .map_err(|_| ReviveError::Unrecoverable)?;
 
-    match fanout_get_classified(seams.transport, name).await {
-        FanoutRecord::Found(served, _) if served.sequence > recovered.sequence => {
-            return Err(ReviveError::Superseded {
-                sequence: served.sequence,
-            });
-        }
-        FanoutRecord::Found(..) | FanoutRecord::Absent => {}
-        FanoutRecord::Unavailable(_) => return Err(ReviveError::Uncorroborated),
-    }
+    corroborates(
+        fanout_get_classified(seams.transport, name).await,
+        recovered.sequence,
+        &bytes,
+    )?;
     let floor = floor::sequence_floor(seams.floors, name.as_str().as_bytes())
         .await
         .map_err(ReviveError::FloorRead)?;
@@ -345,6 +361,7 @@ where
             PlaneRefusal::Rejected => ReviveError::TrustViolation,
             PlaneRefusal::Unavailable => ReviveError::Unavailable,
             PlaneRefusal::Unsignable(error) => ReviveError::Publish(error),
+            PlaneRefusal::Mismatch => ReviveError::PlaneMismatch,
         })?;
     // D2: the value the plane admitted, unchanged.
     let value = super::fork::verified(name, admitted.observed.bytes())
@@ -359,8 +376,8 @@ where
     })
 }
 
-/// Steps 5 and 6: the fan-out still reads `Absent` or serves exactly the
-/// admitted record, then the renewal walk's signature path signs at `S + 1`.
+/// Steps 5 and 6: the fan-out still corroborates the admitted record, then the
+/// renewal walk's signature path signs at `S + 1`.
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
@@ -371,16 +388,11 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     let observed = &lapsed.admitted.observed;
-    match fanout_get_classified(seams.transport, lapsed.name).await {
-        FanoutRecord::Absent => {}
-        FanoutRecord::Found(_, live) if live == observed.bytes() => {}
-        FanoutRecord::Found(served, _) => {
-            return Err(ReviveError::Superseded {
-                sequence: served.sequence,
-            });
-        }
-        FanoutRecord::Unavailable(_) => return Err(ReviveError::Uncorroborated),
-    }
+    corroborates(
+        fanout_get_classified(seams.transport, lapsed.name).await,
+        observed.sequence(),
+        observed.bytes(),
+    )?;
     let receipt = sign_admitted(
         seams,
         observed,
@@ -436,7 +448,9 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ScopeRootRead<'_, H
         .await
         .map_err(|admission| match admission {
             ScopeRootAdmission::Rejected => PlaneRefusal::Rejected,
-            ScopeRootAdmission::Unavailable | ScopeRootAdmission::Gone => PlaneRefusal::Unavailable,
+            ScopeRootAdmission::Unavailable
+            | ScopeRootAdmission::Gone
+            | ScopeRootAdmission::HeadBlockAbsent => PlaneRefusal::Unavailable,
         })?;
         Ok(Admitted {
             observed: admitted
@@ -465,6 +479,9 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ChildRead<'_, H, F,
         _: &VerifiedRecord,
         _: &[u8],
     ) -> Result<Admitted, PlaneRefusal> {
+        if self.bar.scope_id != self.adopter.scope_id() {
+            return Err(PlaneRefusal::Mismatch);
+        }
         match resolve_child_record(
             transport,
             self.snapshot_cache,
@@ -506,7 +523,7 @@ impl<F: FloorStore> PlaneRead for ScopePointerRead<'_, F> {
         bytes: &[u8],
     ) -> Result<Admitted, PlaneRefusal> {
         if self.consult.scope_keys.pointer_name(&self.scope_id) != *name {
-            return Err(PlaneRefusal::Rejected);
+            return Err(PlaneRefusal::Mismatch);
         }
         match self
             .consult
@@ -557,6 +574,13 @@ where
         bytes: &[u8],
     ) -> Result<Admitted, PlaneRefusal> {
         if self.keys.name() != name {
+            return Err(PlaneRefusal::Mismatch);
+        }
+        // The load reads any head block it cannot fetch as withheld, so a
+        // value that names no block is refused here, before any fetch.
+        if head_cid_from_value(&recovered.value)
+            .is_none_or(|cid| decode_content_cid_str(&cid).is_err())
+        {
             return Err(PlaneRefusal::Rejected);
         }
         let read = load_bin_index(
@@ -610,11 +634,12 @@ mod tests {
     use crate::sync::pointer::{SessionRole, scope_pointer_name, seal_repoint};
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemorySnapshotCache, ScriptedHttp,
+        VirtualScheduler,
     };
     use crate::testkit::{
         FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
-        owner_root_pseudonym,
+        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on,
+        owner_root_fixture, owner_root_pseudonym,
     };
 
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -728,6 +753,16 @@ mod tests {
         Some(IpnsRecord::unmarshal(&bytes).unwrap().verify(name).unwrap())
     }
 
+    /// No endpoint holds a record at `name`.
+    fn nothing_published(device: &FakeDevice, name: &IpnsName) -> bool {
+        device.record_store.endpoints().iter().all(|endpoint| {
+            device
+                .record_store
+                .record_at(endpoint, name.as_str())
+                .is_none()
+        })
+    }
+
     fn floor_of(device: &FakeDevice, name: &IpnsName) -> Option<u64> {
         block_on(floor::sequence_floor(
             &device.floor_store,
@@ -789,7 +824,7 @@ mod tests {
             Err(ReviveError::Throttled)
         );
         assert_eq!(device.http.requests().len(), 1, "no registration");
-        assert_eq!(served(&device, &name_of(&signer)), None);
+        assert!(nothing_published(&device, &name_of(&signer)));
     }
 
     #[test]
@@ -834,7 +869,7 @@ mod tests {
             })
         );
         assert!(registrations(&device).is_empty());
-        assert_eq!(served(&device, &name), None);
+        assert!(nothing_published(&device, &name));
     }
 
     #[test]
@@ -906,7 +941,143 @@ mod tests {
             revive_one(&world, &device, &signer, Admits),
             Err(ReviveError::Moved)
         );
-        assert_eq!(served(&device, &name), None, "nothing signed");
+        assert!(nothing_published(&device, &name), "nothing signed");
+    }
+
+    #[test]
+    fn an_older_fan_out_record_does_not_stop_the_revival() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([16; 32]);
+        let name = name_of(&signer);
+        device.record_store.seed_record(
+            &device.record_store.endpoints()[0],
+            name.as_str(),
+            minted(&signer, b"/ipfs/bafyolder", 4),
+        );
+        recover(&device, minted(&signer, b"/ipfs/bafyrecovered", 5));
+
+        let revived = revive_one(&world, &device, &signer, Admits).expect("the name revives");
+        assert_eq!(revived.outcome, PublishOutcome::Published { sequence: 6 });
+        assert_eq!(
+            served(&device, &name).unwrap().value,
+            b"/ipfs/bafyrecovered"
+        );
+    }
+
+    #[test]
+    fn a_record_above_s_after_the_registration_stops_the_revival() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([17; 32]);
+        let name = name_of(&signer);
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyold", 5)));
+        let (store, key) = (device.record_store.clone(), name.as_str().to_owned());
+        let newer = minted(&signer, b"/ipfs/bafynewer", 7);
+        device.http.enqueue_derived(move |_| {
+            store.seed_record(&store.endpoints()[0], &key, newer);
+            Ok(answer(200, Vec::new()))
+        });
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Superseded { sequence: 7 })
+        );
+        assert_eq!(served(&device, &name).unwrap().sequence, 7);
+    }
+
+    #[test]
+    fn a_fork_at_the_recovered_sequence_refuses_before_the_plane_read() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([18; 32]);
+        let name = name_of(&signer);
+        device.record_store.seed_record(
+            &device.record_store.endpoints()[0],
+            name.as_str(),
+            minted(&signer, b"/ipfs/bafyfanoutside", 5),
+        );
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyrecoveryside", 5)));
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Superseded { sequence: 5 })
+        );
+        assert!(registrations(&device).is_empty());
+        assert_eq!(floor_of(&device, &name), None);
+    }
+
+    #[test]
+    fn a_refused_recovery_fetch_publishes_nothing() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([19; 32]);
+        device.http.enqueue_response(answer(403, Vec::new()));
+
+        assert!(matches!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Recovery(_))
+        ));
+        assert!(nothing_published(&device, &name_of(&signer)));
+    }
+
+    #[test]
+    fn a_floor_store_that_does_not_read_stops_the_revival() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([20; 32]);
+        device.floor_store.fail_floor_reads();
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyold", 5)));
+
+        assert!(matches!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::FloorRead(_))
+        ));
+        assert!(registrations(&device).is_empty());
+        assert!(nothing_published(&device, &name_of(&signer)));
+    }
+
+    #[test]
+    fn a_routing_set_that_does_not_answer_corroborates_nothing() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([21; 32]);
+        for endpoint in device.record_store.endpoints() {
+            device.record_store.fail_endpoint(&endpoint);
+        }
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyold", 3)));
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Uncorroborated)
+        );
+        assert!(registrations(&device).is_empty());
+    }
+
+    #[test]
+    fn an_endpoint_that_serves_bytes_that_do_not_verify_corroborates_nothing() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([22; 32]);
+        let name = name_of(&signer);
+        device.record_store.seed_record(
+            &device.record_store.endpoints()[0],
+            name.as_str(),
+            b"not a record".to_vec(),
+        );
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyold", 3)));
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Uncorroborated)
+        );
+        assert!(registrations(&device).is_empty());
+        for endpoint in &device.record_store.endpoints()[1..] {
+            assert_eq!(device.record_store.record_at(endpoint, name.as_str()), None);
+        }
     }
 
     #[test]
@@ -995,9 +1166,8 @@ mod tests {
             revive_one(&world, &device, &signer, Admits),
             Err(ReviveError::Publish(PublishError::SequenceExhausted))
         );
-        assert_eq!(
-            served(&device, &name_of(&signer)),
-            None,
+        assert!(
+            nothing_published(&device, &name_of(&signer)),
             "nothing reached the transport"
         );
     }
@@ -1150,7 +1320,7 @@ mod tests {
         );
         assert!(registrations(&device).is_empty());
         assert_eq!(floor_of(&device, &name), None);
-        assert_eq!(served(&device, &name), None);
+        assert!(nothing_published(&device, &name));
     }
 
     #[test]
@@ -1254,9 +1424,13 @@ mod tests {
         http
     }
 
-    #[test]
-    fn a_lapsed_scope_root_revives_through_the_root_adopt() {
-        let (world, device) = after_100_days();
+    /// Revive a lapsed owned scope root at sequence 3, its head block served
+    /// by the gateway `http_for` builds.
+    fn revive_root(
+        world: &FakeWorld,
+        device: &FakeDevice,
+        http_for: impl FnOnce(&OwnerRootFixture) -> ScriptedHttp,
+    ) -> (Result<Revived, ReviveError>, OwnerRootFixture) {
         let owner = EcdsaSigner::from_scalar(&[0x4e; 32]).expect("a valid scalar");
         let enc = X25519Secret::from_scalar([0x5f; 32]);
         let fixture = owner_root_fixture(OwnerRootSpec {
@@ -1277,14 +1451,13 @@ mod tests {
             kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes());
         assert_eq!(name_of(&signer), fixture.name);
         let value = format!("/ipfs/{}", fixture.head_cid_str).into_bytes();
-        recover(&device, minted(&signer, &value, 3));
-        let gateway = gateway();
-        let http = serving(&fixture.head_cid_str, &fixture.head_block);
+        recover(device, minted(&signer, &value, 3));
+        let (gateway, http) = (gateway(), http_for(&fixture));
         let identity = owner.verifying_key();
 
-        let revived = revive_one(
-            &world,
-            &device,
+        let result = revive_one(
+            world,
+            device,
             &signer,
             ScopeRootRead {
                 gateway: &gateway,
@@ -1297,12 +1470,40 @@ mod tests {
                 scope_id: SCOPE,
                 ascent: None,
             },
-        )
-        .expect("the root adopt admits the recovered record");
+        );
+        (result, fixture)
+    }
 
+    #[test]
+    fn a_lapsed_scope_root_revives_through_the_root_adopt() {
+        let (world, device) = after_100_days();
+        let (result, fixture) = revive_root(&world, &device, |fixture| {
+            serving(&fixture.head_cid_str, &fixture.head_block)
+        });
+
+        let revived = result.expect("the root adopt admits the recovered record");
         assert_eq!(revived.outcome, PublishOutcome::Published { sequence: 4 });
-        assert_eq!(served(&device, &fixture.name).unwrap().value, value);
+        assert_eq!(
+            served(&device, &fixture.name).unwrap().value,
+            format!("/ipfs/{}", fixture.head_cid_str).into_bytes()
+        );
         assert_eq!(floor_of(&device, &fixture.name), Some(3));
+    }
+
+    #[test]
+    fn a_scope_root_whose_head_block_no_gateway_holds_is_unavailable() {
+        let (world, device) = after_100_days();
+        let (result, fixture) = revive_root(&world, &device, |_| {
+            let http = ScriptedHttp::default();
+            for _ in 0..4 {
+                http.enqueue_response(answer(404, Vec::new()));
+            }
+            http
+        });
+
+        assert_eq!(result, Err(ReviveError::Unavailable));
+        assert!(registrations(&device).is_empty());
+        assert!(nothing_published(&device, &fixture.name));
     }
 
     #[test]
@@ -1340,6 +1541,84 @@ mod tests {
 
         assert_eq!(revived.outcome, PublishOutcome::Published { sequence: 3 });
         assert_eq!(served(&device, keys.name()).unwrap().value, value);
+    }
+
+    fn bin_read<'a>(
+        world: &'a FakeWorld,
+        device: &'a FakeDevice,
+        gateway: &'a Gateway,
+        http: &'a ScriptedHttp,
+        keys: &'a BinIndexKeys,
+    ) -> BinIndexRead<'a, ScriptedHttp, InMemoryFloorStore, InMemorySnapshotCache, VirtualScheduler>
+    {
+        BinIndexRead {
+            gateway,
+            http,
+            floors: &device.floor_store,
+            snapshots: &device.snapshot_cache,
+            scheduler: &world.scheduler,
+            profile: &SyncTimingProfile::CI,
+            keys,
+        }
+    }
+
+    #[test]
+    fn a_bin_index_value_that_names_no_block_is_refused_before_any_fetch() {
+        const SECRET: &[u8] = b"revival-bin-secret";
+        let (world, device) = after_100_days();
+        let keys = BinIndexKeys::derive(SECRET);
+        let signer = kdf::bin_index_ipns_keypair(SECRET);
+        recover(&device, minted(&signer, b"/ipfs/not-a-cid", 2));
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+
+        assert_eq!(
+            revive_one(
+                &world,
+                &device,
+                &signer,
+                bin_read(&world, &device, &gateway, &http, &keys)
+            ),
+            Err(ReviveError::TrustViolation)
+        );
+        assert!(http.requests().is_empty(), "no block fetch");
+        assert!(registrations(&device).is_empty());
+    }
+
+    #[test]
+    fn a_bin_index_read_for_another_name_is_a_caller_mismatch() {
+        let (world, device) = after_100_days();
+        let keys = BinIndexKeys::derive(b"revival-bin-secret");
+        let signer = Ed25519Signer::from_seed([15; 32]);
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/bafyold", 2)));
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+
+        assert_eq!(
+            revive_one(
+                &world,
+                &device,
+                &signer,
+                bin_read(&world, &device, &gateway, &http, &keys)
+            ),
+            Err(ReviveError::PlaneMismatch)
+        );
+    }
+
+    #[test]
+    fn a_child_read_whose_bar_names_another_scope_is_a_caller_mismatch() {
+        let (world, device) = after_100_days();
+        let (signer, record, head) = file_record(READ_SCOPE_SEED, 4);
+        device.http.enqueue_response(answer(200, record));
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+        let mut read = child_read(&device, &gateway, &http, Some(head));
+        read.bar.scope_id = [0x45; 16];
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, read),
+            Err(ReviveError::PlaneMismatch)
+        );
+        assert_eq!(floor_of(&device, &name_of(&signer)), None);
     }
 
     #[test]

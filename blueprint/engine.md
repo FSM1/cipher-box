@@ -229,16 +229,17 @@ bytes (FSM1/cipher-box-next#28 D2).
   (FSM1/cipher-box-next#24 lapse semantics). A key-holding session revives a
   lapsed name only through the read of its own plane (ADR 0062 D1), in these
   steps: (1) fetch the last record from the recovery endpoint; a 429 answer
-  fails nothing and tries again later. (2) The fan-out corroborates it: each
-  endpoint that answers reads `Absent` or serves a record at or below the
-  recovered sequence. No answer refuses, and a record below the durable floor
-  is refused. (3) Give the record to the read of its plane: the root adopt for
+  fails nothing and tries again later. (2) The fan-out corroborates the
+  recovered record at sequence S. `Absent` needs an answer from each
+  endpoint; a served record below S, or the recovered record itself, passes.
+  A record above S, or a different record at S, refuses. No answer refuses,
+  and a recovered record below the durable floor is refused. (3) Give the record to the read of its plane: the root adopt for
   a scope root, the gated child resolve for another node, `open_repoint` and
   the pointer bar for a pointer record, and the bin index load for the bin
   index. A refusal of bytes the plane served is a `TrustViolation`; a body
   that is not available is an availability failure. (4) Register the admitted
-  names in batches of up to `REGISTRY_BATCH_MAX`. (5) The fan-out still reads
-  `Absent` or serves exactly the admitted record. (6) Read the durable floor
+  names in batches of up to `REGISTRY_BATCH_MAX`. (5) The fan-out still passes
+  the step 2 rule against the admitted record. (6) Read the durable floor
   with no await before the signature; it must be at or below the admitted
   sequence S. Sign at S + 1 with the renewal EOL, through the renewal walk's
   signature path, so a revival never wins a tie against a real record. A

@@ -532,7 +532,7 @@ where
                                 admitted,
                             })
                         }
-                        Err(ScopeRootAdmission::Rejected) => {
+                        Err(ScopeRootAdmission::Rejected | ScopeRootAdmission::HeadBlockAbsent) => {
                             pass.report.rejected.push(scope.name.as_str().to_owned());
                             None
                         }
