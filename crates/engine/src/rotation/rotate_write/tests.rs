@@ -1550,6 +1550,10 @@ fn a_bounded_stop_counts_each_held_node_and_drops_only_the_ones_past_it() {
     assert!(err.is_retryable());
     assert_eq!(*one_past.held.borrow(), vec![nid(0x04)]);
     assert!(state.published.borrow().is_empty());
+    assert!(
+        state.moved.borrow().is_empty(),
+        "a stopped walk moves no node"
+    );
 
     let state = WaveState::default();
     let both_past = CountingBound {
@@ -1566,6 +1570,11 @@ fn a_bounded_stop_counts_each_held_node_and_drops_only_the_ones_past_it() {
         vec![nid(0x03), nid(0x04)]
     );
     assert!(both_past.held.borrow().is_empty());
+    assert_eq!(
+        *state.moved.borrow(),
+        vec![(1, 3), (2, 3), (3, 3)],
+        "the total leaves out the dropped nodes, and the root ends it"
+    );
 }
 
 #[test]

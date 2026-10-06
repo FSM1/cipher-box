@@ -94,6 +94,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// Builds the lazy-wave sweep task the read cascade enqueues once its cut is
     /// durable, over the scope reference the cascade read the root at.
     pub sweep: &'a dyn Fn(ChildScopeRef) -> BoxedTask,
+    /// Notes each scope whose read cut the cascade made durable.
+    pub cut_durable: &'a dyn Fn([u8; 16]),
     /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
     pub bound: &'a dyn NodeBound,
     /// When the root fallback falls back ([`RootWait`]).
@@ -406,6 +408,7 @@ where
                     carried_history_links: &current.carried_history_links,
                 },
                 || (self.sweep)(scope.clone()),
+                self.cut_durable,
             )
             .await
         })

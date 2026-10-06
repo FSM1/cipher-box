@@ -811,6 +811,7 @@ pub async fn cascade_rotate_scope<E, F, S, R, P, Mk>(
     publisher: &P,
     root_plan: &RotateScopePlan<'_>,
     make_sweep_task: Mk,
+    cut_durable: &dyn Fn([u8; 16]),
 ) -> Result<CascadeOutcome, CascadeError>
 where
     E: Entropy,
@@ -825,6 +826,7 @@ where
     // 1) Re-key the root — the thread head. Its fresh seed derives its children's
     //    new parent node seeds.
     let (root_rekeyed, root_fresh_seed) = rekey_one(entropy, floors, publisher, root_plan).await?;
+    cut_durable(root_scope_id);
     let mut outcome = CascadeOutcome {
         rekeyed: vec![root_rekeyed],
     };
@@ -927,6 +929,7 @@ where
             };
 
             let (rekeyed, child_fresh_seed) = rekey_one(entropy, floors, publisher, &plan).await?;
+            cut_durable(child.scope_id);
             outcome.rekeyed.push(rekeyed);
 
             // Enqueue this child's children, threaded on THIS child's fresh seed.

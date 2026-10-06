@@ -20879,3 +20879,41 @@ fn the_sweep_a_read_revoke_enqueues_reports_no_node_left_at_the_old_epoch() {
     assert_eq!(*last_reseal_at, Some(*at), "this run re-sealed the nodes");
     assert!(*at >= cut_at);
 }
+
+/// A write wave that stops sends its start and no end: the owed work is its
+/// terminal event.
+#[test]
+fn a_write_wave_that_stops_sends_no_end_and_reports_the_work_owed() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    let terminal: Vec<&str> = events_so_far(&mut fx._events)
+        .iter()
+        .filter_map(|event| match event {
+            Event::NameWaveStarted { scope_root, .. } if *scope_root == folder => Some("started"),
+            Event::NameWaveEnded { .. } => Some("ended"),
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == folder => Some("owed"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(terminal, vec!["started", "owed"]);
+}

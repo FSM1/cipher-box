@@ -10078,6 +10078,7 @@ mod tests {
                 carried_history_links: &[],
             },
             || Box::pin(async {}),
+            &|_| {},
         ))
     }
 

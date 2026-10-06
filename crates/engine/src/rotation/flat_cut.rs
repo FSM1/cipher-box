@@ -134,7 +134,7 @@ where
         FlatCut {
             scope: &scope,
             ascent: ascent.as_deref(),
-            make_sweep: || sweep(scope.clone(), ascent.clone()),
+            make_sweep: || (sweep.task)(scope.clone(), ascent.clone()),
         },
     )
     .await

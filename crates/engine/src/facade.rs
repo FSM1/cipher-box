@@ -2431,8 +2431,8 @@ pub enum Event {
         at: UnixMillis,
     },
     /// The name wave holds `moved` of the subtree's `total` nodes at their new
-    /// names. Sent once per node, the root last; a retried wave counts again
-    /// from one.
+    /// names. Sent once per node, the root last. A retry inside the bound counts
+    /// again from one under the same start.
     NameWaveProgress {
         /// The scope root the wave moves.
         #[cfg_attr(
@@ -2449,7 +2449,8 @@ pub enum Event {
         at: UnixMillis,
     },
     /// The name wave finished: the re-point landed and the old names retired.
-    /// A wave that stops sends [`Self::RotationWorkOwed`] instead.
+    /// A wave that stops sends no end: [`Self::RotationWorkOwed`] is its
+    /// terminal event.
     NameWaveEnded {
         /// The scope root the wave moved.
         #[cfg_attr(
@@ -2465,8 +2466,9 @@ pub enum Event {
         /// When the wave ended.
         at: UnixMillis,
     },
-    /// One sweep run over a scope root ended. The scope converged when
-    /// `old_epoch_nodes` is zero. The times are this session's only.
+    /// Sent at the end of each sweep run that returns an outcome. A failed run
+    /// sends none. The scope converged when `old_epoch_nodes` is zero. The
+    /// times are this session's only.
     SweepConvergence {
         /// The swept scope root.
         #[cfg_attr(
@@ -2478,7 +2480,8 @@ pub enum Event {
         /// The read epoch the run gated the scope root at.
         read_epoch: u64,
         /// The interior nodes the run did not prove at `read_epoch`: a lost
-        /// race or a node it could not read.
+        /// race or a node it could not read. A lower bound when not zero: the
+        /// run does not count the nodes below a node it could not read.
         old_epoch_nodes: u32,
         /// When this session last cut the scope's read epoch.
         cut_at: Option<UnixMillis>,
@@ -3832,15 +3835,20 @@ pub(crate) async fn memoized_scan<St: StagingStore + QueueGeneration>(
 }
 
 /// The task a rotation enqueues once its cut is durable: [`SWEEP_MAX_PASSES`]
-/// passes, and whatever it leaves is the idle sweep job's. The enqueue is the
-/// cut time [`RotationTimes`] holds.
+/// passes, and whatever it leaves is the idle sweep job's. The enqueue and each
+/// scope a cascade cuts set the cut time [`RotationTimes`] holds.
 fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
     sweeper: Sweeper,
     scheduler: Sch,
     events: mpsc::UnboundedSender<Event>,
     times: Rc<RotationTimes>,
 ) -> SweepTaskFactory {
-    Rc::new(move |scope, parent_node_seed| {
+    let cut = {
+        let scheduler = scheduler.clone();
+        let times = times.clone();
+        Rc::new(move |scope_id| times.cut(scope_id, scheduler.now()))
+    };
+    let task = Rc::new(move |scope: ChildScopeRef, parent_node_seed| {
         let scope_id = scope.scope_id;
         times.cut(scope_id, scheduler.now());
         let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
@@ -3851,12 +3859,14 @@ fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
             if let SweepRun::Swept(Ok(outcome)) = run.await {
                 times.report(&events, scope_id, &outcome, scheduler.now());
             }
-        })
-    })
+        }) as crate::seams::BoxedTask
+    });
+    SweepTaskFactory { task, cut }
 }
 
 /// When this session last cut each scope's read epoch, and when a sweep run
-/// last re-sealed a node of it. Session memory only: a restart starts empty.
+/// last re-sealed a node of it. A cascade notes each scope once its floor is
+/// durable. Session memory only: a restart starts empty.
 #[derive(Default)]
 struct RotationTimes(RefCell<BTreeMap<[u8; 16], ScopeTimes>>);
 
@@ -7855,7 +7865,9 @@ where {
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),
-                    make_sweep: || sweep(target.scope.clone(), target.parent_node_seed.clone()),
+                    make_sweep: || {
+                        (sweep.task)(target.scope.clone(), target.parent_node_seed.clone())
+                    },
                 },
             )
             .await
@@ -8654,9 +8666,10 @@ where {
                         pass.stop_owed(node, owed_steps.clone(), OwedStop::of_grant(stalled))
                             .await;
                         let sweep = self.sweep_factory()?;
-                        self.seams
-                            .scheduler
-                            .spawn(sweep(parent.clone(), parent_scope.parent_node_seed.clone()));
+                        self.seams.scheduler.spawn((sweep.task)(
+                            parent.clone(),
+                            parent_scope.parent_node_seed.clone(),
+                        ));
                     }
                     None => {
                         let _ = pass.owed().clear(node).await;

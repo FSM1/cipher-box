@@ -602,6 +602,7 @@ fn cascade_refusal<F: FloorStore>(
         &publisher,
         &plan,
         || Box::pin(async {}),
+        &|_| {},
     ))
     .expect_err("the cascade must fail closed")
 }

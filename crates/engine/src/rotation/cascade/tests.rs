@@ -489,9 +489,16 @@ fn run_over<E: Entropy, F: FloorStore>(
     let scheduler = VirtualScheduler::new();
     let outcome = block_on(async {
         let plan = fx.plan(&root_index);
-        cascade_rotate_scope(&mut entropy, &floors, &scheduler, &net, &net, &plan, || {
-            Box::pin(async {})
-        })
+        cascade_rotate_scope(
+            &mut entropy,
+            &floors,
+            &scheduler,
+            &net,
+            &net,
+            &plan,
+            || Box::pin(async {}),
+            &|_| {},
+        )
         .await
     });
     let spawned = scheduler.take_spawned_tasks().len();
@@ -1387,6 +1394,39 @@ fn unresolvable_descendant_aborts_fail_closed() {
     assert_eq!(spawned, 0, "no sweep enqueued on a fail-closed abort");
     // B never floored (it never published).
     assert_eq!(block_on(floors.epoch_floor(&sid(0x0b))).unwrap(), None);
+}
+
+/// Each scope of a nested cascade is noted as cut once its own floor is
+/// durable, so a cascade that stops keeps the cuts that landed before it.
+#[test]
+fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
+    let noted = |net: FakeNet| {
+        let cuts = RefCell::new(Vec::new());
+        let floors = InMemoryFloorStore::default();
+        let plan_root = [childref(0x0a)];
+        let outcome = block_on(cascade_rotate_scope(
+            &mut SeededEntropy::new(0xCA5CADE),
+            &floors,
+            &VirtualScheduler::new(),
+            &net,
+            &net,
+            &RootFx::new(net.clone()).plan(&plan_root),
+            || Box::pin(async {}),
+            &|scope_id| cuts.borrow_mut().push(scope_id),
+        ));
+        (outcome.is_ok(), cuts.into_inner())
+    };
+    let nested = || FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
+
+    assert_eq!(
+        noted(nested()),
+        (true, vec![sid(0x00), sid(0x0a), sid(0x0b)])
+    );
+    assert_eq!(
+        noted(nested().publish_fault(0x0b, RotationPublishError::NotPublished)),
+        (false, vec![sid(0x00), sid(0x0a)]),
+        "the cuts before the stop stay noted"
+    );
 }
 
 #[test]
