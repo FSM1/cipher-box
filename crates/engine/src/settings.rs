@@ -23,7 +23,7 @@ use core::num::NonZeroU64;
 
 use cipherbox_core::codec::{Map, Value, decode, encode};
 use cipherbox_core::error::{CodecError, Malformed};
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{SETTINGS_RECORD_V, open_settings_record, seal_settings_record};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -33,15 +33,17 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, ApiError};
 use crate::content::validate_byo_config;
 use crate::content::{
     ByoBearer, ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy,
 };
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::facade::{Event, emit_trust_violation};
+use crate::gate::GateError;
 use crate::gate::floor;
-use crate::gate::floor::RevisionMintError;
+use crate::gate::floor::{RevisionMintError, Strictness};
+use crate::net::MAX_RECORD_BYTES;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
 use crate::net::publish::{Observed, PublishOutcome};
 use crate::net::record_publish::{
@@ -49,9 +51,10 @@ use crate::net::record_publish::{
     publish_record_placed,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
+use crate::net::revival::{Admitted, PlaneRead, PlaneRefusal};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{
-    DefaultsReason, EolRule, LapsedHead, OpenedBody, RecordLoad, RecordPlane, Unopened,
+    DefaultsReason, EolRule, LapsedHead, OpenedBody, RecordLoad, RecordPlane, RecordRead, Unopened,
     load_record, prefixed_key, unresolved_marks,
 };
 use crate::seams::{
@@ -847,8 +850,13 @@ pub enum SettingsPublishError {
     /// our own bytes at our own sequence, so the update is not known to have
     /// landed and the floor must not advance behind it.
     Unconfirmed,
-    /// The confirmed publish could not be recorded durably.
+    /// A durable sequence floor could not be read, or the confirmed publish
+    /// could not be recorded.
     Floor(SeamError),
+    /// A first save on a device with no floor found no answer it can sign
+    /// above: the recovery fetch failed, or its bytes do not verify under the
+    /// settings name.
+    Recovery(ApiError),
     /// The store failed inside the revision mint, so whether the mint counter
     /// rose is unknown.
     Mint(SeamError),
@@ -1058,6 +1066,11 @@ where
     let placement = placement_of(settings).map_err(SettingsPublishError::Placement)?;
     let signer = kdf::settings_ipns_keypair(login_secret);
     let name = IpnsName::from_public_key(&signer.verifying_key());
+    // Before the mint, so a refusal here leaves no stranded mint.
+    let observed = match observed {
+        Some(sequence) => Some(sequence),
+        None => first_save_basis(api, floors, &name).await?,
+    };
     let revision = next_revision(floors, &name).await?;
     let body = encode_settings_body(settings, revision).map_err(SettingsPublishError::Codec)?;
     let ephemeral = fresh_ephemeral(entropy).map_err(SettingsPublishError::Entropy)?;
@@ -1132,6 +1145,41 @@ where
     })
 }
 
+/// The sequence a save on a device with no floor signs above: the recovery
+/// endpoint's record, verified under the settings name, so the save does not
+/// publish at sequence 1 below the record of another device (ADR 0062 D4).
+async fn first_save_basis<H, C, F>(
+    api: &ApiClient<H, C>,
+    floors: &F,
+    name: &IpnsName,
+) -> Result<Option<u64>, SettingsPublishError>
+where
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+{
+    let floor = floor::sequence_floor(floors, name.as_str().as_bytes())
+        .await
+        .map_err(SettingsPublishError::Floor)?;
+    if floor.is_some() {
+        return Ok(None);
+    }
+    let bytes = match api.recovery_fetch(name.as_str()).await {
+        Ok(bytes) => bytes,
+        Err(ApiError::Status { status: 404, .. }) => return Ok(None),
+        Err(error) => return Err(SettingsPublishError::Recovery(error)),
+    };
+    let recovered = (bytes.len() <= MAX_RECORD_BYTES)
+        .then(|| IpnsRecord::unmarshal(&bytes).and_then(|record| record.verify(name)))
+        .and_then(Result::ok)
+        .ok_or_else(|| {
+            SettingsPublishError::Recovery(ApiError::Decode(
+                "the recovered settings record does not verify".into(),
+            ))
+        })?;
+    Ok(Some(recovered.sequence))
+}
+
 /// Resolve the vault settings record, bounded by
 /// [`SyncTimingProfile::settings_load_budget`]. Never fails: a record that will
 /// not resolve, will not open, or will not validate degrades to this device's
@@ -1196,6 +1244,55 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
+    // The reader of this record is always its signer, so a lapsed EOL is a
+    // refusal rather than the availability event it is plane-wide.
+    let read = read_settings(
+        transport,
+        gateway,
+        http,
+        floors,
+        snapshots,
+        scheduler,
+        profile,
+        enc_secret,
+        signer,
+        EolRule::RefuseAt(scheduler.now()),
+    )
+    .await;
+    SettingsRead {
+        load: match read.load {
+            RecordLoad::Resolved(settings) => SettingsLoad::Resolved(settings),
+            RecordLoad::Stale {
+                body: settings,
+                reason,
+            } => SettingsLoad::Stale { settings, reason },
+            RecordLoad::Degraded(reason) => SettingsLoad::Defaults(reason),
+        },
+        renewable: read.renewable,
+    }
+}
+
+/// The settings record through the shared ladder, under `eol`.
+#[allow(clippy::too_many_arguments)]
+async fn read_settings<T, H, F, Sn, Sch>(
+    transport: &T,
+    gateway: &Gateway,
+    http: &H,
+    floors: &F,
+    snapshots: &Sn,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    enc_secret: &X25519Secret,
+    signer: &Ed25519Signer,
+    eol: EolRule,
+) -> RecordRead<VaultSettings>
+where
+    T: RecordTransport,
+    H: Http,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler,
+{
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let plane = RecordPlane {
         cache_key: settings_cache_key(&name),
@@ -1204,13 +1301,11 @@ where
         // The settings mint is raised before the seal (ADR 0034 D6), so no
         // PUT outcome clears it.
         refused_key: None,
-        // The reader of this record is always its signer, so a lapsed EOL is a
-        // refusal rather than the availability event it is plane-wide.
-        eol: EolRule::RefuseAt(scheduler.now()),
+        eol,
         name: &name,
         signer,
     };
-    let read = load_record(
+    load_record(
         transport,
         gateway,
         http,
@@ -1226,17 +1321,87 @@ where
             })
         },
     )
-    .await;
-    SettingsRead {
-        load: match read.load {
-            RecordLoad::Resolved(settings) => SettingsLoad::Resolved(settings),
-            RecordLoad::Stale {
-                body: settings,
-                reason,
-            } => SettingsLoad::Stale { settings, reason },
-            RecordLoad::Degraded(reason) => SettingsLoad::Defaults(reason),
-        },
-        renewable: read.renewable,
+    .await
+}
+
+/// The read a lapsed settings record revives through (ADR 0062 D4). The
+/// record carries a bearer credential, so it revives only on a device whose
+/// floor equals the recovered sequence, and this is the one settings read
+/// that sets the EOL rule aside. Any other device takes the ADR 0034 ladder.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the session-start caller is not landed")
+)]
+pub(crate) struct SettingsRevivalRead<'a, H, F, Sn, Sch> {
+    pub(crate) gateway: &'a Gateway,
+    pub(crate) http: &'a H,
+    pub(crate) floors: &'a F,
+    pub(crate) snapshots: &'a Sn,
+    pub(crate) scheduler: &'a Sch,
+    pub(crate) profile: &'a SyncTimingProfile,
+    pub(crate) enc_secret: &'a X25519Secret,
+    pub(crate) signer: &'a Ed25519Signer,
+}
+
+impl<H, F, Sn, Sch> PlaneRead for SettingsRevivalRead<'_, H, F, Sn, Sch>
+where
+    H: Http,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler,
+{
+    async fn admit<T: RecordTransport>(
+        &self,
+        transport: &T,
+        name: &IpnsName,
+        recovered: &VerifiedRecord,
+        bytes: &[u8],
+    ) -> Result<Admitted, PlaneRefusal> {
+        if IpnsName::from_public_key(&self.signer.verifying_key()) != *name {
+            return Err(PlaneRefusal::Mismatch);
+        }
+        // `check_sequence` reads an absent floor as 0, and no floor never
+        // revives this record.
+        match floor::sequence_floor(self.floors, name.as_str().as_bytes()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(PlaneRefusal::NotAtFloor),
+            Err(_) => return Err(PlaneRefusal::Unavailable),
+        }
+        match floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            recovered.sequence,
+            Strictness::AtFloor,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(GateError::Rejected(_)) => return Err(PlaneRefusal::NotAtFloor),
+            Err(GateError::Seam(_)) => return Err(PlaneRefusal::Unavailable),
+        }
+        let read = read_settings(
+            transport,
+            self.gateway,
+            self.http,
+            self.floors,
+            self.snapshots,
+            self.scheduler,
+            self.profile,
+            self.enc_secret,
+            self.signer,
+            EolRule::LeaveToRenewal,
+        )
+        .await;
+        match read.load {
+            RecordLoad::Resolved(_) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
+            RecordLoad::Stale { reason, .. } | RecordLoad::Degraded(reason) => {
+                Err(if reason.is_verdict() {
+                    PlaneRefusal::Rejected
+                } else {
+                    PlaneRefusal::Unavailable
+                })
+            }
+        }
     }
 }
 

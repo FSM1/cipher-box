@@ -84,6 +84,9 @@ pub(crate) enum PlaneRefusal {
     Unsignable(PublishError),
     /// The caller built the read for another name or another scope.
     Mismatch,
+    /// The plane revives only at this device's floor, and the floor is
+    /// another sequence or absent.
+    NotAtFloor,
 }
 
 /// The read of the plane a lapsed name lives on (ADR 0062 D1 step 3).
@@ -161,6 +164,9 @@ pub(crate) enum ReviveError {
     /// The caller built the read of the plane for another name or another
     /// scope, so no read ran.
     PlaneMismatch,
+    /// The settings record revives only on a device whose floor equals the
+    /// recovered sequence (ADR 0062 D4).
+    NotAtFloor,
     /// The durable floor rose above the admitted sequence, or the drain
     /// publishes the name, before the signature.
     Moved,
@@ -403,6 +409,7 @@ where
             PlaneRefusal::Unavailable => ReviveError::Unavailable,
             PlaneRefusal::Unsignable(error) => ReviveError::Publish(error),
             PlaneRefusal::Mismatch => ReviveError::PlaneMismatch,
+            PlaneRefusal::NotAtFloor => ReviveError::NotAtFloor,
         })?;
     let signer = request
         .signer
@@ -1740,5 +1747,112 @@ mod tests {
         let record = served(&device, &name).unwrap();
         assert_eq!(record.sequence, 6);
         assert_eq!(record.value, b"/ipfs/bafyrecovered", "the admitted value");
+    }
+
+    const SETTINGS_SECRET: &[u8] = b"revival-settings-secret";
+
+    /// A lapsed settings record at `sequence` in recovery, its head block
+    /// served by the gateway: the signer, the record value and the gateway.
+    fn lapsed_settings(
+        device: &FakeDevice,
+        sequence: u64,
+    ) -> (Ed25519Signer, Vec<u8>, ScriptedHttp) {
+        let (_, block) = crate::settings::cached_settings_block(
+            SETTINGS_SECRET,
+            &crate::settings::VaultSettings::default(),
+            &mut SeededEntropy::new(0x5E),
+        );
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        let signer = kdf::settings_ipns_keypair(SETTINGS_SECRET);
+        let value = format!("/ipfs/{cid}").into_bytes();
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, &value, sequence)));
+        (signer, value, serving(&cid, &block))
+    }
+
+    fn revive_settings(
+        world: &FakeWorld,
+        device: &FakeDevice,
+        signer: &Ed25519Signer,
+        http: &ScriptedHttp,
+    ) -> Result<Revived, ReviveError> {
+        let gateway = gateway();
+        let enc_secret = kdf::enc_subkey(SETTINGS_SECRET);
+        revive_one(
+            world,
+            device,
+            signer,
+            crate::settings::SettingsRevivalRead {
+                gateway: &gateway,
+                http,
+                floors: &device.floor_store,
+                snapshots: &device.snapshot_cache,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                enc_secret: &enc_secret,
+                signer,
+            },
+        )
+    }
+
+    #[test]
+    fn a_device_at_the_floor_revives_the_settings_record_with_the_renewal_eol() {
+        let (world, device) = after_100_days();
+        let (signer, value, http) = lapsed_settings(&device, 5);
+        let name = name_of(&signer);
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 5),
+        )
+        .unwrap();
+        device.http.enqueue_response(answer(200, Vec::new()));
+
+        let revived = revive_settings(&world, &device, &signer, &http)
+            .expect("the settings load admits the lapsed record at the floor");
+
+        assert_eq!(
+            revived,
+            Revived {
+                outcome: PublishOutcome::Published { sequence: 6 },
+                restored_from_server_copy: false,
+            }
+        );
+        let record = served(&device, &name).expect("the revival is served");
+        assert_eq!(record.value, value, "the value unchanged");
+        assert_eq!(
+            record.validity,
+            renewal_eol_from(world.scheduler.now()).into_bytes()
+        );
+    }
+
+    #[test]
+    fn a_device_off_the_floor_does_not_revive_the_settings_record() {
+        for (floor, sequence) in [(None, 5), (None, 0), (Some(4), 5)] {
+            let (world, device) = after_100_days();
+            let (signer, _, http) = lapsed_settings(&device, sequence);
+            let name = name_of(&signer);
+            if let Some(floor) = floor {
+                block_on(
+                    device
+                        .floor_store
+                        .raise_sequence_floor(name.as_str().as_bytes(), floor),
+                )
+                .unwrap();
+            }
+
+            assert_eq!(
+                revive_settings(&world, &device, &signer, &http),
+                Err(ReviveError::NotAtFloor),
+                "floor {floor:?}, sequence {sequence}"
+            );
+            assert!(
+                http.requests().is_empty(),
+                "floor {floor:?}: no block fetch"
+            );
+            assert!(registrations(&device).is_empty(), "floor {floor:?}");
+            assert!(nothing_published(&device, &name), "floor {floor:?}");
+        }
     }
 }
