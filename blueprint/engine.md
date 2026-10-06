@@ -162,6 +162,19 @@ bytes (FSM1/cipher-box-next#28 D2).
   and sends `renewalFailed` for it, as the renewal walk does. The same pass
   then runs a bounded part of the **renewal walk** (ADR 0061 D1 to D4), which
   reaches every other name of the vault.
+  A name that no parent body names revives at session start, before the first
+  tick, when the fan-out reads it `Absent` (ADR 0062 D3), in this order: the
+  vault pointer chain from its index floor up to the probe one index past the
+  last, before `resolve_vault_pointer` runs; the vault root after the cold
+  seed, whose write floor opens the owner write blob that carries the root's
+  signer, and then the cold start runs again; the bin index before its load;
+  then each owned scope pointer when the hourly enrolment proves its scope.
+  The session-start revival and the walk share one recovery pace of 25
+  fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
+  the first minute. A revival holds nothing in `HeldRecords` and raises no
+  floor: the gated read that follows it admits the record at `S + 1` and
+  raises the floor to it. No revival signs a name in a scope that has an owed
+  rotation entry (ADR 0063 D4).
   A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve
@@ -192,6 +205,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
   The walk enters each folder once for each pass, so a link cycle ends.
+  A visit that finds a name lapsed revives it through the read of its plane
+  (see Revival), and then reads it again: a lapsed folder revives before the
+  walk descends into it, so its subtree renews in the same cycle. A name is
+  lapsed when the fan-out reads it `Absent`, or when the cached copy the read
+  admitted is past its EOL and the fan-out reads `Absent`. A visit that
+  revives does not count toward the 500 visits; the recovery pace bounds it.
   A pass that meets a transient failure (a transport error, a 401 after the
   refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
   failed PUT or a store error) keeps the stored cursor, so the next pass

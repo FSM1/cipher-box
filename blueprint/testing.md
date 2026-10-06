@@ -105,7 +105,16 @@ renewal, and revival, including floor changes before signing, foreign envelope
 versions, and sequence exhaustion. On the virtual clock, the `net::revival` unit tests
 revive a lapsed file record through the gate at `S + 1` with the renewal EOL
 (ADR 0062 consequence 5), refuse each D1 step that fails, and hold the
-recovery pace.
+recovery pace. The two virtual-clock tests of ADR 0062 consequence 5 run end
+to end in `tests/renewal_walk.rs`: a device that starts after 100 days
+offline, with every name lapsed, revives the vault pointer, the vault root
+and the bin index before the first tick, lists the vault, and the walk
+revives a lapsed folder before the file below it, each at `S + 1`; and a
+session spends at most 25 recovery fetches in its first minute and revives
+the rest when the pace allows. `net::vault_pointer` revives the chain up to
+the probe one index past the last and never below the index floor, and
+`net::rotation` revives a lapsed owned scope pointer, but not in a scope
+that has an owed rotation entry.
 
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
