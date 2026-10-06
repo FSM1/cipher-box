@@ -38,8 +38,10 @@ This applies to a bookmark stored before D1, and to a share pointer from an
 older owner build. An accept of a share pointer for a held bookmark with no
 name adds the name to that bookmark. A direct grant to an existing personal
 grantee at the same permission posts the share pointer again. It adds no row
-and runs no cut, as "already has access" states. This gives the owner one
-repair path. A write cut posts no share pointer.
+and runs no cut. This gives the owner one repair path. A permission change of a
+personal grantee, up or down, posts the share pointer to that grantee. So a
+downgraded writer gets the name at the cut that needs it. That is one post to
+one grantee. A write cut posts nothing to the other survivors.
 
 ## Alternatives considered
 
@@ -76,7 +78,9 @@ repair path. A write cut posts no share pointer.
   `scopePointerName`, and the link-held arm keeps the name at conversion.
   "Pointer planes" states that the bookmark keeps the name with
   `pointerReadKey`. The pointer consult runs for each bookmark that holds a
-  name, not only for a link hold.
+  name, not only for a link hold. The same-permission direct grant, now
+  "nothing" ("already has access"), posts the share pointer again, and a
+  permission change posts it to that grantee.
 - ADR 0024 gets an "Amended by ADR 0074 D1" sentence at its amendment of
   2026-09-25.
 - `blueprint/core.md`: no change. The grant blob, the KDF catalog and the KAT
