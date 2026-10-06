@@ -119,7 +119,7 @@ use crate::sync::project::{
 use crate::sync::provision::GENESIS_EPOCH;
 use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
-    replay,
+    landed_exit, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
@@ -3132,6 +3132,19 @@ where
                         continue;
                     }
                     KeptVerdict::Expired => {
+                        // A relocation the mark drops may have stopped before its
+                        // crossing committed, so the cut it owes is owed here.
+                        let exit = op.relocation().and_then(|(from_parent, new_parent, _)| {
+                            landed_exit(
+                                &self.cells.base.borrow(),
+                                from_parent,
+                                new_parent,
+                                scope.scope_roots,
+                            )
+                        });
+                        if let Some(root) = exit {
+                            self.owe_scope_exit(scope, root).await;
+                        }
                         self.dequeue_op(op_id).await?;
                         self.release_staged_blocks(&op).await;
                         notes.remove(op_id);

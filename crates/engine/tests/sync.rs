@@ -945,6 +945,37 @@ fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
     assert!(cut.is_complete());
 }
 
+/// A move journaled `Intra` whose source became a scope root before it landed
+/// left that scope all the same. The drop is the move already landed, so the
+/// cut it owes follows from the scope roots the replay lists, not from the
+/// crossing the op carries.
+#[test]
+fn an_already_satisfied_drop_journaled_intra_still_rotates_the_scope_it_left() {
+    let rotator = RecordingRotator::refusing(&[]);
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(6))],
+        &[Op::move_node(
+            id(7),
+            id(12),
+            id(6),
+            "m.txt",
+            None,
+            1,
+            AT,
+            ScopeCrossing::Intra,
+        )],
+        &rotator,
+    );
+
+    assert_eq!(
+        triggers,
+        vec![id(5)],
+        "the exit is owed whatever was journaled"
+    );
+    assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
+    assert!(cut.is_complete());
+}
+
 /// The enclosing-root fallback in the full-depth walk exists so an applied exit
 /// always cuts *something*. A drop is not evidence this op performed the exit,
 /// so a source folder a co-writer has since deleted must not escalate into a cut

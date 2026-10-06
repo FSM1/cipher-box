@@ -662,23 +662,36 @@ struct ScopeExit {
     /// snapshot root, because an exit this op performed must rotate something
     /// ([`enclosing_scope_root`]).
     applied: Option<crate::facade::NodeId>,
-    /// What a **dropped** exit cuts: the walk's own answer alone. A drop is no
-    /// evidence this op performed the exit, so a source folder a concurrent
-    /// writer deleted must not escalate the fallback into a whole-vault cut.
+    /// What a **dropped** exit cuts: [`landed_exit`], with no fallback. A drop
+    /// is no evidence this op performed the exit, so a source folder a
+    /// concurrent writer deleted must not escalate into a whole-vault cut.
     dropped: Option<crate::facade::NodeId>,
 }
 
 impl ScopeExit {
     fn of(base: &Snapshot, op: &Op, scope_roots: &[crate::facade::NodeId]) -> Self {
-        let Some(from_parent) = op.scope_exit_source() else {
-            return Self::default();
-        };
-        let found = enclosing_scope_root(base, from_parent, scope_roots);
-        Self {
-            applied: Some(found.unwrap_or(base.root)),
-            dropped: found,
-        }
+        let dropped = op.relocation().and_then(|(from_parent, new_parent, _)| {
+            landed_exit(base, from_parent, new_parent, scope_roots)
+        });
+        let applied = op.scope_exit_source().map(|from_parent| {
+            enclosing_scope_root(base, from_parent, scope_roots).unwrap_or(base.root)
+        });
+        Self { applied, dropped }
     }
+}
+
+/// The interior scope root a relocation that already landed left, derived from
+/// the scope roots listed now and not from the crossing the op journaled: a
+/// grant minted after the journal entry still owes its cut (ADR 0045 D1).
+pub(crate) fn landed_exit(
+    base: &Snapshot,
+    from_parent: crate::facade::NodeId,
+    new_parent: crate::facade::NodeId,
+    scope_roots: &[crate::facade::NodeId],
+) -> Option<crate::facade::NodeId> {
+    let source =
+        enclosing_scope_root(base, from_parent, scope_roots).filter(|root| *root != base.root)?;
+    (enclosing_scope_root(base, new_parent, scope_roots) != Some(source)).then_some(source)
 }
 
 /// The listed scope root at or above `node`, walking it and then its ancestors

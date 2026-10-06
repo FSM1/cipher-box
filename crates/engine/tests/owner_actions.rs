@@ -69,7 +69,8 @@ use cipherbox_engine::sync::owed_rotation::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
-    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_scoped_key, owner_tag,
+    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, doomed_journal_key,
+    owner_scoped_key, owner_tag,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
@@ -7600,6 +7601,72 @@ fn a_relink_the_grant_overtook_still_re_seals_and_cuts() {
         before + 1,
         "and that scope was cut, off the plane the pass proved rather than the \
          crossing the op carries"
+    );
+}
+
+/// The same overtaken relink, with the device stopped after the source-remove
+/// confirms and before the crossing commits. On resume the op leaves the queue
+/// with no publish left to prove the planes from, so the crossing is derived
+/// again from the scope roots the resumed session proves.
+#[test]
+fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("an intra-scope relink queues");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "the grant leaves the relink queued as it was journaled"
+    );
+    converge_into_granted_scope(&fx, holiday);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    let mark = owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET));
+    let staging = fx.owner_device.staging_store.inner();
+    staging.park_after_staged_write(&mark);
+    for _ in 0..2 {
+        if !staging.holds_parked_write() {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+    }
+    assert!(
+        staging.holds_parked_write(),
+        "the source-remove confirmed and the pass stopped at its mark"
+    );
+    // The stop: the pass and its session go, and the device boots again.
+    fx._tasks.clear();
+    staging.release_parked_write();
+    let (engine, _events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.engine = engine;
+    fx._tasks = tasks;
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "the stop came before the cut"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the resumed session dropped the published relink"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and still cut the scope it left"
     );
 }
 
