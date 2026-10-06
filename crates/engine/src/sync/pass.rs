@@ -79,7 +79,7 @@ use crate::sync::rebase::{DropReason, QueueScanMemo, enclosing_scope_root, repla
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::render::BaseSnapshot;
-use crate::sync::staleness::observe_pin;
+use crate::sync::staleness::PinPass;
 use crate::sync::tick::{
     ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, focus_scope_roots, nodes_in_scope,
@@ -133,8 +133,7 @@ struct Pass {
     contact_label_seed: SecretBytes,
     bin_keys: Rc<BinIndexKeys>,
     settings_signer: Rc<Ed25519Signer>,
-    /// The root adopt reconciled: the signal that tells a withheld-update
-    /// hold from an outage.
+    /// The root adopt reconciled ([`PinPass::root_reconciled`]).
     root_reconciled: bool,
 }
 
@@ -807,6 +806,12 @@ where
         let mut folder_verdict = RefreshVerdict::Reconciled;
         let mut attempted_files: Vec<NodeId> = Vec::new();
         let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
+        let pins = PinPass {
+            now: pass.now,
+            root_reconciled: pass.root_reconciled,
+            profile: &self.seams.profile,
+            events: &self.seams.events,
+        };
         let scopes = ScopeSets {
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
@@ -892,27 +897,7 @@ where
             };
             let mut settle = |nodes: &[NodeId], report: FolderRefreshReport| {
                 for (name, read) in &report.pins {
-                    let mut pin = state.withheld_pins.borrow().get(name).copied();
-                    if observe_pin(
-                        &mut pin,
-                        *read,
-                        pass.now,
-                        true,
-                        pass.root_reconciled,
-                        &self.seams.profile,
-                    ) {
-                        let _ = self
-                            .seams
-                            .events
-                            .unbounded_send(Event::WithheldUpdateEscalation {
-                                ipns_name: name.clone(),
-                            });
-                    }
-                    let mut pins = state.withheld_pins.borrow_mut();
-                    match pin {
-                        Some(pin) => pins.insert(name.clone(), pin),
-                        None => pins.remove(name),
-                    };
+                    pins.observe_in(&mut state.withheld_pins.borrow_mut(), name, *read, true);
                     read_pins.insert(name.clone());
                 }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(

@@ -13,7 +13,11 @@
 //! is not mere staleness — it is a targeted stale-view pin (it also covers the
 //! pointer-plane network-suppression residual, #38 D2).
 
-use crate::facade::Staleness;
+use std::collections::BTreeMap;
+
+use futures_channel::mpsc;
+
+use crate::facade::{Event, Staleness};
 use crate::profile::SyncTimingProfile;
 use crate::seams::UnixMillis;
 use crate::sync::tick::elapsed_at_least;
@@ -125,7 +129,7 @@ pub(crate) enum PinRead {
 
 /// Fold one pass's `read` of a name into its `pin`, and answer whether the
 /// escalation goes out now: one time per hold, under [`withheld_escalation`].
-pub(crate) fn observe_pin(
+fn observe_pin(
     pin: &mut Option<WithheldPin>,
     read: PinRead,
     now: UnixMillis,
@@ -157,6 +161,57 @@ pub(crate) fn observe_pin(
     }
     held.escalated = true;
     true
+}
+
+/// What one pass folds every withheld-update hold under.
+pub(crate) struct PinPass<'a> {
+    pub(crate) now: UnixMillis,
+    /// Whether the vault root resolve of this pass reconciled, which tells a
+    /// targeted hold from an outage.
+    pub(crate) root_reconciled: bool,
+    pub(crate) profile: &'a SyncTimingProfile,
+    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+}
+
+impl PinPass<'_> {
+    /// Fold `read` of `name` into `pin`, and send the escalation for `name`
+    /// when it is due.
+    pub(crate) fn observe(
+        &self,
+        pin: &mut Option<WithheldPin>,
+        name: &[u8],
+        read: PinRead,
+        is_shared_scope: bool,
+    ) {
+        if observe_pin(
+            pin,
+            read,
+            self.now,
+            is_shared_scope,
+            self.root_reconciled,
+            self.profile,
+        ) {
+            let _ = self.events.unbounded_send(Event::WithheldUpdateEscalation {
+                ipns_name: name.to_vec(),
+            });
+        }
+    }
+
+    /// [`Self::observe`] on the hold that `pins` keeps for `name`.
+    pub(crate) fn observe_in(
+        &self,
+        pins: &mut BTreeMap<Vec<u8>, WithheldPin>,
+        name: &[u8],
+        read: PinRead,
+        is_shared_scope: bool,
+    ) {
+        let mut pin = pins.get(name).copied();
+        self.observe(&mut pin, name, read, is_shared_scope);
+        match pin {
+            Some(pin) => pins.insert(name.to_vec(), pin),
+            None => pins.remove(name),
+        };
+    }
 }
 
 #[cfg(test)]

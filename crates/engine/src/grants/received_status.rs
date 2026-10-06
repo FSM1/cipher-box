@@ -45,7 +45,7 @@ use crate::seams::{
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
-use crate::sync::staleness::{PinRead, WithheldPin, observe_pin};
+use crate::sync::staleness::{PinPass, PinRead, WithheldPin};
 use crate::sync::tick::{ResolveMode, on_access_refresh_due};
 
 use super::accept::ReceivedShareStore;
@@ -398,8 +398,7 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     /// How this pass paces its re-resolves
     /// ([`refresh`](ReceivedShareStatus::refresh)).
     pub mode: ResolveMode,
-    /// Whether the vault root resolve of this pass reconciled, which tells a
-    /// targeted hold from an outage.
+    /// [`PinPass::root_reconciled`].
     pub root_reconciled: bool,
 }
 
@@ -492,7 +491,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let (pointers, heals) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
-        self.observe_pointer_pins(&received, &pointers, render, now, profile);
+        let pins = PinPass {
+            now,
+            root_reconciled: self.root_reconciled,
+            profile,
+            events: render.events,
+        };
+        self.observe_pointer_pins(&received, &pointers, render, &pins);
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
             received.heal_root_name(&key, root.clone());
@@ -529,14 +534,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             // the last verdict.
             let pointer = pointers.get(&key).copied();
             let unread = |pin: &mut Option<WithheldPin>| {
-                observe_pin(
-                    pin,
-                    PinRead::Unread,
-                    now,
-                    false,
-                    self.root_reconciled,
-                    profile,
-                );
+                pins.observe(pin, &share.scope_root_name, PinRead::Unread, false);
             };
             if !scheduled.contains(&key) || pointer == Some(PointerVerdict::Unavailable) {
                 if let Some(mut held) = held {
@@ -674,13 +672,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             } else {
                 PinRead::Unread
             };
-            if observe_pin(&mut pin, read, now, grafted, self.root_reconciled, profile) {
-                let _ = render
-                    .events
-                    .unbounded_send(Event::WithheldUpdateEscalation {
-                        ipns_name: share.scope_root_name.clone(),
-                    });
-            }
+            pins.observe(&mut pin, &share.scope_root_name, read, grafted);
             refreshed.insert(
                 key,
                 ReceivedVerdict {
@@ -787,8 +779,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         received: &ReceivedSharesList,
         pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
         render: &ScopeRender<'_>,
-        now: UnixMillis,
-        profile: &SyncTimingProfile,
+        pass: &PinPass<'_>,
     ) {
         let mut pins = render.pointer_pins.borrow_mut();
         let mut live = BTreeSet::new();
@@ -808,18 +799,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 &render.own_descendants.borrow(),
                 &share.scope_id,
             );
-            let mut pin = pins.get(&name).copied();
-            if observe_pin(&mut pin, read, now, shared, self.root_reconciled, profile) {
-                let _ = render
-                    .events
-                    .unbounded_send(Event::WithheldUpdateEscalation {
-                        ipns_name: name.clone(),
-                    });
-            }
-            match pin {
-                Some(pin) => pins.insert(name.clone(), pin),
-                None => pins.remove(&name),
-            };
+            pass.observe_in(&mut pins, &name, read, shared);
             live.insert(name);
         }
         pins.retain(|name, _| live.contains(name));

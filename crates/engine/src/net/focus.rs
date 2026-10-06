@@ -45,7 +45,7 @@ pub(crate) struct FolderRefreshReport {
     /// not author, which the owner's engine adopts into the bin.
     pub(crate) departed: Vec<UnlinkedChild>,
     /// On a grafted leg, each name whose read a withheld-update hold folds
-    /// in ([`observe_pin`](crate::sync::staleness::observe_pin)).
+    /// in ([`PinPass`](crate::sync::staleness::PinPass)).
     pub(crate) pins: Vec<(Vec<u8>, PinRead)>,
 }
 
