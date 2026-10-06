@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::SeamResult;
+use crate::sync::kept_op::is_kept_op_key;
 
 /// Store-assigned identifier of one queued op. Strictly increasing per
 /// store, never reused — enqueue order is FIFO order.
@@ -114,9 +115,11 @@ pub trait StagingStore {
 ///
 /// Only the methods that change which ops are queued count. Staged bytes
 /// are not an operand of the state law, and a live write handle churns them.
+/// Kept-op writes have their own count: [`QueueGeneration::kept_generation`].
 pub struct QueueGenerationStore<S> {
     seam: S,
     generation: Rc<Cell<u64>>,
+    kept_generation: Rc<Cell<u64>>,
 }
 
 impl<S> QueueGenerationStore<S> {
@@ -125,6 +128,7 @@ impl<S> QueueGenerationStore<S> {
         Self {
             seam,
             generation: Rc::new(Cell::new(0)),
+            kept_generation: Rc::new(Cell::new(0)),
         }
     }
 
@@ -136,12 +140,30 @@ impl<S> QueueGenerationStore<S> {
         &self.seam
     }
 
-    /// Counts one mutation. Charged before the store is asked, so a refusal
-    /// that changed the queue anyway is still counted — an extra render costs
-    /// time, a missed one serves a view that never existed.
+    /// Counts one mutation. Charged before and after the store is asked, so a
+    /// refusal that changed the queue anyway is still counted, and a read that
+    /// keys itself mid-write is not served again — an extra render costs time,
+    /// a missed one serves a view that never existed.
     fn mutating(&self) {
         self.generation.set(self.generation.get().wrapping_add(1));
     }
+
+    /// Counts one write at `staging_key` if it holds the published-op mark or
+    /// the kept-op notes, charged as [`Self::mutating`] is.
+    fn staged_write(&self, staging_key: &[u8]) {
+        if is_kept_op_key(staging_key) {
+            self.kept_generation
+                .set(self.kept_generation.get().wrapping_add(1));
+        }
+    }
+}
+
+/// Runs `call` between two charges, as [`QueueGenerationStore::mutating`] says.
+async fn charged<F: Future>(charge: impl Fn(), call: impl FnOnce() -> F) -> F::Output {
+    charge();
+    let done = call().await;
+    charge();
+    done
 }
 
 impl<S: Clone> Clone for QueueGenerationStore<S> {
@@ -149,6 +171,7 @@ impl<S: Clone> Clone for QueueGenerationStore<S> {
         Self {
             seam: self.seam.clone(),
             generation: self.generation.clone(),
+            kept_generation: self.kept_generation.clone(),
         }
     }
 }
@@ -159,23 +182,30 @@ impl<S: Clone> Clone for QueueGenerationStore<S> {
 pub trait QueueGeneration {
     /// How many queue mutations this store has been asked for.
     fn generation(&self) -> u64;
+
+    /// How many writes of the published-op mark or the kept-op notes this
+    /// store has been asked for: they decide which queued ops are kept
+    /// (ADR 0069 D7), and they are not queue mutations.
+    fn kept_generation(&self) -> u64;
 }
 
 impl<S> QueueGeneration for QueueGenerationStore<S> {
     fn generation(&self) -> u64 {
         self.generation.get()
     }
+
+    fn kept_generation(&self) -> u64 {
+        self.kept_generation.get()
+    }
 }
 
 impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
-        self.mutating();
-        self.seam.enqueue_op(op).await
+        charged(|| self.mutating(), || self.seam.enqueue_op(op)).await
     }
 
     async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
-        self.mutating();
-        self.seam.enqueue_ops(ops).await
+        charged(|| self.mutating(), || self.seam.enqueue_ops(ops)).await
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
@@ -183,12 +213,15 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
     }
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
-        self.mutating();
-        self.seam.remove_op(op_id).await
+        charged(|| self.mutating(), || self.seam.remove_op(op_id)).await
     }
 
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
-        self.seam.put_staged_bytes(staging_key, bytes).await
+        charged(
+            || self.staged_write(staging_key),
+            || self.seam.put_staged_bytes(staging_key, bytes),
+        )
+        .await
     }
 
     async fn staged_bytes(&self, staging_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
@@ -196,7 +229,11 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
     }
 
     async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {
-        self.seam.remove_staged_bytes(staging_key).await
+        charged(
+            || self.staged_write(staging_key),
+            || self.seam.remove_staged_bytes(staging_key),
+        )
+        .await
     }
 
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
@@ -208,8 +245,7 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
     }
 
     async fn clear(&self) -> SeamResult<()> {
-        self.mutating();
-        self.seam.clear().await
+        charged(|| self.mutating(), || self.seam.clear()).await
     }
 }
 
@@ -263,6 +299,25 @@ mod tests {
         block_on(store.remove_staged_bytes(b"key")).expect("remove");
 
         assert_eq!(store.generation(), start);
+    }
+
+    #[test]
+    fn only_a_kept_op_key_moves_the_kept_generation() {
+        use crate::sync::drain::PUBLISHED_OP_MARK_PREFIX;
+        use crate::sync::kept_op::KEPT_OP_NOTES_PREFIX;
+
+        let store = counted();
+        block_on(store.put_staged_bytes(b"block", b"bytes")).expect("put");
+        assert_eq!(store.kept_generation(), 0);
+
+        for prefix in [PUBLISHED_OP_MARK_PREFIX, KEPT_OP_NOTES_PREFIX] {
+            let before = store.kept_generation();
+            block_on(store.put_staged_bytes(prefix, b"bytes")).expect("put");
+            let put = store.kept_generation();
+            block_on(store.remove_staged_bytes(prefix)).expect("remove");
+            assert_ne!(put, before);
+            assert_ne!(store.kept_generation(), put);
+        }
     }
 
     #[test]

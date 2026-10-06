@@ -5893,6 +5893,7 @@ impl<T: SeamTypes> Engine<T> {
         *self.state.snapshot.borrow_mut() = Snapshot::new(root);
         self.render_memo.borrow_mut().clear();
         self.state.queue_scan.borrow_mut().clear();
+        self.state.pending_scan.borrow_mut().clear();
 
         self.seams.credential_store.clear_refresh_token().await
     }
@@ -10881,7 +10882,10 @@ where {
     pub async fn status(&self) -> Result<SessionStatus, EngineError> {
         self.live_session()?;
         // Every `RefCell` read happens after the await, so no borrow spans it.
-        let retained_records = self.scan_queue().await?.retained;
+        // A kept op is never a retained record, so the unfiltered scan answers.
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let reader = RecordReader::new(session.enc_subkey());
+        let retained_records = self.durable_scan(&reader).await?.retained;
         Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
             queue_hold: *self.state.queue_hold.borrow(),
@@ -11961,6 +11965,13 @@ where {
             .0
     }
 
+    /// The memoized queue scan, kept ops included.
+    async fn durable_scan(&self, reader: &RecordReader<'_>) -> Result<QueueScan, EngineError> {
+        memoized_scan(&self.seams.staging_store, reader, &self.state.queue_scan)
+            .await
+            .map_err(EngineError::from_seam)
+    }
+
     /// Scan the durable staging store's queue for this session. Undecodable
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
@@ -11971,12 +11982,21 @@ where {
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        let mut scan = memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
-            .await
-            .map_err(EngineError::from_seam)?;
+        let staging = &self.seams.staging_store;
+        // Both generations are read before the reads they key.
+        let key = (
+            QueueKey::new(&reader, staging.generation()),
+            staging.kept_generation(),
+        );
+        let hit = self.state.pending_scan.borrow().hit(&key).cloned();
+        if let Some(scan) = hit {
+            return Ok(scan);
+        }
+        let mut scan = self.durable_scan(&reader).await?;
         self.retain_pending_ops(session, &mut scan.mine)
             .await
             .map_err(EngineError::from_seam)?;
+        self.state.pending_scan.borrow_mut().fill(key, scan.clone());
         Ok(scan)
     }
 
@@ -16984,6 +17004,10 @@ mod tests {
         /// and every path that moves either operand of the state law ends it.
         mod render_memo {
             use super::*;
+            use crate::sync::drain::PUBLISHED_OP_MARK_PREFIX;
+            use crate::sync::kept_op::{
+                KEPT_OP_NOTES_PREFIX, KeptNote, KeptNotes, store_kept_notes,
+            };
 
             /// Names the memo cannot serve without re-rendering.
             fn names(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<String> {
@@ -17082,6 +17106,106 @@ mod tests {
                 block_on(engine.command(Command::Logout)).unwrap();
 
                 assert!(engine.state.queue_scan.borrow().hit(&key).is_none());
+            }
+
+            /// A read of the queue that the filter memo serves reads neither
+            /// the published-op mark nor the kept-op notes.
+            #[test]
+            fn the_kept_op_filter_is_read_once_between_two_writes() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+                block_on(engine.snapshot(root)).unwrap();
+
+                engine
+                    .seams
+                    .staging_store
+                    .inner()
+                    .fail_staged_reads_under(KEPT_OP_NOTES_PREFIX);
+
+                assert!(block_on(engine.snapshot(root)).is_ok());
+                assert!(block_on(engine.status()).is_ok());
+            }
+
+            /// `change` moves one operand of the kept-op filter after a read
+            /// filled its memo. The next read must see the queued op as kept.
+            fn a_kept_op_filter_write_ends_the_memo(
+                change: impl FnOnce(&Engine<FakeSeamTypes>, &X25519Secret, OpId),
+            ) {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+                let queued = block_on(engine.seams.staging_store.queued_ops()).unwrap();
+                let (op_id, _) = *queued.first().expect("the create is queued");
+                assert_eq!(child_names(&engine, root), vec!["notes.txt"]);
+
+                let enc_subkey = cipherbox_core::kdf::enc_subkey(&[7u8; 32]);
+                change(&engine, &enc_subkey, op_id);
+
+                assert!(
+                    child_names(&engine, root).is_empty(),
+                    "the kept op leaves the render"
+                );
+            }
+
+            /// The children `snapshot` renders, which reads the queue past
+            /// the render memo.
+            fn child_names(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<String> {
+                block_on(engine.snapshot(folder))
+                    .unwrap()
+                    .children
+                    .into_iter()
+                    .map(|child| child.name)
+                    .collect()
+            }
+
+            #[test]
+            fn a_raised_published_op_mark_ends_the_filter_memo() {
+                a_kept_op_filter_write_ends_the_memo(|engine, enc_subkey, op_id| {
+                    block_on(engine.seams.staging_store.put_staged_bytes(
+                        &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, enc_subkey),
+                        &op_id.0.to_be_bytes(),
+                    ))
+                    .unwrap();
+                });
+            }
+
+            #[test]
+            fn a_written_kept_op_note_ends_the_filter_memo() {
+                a_kept_op_filter_write_ends_the_memo(|engine, enc_subkey, op_id| {
+                    let mut notes = KeptNotes::default();
+                    notes.insert(
+                        op_id,
+                        KeptNote {
+                            scope: None,
+                            write_epoch: 0,
+                            published_at: UnixMillis(0),
+                        },
+                    );
+                    block_on(store_kept_notes(
+                        &engine.seams.staging_store,
+                        BookkeepingSeal::new(enc_subkey, &*engine.entropy),
+                        enc_subkey,
+                        &notes,
+                    ))
+                    .unwrap();
+                });
+            }
+
+            /// The filter memo is keyed on the queue generation too: a queue
+            /// that turns over while the mark and the notes stand is read again.
+            #[test]
+            fn a_queue_mutation_ends_the_filter_memo() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "first.txt", NodeKind::File);
+                assert_eq!(child_names(&engine, root), vec!["first.txt"]);
+
+                create(&mut engine, root, "second.txt", NodeKind::File);
+
+                let mut names = child_names(&engine, root);
+                names.sort();
+                assert_eq!(names, vec!["first.txt", "second.txt"]);
             }
 
             #[test]

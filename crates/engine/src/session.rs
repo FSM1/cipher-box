@@ -55,7 +55,7 @@ use crate::sync::drain::{BookkeepingCursors, CaptureProofs, DrainCells, QueueHol
 use crate::sync::model::Snapshot;
 use crate::sync::owed_rotation::OwedCell;
 use crate::sync::project::UnlinkedChild;
-use crate::sync::rebase::QueueScanMemo;
+use crate::sync::rebase::{PendingScanMemo, QueueScanMemo};
 use crate::sync::render::BaseSnapshot;
 use crate::sync::staging::LiveBlocks;
 use crate::sync::staleness::WithheldPin;
@@ -470,6 +470,8 @@ pub(crate) struct SessionState {
     /// Memo of the durable queue scan every read renders through
     /// ([`scan_queue`](crate::facade::Engine::scan_queue)).
     pub(crate) queue_scan: Rc<RefCell<QueueScanMemo>>,
+    /// The same scan with its kept ops dropped, which every render reads.
+    pub(crate) pending_scan: Rc<RefCell<PendingScanMemo>>,
     /// The drain's held queue head, written by the drain tick and read by
     /// [`snapshot`](crate::facade::Engine::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own verdict rather than trusting a stale one.
@@ -644,6 +646,7 @@ impl SessionState {
             unfinished_write_cuts: Rc::new(RefCell::new(BTreeSet::new())),
             dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
             queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
+            pending_scan: Rc::new(RefCell::new(PendingScanMemo::default())),
             queue_hold: Rc::new(RefCell::new(None)),
             pending_reclaim: Rc::new(Cell::new(0)),
             reclaim_stalls: Rc::new(RefCell::new(Vec::new())),

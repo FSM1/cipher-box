@@ -146,6 +146,11 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
         Some((&seed.seed, Some(seed.stamp)))
     }
 
+    /// The scope the child must be sealed under.
+    pub(crate) fn scope_id(&self) -> [u8; 16] {
+        self.scope_id
+    }
+
     /// The scope whose seed opened the last record this adopter admitted.
     pub(crate) fn opened_scope(&self) -> Option<[u8; 16]> {
         self.opened_scope.get()

@@ -11303,6 +11303,173 @@ fn an_op_with_a_note_and_no_mark_stays_kept_across_a_restart() {
     );
 }
 
+/// A restart while the root record is dark paints the last-known-good root. A
+/// kept op stays out of the render, so without that paint the folder it created
+/// is in neither plane and everything below it falls outside the vault.
+#[test]
+fn a_kept_create_renders_after_a_restart_with_a_dark_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let kept = {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        let kept = create(&mut engine, "deep");
+        tick(&world, &engine, &mut tasks);
+        let deep = child_id(&engine, ROOT, "deep");
+        create_under(&mut engine, deep, "deeper");
+        kept
+    };
+    drop(world.scheduler.take_spawned_tasks());
+    assert!(raw_queue_holds(&alice, kept), "the create of deep is kept");
+
+    let root = write_name(ROOT);
+    world.record_store.fail_get_for(root.as_str());
+    let (mut restarted, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    let deep = child_id(&restarted, ROOT, "deep");
+    let deeper = child_id(&restarted, deep, "deeper");
+    let view = block_on(restarted.snapshot(deeper)).expect("deeper renders");
+    assert!(!view.received_share, "deeper still reaches the vault root");
+    let write = block_on(restarted.command(Command::Create {
+        parent: deep,
+        name: "inside.bin".into(),
+        kind: NodeKind::File,
+    }));
+    assert!(write.is_ok(), "a write into deep is accepted: {write:?}");
+
+    tick(&world, &restarted, &mut tasks);
+    assert!(
+        raw_queue_holds(&alice, kept),
+        "the paint does not change when a kept op leaves"
+    );
+    world.record_store.heal_get_for(root.as_str());
+    let_kept_ops_leave(&world, &restarted, &mut tasks);
+    assert!(
+        !raw_queue_holds(&alice, kept),
+        "the kept op leaves at its bound"
+    );
+}
+
+/// The same paint holds with no kept op in the queue.
+#[test]
+fn a_restart_with_a_dark_root_paints_the_last_known_good_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        create(&mut engine, "deep");
+        let_kept_ops_leave(&world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(queued(&alice), 0, "no op is kept");
+
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    let (mut restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    let deep = child_id(&restarted, ROOT, "deep");
+    let write = block_on(restarted.command(Command::Create {
+        parent: deep,
+        name: "inside.bin".into(),
+        kind: NodeKind::File,
+    }));
+    assert!(write.is_ok(), "a write into deep is accepted: {write:?}");
+}
+
+/// Alice's device after one session that created and published `deep`.
+fn alice_with_published_deep(world: &FakeWorld, blocks: &Blocks) -> FakeDevice {
+    let alice = world.device(b"alice");
+    {
+        let (mut engine, _events, mut tasks) = boot(world, blocks, &alice, 42);
+        create(&mut engine, "deep");
+        tick(world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+    alice
+}
+
+/// A local fault on the read of the owner seed cache means no copy: the dark
+/// start still runs, with nothing painted.
+#[test]
+fn a_dark_restart_with_an_unreadable_owner_seed_cache_still_starts() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = alice_with_published_deep(&world, &blocks);
+
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    alice
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(OWNER_SEED_CACHE_PREFIX);
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    let root = block_on(restarted.snapshot(ROOT)).expect("the root renders");
+    assert!(
+        root.children.iter().all(|child| child.name != "deep"),
+        "the faulted cache paints nothing"
+    );
+}
+
+/// One endpoint fails and the others serve a replay below the floor, which
+/// reads as unavailable (ADR 0071 D1). The start paints the confirmed copy and
+/// the sequence floor stays where it was.
+#[test]
+fn a_restart_that_reads_a_replay_beside_a_failed_endpoint_paints_the_confirmed_copy() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let seeded = root_record(&world, 0);
+    let alice = alice_with_published_deep(&world, &blocks);
+    let floor = || {
+        block_on(
+            alice
+                .floors(&SECRET)
+                .sequence_floor(root_name.as_str().as_bytes()),
+        )
+        .expect("the floor reads")
+    };
+    let before = floor();
+
+    let endpoints = world.record_store.endpoints();
+    world
+        .record_store
+        .fail_get_at_for(&endpoints[0], root_name.as_str());
+    for endpoint in &endpoints[1..] {
+        world
+            .record_store
+            .seed_record(endpoint, root_name.as_str(), seeded.clone());
+    }
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    child_id(&restarted, ROOT, "deep");
+    assert_eq!(floor(), before, "the sequence floor does not move down");
+}
+
+/// A root that every endpoint serves as a replay below the floor is a refusal,
+/// and the paint of a dark root does not hide it.
+#[test]
+fn a_restart_that_reads_a_replayed_root_is_still_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let seeded = root_record(&world, 0);
+    let alice = alice_with_published_deep(&world, &blocks);
+
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), seeded.clone());
+    }
+    serve_http(&alice, &blocks, 400);
+    let (mut restarted, _events) = engine_on(&alice, 43);
+    match block_on(restarted.start(secret(), None)) {
+        Err(EngineError::ColdStart { message }) => assert!(
+            message.contains("adoption gate rejected"),
+            "the start fails at the root gate: {message}"
+        ),
+        other => panic!("expected a root gate refusal, got {other:?}"),
+    }
+}
+
 /// A restore ends at the bin index, not at a record publish, so it raises no
 /// mark. It completes when it lands and does not run again.
 #[test]

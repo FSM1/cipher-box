@@ -119,8 +119,7 @@ pub use net::{
     AdoptOutcome, Adopter, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, OrphanHeads,
     PreflightError, PublishError, PublishOutcome, PublishRequest, RePutResult, ReclaimPass,
     ReclaimStall, ReclaimStallReason, RecordPointerFetch, RecordPublishError, ResolveOutcome,
-    Resolved, ReviveError, ReviveRequest, RootAdopter, StagingRetireLedger, observed_at, publish,
-    resolve, revive,
+    Resolved, RootAdopter, StagingRetireLedger, observed_at, publish, resolve,
 };
 pub use profile::SyncTimingProfile;
 pub use record_plane::{BinIndexHoldCheck, DefaultsReason, LapsedHead, Unopened};

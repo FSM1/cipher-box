@@ -44,7 +44,14 @@ pub mod register;
 pub mod renewal_walk;
 pub mod resolve;
 pub mod retire;
-pub mod revival;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the session-start and walk callers are not landed"
+    )
+)]
+pub(crate) mod revival;
 pub mod rotation;
 
 pub use adopter::{LocalHead, RootAdopter};
@@ -81,7 +88,6 @@ pub use retire::{
     RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason, StagingRetireLedger,
     drain_owed_retires, orphaned_head, retire, root_retire_ready,
 };
-pub use revival::{ReviveError, ReviveRequest, revive};
 pub(crate) use rotation::{
     DescendantScopeRoot, ScopePointerEnrolment, ScopePointerMint, ScopeWalk, WalkFailure,
     WritePlaneDark, enrol_owned_scope_pointers,

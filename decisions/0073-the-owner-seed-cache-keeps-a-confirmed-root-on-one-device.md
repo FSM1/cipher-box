@@ -40,6 +40,8 @@ The owner rotation uses `RootFallback::last_copy`: it moves the root first,
 publishes nothing at the old name, and keeps no grant row (ADR 0068 D3 and D5).
 It does not adopt or renew the refused record. This protects one device that
 retains its store. The vault record for all owner devices is not landed.
+Amended on 2026-10-06 by FSM1/cipher-box#2344: a cold start whose root resolve
+reads as unavailable also opens the cached copy, at the current floors.
 
 ## Alternatives considered
 
