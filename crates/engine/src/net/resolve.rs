@@ -25,7 +25,7 @@ use super::liveness::{HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue}
 use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
 use crate::facade::NodeId;
 use crate::gate::floor::PendingSequenceRaise;
-use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
+use crate::gate::{Adopted, Committed, GateError, GateRejection, PendingAdoption, RejectionReason};
 use crate::grants::grafted::FloorNamespace;
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
@@ -54,7 +54,7 @@ pub trait Adopter {
     /// it: discarding the advance instead would cache the record under stale
     /// cut-epoch, read-epoch and sequence floors, and leave a replay of an older
     /// valid record above every bar this pass was to raise.
-    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, SeamError> {
+    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Committed, SeamError> {
         Err(SeamError::new(
             "a deferred gate pass reached an adopter that commits no floor",
         ))
@@ -71,7 +71,7 @@ pub trait Adopter {
     async fn commit_sequence_adoption(
         &self,
         _pending: PendingSequenceRaise,
-    ) -> Result<Adopted, SeamError> {
+    ) -> Result<Committed, SeamError> {
         Err(SeamError::new(
             "a deferred sequence raise reached an adopter that commits no floor",
         ))
@@ -342,6 +342,8 @@ pub(crate) struct GatedResolve {
     /// The `NoUpdate` is a record below the sequence floor while an endpoint
     /// failed (ADR 0071 D1), not an outage.
     pub(crate) withheld: bool,
+    /// The sequence floor an `Adopted` commit left ([`Committed::floor`]).
+    pub(crate) committed_floor: Option<u64>,
 }
 
 /// What one arm of the gate match yields beside its outcome. Named because four
@@ -355,6 +357,7 @@ struct GatedParts {
     observed: Option<Result<Observed, PublishError>>,
     envelope: Option<HeldEnvelope>,
     fork: Option<Fork>,
+    committed_floor: Option<u64>,
 }
 
 /// Whether a gate refusal reads as unavailable: the sequence stage refused a
@@ -412,16 +415,20 @@ where
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
-                let adopted = keep_then_commit(snapshot_cache, name, &bytes, async {
-                    match pass {
-                        GatePass::Deferred(pending) => adopter.commit_adoption(pending).await,
-                        GatePass::DeferredSequence(pending) => {
-                            adopter.commit_sequence_adoption(pending).await
+                let Committed { adopted, floor } =
+                    keep_then_commit(snapshot_cache, name, &bytes, async {
+                        match pass {
+                            GatePass::Deferred(pending) => adopter.commit_adoption(pending).await,
+                            GatePass::DeferredSequence(pending) => {
+                                adopter.commit_sequence_adoption(pending).await
+                            }
+                            GatePass::Advanced(adopted) => Ok(Committed {
+                                floor: Some(adopted.sequence),
+                                adopted,
+                            }),
                         }
-                        GatePass::Advanced(adopted) => Ok(adopted),
-                    }
-                })
-                .await?;
+                    })
+                    .await?;
                 let observed = Some(Observed::gated(name, adopted.sequence, version, &bytes));
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
@@ -446,6 +453,7 @@ where
                             namespace: FloorNamespace::Own,
                         }),
                         fork,
+                        committed_floor: floor,
                     },
                 )
             }
@@ -498,6 +506,7 @@ where
                                 }),
                                 current_at_floor: Some(material.at_floor),
                                 fork: None,
+                                committed_floor: None,
                             });
                             (
                                 ResolveOutcome::Current {
@@ -552,6 +561,7 @@ where
         observed,
         envelope,
         fork,
+        committed_floor,
     } = parts;
 
     Ok(GatedResolve {
@@ -570,6 +580,7 @@ where
         observed,
         envelope,
         withheld,
+        committed_floor,
     })
 }
 
@@ -634,6 +645,7 @@ where
         held_record,
         read_scope_seed,
         envelope,
+        committed_floor,
         ..
     } = resolve_gated(transport, snapshot_cache, adopter, name, mode).await?;
     let write_scope_seed = adopt_hold.clone();
@@ -647,6 +659,13 @@ where
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
     // A record with no envelope rule has nothing to gate its renewal on.
     if let (Some((verified, record_bytes)), Some(envelope)) = (held_record, envelope) {
+        // The exact-floor renewal refuses an adopt whose floor is not its
+        // sequence.
+        if matches!(resolved.outcome, ResolveOutcome::Adopted(_))
+            && committed_floor != Some(verified.sequence)
+        {
+            return Ok(done(resolved));
+        }
         // Renew under the record's own adopted head CID, not a caller-supplied
         // one: it comes from the signed `/ipfs/<cid>` value. A gate-passing
         // record always carries a valid value; if it does not, skip the hold
@@ -677,9 +696,17 @@ where
             return Ok(done(resolved));
         }
         let mut held = held.borrow_mut();
+        let key = HeldKey::Node(node_id);
+        // A pass that completes late never replaces a newer held record.
+        if held
+            .get(&key)
+            .and_then(|prior| super::fork::verified(name, &prior.record_bytes))
+            .is_some_and(|prior| prior.sequence > verified.sequence)
+        {
+            return Ok(done(resolved));
+        }
         // The drain is the only source of a head's held content CIDs, so a
         // re-hold carries the set forward rather than wiping it.
-        let key = HeldKey::Node(node_id);
         let content_cids = held
             .remove(&key)
             .filter(|prior| prior.head_cid() == Some(head_cid.as_str()))
@@ -1197,6 +1224,84 @@ mod tests {
     fn record(signer: &Ed25519Signer, sequence: u64) -> Vec<u8> {
         let validity = eol::eol_from(UnixMillis(0));
         IpnsRecord::create_v2(signer, VALUE, sequence, TTL_NANOS, &validity).marshal()
+    }
+
+    /// [`StubAdopter`] that commits a deferred raise against a floor store.
+    struct Committing<'f> {
+        stub: StubAdopter,
+        floors: &'f crate::testkit::fakes::InMemoryFloorStore,
+    }
+
+    impl super::Adopter for Committing<'_> {
+        async fn adopt(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<super::AdoptOutcome, GateError> {
+            self.stub.adopt(name, record_bytes).await
+        }
+
+        async fn commit_sequence_adoption(
+            &self,
+            pending: PendingSequenceRaise,
+        ) -> Result<crate::gate::Committed, crate::seams::SeamError> {
+            pending.commit_for_hold(self.floors).await
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+            self.stub.probe_read_scope_seed(name, record_bytes).await
+        }
+    }
+
+    /// A raise the store did not take fails the resolve as a store fault and
+    /// holds nothing; the next resolve after a healthy raise holds the head.
+    #[test]
+    fn a_head_whose_floor_raise_fell_short_is_held_only_after_a_healthy_raise() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [9u8; 32];
+        let node_id = [7u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 1));
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+        };
+        let adopter = Committing {
+            stub: StubAdopter::new(Verdict::DeferSequence),
+            floors: &device.floor_store,
+        };
+        let resolve = || {
+            block_on(resolve_and_hold(
+                &device.record_store,
+                &device.snapshot_cache,
+                &adopter,
+                &name,
+                &held,
+                &material,
+                ResolveMode::CacheFirst,
+            ))
+        };
+
+        device
+            .floor_store
+            .under_report_sequence_raises_for(name.as_str().as_bytes());
+        assert!(resolve().is_err(), "a short raise is a store fault");
+        assert!(held.borrow().is_empty(), "the head is not enrolled");
+
+        device.floor_store.heal_floors();
+        let resolved = resolve().expect("a healthy raise resolves").resolved;
+        assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+        assert!(held.borrow().get(&HeldKey::Node(node_id)).is_some());
     }
 
     #[test]
