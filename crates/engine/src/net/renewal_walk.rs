@@ -764,6 +764,7 @@ where
                     adopted,
                     observed,
                     fork,
+                    ..
                 } = *read;
                 if let Some(fork) = fork {
                     pass.report

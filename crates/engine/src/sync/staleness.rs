@@ -100,6 +100,64 @@ pub fn withheld_escalation(
             >= crate::sync::duration_millis(profile.escalation_window)
 }
 
+/// A run of withheld reads of one name (ADR 0071 D1), from the first withheld
+/// read to the next read that reaches a record. Session memory only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WithheldPin {
+    /// The start of the window: the first withheld read, or the last pass
+    /// whose vault root did not reconcile, as only healthy time counts.
+    pub(crate) since: UnixMillis,
+    /// Whether this hold already sent its escalation.
+    pub(crate) escalated: bool,
+}
+
+/// What one pass learned about a name a hold watches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinRead {
+    /// A record below the sequence floor while an endpoint failed.
+    Withheld,
+    /// A record the read could use: the hold ends.
+    Reached,
+    /// No answer, or no read this pass: the hold stays.
+    Unread,
+}
+
+/// Fold one pass's `read` of a name into its `pin`, and answer whether the
+/// escalation goes out now: one time per hold, under [`withheld_escalation`].
+pub(crate) fn observe_pin(
+    pin: &mut Option<WithheldPin>,
+    read: PinRead,
+    now: UnixMillis,
+    is_shared_scope: bool,
+    root_reconciled: bool,
+    profile: &SyncTimingProfile,
+) -> bool {
+    let held = match (read, pin.as_mut()) {
+        (PinRead::Reached, _) => {
+            *pin = None;
+            return false;
+        }
+        (PinRead::Unread, None) => return false,
+        (PinRead::Withheld, None) => pin.insert(WithheldPin {
+            since: now,
+            escalated: false,
+        }),
+        (_, Some(held)) => held,
+    };
+    if !root_reconciled {
+        held.since = now;
+        return false;
+    }
+    if read != PinRead::Withheld
+        || held.escalated
+        || !withheld_escalation(now, held.since, is_shared_scope, true, profile)
+    {
+        return false;
+    }
+    held.escalated = true;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +309,39 @@ mod tests {
             true,
             &P
         ));
+    }
+
+    /// One hold escalates one time, after a window of passes whose vault root
+    /// reconciled; a reached record ends it.
+    #[test]
+    fn a_pin_escalates_once_per_hold_over_healthy_time() {
+        let mut pin = None;
+        let mut observe = |read, at, reconciled| {
+            observe_pin(&mut pin, read, UnixMillis(at), true, reconciled, &P)
+        };
+        assert!(!observe(PinRead::Unread, 0, true), "no read opens no hold");
+        assert!(!observe(PinRead::Withheld, 0, true));
+        assert!(
+            !observe(PinRead::Withheld, 400_000, false),
+            "an outage pass"
+        );
+        assert!(!observe(PinRead::Withheld, 999_999, true));
+        assert!(observe(PinRead::Withheld, 1_000_000, true));
+        assert!(!observe(PinRead::Withheld, 2_000_000, true), "one time");
+        assert!(!observe(PinRead::Reached, 2_000_001, true));
+        assert!(!observe(PinRead::Withheld, 2_000_002, true));
+        assert!(observe(PinRead::Withheld, 2_600_002, true), "a new hold");
+
+        let mut owned = None;
+        for at in [0, 600_000, 6_000_000] {
+            assert!(!observe_pin(
+                &mut owned,
+                PinRead::Withheld,
+                UnixMillis(at),
+                false,
+                true,
+                &P
+            ));
+        }
     }
 }

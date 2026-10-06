@@ -457,6 +457,9 @@ pub(crate) struct AdmittedChild {
     pub(crate) adopted: Adopted,
     pub(crate) observed: Result<Observed, RefusedRead>,
     pub(crate) fork: Option<Fork>,
+    /// The body is last-known-good, because the record the endpoints served
+    /// was withheld (ADR 0071 D1).
+    pub(crate) withheld: bool,
 }
 
 /// Why a child-record resolve produced no adopted body.
@@ -519,6 +522,7 @@ where
         .await
         .map_err(unavailable)?;
     let resolved = gated.resolved;
+    let withheld = gated.withheld;
     let mut fork = resolved.fork;
     let lagging = async |record_bytes: &[u8], epoch, fork| {
         let (adopted, envelope) = read_lagging(
@@ -531,7 +535,14 @@ where
             epoch,
         )
         .await?;
-        Ok(admitted_child(name, record_bytes, adopted, &envelope, fork))
+        Ok(admitted_child(
+            name,
+            record_bytes,
+            adopted,
+            &envelope,
+            fork,
+            false,
+        ))
     };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
@@ -548,6 +559,7 @@ where
                 adopted,
                 observed,
                 fork,
+                withheld: false,
             })));
         }
         ResolveOutcome::TrustViolation(rejection) => {
@@ -596,6 +608,7 @@ where
         adopted,
         &envelope,
         fork,
+        withheld,
     ))
 }
 
@@ -606,6 +619,7 @@ fn admitted_child(
     adopted: Adopted,
     envelope: &Envelope,
     fork: Option<Fork>,
+    withheld: bool,
 ) -> ChildRecord {
     let observed =
         Observed::gated(name, adopted.sequence, envelope.v, record_bytes).map_err(|error| {
@@ -618,6 +632,7 @@ fn admitted_child(
         adopted,
         observed,
         fork,
+        withheld,
     }))
 }
 

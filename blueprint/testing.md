@@ -285,11 +285,17 @@ scenario fails the meta-test):
   The withheld-update escalation bounds that hold on a shared scope: a
   received share held withheld past the escalation window, while the vault
   root resolves, sends one escalation and no trust event, and a full outage
-  sends none (`tests/owner_actions.rs`
+  sends none and does not count toward the window (`tests/owner_actions.rs`
   `a_shared_scope_withheld_past_the_window_sends_one_escalation`,
-  `a_shared_scope_withheld_in_a_full_outage_sends_no_escalation`); a read that
-  reaches a record ends the hold, a pass that reaches no record keeps it, and
-  an owned scope never escalates (`grants::received_status`).
+  `a_shared_scope_withheld_in_a_full_outage_sends_no_escalation`); a folder
+  inside a shared scope that the focus leg reads as withheld does the same,
+  a read of it that no endpoint answers sends none, and a read that reaches
+  its record ends the hold (`tests/owner_actions.rs`
+  `a_withheld_shared_child_sends_one_escalation_after_the_window`,
+  `a_shared_child_no_endpoint_answers_sends_no_escalation`,
+  `a_reached_shared_child_ends_the_hold`); a pass that reaches no record keeps
+  the hold, and an owned scope never escalates (`grants::received_status`,
+  `sync::staleness`).
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;

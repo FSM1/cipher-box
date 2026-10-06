@@ -330,6 +330,9 @@ pub(crate) struct GatedResolve {
     pub(crate) observed: Option<Result<Observed, PublishError>>,
     /// The envelope a renewal of [`Self::observed`] is gated on.
     pub(crate) envelope: Option<HeldEnvelope>,
+    /// The `NoUpdate` is a record below the sequence floor while an endpoint
+    /// failed (ADR 0071 D1), not an outage.
+    pub(crate) withheld: bool,
 }
 
 /// What one arm of the gate match yields beside its outcome. Named because four
@@ -382,6 +385,7 @@ where
 
     let fetch = fanout_get_tied_classified(transport, name).await;
     let absent = fetch.absent;
+    let mut withheld = false;
     let (fetched, tied) = match fetch.pick {
         Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
         None => (None, Vec::new()),
@@ -505,6 +509,7 @@ where
                     }
                 }
                 reason if unavailable_below_floor(reason, fetch.endpoint_failed) => {
+                    withheld = true;
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
                 _ => (
@@ -555,6 +560,7 @@ where
         absent,
         observed,
         envelope,
+        withheld,
     })
 }
 

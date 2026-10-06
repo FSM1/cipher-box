@@ -45,7 +45,7 @@ use crate::seams::{
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
-use crate::sync::staleness::withheld_escalation;
+use crate::sync::staleness::{PinRead, WithheldPin, observe_pin};
 use crate::sync::tick::{ResolveMode, on_access_refresh_due};
 
 use super::accept::ReceivedShareStore;
@@ -82,16 +82,6 @@ pub(crate) struct ReceivedVerdict {
     pub permission: Permission,
     /// The open hold on a withheld update of this scope, if one stands.
     pub withheld: Option<WithheldPin>,
-}
-
-/// A run of withheld reads of one shared scope (ADR 0071 D1), from the first
-/// withheld read to the next read that reaches a record. Session memory only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WithheldPin {
-    /// The pass that first read the scope as withheld.
-    pub since: UnixMillis,
-    /// Whether this hold already sent its escalation.
-    pub escalated: bool,
 }
 
 /// The durable bars a verdict on one bookmarked shared scope is measured
@@ -405,9 +395,9 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     /// How this pass paces its re-resolves
     /// ([`refresh`](ReceivedShareStatus::refresh)).
     pub mode: ResolveMode,
-    /// Whether this pass's other resolves reached the record plane, which
-    /// tells a targeted hold from an outage.
-    pub other_resolves_succeeding: bool,
+    /// Whether the vault root resolve of this pass reconciled, which tells a
+    /// targeted hold from an outage.
+    pub root_reconciled: bool,
 }
 
 impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F> {
@@ -534,8 +524,19 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             // through the pointer (ADR 0024 D5), so an unanswered pointer keeps
             // the last verdict.
             let pointer = pointers.get(&key).copied();
+            let unread = |pin: &mut Option<WithheldPin>| {
+                observe_pin(
+                    pin,
+                    PinRead::Unread,
+                    now,
+                    false,
+                    self.root_reconciled,
+                    profile,
+                );
+            };
             if !scheduled.contains(&key) || pointer == Some(PointerVerdict::Unavailable) {
-                if let Some(held) = held {
+                if let Some(mut held) = held {
+                    unread(&mut held.withheld);
                     refreshed.insert(key, held);
                 }
                 continue;
@@ -554,13 +555,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                         link_class(ResolutionClass::Unresolvable, hold.deadline, now)
                     }
                 };
+                let mut withheld = held.and_then(|held| held.withheld);
+                unread(&mut withheld);
                 refreshed.insert(
                     key,
                     ReceivedVerdict {
                         class,
                         at: now,
                         permission: carried,
-                        withheld: held.and_then(|held| held.withheld),
+                        withheld,
                     },
                 );
                 continue;
@@ -659,34 +662,21 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             if grafted && permission != Permission::Write {
                 render.write_seeds.borrow_mut().remove(&share.scope_id);
             }
-            let held_pin = held.and_then(|held| held.withheld);
-            let pin = if withheld {
-                let mut pin = held_pin.unwrap_or(WithheldPin {
-                    since: now,
-                    escalated: false,
-                });
-                if !pin.escalated
-                    && withheld_escalation(
-                        now,
-                        pin.since,
-                        grafted,
-                        self.other_resolves_succeeding,
-                        profile,
-                    )
-                {
-                    pin.escalated = true;
-                    let _ = render
-                        .events
-                        .unbounded_send(Event::WithheldUpdateEscalation {
-                            ipns_name: share.scope_root_name.clone(),
-                        });
-                }
-                Some(pin)
+            let mut pin = held.and_then(|held| held.withheld);
+            let read = if withheld {
+                PinRead::Withheld
             } else if reached_record {
-                None
+                PinRead::Reached
             } else {
-                held_pin
+                PinRead::Unread
             };
+            if observe_pin(&mut pin, read, now, grafted, self.root_reconciled, profile) {
+                let _ = render
+                    .events
+                    .unbounded_send(Event::WithheldUpdateEscalation {
+                        ipns_name: share.scope_root_name.clone(),
+                    });
+            }
             refreshed.insert(
                 key,
                 ReceivedVerdict {
@@ -1624,7 +1614,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
-                    other_resolves_succeeding: true,
+                    root_reconciled: true,
                 }
                 .classified(
                     share,
@@ -2231,8 +2221,8 @@ mod tests {
         reported: Cell<bool>,
         /// The names each withheld-update escalation named, across passes.
         escalations: RefCell<Vec<Vec<u8>>>,
-        /// What the pass reports about its other resolves.
-        others_resolve: Cell<bool>,
+        /// What the pass reports about its vault root resolve.
+        root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
     }
 
@@ -2288,7 +2278,7 @@ mod tests {
                 granted: permission,
                 reported: Cell::new(false),
                 escalations: RefCell::new(Vec::new()),
-                others_resolve: Cell::new(true),
+                root_reconciled: Cell::new(true),
                 list_lock: ReceivedSharesLock::new(()),
             };
             block_on(
@@ -2474,7 +2464,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &self.list_lock,
                     mode,
-                    other_resolves_succeeding: self.others_resolve.get(),
+                    root_reconciled: self.root_reconciled.get(),
                 }
                 .refresh(
                     &self.staging,
@@ -2564,20 +2554,24 @@ mod tests {
         assert_eq!(fx.escalated(), 1, "one time per hold");
     }
 
-    /// With no other resolve succeeding the hold is an outage, not a
-    /// targeted pin.
+    /// While the vault root does not reconcile the hold is an outage, not a
+    /// targeted pin, and that time does not count toward the window.
     #[test]
-    fn a_withheld_shared_scope_in_a_full_outage_never_escalates() {
+    fn a_withheld_shared_scope_escalates_only_when_other_resolves_succeed() {
         let fx = withheld_at(VAULT_ROOT, 2);
-        fx.others_resolve.set(false);
+        fx.root_reconciled.set(false);
         for at in [1_000, 6_000, 60_000] {
             assert_eq!(fx.forced_pass(at), ResolutionClass::Unresolvable);
         }
         assert_eq!(fx.escalated(), 0);
 
-        fx.others_resolve.set(true);
+        fx.root_reconciled.set(true);
         fx.forced_pass(60_001);
-        assert_eq!(fx.escalated(), 1, "the hold dates from its first pass");
+        assert_eq!(fx.escalated(), 0, "the outage time does not count");
+        fx.forced_pass(64_999);
+        assert_eq!(fx.escalated(), 0);
+        fx.forced_pass(65_000);
+        assert_eq!(fx.escalated(), 1, "one window of healthy passes");
     }
 
     /// A read that reaches a record ends the hold, so the next hold measures
@@ -3449,7 +3443,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
-                    other_resolves_succeeding: true,
+                    root_reconciled: true,
                 }
                 .refresh(
                     &self.staging,

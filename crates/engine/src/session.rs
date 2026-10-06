@@ -58,6 +58,7 @@ use crate::sync::project::UnlinkedChild;
 use crate::sync::rebase::QueueScanMemo;
 use crate::sync::render::BaseSnapshot;
 use crate::sync::staging::LiveBlocks;
+use crate::sync::staleness::WithheldPin;
 use crate::sync::tick::FocusWindow;
 
 /// The session's seed-derived identity — the single place derived key material
@@ -418,6 +419,9 @@ pub(crate) struct SessionState {
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
     pub(crate) received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
+    /// The withheld-update hold on each folder or file name the focus legs
+    /// below a grafted root read last pass. In-memory.
+    pub(crate) withheld_pins: Rc<RefCell<BTreeMap<Vec<u8>, WithheldPin>>>,
     /// Held across every load, change and persist of the received-shares list,
     /// so the join, the accept and the refresh never overwrite each other.
     pub(crate) received_shares_lock: Rc<ReceivedSharesLock>,
@@ -621,6 +625,7 @@ impl SessionState {
             pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
             on_access_misses: OnAccessMisses::default(),
             received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
+            withheld_pins: Rc::new(RefCell::new(BTreeMap::new())),
             received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
             grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
             bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),

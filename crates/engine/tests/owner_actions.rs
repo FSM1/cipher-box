@@ -13109,20 +13109,159 @@ fn a_shared_scope_withheld_past_the_window_sends_one_escalation() {
 }
 
 /// A hold while no other resolve succeeds is an outage: the vault root does
-/// not resolve either, so no escalation goes out.
+/// not resolve either, so no escalation goes out, and that time does not
+/// count toward the window. Once the vault root resolves again, the same
+/// hold escalates one window later.
 #[test]
 fn a_shared_scope_withheld_in_a_full_outage_sends_no_escalation() {
     let (fx, grantee, mut events, mut tasks, name) = withheld_share();
     let store = &fx.world.record_store;
-    for key in store.routing_keys(&store.endpoints()[1]) {
-        if key.as_bytes() != name.as_slice() {
-            store.fail_get_for(&key);
-        }
+    let others: Vec<String> = store
+        .routing_keys(&store.endpoints()[1])
+        .into_iter()
+        .filter(|key| key.as_bytes() != name.as_slice())
+        .collect();
+    for key in &others {
+        store.fail_get_for(key);
     }
+    settle(&fx, &grantee, &mut tasks);
+    settle(&fx, &grantee, &mut tasks);
+    assert!(escalations(&events_so_far(&mut events)).is_empty());
+
+    for key in &others {
+        fx.world.record_store.heal_get_for(key);
+    }
+    for _ in 0..4 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "the window starts at the first healthy pass"
+    );
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(escalations(&events_so_far(&mut events)), vec![name]);
+}
+
+/// A grantee with a folder inside the shared scope in its focus window, whose
+/// record endpoint B serves one sequence behind the floor while endpoint A
+/// fails. The scope root stays honest. Answers the folder's record name.
+fn withheld_shared_child() -> (
+    GrantScenario,
+    Engine<FakeSeamTypes>,
+    EventStream,
+    Vec<BoxedTask>,
+    String,
+) {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    block_on(grantee.set_focus(Some(inner))).expect("the focus moves");
+    settle(&fx, &grantee, &mut tasks);
+    let store = &fx.world.record_store;
+    let endpoints = store.endpoints();
+    let (a, b) = (endpoints[0].clone(), endpoints[1].clone());
+    store.fail_put_endpoint(&b);
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "deep");
+    let store = &fx.world.record_store;
+    store.heal_put_endpoint(&b);
+    let lagging: Vec<String> = store
+        .routing_keys(&a)
+        .into_iter()
+        .filter(|key| {
+            store
+                .record_at(&b, key)
+                .is_some_and(|old| store.record_at(&a, key) != Some(old))
+        })
+        .collect();
+    let [name] = lagging.as_slice() else {
+        panic!("B lags on the inner folder alone: {lagging:?}");
+    };
+    let name = name.clone();
+    settle(&fx, &grantee, &mut tasks);
+    fx.world.record_store.fail_endpoint(&a);
+    let _ = events_so_far(&mut events);
+    (fx, grantee, events, tasks, name)
+}
+
+/// A withheld folder inside a shared scope, read by the focus leg while the
+/// vault root resolves, sends one escalation after the window.
+#[test]
+fn a_withheld_shared_child_sends_one_escalation_after_the_window() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_shared_child();
+    tick(&fx.world, &grantee, &mut tasks);
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "inside the window"
+    );
+
+    settle(&fx, &grantee, &mut tasks);
+    let seen = events_so_far(&mut events);
+    assert_eq!(escalations(&seen), vec![name.into_bytes()]);
+    assert_eq!(abuse_events_in(&seen), 0, "the hold is no trust verdict");
+
+    settle(&fx, &grantee, &mut tasks);
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "one time per hold"
+    );
+}
+
+/// A folder inside a shared scope that no endpoint answers for is an
+/// outage of that read, not a withheld update.
+#[test]
+fn a_shared_child_no_endpoint_answers_sends_no_escalation() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_shared_child();
+    fx.world
+        .record_store
+        .heal_endpoint(&fx.world.record_store.endpoints()[0]);
+    fx.world.record_store.fail_get_for(&name);
     settle(&fx, &grantee, &mut tasks);
     settle(&fx, &grantee, &mut tasks);
 
     assert!(escalations(&events_so_far(&mut events)).is_empty());
+}
+
+/// A read of the folder that reaches a record ends the hold, so a later hold
+/// measures a new window.
+#[test]
+fn a_reached_shared_child_ends_the_hold() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_shared_child();
+    let a = fx.world.record_store.endpoints()[0].clone();
+    for _ in 0..4 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    fx.world.record_store.heal_endpoint(&a);
+    tick(&fx.world, &grantee, &mut tasks);
+    fx.world.record_store.fail_endpoint(&a);
+    for _ in 0..4 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "the reached record restarted the window"
+    );
+
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        escalations(&events_so_far(&mut events)),
+        vec![name.into_bytes()]
+    );
+}
+
+/// The trust events on the stream.
+fn abuse_events_in(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+        .count()
 }
 
 /// A pointer no endpoint answers is availability, never a verdict.
