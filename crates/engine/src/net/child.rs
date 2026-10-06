@@ -145,6 +145,11 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
         Some((&seed.seed, Some(seed.stamp)))
     }
 
+    /// The scope the child must be sealed under.
+    pub(crate) fn scope_id(&self) -> [u8; 16] {
+        self.scope_id
+    }
+
     /// The scope whose seed opened the last record this adopter admitted.
     pub(crate) fn opened_scope(&self) -> Option<[u8; 16]> {
         self.opened_scope.get()
@@ -839,8 +844,8 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
     async fn commit_sequence_adoption(
         &self,
         pending: floor::PendingSequenceRaise,
-    ) -> Result<Adopted, SeamError> {
-        pending.commit(self.floors).await
+    ) -> Result<crate::gate::Committed, SeamError> {
+        pending.commit_for_hold(self.floors).await
     }
 
     /// [`ChildAdopter::open_at_floor`], with the head this adopter assembled

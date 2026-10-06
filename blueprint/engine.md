@@ -225,13 +225,32 @@ bytes (FSM1/cipher-box-next#28 D2).
   root whose name its write seed does not derive, it emits
   `writeCutUnfinished`, so every owner device shows a write cut that did not
   finish and can finish it.
-- **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
-  from the authenticated recovery endpoint and extracts the last-known CID —
-  or recovers it from the pin set's name→CID mapping — then mints a fresh
-  record with a fresh signature; lapse is an availability event, never loss
-  (FSM1/cipher-box-next#24 lapse semantics). The adoption gate therefore does **not** reject on
-  EOL; the one carve-out is the vault settings resolve, whose reader is always
-  its own signer (see "Vault settings load").
+- **Revival**: a lapse is an availability event, never loss
+  (FSM1/cipher-box-next#24 lapse semantics). A key-holding session revives a
+  lapsed name only through the read of its own plane (ADR 0062 D1), in these
+  steps: (1) fetch the last record from the recovery endpoint; a 429 answer
+  fails nothing and tries again later. (2) The fan-out corroborates the
+  recovered record at sequence S. `Absent` needs an answer from each
+  endpoint; a served record below S, or the same signed record, passes.
+  A record above S, or a different record at S, refuses. No answer refuses,
+  and a recovered record below the durable floor is refused. (3) Give the record to the read of its plane: the root adopt for
+  a scope root, the gated child resolve for another node, `open_repoint` and
+  the pointer bar for a pointer record, and the bin index load for the bin
+  index. A refusal of bytes the plane served is a `TrustViolation`; a body
+  that is not available is an availability failure. (4) Register the admitted
+  names in batches of up to `REGISTRY_BATCH_MAX`. (5) The fan-out still passes
+  the step 2 rule against the admitted record. (6) Read the durable floor
+  with no await before the signature; it must be at or below the admitted
+  sequence S. Sign at S + 1 with the renewal EOL, through the renewal walk's
+  signature path, so a revival never wins a tie against a real record. A
+  revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
+  sealed block, and never re-seals a body or re-points a name (D2). A device
+  with no floor for the record revives from the corroborated recovery record
+  and reports that it restored the server copy (D5). A session makes at most
+  25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
+  for each account; a fetch over the pace waits for the next slot. The adoption gate
+  therefore does **not** reject on EOL; the one carve-out is the vault settings
+  resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
   (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion, under
   the seed rule of "rotateScopeWrite" (ADR 0065 D1); the old

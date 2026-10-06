@@ -102,7 +102,10 @@ The **Engine simulation tests** PR gate also runs the engine unit tests,
 `encode_refusals`, and `renewal_walk` in release mode. Together they exercise
 the shared produce-side gate through root rotation, the name wave, the drain,
 renewal, and revival, including floor changes before signing, foreign envelope
-versions, and sequence exhaustion.
+versions, and sequence exhaustion. On the virtual clock, the `net::revival` unit tests
+revive a lapsed file record through the gate at `S + 1` with the renewal EOL
+(ADR 0062 consequence 5), refuse each D1 step that fails, and hold the
+recovery pace.
 
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
