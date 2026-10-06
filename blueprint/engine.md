@@ -231,7 +231,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   steps: (1) fetch the last record from the recovery endpoint; a 429 answer
   fails nothing and tries again later. (2) The fan-out corroborates the
   recovered record at sequence S. `Absent` needs an answer from each
-  endpoint; a served record below S, or the recovered record itself, passes.
+  endpoint; a served record below S, or the same signed record, passes.
   A record above S, or a different record at S, refuses. No answer refuses,
   and a recovered record below the durable floor is refused. (3) Give the record to the read of its plane: the root adopt for
   a scope root, the gated child resolve for another node, `open_repoint` and

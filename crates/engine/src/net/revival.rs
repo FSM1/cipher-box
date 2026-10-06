@@ -18,7 +18,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
-use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified};
+use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified, signed_data};
 use super::pointer_fetch::{PointerConsult, PointerConsultError};
 use super::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
@@ -257,7 +257,13 @@ async fn corroborate<T: RecordTransport>(
     match fanout_get_classified(transport, name).await {
         FanoutRecord::Absent => Ok(()),
         FanoutRecord::Found(served, _) if served.sequence < sequence => Ok(()),
-        FanoutRecord::Found(served, live) if served.sequence == sequence && live == bytes => Ok(()),
+        // ADR 0066 D1: a copy with an unsigned field added is the same record.
+        FanoutRecord::Found(served, _)
+            if served.sequence == sequence
+                && signed_data(name, bytes).as_deref() == Some(&served.data[..]) =>
+        {
+            Ok(())
+        }
         FanoutRecord::Found(served, _) => Err(ReviveError::Superseded {
             sequence: served.sequence,
         }),
@@ -721,20 +727,24 @@ mod tests {
         device: &FakeDevice,
         requests: &[ReviveRequest<'_, P>],
     ) -> Vec<Result<Revived, ReviveError>> {
+        revive_paced(&world.scheduler, device, &RecoveryPace::default(), requests)
+    }
+
+    fn revive_paced<P: PlaneRead>(
+        scheduler: &VirtualScheduler,
+        device: &FakeDevice,
+        pace: &RecoveryPace,
+        requests: &[ReviveRequest<'_, P>],
+    ) -> Vec<Result<Revived, ReviveError>> {
         let publishing = RefCell::default();
         let seams = RenewalSeams {
             transport: &device.record_store,
             floors: &device.floor_store,
-            scheduler: &world.scheduler,
+            scheduler,
             profile: &SyncTimingProfile::CI,
             publishing: &publishing,
         };
-        block_on(revive(
-            &api(device),
-            &seams,
-            &RecoveryPace::default(),
-            requests,
-        ))
+        block_on(revive(&api(device), &seams, pace, requests))
     }
 
     fn revive_one<P: PlaneRead>(
@@ -1647,5 +1657,63 @@ mod tests {
             start.saturating_add(RECOVERY_PACE_WINDOW),
             "the 26th fetch waits until the first leaves the window"
         );
+    }
+
+    #[test]
+    fn a_revival_waits_for_a_slot_of_the_session_pace() {
+        let (world, device) = after_100_days();
+        let scheduler = world.scheduler.clone().with_auto_advance();
+        let pace = RecoveryPace::default();
+        for _ in 0..RECOVERY_PACE {
+            block_on(pace.slot(&scheduler));
+        }
+        let start = scheduler.now();
+        let signer = Ed25519Signer::from_seed([23; 32]);
+        let name = name_of(&signer);
+        recover(&device, minted(&signer, b"/ipfs/bafyrecovered", 5));
+
+        let result = revive_paced(
+            &scheduler,
+            &device,
+            &pace,
+            &[ReviveRequest {
+                name: &name,
+                signer: &signer,
+                plane: Admits,
+            }],
+        )
+        .remove(0);
+
+        assert_eq!(
+            result.map(|revived| revived.outcome),
+            Ok(PublishOutcome::Published { sequence: 6 })
+        );
+        assert_eq!(
+            scheduler.now(),
+            start.saturating_add(RECOVERY_PACE_WINDOW),
+            "the recovery fetch waited for the next slot"
+        );
+    }
+
+    #[test]
+    fn a_copy_with_an_unsigned_field_corroborates_the_recovered_record() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([24; 32]);
+        let name = name_of(&signer);
+        let recovered = minted(&signer, b"/ipfs/bafyrecovered", 5);
+        let copy = crate::net::fork::with_unsigned_field(&recovered);
+        assert_ne!(copy, recovered);
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), copy.clone());
+        }
+        recover(&device, recovered);
+
+        let revived = revive_one(&world, &device, &signer, Admits).expect("the name revives");
+        assert_eq!(revived.outcome, PublishOutcome::Published { sequence: 6 });
+        let record = served(&device, &name).unwrap();
+        assert_eq!(record.sequence, 6);
+        assert_eq!(record.value, b"/ipfs/bafyrecovered", "the admitted value");
     }
 }
