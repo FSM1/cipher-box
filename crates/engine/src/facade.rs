@@ -2976,6 +2976,10 @@ impl EngineError {
             SettingsPublishError::Unconfirmed => EngineError::Seam {
                 message: "the settings publish was not confirmed on re-resolve".to_owned(),
             },
+            SettingsPublishError::RecoveryThrottled => EngineError::Seam {
+                message: "the recovery endpoint is busy; try the settings save again later"
+                    .to_owned(),
+            },
             SettingsPublishError::Recovery(_) => EngineError::Seam {
                 message: "the recovery endpoint gave no settings record to sign above".to_owned(),
             },

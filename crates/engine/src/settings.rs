@@ -40,9 +40,8 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::facade::{Event, emit_trust_violation};
-use crate::gate::GateError;
 use crate::gate::floor;
-use crate::gate::floor::{RevisionMintError, Strictness};
+use crate::gate::floor::RevisionMintError;
 use crate::net::MAX_RECORD_BYTES;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
 use crate::net::publish::{Observed, PublishOutcome};
@@ -857,6 +856,9 @@ pub enum SettingsPublishError {
     /// above: the recovery fetch failed, or its bytes do not verify under the
     /// settings name.
     Recovery(ApiError),
+    /// The recovery endpoint answered 429 to a first save on a device with no
+    /// floor. A later save tries again.
+    RecoveryThrottled,
     /// The store failed inside the revision mint, so whether the mint counter
     /// rose is unknown.
     Mint(SeamError),
@@ -1067,10 +1069,7 @@ where
     let signer = kdf::settings_ipns_keypair(login_secret);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     // Before the mint, so a refusal here leaves no stranded mint.
-    let observed = match observed {
-        Some(sequence) => Some(sequence),
-        None => first_save_basis(api, floors, &name).await?,
-    };
+    let observed = observed.max(first_save_basis(api, floors, &name).await?);
     let revision = next_revision(floors, &name).await?;
     let body = encode_settings_body(settings, revision).map_err(SettingsPublishError::Codec)?;
     let ephemeral = fresh_ephemeral(entropy).map_err(SettingsPublishError::Entropy)?;
@@ -1148,6 +1147,7 @@ where
 /// The sequence a save on a device with no floor signs above: the recovery
 /// endpoint's record, verified under the settings name, so the save does not
 /// publish at sequence 1 below the record of another device (ADR 0062 D4).
+/// The caller signs above the higher of this and the record the load verified.
 async fn first_save_basis<H, C, F>(
     api: &ApiClient<H, C>,
     floors: &F,
@@ -1167,6 +1167,9 @@ where
     let bytes = match api.recovery_fetch(name.as_str()).await {
         Ok(bytes) => bytes,
         Err(ApiError::Status { status: 404, .. }) => return Ok(None),
+        Err(ApiError::Status { status: 429, .. }) => {
+            return Err(SettingsPublishError::RecoveryThrottled);
+        }
         Err(error) => return Err(SettingsPublishError::Recovery(error)),
     };
     let recovered = (bytes.len() <= MAX_RECORD_BYTES)
@@ -1356,25 +1359,12 @@ where
         if IpnsName::from_public_key(&self.signer.verifying_key()) != *name {
             return Err(PlaneRefusal::Mismatch);
         }
-        // `check_sequence` reads an absent floor as 0, and no floor never
-        // revives this record.
         match floor::sequence_floor(self.floors, name.as_str().as_bytes()).await {
-            Ok(Some(_)) => {}
-            Ok(None) => return Err(PlaneRefusal::NotAtFloor),
+            Ok(Some(floor)) if floor == recovered.sequence => {}
+            Ok(_) => return Err(PlaneRefusal::NotAtFloor),
             Err(_) => return Err(PlaneRefusal::Unavailable),
         }
-        match floor::check_sequence(
-            self.floors,
-            name.as_str().as_bytes(),
-            recovered.sequence,
-            Strictness::AtFloor,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(GateError::Rejected(_)) => return Err(PlaneRefusal::NotAtFloor),
-            Err(GateError::Seam(_)) => return Err(PlaneRefusal::Unavailable),
-        }
+        PlaneRefusal::unless_addressed(recovered)?;
         let read = read_settings(
             transport,
             self.gateway,
@@ -1391,11 +1381,7 @@ where
         match read.load {
             RecordLoad::Resolved(_) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
             RecordLoad::Stale { reason, .. } | RecordLoad::Degraded(reason) => {
-                Err(if reason.is_verdict() {
-                    PlaneRefusal::Rejected
-                } else {
-                    PlaneRefusal::Unavailable
-                })
+                Err(PlaneRefusal::of_load(reason))
             }
         }
     }
@@ -2836,5 +2822,71 @@ mod tests {
         assert_eq!(Destinations::decode(&[0u8; Destinations::LEN]), None);
         assert_eq!(Destinations::decode(&[2u8; Destinations::LEN]), None);
         assert_eq!(Destinations::decode(&[]), None);
+    }
+
+    /// A save on a device with no floor signs above the higher of the record
+    /// the load verified and the recovery copy (ADR 0062 D4).
+    #[test]
+    fn a_save_with_no_floor_signs_above_the_higher_of_the_load_and_recovery() {
+        use crate::testkit::account::{Blocks, serve_http};
+
+        const SECRET: [u8; 32] = [7u8; 32];
+        for (observed, recovered, signed) in [(3, 10, 11), (12, 10, 13)] {
+            let world = FakeWorld::new();
+            let device = world.device(b"new");
+            let blocks = Blocks::default();
+            let name = settings_name(&SECRET);
+            let record = IpnsRecord::create_v2(
+                &kdf::settings_ipns_keypair(&SECRET),
+                b"/ipfs/bafyrecovered",
+                recovered,
+                2_000_000_000,
+                "2000-01-01T00:00:00Z",
+            )
+            .marshal();
+            let served = blocks.clone();
+            device.http.enqueue_derived(move |request| {
+                if request.url.contains("/recovery/") {
+                    Ok(crate::seams::HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: record.into(),
+                    })
+                } else {
+                    served.reply(request)
+                }
+            });
+            serve_http(&device, &blocks, 4);
+            let api = ApiClient::new(
+                device.http.clone(),
+                device.credential_store.clone(),
+                "http://api.test",
+            );
+
+            block_on(publish_settings_above(
+                &device.record_store,
+                &api,
+                &device.floor_store,
+                &device.snapshot_cache,
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &mut SeededEntropy::new(3),
+                &OrphanHeads::default(),
+                &SECRET,
+                &VaultSettings::default(),
+                Some(observed),
+            ))
+            .expect("the save lands");
+
+            assert_eq!(
+                block_on(floor::sequence_floor(
+                    &device.floor_store,
+                    name.as_str().as_bytes()
+                ))
+                .unwrap(),
+                Some(signed),
+                "observed {observed}, recovered {recovered}"
+            );
+        }
     }
 }
