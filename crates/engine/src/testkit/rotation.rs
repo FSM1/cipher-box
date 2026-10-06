@@ -454,11 +454,7 @@ impl ScopeRootPublisher for ScriptedPublisher {
         &self,
         record: &ResealedScopeRoot,
     ) -> Result<PublishedRoot, RotationPublishError> {
-        self.0.clone().map(|()| PublishedRoot {
-            name: record.ipns_name.clone(),
-            base: 0,
-            sequence: 1,
-        })
+        self.0.clone().map(|()| PublishedRoot::fresh(record, 1))
     }
 }
 

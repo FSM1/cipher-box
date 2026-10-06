@@ -194,8 +194,9 @@ pub struct PublishedRoot {
 }
 
 impl PublishedRoot {
-    #[cfg(test)]
-    pub(crate) fn fresh(record: &ResealedScopeRoot, sequence: u64) -> Self {
+    /// A first publish of `record` at `sequence`, for the test fakes.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn fresh(record: &ResealedScopeRoot, sequence: u64) -> Self {
         Self {
             name: record.ipns_name.clone(),
             base: 0,

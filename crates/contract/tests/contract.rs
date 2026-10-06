@@ -1742,11 +1742,7 @@ impl ScopeRootPublisher for LocalNet {
         &self,
         record: &ResealedScopeRoot,
     ) -> Result<PublishedRoot, RotationPublishError> {
-        Ok(PublishedRoot {
-            name: record.ipns_name.clone(),
-            base: 0,
-            sequence: 1,
-        })
+        Ok(PublishedRoot::fresh(record, 1))
     }
 }
 
@@ -1758,14 +1754,7 @@ impl ScopeRootPromoter for LocalNet {
         record: &ResealedScopeRoot,
         _held_outside: &[cipherbox_engine::grants::HeldNode],
     ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
-        Ok((
-            Vec::new(),
-            PublishedRoot {
-                name: record.ipns_name.clone(),
-                base: 0,
-                sequence: 1,
-            },
-        ))
+        Ok((Vec::new(), PublishedRoot::fresh(record, 1)))
     }
 }
 

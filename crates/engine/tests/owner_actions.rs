@@ -9163,22 +9163,19 @@ fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
     assert_eq!(size, Some(200), "the navigation read the file's version");
 }
 
-/// Create `doc.bin` in the folder and answer its id.
-fn create_doc(fx: &mut GrantScenario) -> NodeId {
-    block_on(fx.engine.command(Command::Create {
-        parent: fx.folder,
-        name: "doc.bin".into(),
-        kind: NodeKind::File,
-    }))
-    .expect("a metadata create stages");
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    block_on(fx.engine.view())
-        .expect("a rendered view")
-        .children(fx.folder)
-        .into_iter()
-        .find(|child| child.name == "doc.bin")
-        .expect("the file is listed")
-        .id
+/// Write 200 bytes to `target` on `engine`, then run three ticks.
+fn commit_doc(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    target: WriteTarget,
+) {
+    let handle = block_on(engine.begin_write(target, 200)).expect("a write opens");
+    block_on(engine.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
+    block_on(engine.commit_write(handle)).expect("the write commits");
+    for _ in 0..3 {
+        tick(world, engine, tasks);
+    }
 }
 
 /// A second owner device writes 200 bytes to `doc`.
@@ -9189,19 +9186,15 @@ fn write_doc_on_second_device(fx: &GrantScenario, doc: NodeId) {
     }))
     .expect("the second device opens the folder");
     tick(&fx.world, &second, &mut second_tasks);
-    let handle = block_on(second.begin_write(
+    commit_doc(
+        &fx.world,
+        &mut second,
+        &mut second_tasks,
         WriteTarget::Version {
             node: doc,
             expected_version: None,
         },
-        200,
-    ))
-    .expect("a version write opens");
-    block_on(second.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
-    block_on(second.commit_write(handle)).expect("the version commits");
-    for _ in 0..3 {
-        tick(&fx.world, &second, &mut second_tasks);
-    }
+    );
 }
 
 fn painted_size(fx: &GrantScenario, doc: NodeId) -> Option<u64> {
@@ -9218,7 +9211,7 @@ fn painted_size(fx: &GrantScenario, doc: NodeId) -> Option<u64> {
 #[test]
 fn a_navigation_right_after_an_own_scope_set_edit_reads_the_scope() {
     let mut fx = GrantScenario::new();
-    let doc = create_doc(&mut fx);
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(
@@ -9263,26 +9256,7 @@ fn grant_inner_on_second_device(fx: &GrantScenario, inner: NodeId) -> NodeId {
     for _ in 0..2 {
         tick(&fx.world, &second, &mut second_tasks);
     }
-    let handle = block_on(second.begin_write(
-        WriteTarget::NewFile {
-            parent: inner,
-            name: "doc.bin".into(),
-        },
-        200,
-    ))
-    .expect("a new file write opens");
-    block_on(second.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
-    block_on(second.commit_write(handle)).expect("the file commits");
-    for _ in 0..3 {
-        tick(&fx.world, &second, &mut second_tasks);
-    }
-    block_on(second.view())
-        .expect("a rendered view")
-        .children(inner)
-        .into_iter()
-        .find(|row| row.name == "doc.bin")
-        .expect("the file is listed")
-        .id
+    write_doc_in(&fx.world, &mut second, &mut second_tasks, inner)
 }
 
 /// The size `engine` paints for `file` in `folder`.
@@ -9425,7 +9399,7 @@ fn a_promoted_root_over_another_devices_grant_does_not_hold_the_root() {
 #[test]
 fn a_navigation_right_after_an_upload_into_the_vault_root_reads_at_once() {
     let mut fx = GrantScenario::new();
-    let doc = create_doc(&mut fx);
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
     write_doc_on_second_device(&fx, doc);
     block_on(fx.engine.command(Command::SetFocus { node: None }))
         .expect("the root takes the focus");
@@ -9461,23 +9435,23 @@ fn a_navigation_right_after_an_upload_into_the_vault_root_reads_at_once() {
     );
 }
 
-/// Write `doc.bin` of 200 bytes into `parent` on the owner's device and answer
-/// its id.
-fn write_doc_in(fx: &mut GrantScenario, parent: NodeId) -> NodeId {
-    let handle = block_on(fx.engine.begin_write(
+/// Write `doc.bin` of 200 bytes into `parent` on `engine` and answer its id.
+fn write_doc_in(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    parent: NodeId,
+) -> NodeId {
+    commit_doc(
+        world,
+        engine,
+        tasks,
         WriteTarget::NewFile {
             parent,
             name: "doc.bin".into(),
         },
-        200,
-    ))
-    .expect("a new file write opens");
-    block_on(fx.engine.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
-    block_on(fx.engine.commit_write(handle)).expect("the file commits");
-    for _ in 0..3 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    block_on(fx.engine.view())
+    );
+    block_on(engine.view())
         .expect("a rendered view")
         .children(parent)
         .into_iter()
@@ -9494,7 +9468,7 @@ fn a_navigation_into_a_received_share_reads_at_once() {
     let mut fx = GrantScenario::new();
     let folder = fx.folder;
     let sub = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "sub");
-    let doc = write_doc_in(&mut fx, sub);
+    let doc = write_doc_in(&fx.world, &mut fx.engine, &mut fx._tasks, sub);
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let (mut grantee, mut events, mut tasks) = recipient_session(&fx);
@@ -9553,7 +9527,7 @@ fn a_navigation_to_an_unlisted_folder_probes_the_root_once() {
 #[test]
 fn a_navigation_whose_root_probe_has_no_answer_reads_nothing() {
     let mut fx = GrantScenario::new();
-    let doc = create_doc(&mut fx);
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     write_doc_on_second_device(&fx, doc);

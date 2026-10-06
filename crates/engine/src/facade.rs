@@ -10134,10 +10134,13 @@ where {
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
-        if !self.state.boundary_walk_landed.get() {
+        let queue_children = || {
             if let Some(folder) = folder {
                 self.queue_focus_file_children(folder);
             }
+        };
+        if !self.state.boundary_walk_landed.get() {
+            queue_children();
             return;
         }
         let own = self.leg_scopes().await.own;
@@ -10154,9 +10157,7 @@ where {
             .filter(|folder| !due.contains(folder))
             .collect();
         if due.is_empty() && below.is_empty() {
-            if let Some(folder) = folder {
-                self.queue_focus_file_children(folder);
-            }
+            queue_children();
             if self.queued_focus_files().is_empty() {
                 return;
             }
@@ -10167,9 +10168,7 @@ where {
             .scope_root_moved(probes, root, root_name.as_ref(), &self.seams.floor_store)
             .await
         {
-            if let Some(folder) = folder {
-                self.queue_focus_file_children(folder);
-            }
+            queue_children();
             return;
         }
         let scope_read_seed = self.scope_read_seed(&root.0).await;
@@ -10199,9 +10198,7 @@ where {
         // A folder below a descendant scope root reads on that scope's leg.
         self.navigation_legs(root, below, NodeKind::Folder, now, &settle, probes)
             .await;
-        if let Some(folder) = folder {
-            self.queue_focus_file_children(folder);
-        }
+        queue_children();
         self.navigation_file_legs(root, now, &settle, probes).await;
     }
 
@@ -10419,17 +10416,13 @@ where {
                 unread = true;
                 continue;
             };
+            let name = if scope == root {
+                root_name.as_ref()
+            } else {
+                leg_material.material.scope_root_name.as_ref()
+            };
             if self
-                .scope_root_moved(
-                    probes,
-                    scope,
-                    if scope == root {
-                        root_name.as_ref()
-                    } else {
-                        leg_material.material.scope_root_name.as_ref()
-                    },
-                    &leg_material.material.floors,
-                )
+                .scope_root_moved(probes, scope, name, &leg_material.material.floors)
                 .await
             {
                 unread = true;
@@ -20712,7 +20705,7 @@ mod focus_access_tests {
         // The walk this flag claims ran against the vault root's name, which
         // an online start holds and an offline one does not.
         *engine.state.current_root_name.borrow_mut() = Some(IpnsName::from_public_key(
-            &cipherbox_core::kdf::ipns_keypair(&[5u8; 32]).verifying_key(),
+            &kdf::ipns_keypair(&[5u8; 32]).verifying_key(),
         ));
         let scope_id = engine.state.snapshot.borrow().root.0;
         deposit_seed(
@@ -21126,12 +21119,10 @@ mod focus_access_tests {
             // A scope root's own name rides on the child entry that projected it.
             let mut shared = NodeMeta::new(FOLDER, "shared", NodeKind::Folder);
             shared.ipns_name = Some(
-                IpnsName::from_public_key(
-                    &cipherbox_core::kdf::ipns_keypair(&[6u8; 32]).verifying_key(),
-                )
-                .as_str()
-                .as_bytes()
-                .to_vec(),
+                IpnsName::from_public_key(&kdf::ipns_keypair(&[6u8; 32]).verifying_key())
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
             );
             base.upsert_node(shared);
             base.link(root, FOLDER, 1);

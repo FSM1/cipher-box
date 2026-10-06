@@ -2764,14 +2764,16 @@ where
     /// republishes from: the read body and the preserved fields are carried
     /// forward byte for byte, so the record now standing at the name has the
     /// same ones, and the CAS bound rises to the sequence this publish spent
-    /// ([`GatedRoots`]). The signed record it landed rides beside the base.
+    /// ([`GatedRoots`]). The signed record it landed and the
+    /// [`PublishedRoot`] ride beside the base.
     async fn run(
         &self,
         record: &ResealedScopeRoot,
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
-    ) -> Result<(RepublishBase, Vec<u8>, u64), RotationPublishError> {
+    ) -> Result<(RepublishBase, Vec<u8>, PublishedRoot), RotationPublishError> {
         let name = current.observed.name();
+        let base = current.observed.sequence();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
@@ -2857,7 +2859,11 @@ where
                     ..current
                 },
                 receipt.record_bytes,
-                sequence,
+                PublishedRoot {
+                    name: record.ipns_name.clone(),
+                    base,
+                    sequence,
+                },
             )),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
@@ -2930,8 +2936,7 @@ where
             )
             .map_err(|_| RotationPublishError::Rejected)?,
         };
-        let base = current.observed.sequence();
-        let (published, record_bytes, sequence) = self
+        let (published, record_bytes, root) = self
             .root_publish()
             .run(record, &override_seed, current)
             .await?;
@@ -2939,11 +2944,7 @@ where
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
         self.gated.park(published);
-        Ok(PublishedRoot {
-            name: record.ipns_name.clone(),
-            base,
-            sequence,
-        })
+        Ok(root)
     }
 }
 
@@ -2986,7 +2987,6 @@ where
         drop_held_refs(&mut current.read_body, node.node_id, held_outside)
             .map_err(|node_id| RotationPublishError::NotConverged { node_id })?;
         let children = body_children(&current.read_body);
-        let observed = current.observed.sequence();
         let base = RepublishBase {
             read_body: current.read_body,
             unknown: current.carried_unknown,
@@ -2999,19 +2999,12 @@ where
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
-        let (_, record_bytes, sequence) = self
+        let (_, record_bytes, root) = self
             .root_publish()
             .run(record, &override_seed, base)
             .await?;
         self.keep_own_publish(&name, &record_bytes).await;
-        Ok((
-            children,
-            PublishedRoot {
-                name: record.ipns_name.clone(),
-                base: observed,
-                sequence,
-            },
-        ))
+        Ok((children, root))
     }
 }
 
@@ -3409,16 +3402,11 @@ where
             .granted_root(NodeId(record.scope_id))
             .map_err(|_| RotationPublishError::Rejected)?;
         let floors = self.granted_floors(granted);
-        let base = current.observed.sequence();
-        let (_, _, sequence) = self
+        let (_, _, root) = self
             .root_publish(&floors)
             .run(record, &override_seed, current)
             .await?;
-        Ok(PublishedRoot {
-            name: record.ipns_name.clone(),
-            base,
-            sequence,
-        })
+        Ok(root)
     }
 }
 
