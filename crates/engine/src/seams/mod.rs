@@ -28,11 +28,11 @@ mod snapshot_cache;
 mod staging_store;
 
 pub use credential_store::CredentialStore;
-pub(crate) use floor_store::NoPersistFloorStore;
 pub use floor_store::{
     CONTACT_LABEL_LEN, ContactLabel, FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN,
     OwnerScopedFloorStore, SharerScopedFloorStore,
 };
+pub(crate) use floor_store::{NoPersistFloorStore, refuse_short_raise};
 pub(crate) use http::bearer_value;
 pub use http::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,

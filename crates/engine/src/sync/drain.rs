@@ -9791,6 +9791,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -9822,6 +9823,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -9858,6 +9860,7 @@ mod tests {
                 absent: false,
                 observed: None,
                 envelope: None,
+                committed_floor: None,
             },
             &refused_name(),
             &events,
