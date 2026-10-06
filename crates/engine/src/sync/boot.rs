@@ -23,8 +23,8 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use zeroize::Zeroizing;
 
 use crate::facade::{Event, NodeId};
+use crate::gate::GateRejection;
 use crate::gate::floor::{self, ColdSeedError, FloorRegression};
-use crate::gate::{GateError, GateRejection};
 use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
@@ -272,13 +272,12 @@ where
             // A dark root paints the confirmed owner copy: a kept op stays out
             // of the overlay until the base shows it (ADR 0069 D7).
             if at_floor.is_none() && matches!(outcome, ResolveOutcome::NoUpdate) {
+                // A local fault means no copy, as in `resolve_gated`.
                 let dark = adopter
                     .recover_dark_root(&adoption.repoint.current_root)
                     .await
-                    .map_err(|e| match e {
-                        GateError::Seam(seam) => ColdStartError::Seam(seam),
-                        GateError::Rejected(rejection) => ColdStartError::RootAdoption(rejection),
-                    })?;
+                    .ok()
+                    .flatten();
                 if let Some(material) = dark {
                     read_scope_seed = Some(material.read_scope_seed);
                     write_scope_seed = material

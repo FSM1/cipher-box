@@ -11376,6 +11376,73 @@ fn a_restart_with_a_dark_root_paints_the_last_known_good_root() {
     assert!(write.is_ok(), "a write into deep is accepted: {write:?}");
 }
 
+/// A local fault on the read of the owner seed cache means no copy: the dark
+/// start still runs, with nothing painted.
+#[test]
+fn a_dark_restart_with_an_unreadable_owner_seed_cache_still_starts() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        create(&mut engine, "deep");
+        tick(&world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    alice
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(OWNER_SEED_CACHE_PREFIX);
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    assert!(
+        block_on(restarted.snapshot(ROOT)).is_ok(),
+        "the root renders"
+    );
+}
+
+/// One endpoint fails and the others serve a replay below the floor, which
+/// reads as unavailable (ADR 0071 D1). The start paints the confirmed copy and
+/// the sequence floor stays where it was.
+#[test]
+fn a_restart_that_reads_a_replay_beside_a_failed_endpoint_paints_the_confirmed_copy() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let seeded = root_record(&world, 0);
+    let alice = world.device(b"alice");
+    {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        create(&mut engine, "deep");
+        tick(&world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+    let floor = || {
+        block_on(
+            alice
+                .floors(&SECRET)
+                .sequence_floor(root_name.as_str().as_bytes()),
+        )
+        .expect("the floor reads")
+    };
+    let before = floor();
+
+    let endpoints = world.record_store.endpoints();
+    world
+        .record_store
+        .fail_get_at_for(&endpoints[0], root_name.as_str());
+    for endpoint in &endpoints[1..] {
+        world
+            .record_store
+            .seed_record(endpoint, root_name.as_str(), seeded.clone());
+    }
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    child_id(&restarted, ROOT, "deep");
+    assert_eq!(floor(), before, "the sequence floor does not move down");
+}
+
 /// A root that every endpoint serves as a replay below the floor is a refusal,
 /// and the paint of a dark root does not hide it.
 #[test]

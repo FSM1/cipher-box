@@ -141,15 +141,16 @@ impl<S> QueueGenerationStore<S> {
         &self.seam
     }
 
-    /// Counts one mutation. Charged before the store is asked, so a refusal
-    /// that changed the queue anyway is still counted — an extra render costs
-    /// time, a missed one serves a view that never existed.
+    /// Counts one mutation. Charged before and after the store is asked, so a
+    /// refusal that changed the queue anyway is still counted, and a read that
+    /// keys itself mid-write is not served again — an extra render costs time,
+    /// a missed one serves a view that never existed.
     fn mutating(&self) {
         self.generation.set(self.generation.get().wrapping_add(1));
     }
 
     /// Counts one write at `staging_key` if it holds the published-op mark or
-    /// the kept-op notes, charged before the store is asked as [`Self::mutating`].
+    /// the kept-op notes, charged as [`Self::mutating`] is.
     fn staged_write(&self, staging_key: &[u8]) {
         if is_kept_op_key(staging_key) {
             self.kept_generation
@@ -194,12 +195,16 @@ impl<S> QueueGeneration for QueueGenerationStore<S> {
 impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
         self.mutating();
-        self.seam.enqueue_op(op).await
+        let done = self.seam.enqueue_op(op).await;
+        self.mutating();
+        done
     }
 
     async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
         self.mutating();
-        self.seam.enqueue_ops(ops).await
+        let done = self.seam.enqueue_ops(ops).await;
+        self.mutating();
+        done
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
@@ -208,12 +213,16 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
         self.mutating();
-        self.seam.remove_op(op_id).await
+        let done = self.seam.remove_op(op_id).await;
+        self.mutating();
+        done
     }
 
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
         self.staged_write(staging_key);
-        self.seam.put_staged_bytes(staging_key, bytes).await
+        let done = self.seam.put_staged_bytes(staging_key, bytes).await;
+        self.staged_write(staging_key);
+        done
     }
 
     async fn staged_bytes(&self, staging_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
@@ -222,7 +231,9 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
 
     async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {
         self.staged_write(staging_key);
-        self.seam.remove_staged_bytes(staging_key).await
+        let done = self.seam.remove_staged_bytes(staging_key).await;
+        self.staged_write(staging_key);
+        done
     }
 
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
@@ -235,7 +246,9 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
 
     async fn clear(&self) -> SeamResult<()> {
         self.mutating();
-        self.seam.clear().await
+        let done = self.seam.clear().await;
+        self.mutating();
+        done
     }
 }
 
