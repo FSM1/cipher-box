@@ -63,12 +63,13 @@ pub trait FloorStore {
     /// trust hole.
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         for raise in raises {
-            match raise.namespace {
+            let stored = match raise.namespace {
                 FloorNamespace::Epoch => self.raise_epoch_floor(&raise.key, raise.value).await?,
                 FloorNamespace::Sequence => {
                     self.raise_sequence_floor(&raise.key, raise.value).await?
                 }
             };
+            refuse_short_raise(stored, raise.value)?;
         }
         Ok(())
     }
@@ -91,6 +92,18 @@ pub enum FloorNamespace {
     Epoch,
     /// Per-name sequence floors ([`FloorStore::raise_sequence_floor`]).
     Sequence,
+}
+
+/// `Err` when a raise reports a floor below the value it was asked for: a
+/// monotonic-max store never does, so the store did not take the raise. A
+/// floor above the value is a raise that an earlier one already passed.
+pub(crate) fn refuse_short_raise(stored: u64, value: u64) -> SeamResult<()> {
+    if stored < value {
+        return Err(SeamError::new(format!(
+            "floor_store: a raise to {value} reported {stored}"
+        )));
+    }
+    Ok(())
 }
 
 /// One monotonic-max floor raise inside a [`FloorStore::commit_floors`] batch.
@@ -461,6 +474,53 @@ mod tests {
     use super::*;
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryFloorStore;
+
+    /// A store that reports every epoch raise one below the value and keeps
+    /// nothing, with the default batch commit.
+    struct ShortEpochRaises;
+
+    impl FloorStore for ShortEpochRaises {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+            Ok(epoch.saturating_sub(1))
+        }
+
+        async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            Ok(sequence)
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_default_batch_commit_refuses_an_epoch_raise_the_store_did_not_take() {
+        assert!(
+            block_on(ShortEpochRaises.commit_floors(&[FloorRaise::epoch(b"scope", 4)])).is_err()
+        );
+        assert!(
+            block_on(ShortEpochRaises.commit_floors(&[FloorRaise::sequence(b"name", 4)])).is_ok(),
+            "a sequence raise the store took commits",
+        );
+    }
+
+    #[test]
+    fn the_default_batch_commit_accepts_a_floor_an_earlier_raise_passed() {
+        use crate::testkit::fakes::SplitWriteFloorStore;
+
+        let floors = SplitWriteFloorStore::default();
+        block_on(floors.commit_floors(&[FloorRaise::sequence(b"name", 5)])).unwrap();
+        block_on(floors.commit_floors(&[FloorRaise::sequence(b"name", 4)]))
+            .expect("a lower raise is no store fault");
+    }
 
     use cipherbox_core::kdf;
 

@@ -2287,6 +2287,62 @@ mod tests {
         );
     }
 
+    /// A root adoption whose batch commit the store under-reports fails the
+    /// resolve and holds nothing; after the store heals, the next resolve
+    /// holds the vault head.
+    #[test]
+    fn a_vault_head_whose_floor_commit_fell_short_is_held_only_after_a_healthy_commit() {
+        use crate::net::{HeldKey, HeldMaterial, HeldRecords, resolve_and_hold};
+        use crate::testkit::fakes::SplitWriteFloorStore;
+
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let floors = SplitWriteFloorStore::default();
+        seed_write_floor(floors.floors(), &fx.scope_id, OWB_WRITE_EPOCH);
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        transport.seed_record(&endpoint, fx.name.as_str(), fx.record(1));
+        let snapshots = InMemorySnapshotCache::default();
+        let http = ScriptedHttp::default();
+        let gw = gateway();
+        let adopter = RootAdopter::new(
+            &gw,
+            &http,
+            &floors,
+            &fx.owner_enc,
+            &fx.owner_identity_verifier,
+            fx.scope_id,
+        );
+        let held = RefCell::new(HeldRecords::new());
+        let root_id = [0x55; 16];
+        let material = HeldMaterial {
+            node_id: root_id,
+            write_scope_seed: None,
+        };
+        let resolve = || {
+            http.enqueue_response(ok_response(fx.head_block.clone()));
+            block_on(resolve_and_hold(
+                &transport,
+                &snapshots,
+                &adopter,
+                &fx.name,
+                &held,
+                &material,
+                ResolveMode::CacheFirst,
+            ))
+        };
+
+        floors
+            .floors()
+            .under_report_sequence_raises_for(fx.name.as_str().as_bytes());
+        assert!(resolve().is_err(), "a short commit is a store fault");
+        assert!(held.borrow().is_empty(), "the vault head is not enrolled");
+
+        floors.floors().heal_floors();
+        let resolved = resolve().expect("a healthy commit resolves").resolved;
+        assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+        assert!(held.borrow().get(&HeldKey::Node(root_id)).is_some());
+    }
+
     /// The stage a recovery the gate refused names.
     fn refused_stage<T>(recovered: Result<T, GateError>) -> GateStage {
         match recovered {

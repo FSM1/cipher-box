@@ -431,17 +431,12 @@ impl PendingSequenceRaise {
     ///
     /// A floor left below the record's sequence is a store fault: the
     /// exact-floor renewal would refuse the record, so it must not be held.
-    /// A floor above the sequence is a newer adoption, not a fault.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
         let sequence = self.adopted.sequence;
         let stored = floors
             .raise_sequence_floor(&self.ipns_name, sequence)
             .await?;
-        if stored < sequence {
-            return Err(SeamError::new(format!(
-                "floor_store: the sequence floor is {stored} after a raise to {sequence}"
-            )));
-        }
+        crate::seams::refuse_short_raise(stored, sequence)?;
         Ok(self.adopted)
     }
 }
