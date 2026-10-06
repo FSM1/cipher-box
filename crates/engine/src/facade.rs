@@ -105,7 +105,7 @@ use crate::net::cut::OwnerCutNet;
 use crate::net::publish::refuse_foreign_version;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::renewal_walk::{
-    BinRoot, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
+    BinRoot, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
@@ -6600,9 +6600,18 @@ where {
                     keyless_re_put(&transport, &records).await;
                     // Surface every renewal that did not land (LostRace/PublishError)
                     // as an Event — never a silent failure (blueprint/engine.md).
-                    let renewals =
-                        eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records)
-                            .await;
+                    let renewals = eol_renew_pass(
+                        &api,
+                        &RenewalSeams {
+                            transport: &transport,
+                            floors: &floors,
+                            scheduler: &scheduler,
+                            profile: &profile,
+                            publishing: &publishing,
+                        },
+                        &held,
+                    )
+                    .await;
                     emit_renewal_failures(&events, &renewals);
                 }
                 let session_keys = pointer_keys.borrow().clone();

@@ -517,9 +517,19 @@ where
             revision: opened.revision,
         });
     }
-    // Both bars are behind this point, so the record may be enrolled for
-    // renewal.
+    // Only a record that cleared its floor and opened becomes last-known-good,
+    // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
+    let _ = snapshots.put(&plane.cache_key, &block).await;
+    // Advancing behind the open, never ahead of it, is the floor law: a record
+    // that will not open must not raise the bar the next resolve is held to.
+    // Neither store failing is a verdict on a record we just authenticated.
+    let stored = floors.raise_sequence_floor(key, sequence).await;
+    let _ = floor::advance_sequence_on_unseal(floors, &plane.adopted_key, opened.revision).await;
+    // Both bars are behind this point. A renewal signs only at an exact floor,
+    // so a record whose floor did not advance to it is not enrolled.
+    let advanced = stored == Ok(sequence);
     let renewable = durable
+        .filter(|_| advanced)
         .and_then(|_| head_cid_from_value(&verified.value))
         .map(|head_cid| HeldRecord {
             routing_key: name.as_str().to_owned(),
@@ -530,13 +540,5 @@ where
             content_cids: Vec::new(),
             envelope: None,
         });
-    // Only a record that cleared its floor and opened becomes last-known-good,
-    // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
-    let _ = snapshots.put(&plane.cache_key, &block).await;
-    // Advancing behind the open, never ahead of it, is the floor law: a record
-    // that will not open must not raise the bar the next resolve is held to.
-    // Neither store failing is a verdict on a record we just authenticated.
-    let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
-    let _ = floor::advance_sequence_on_unseal(floors, &plane.adopted_key, opened.revision).await;
     Ok((opened.body, renewable))
 }

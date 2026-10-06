@@ -1454,6 +1454,7 @@ mod tests {
         use crate::api::ApiClient;
         use crate::net::eol_renew_pass;
         use crate::net::publish::PublishOutcome;
+        use crate::net::renewal_walk::RenewalSeams;
         use crate::profile::SyncTimingProfile;
         use crate::seams::FloorStore;
 
@@ -1533,12 +1534,15 @@ mod tests {
             body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &[hr],
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -1709,6 +1713,7 @@ mod tests {
         use crate::api::ApiClient;
         use crate::net::eol_renew_pass;
         use crate::net::publish::PublishOutcome;
+        use crate::net::renewal_walk::RenewalSeams;
         use crate::profile::SyncTimingProfile;
         use crate::seams::FloorStore;
 
@@ -1779,12 +1784,15 @@ mod tests {
             body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &[hr],
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -1845,6 +1853,7 @@ mod tests {
         use crate::api::ApiClient;
         use crate::net::eol_renew_pass;
         use crate::net::publish::PublishOutcome;
+        use crate::net::renewal_walk::RenewalSeams;
         use crate::profile::SyncTimingProfile;
         use crate::seams::FloorStore;
 
@@ -1906,12 +1915,15 @@ mod tests {
             body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &[hr],
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), hr)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
@@ -1937,20 +1949,17 @@ mod tests {
         assert!(!expected_head.is_empty());
     }
 
-    /// The head arm of the renewal carries no live-value comparison, unlike the
-    /// inline arm, because two mechanisms already stand between it and a record
-    /// a co-writer superseded — and this pins both. A renewal publishes at this
-    /// device's durable floor plus one: while the device has not loaded the
-    /// newer record, the network holds a sequence above that and the publish
-    /// loses; once it has, the adoption re-held the newer record under the same
-    /// node id, so the renewal re-signs the newer version.
+    /// While the device has not loaded a co-writer's newer record, the renewal
+    /// signs nothing; once the adoption re-held it under the same node id, the
+    /// renewal re-signs the newer version.
     #[test]
-    fn the_renewal_loses_to_a_newer_record_it_never_loaded_and_re_signs_one_it_adopted() {
+    fn the_renewal_skips_a_newer_record_it_never_loaded_and_re_signs_one_it_adopted() {
         use core::time::Duration;
 
         use crate::api::ApiClient;
         use crate::net::eol_renew_pass;
         use crate::net::publish::PublishOutcome;
+        use crate::net::renewal_walk::RenewalSeams;
         use crate::profile::SyncTimingProfile;
         use crate::seams::{FloorStore, HttpResponse};
 
@@ -2027,23 +2036,23 @@ mod tests {
         }
 
         scheduler.advance(INSIDE_THE_WINDOW);
-        register_ok();
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            core::slice::from_ref(&ours),
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), ours.clone())])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),
-            &Some(PublishOutcome::LostRace {
-                published_sequence: 2,
-                observed_sequence: 3,
-            }),
-            "a renewal at the unmoved floor plus one cannot reach the newer record",
+            &None,
+            "a renewal never signs over a record it did not load",
         );
+        assert!(device.http.requests().is_empty(), "nothing is registered");
         assert_eq!(
             live_value(),
             CO_WRITER_VALUE,
@@ -2081,12 +2090,15 @@ mod tests {
 
         register_ok();
         let results = block_on(eol_renew_pass(
-            &device.record_store,
             &api,
-            &device.floor_store,
-            &scheduler,
-            &SyncTimingProfile::CI,
-            &[re_held],
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &Default::default(),
+            },
+            &RefCell::new(HeldRecords::from([(HeldKey::Node(node_id), re_held)])),
         ));
         assert_eq!(
             results[0].outcome.as_ref().unwrap(),

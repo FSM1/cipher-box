@@ -150,8 +150,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   ~hourly Scheduler job keyless-re-PUTs every record the session holds, so
   actively used vaults keep themselves alive; on session start and
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
-  and below ~30 days remaining republishes the same CID at seq+1 through the
-  normal CAS path. A held node record carries its envelope version and its
+  and below ~30 days remaining republishes the same value at seq+1. A held
+  record renews through the signature path of the renewal walk (ADR 0061 D3
+  steps 4 to 6), and the loop skips a name that the drain is publishing. The
+  renewal signs only when the record that the network serves is the held
+  record, before and after the registration. A scope pointer name has no floor
+  that its enrolment raises, so its renewal signs when the floor is absent or
+  at most the held sequence. A held node record carries its envelope version and its
   scope bar (`HeldEnvelope`): the renewal does not sign a version that this
   build does not author, or a record whose scope floors rose above the bar,
   and sends `renewalFailed` for it, as the renewal walk does. The same pass
@@ -376,7 +381,9 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
-  (`publish_bin_index`, `publish_settings_above`), and the vouched floor
+  (`publish_bin_index`, `publish_settings_above`), the name sequence of a
+  value this device signed in a liveness renewal, after `Published`
+  (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more
   restrictive: the revocation floor (`record_revocation_floor`);
 - (c) an epoch a minting device holds by construction: `promote_scope_root`,
