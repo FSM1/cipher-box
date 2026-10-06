@@ -115,8 +115,8 @@ pub trait Adopter {
         Ok(None)
     }
 
-    /// Recover the confirmed owner copy when the resolve adopted nothing and
-    /// found no current record.
+    /// Recover the confirmed owner copy when the resolve adopted nothing,
+    /// refused nothing and found no current record.
     async fn recover_dark_root(
         &self,
         _name: &IpnsName,

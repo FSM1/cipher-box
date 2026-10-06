@@ -11403,9 +11403,10 @@ fn a_dark_restart_with_an_unreadable_owner_seed_cache_still_starts() {
         .inner()
         .fail_staged_reads_under(OWNER_SEED_CACHE_PREFIX);
     let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    let root = block_on(restarted.snapshot(ROOT)).expect("the root renders");
     assert!(
-        block_on(restarted.snapshot(ROOT)).is_ok(),
-        "the root renders"
+        root.children.iter().all(|child| child.name != "deep"),
+        "the faulted cache paints nothing"
     );
 }
 

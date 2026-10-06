@@ -41,7 +41,7 @@ publishes nothing at the old name, and keeps no grant row (ADR 0068 D3 and D5).
 It does not adopt or renew the refused record. This protects one device that
 retains its store. The vault record for all owner devices is not landed.
 Amended on 2026-10-06 by FSM1/cipher-box#2344: a cold start whose root resolve
-adopts nothing also opens the cached copy, at the current floors.
+reads as unavailable also opens the cached copy, at the current floors.
 
 ## Alternatives considered
 
