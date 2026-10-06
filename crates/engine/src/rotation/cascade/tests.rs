@@ -1412,7 +1412,15 @@ fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
             &net,
             &RootFx::new(net.clone()).plan(&plan_root),
             || Box::pin(async {}),
-            &|scope_id| cuts.borrow_mut().push(scope_id),
+            &|scope_id| {
+                let floor = block_on(floors.epoch_floor(&scope_id)).expect("the floor reads");
+                assert_eq!(
+                    floor,
+                    Some(5),
+                    "the hook runs once the new epoch is the floor"
+                );
+                cuts.borrow_mut().push(scope_id);
+            },
         ));
         (outcome.is_ok(), cuts.into_inner())
     };

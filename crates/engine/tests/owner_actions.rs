@@ -20917,3 +20917,47 @@ fn a_write_wave_that_stops_sends_no_end_and_reports_the_work_owed() {
         .collect();
     assert_eq!(terminal, vec!["started", "owed"]);
 }
+
+/// The sweep runs this pass reports, with the cut time and the last re-seal
+/// time of each.
+fn sweep_reports(
+    events: &mut EventStream,
+) -> Vec<(NodeId, Option<UnixMillis>, Option<UnixMillis>)> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                cut_at,
+                last_reseal_at,
+                ..
+            } => Some((scope_root, cut_at, last_reseal_at)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A stalled link mint spawns the sweep of the parent, which no cut moved: the
+/// parent's run reports no cut time.
+#[test]
+fn the_sweep_a_stalled_mint_spawns_reports_no_cut_of_the_parent() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    settle_filed_sweeps(&fx);
+
+    let parent: Vec<_> = sweep_reports(&mut fx._events)
+        .into_iter()
+        .filter(|(scope, _, _)| *scope == ROOT)
+        .collect();
+    assert!(!parent.is_empty(), "the parent's sweep reports");
+    assert!(
+        parent.iter().all(|(_, cut_at, _)| cut_at.is_none()),
+        "no cut of the parent occurred"
+    );
+}
