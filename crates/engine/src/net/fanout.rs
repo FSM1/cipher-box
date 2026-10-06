@@ -464,7 +464,7 @@ fn get_failure(error: &SeamError) -> EndpointFailure {
 }
 
 /// The signed `data` of `record_bytes`, when it verifies under `name`.
-fn signed_data(name: &IpnsName, record_bytes: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn signed_data(name: &IpnsName, record_bytes: &[u8]) -> Option<Vec<u8>> {
     verified(name, record_bytes).map(|record| record.data)
 }
 

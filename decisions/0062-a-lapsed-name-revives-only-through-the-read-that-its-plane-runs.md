@@ -11,7 +11,8 @@
   (the settings ladder), and
   [ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md)
   (the renewal walk)
-- **Implemented by:** not landed; FSM1/cipher-box#2108 tracks the change
+- **Implemented by:** FSM1/cipher-box#2337, FSM1/cipher-box#2338, FSM1/cipher-box#2339 and
+  FSM1/cipher-box#2340, the four parts of FSM1/cipher-box#2108
 - **Amends:** none
 
 ## Context
@@ -37,6 +38,9 @@ find the vault root, and it does not start.
    (`EolRule::RefuseAt`), so D4 gives the settings record its own rule.
 4. Register the name, in batches of up to `REGISTRY_BATCH_MAX` names.
 5. After the registration, the fan-out still reads `Absent`, or serves exactly the admitted record.
+   Amended on 2026-10-06 by FSM1/cipher-box#2347: in steps 2 and 5, a served record below S, or
+   the same signed record, passes, and a different record at S refuses. A different record at S
+   refuses the revival until the fan-out stops serving it or a later write supersedes both.
 6. After the adopt commits, read the durable floor with no await before the signature. The floor
    must be at or below the admitted sequence S. Sign at S + 1 with the EOL `eol_from(now)` minus
    one day, as a renewal does (ADR 0061 D3 step 6), so a revival never wins a tie against a real

@@ -19,7 +19,7 @@
 
 The staging soak (ADR 0053) must prove from Node that the public routing network serves each soak
 name at or above the sequence in its ledger, that a write advances the sequence by one, and that
-the republisher renews an old record with a fresh validity. The soak holds no engine session in
+an old record carries a fresh validity. The soak holds no engine session in
 Node. A deployed bundle carries no introspection hook (ADR 0049 D3), and TypeScript has no codec of
 its own (rule 4). So the soak needs the Rust decoder, reached from Node, with no session. Every
 read in the engine passes the adoption gate (rule 6). The gate needs the floors and keys of a
