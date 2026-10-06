@@ -20,7 +20,9 @@ use zeroize::Zeroizing;
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified};
 use super::pointer_fetch::{PointerConsult, PointerConsultError};
-use super::publish::{Observed, PublishBar, PublishError, PublishOutcome, head_cid_from_value};
+use super::publish::{
+    Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
+};
 use super::register::register;
 use super::renewal_walk::{FloorRule, RenewalSeams, sign_admitted};
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
@@ -41,6 +43,27 @@ use crate::sync::tick::ResolveMode;
 pub(crate) struct Admitted {
     pub(crate) observed: Observed,
     pub(crate) bar: Option<PublishBar>,
+}
+
+impl Admitted {
+    /// A record admitted under no scope's floors.
+    fn unbarred(name: &IpnsName, sequence: u64, bytes: &[u8]) -> Self {
+        Self {
+            observed: Observed::admitted(name, sequence, bytes),
+            bar: None,
+        }
+    }
+
+    /// The admission of a gated read, under the floors `bar`.
+    fn gated(
+        observed: Result<Observed, RefusedRead>,
+        bar: PublishBar,
+    ) -> Result<Self, PlaneRefusal> {
+        Ok(Self {
+            observed: observed.map_err(|refused| PlaneRefusal::Unsignable(refused.error))?,
+            bar: Some(bar),
+        })
+    }
 }
 
 /// Why the read of a plane admitted no record.
@@ -225,8 +248,13 @@ impl RecoveryPace {
 
 /// Steps 2 and 5: the fan-out reads `Absent`, or serves a record below `S`,
 /// which the signature at `S + 1` supersedes, or exactly the record at `S`.
-fn corroborates(fanout: FanoutRecord, sequence: u64, bytes: &[u8]) -> Result<(), ReviveError> {
-    match fanout {
+async fn corroborate<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+    sequence: u64,
+    bytes: &[u8],
+) -> Result<(), ReviveError> {
+    match fanout_get_classified(transport, name).await {
         FanoutRecord::Absent => Ok(()),
         FanoutRecord::Found(served, _) if served.sequence < sequence => Ok(()),
         FanoutRecord::Found(served, live) if served.sequence == sequence && live == bytes => Ok(()),
@@ -326,11 +354,7 @@ where
         .and_then(|record| record.verify(name))
         .map_err(|_| ReviveError::Unrecoverable)?;
 
-    corroborates(
-        fanout_get_classified(seams.transport, name).await,
-        recovered.sequence,
-        &bytes,
-    )?;
+    corroborate(seams.transport, name, recovered.sequence, &bytes).await?;
     let floor = floor::sequence_floor(seams.floors, name.as_str().as_bytes())
         .await
         .map_err(ReviveError::FloorRead)?;
@@ -388,11 +412,13 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     let observed = &lapsed.admitted.observed;
-    corroborates(
-        fanout_get_classified(seams.transport, lapsed.name).await,
+    corroborate(
+        seams.transport,
+        lapsed.name,
         observed.sequence(),
         observed.bytes(),
-    )?;
+    )
+    .await?;
     let receipt = sign_admitted(
         seams,
         observed,
@@ -452,12 +478,7 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ScopeRootRead<'_, H
             | ScopeRootAdmission::Gone
             | ScopeRootAdmission::HeadBlockAbsent => PlaneRefusal::Unavailable,
         })?;
-        Ok(Admitted {
-            observed: admitted
-                .observed
-                .map_err(|refused| PlaneRefusal::Unsignable(refused.error))?,
-            bar: Some(admitted.bar),
-        })
+        Admitted::gated(admitted.observed, admitted.bar)
     }
 }
 
@@ -492,17 +513,12 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ChildRead<'_, H, F,
         )
         .await
         {
-            Ok(ChildRecord::Admitted(read)) => Ok(Admitted {
-                observed: read
-                    .observed
-                    .map_err(|refused| PlaneRefusal::Unsignable(refused.error))?,
-                bar: Some(self.bar),
-            }),
-            Ok(ChildRecord::Absent) | Err(ChildResolveError::Unavailable(_)) => {
-                Err(PlaneRefusal::Unavailable)
-            }
+            Ok(ChildRecord::Admitted(read)) => Admitted::gated(read.observed, self.bar),
+            Ok(ChildRecord::Absent)
+            | Err(
+                ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
+            ) => Err(PlaneRefusal::Unavailable),
             Err(ChildResolveError::Gate(GateError::Rejected(_))) => Err(PlaneRefusal::Rejected),
-            Err(ChildResolveError::Gate(GateError::Seam(_))) => Err(PlaneRefusal::Unavailable),
         }
     }
 }
@@ -530,10 +546,7 @@ impl<F: FloorStore> PlaneRead for ScopePointerRead<'_, F> {
             .run(transport, self.floors, &self.scope_id)
             .await
         {
-            Ok(Some(_)) => Ok(Admitted {
-                observed: Observed::admitted(name, recovered.sequence, bytes),
-                bar: None,
-            }),
+            Ok(Some(_)) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
             Ok(None) | Err(PointerConsultError::Unavailable) => Err(PlaneRefusal::Unavailable),
             Err(PointerConsultError::Rejected) => Err(PlaneRefusal::Rejected),
         }
@@ -595,10 +608,7 @@ where
         )
         .await;
         match read.load {
-            BinIndexLoad::Resolved(_) => Ok(Admitted {
-                observed: Observed::admitted(name, recovered.sequence, bytes),
-                bar: None,
-            }),
+            BinIndexLoad::Resolved(_) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => {
                 Err(if reason.is_verdict() {
                     PlaneRefusal::Rejected
@@ -662,10 +672,9 @@ mod tests {
             _: &[u8],
         ) -> Result<Admitted, PlaneRefusal> {
             match fanout_get_classified(transport, name).await {
-                FanoutRecord::Found(served, bytes) => Ok(Admitted {
-                    observed: Observed::admitted(name, served.sequence, &bytes),
-                    bar: None,
-                }),
+                FanoutRecord::Found(served, bytes) => {
+                    Ok(Admitted::unbarred(name, served.sequence, &bytes))
+                }
                 FanoutRecord::Absent | FanoutRecord::Unavailable(_) => {
                     Err(PlaneRefusal::Unavailable)
                 }
