@@ -2047,6 +2047,44 @@ mod tests {
         }
     }
 
+    /// A withheld read (ADR 0071 D1) with no cached body, as a manual
+    /// refresh reads, is withheld and not mere unavailability.
+    #[test]
+    fn a_withheld_read_with_no_cache_is_withheld() {
+        let published = publish(Spec::default());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), SEQUENCE + 1))
+            .expect("the floor raises");
+        let transport =
+            InMemoryRecordStore::new(vec![EndpointId::new("e0"), EndpointId::new("e1")]);
+        transport.seed_record(
+            &EndpointId::new("e1"),
+            published.name.as_str(),
+            published.record_bytes.clone(),
+        );
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let read = |transport: &InMemoryRecordStore| {
+            block_on(resolve_child_record(
+                transport,
+                &InMemorySnapshotCache::default(),
+                &adopter(&gw, &http, &floors, &published, NODE),
+                &published.name,
+                None,
+                ResolveMode::NoCache,
+            ))
+        };
+
+        transport.fail_endpoint(&EndpointId::new("e0"));
+        assert!(matches!(read(&transport), Ok(ChildRecord::Withheld)));
+
+        transport.fail_endpoint(&EndpointId::new("e1"));
+        assert!(
+            matches!(read(&transport), Err(ChildResolveError::Unavailable(_))),
+            "no answer is no withheld read"
+        );
+    }
+
     /// A withheld read (ADR 0071 D1) that falls back to a cached body below
     /// the read-epoch floor opens through the lagging arm, and still reports
     /// the read as withheld.

@@ -297,9 +297,12 @@ scenario fails the meta-test):
   `a_withheld_shared_child_sends_one_escalation_after_the_window`,
   `a_shared_child_hold_survives_a_pass_with_no_answer`,
   `a_manual_refresh_inside_the_window_keeps_the_shared_child_hold`,
-  `a_reached_shared_child_ends_the_hold`); a cached body below the read-epoch
-  floor behind a withheld read stays withheld (`net::child`
-  `a_withheld_read_of_a_lagging_cached_body_stays_withheld`); a held
+  `a_reached_shared_child_ends_the_hold`), and a folder that leaves the view
+  ends its hold (`a_shared_child_that_leaves_the_view_ends_its_hold`); a
+  cached body below the read-epoch floor behind a withheld read stays
+  withheld, and a withheld read with no cache is withheld, not unavailable
+  (`net::child` `a_withheld_read_of_a_lagging_cached_body_stays_withheld`,
+  `a_withheld_read_with_no_cache_is_withheld`); a held
   bookmark's scope pointer that no endpoint answers past the window, while
   the vault root reconciles, sends one escalation, with the vault root down
   it sends none until one window after the root recovers, a pointer that
@@ -313,7 +316,8 @@ scenario fails the meta-test):
   `a_pointer_seen_before_escalates_while_an_endpoint_fails`,
   `a_pointer_answer_ends_the_hold`); the window counts only healthy time, so
   a pause past the window while the vault root is down sends nothing on the
-  first healthy pass (`sync::staleness`); a pass that reaches no record keeps
+  first healthy pass, also for a hold that no pass reads in the outage
+  (`sync::staleness`); a pass that reaches no record keeps
   the hold, and an owned scope never escalates (`grants::received_status`).
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then

@@ -13297,6 +13297,41 @@ fn a_reached_shared_child_ends_the_hold() {
     );
 }
 
+/// A name that leaves the focus window ends its hold, so a hold after it
+/// comes back measures a new window.
+#[test]
+fn a_shared_child_that_leaves_the_view_ends_its_hold() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_shared_child();
+    let inner = block_on(grantee.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .iter()
+        .find(|child| child.name == "inner")
+        .expect("the shared folder lists inner")
+        .id;
+    for _ in 0..4 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    block_on(grantee.set_focus(None)).expect("the focus moves");
+    for _ in 0..8 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    block_on(grantee.set_focus(Some(inner))).expect("the focus moves");
+    for _ in 0..3 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "the hold ended when the folder left the view"
+    );
+
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        escalations(&events_so_far(&mut events)),
+        vec![name.into_bytes()]
+    );
+}
+
 /// The trust events on the stream.
 fn abuse_events_in(events: &[Event]) -> usize {
     events

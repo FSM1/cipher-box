@@ -419,8 +419,8 @@ pub(crate) struct SessionState {
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
     pub(crate) received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
-    /// The withheld-update hold on each folder or file name the focus legs
-    /// below a grafted root read last pass. In-memory.
+    /// The withheld-update hold on each folder or file name read below a
+    /// grafted root, kept while the name stays in the focus window. In-memory.
     pub(crate) withheld_pins: Rc<RefCell<BTreeMap<Vec<u8>, WithheldPin>>>,
     /// The same hold on each held bookmark's scope pointer, kept by the
     /// received-share pass. In-memory.

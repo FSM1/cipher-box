@@ -850,13 +850,11 @@ where
                 .or_default();
         }
         let scope_roots = state.bookmarked_scope_roots.borrow().clone();
-        let in_focus = focus_names(
-            &state.snapshot.borrow(),
-            by_scope
-                .values()
-                .flat_map(|targets| targets.folders.iter().copied()),
-            state.focus.borrow().folders_in_view(),
-        );
+        let focus_targets: Vec<NodeId> = by_scope
+            .values()
+            .flat_map(|targets| targets.folders.iter().chain(&targets.files).copied())
+            .collect();
+        let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
         let legs = ScopeLegContext {
             floors: &self.seams.floors,
             sharers: grafted,
@@ -904,6 +902,7 @@ where
             let mut settle = |nodes: &[NodeId], report: FolderRefreshReport| {
                 for (name, read) in &report.pins {
                     pins.observe_in(&mut state.withheld_pins.borrow_mut(), name, *read, true);
+                    read_pins.insert(name.clone());
                 }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(
                     &state.observed_unlinks,
@@ -966,11 +965,17 @@ where
             .borrow_mut()
             .open_files
             .retain(|row| !attempted_files.contains(&row.node));
-        // A hold lives while its name stays in the focus window.
-        state
-            .withheld_pins
-            .borrow_mut()
-            .retain(|name, _| in_focus.contains(name));
+        // A hold lives while this pass read its name or the name stays in
+        // the focus window.
+        let mut in_focus = focus_names(
+            &state.snapshot.borrow(),
+            focus_targets.into_iter(),
+            state.focus.borrow().folders_in_view(),
+        );
+        in_focus.append(&mut read_pins);
+        pins.retain_in(&mut state.withheld_pins.borrow_mut(), |name| {
+            in_focus.contains(name)
+        });
         (folder_verdict, scopes)
     }
 
@@ -1528,7 +1533,7 @@ where
     }
 }
 
-/// The record names of the focus window: each folder a leg targets, and each
+/// The record names of the focus window: each node a leg targets, and each
 /// node a folder in view lists.
 fn focus_names(
     base: &Snapshot,

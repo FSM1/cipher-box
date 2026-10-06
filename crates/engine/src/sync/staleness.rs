@@ -220,6 +220,19 @@ impl PinPass<'_> {
             None => pins.remove(name),
         };
     }
+
+    /// Keep the holds in `pins` whose name `keep` names. A pass whose vault
+    /// root did not reconcile pauses each kept hold, also one it did not read.
+    pub(crate) fn retain_in(
+        &self,
+        pins: &mut BTreeMap<Vec<u8>, WithheldPin>,
+        keep: impl Fn(&[u8]) -> bool,
+    ) {
+        pins.retain(|name, pin| {
+            pin.paused |= !self.root_reconciled;
+            keep(name)
+        });
+    }
 }
 
 #[cfg(test)]
@@ -373,6 +386,34 @@ mod tests {
             true,
             &P
         ));
+    }
+
+    /// A hold that no pass reads while the vault root is down still pauses,
+    /// so the outage does not count toward the window.
+    #[test]
+    fn a_kept_hold_no_pass_reads_in_an_outage_stays_paused() {
+        let (events, mut rx) = futures_channel::mpsc::unbounded();
+        let pass = |at, root_reconciled| PinPass {
+            now: UnixMillis(at),
+            root_reconciled,
+            profile: &P,
+            events: &events,
+        };
+        let name: &[u8] = b"k51-shared-folder";
+        let mut pins = BTreeMap::new();
+        pass(0, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        pass(100_000, false).retain_in(&mut pins, |_| true);
+        pass(1_000_000, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        assert!(rx.try_recv().is_err(), "the window starts at this pass");
+        pass(1_600_000, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        let sent = rx.try_recv().ok();
+        assert!(matches!(
+            sent,
+            Some(Event::WithheldUpdateEscalation { ipns_name }) if ipns_name == name
+        ));
+
+        pass(1_700_000, true).retain_in(&mut pins, |_| false);
+        assert!(pins.is_empty(), "a name out of the window ends its hold");
     }
 
     /// One hold escalates one time, after a window of passes whose vault root
