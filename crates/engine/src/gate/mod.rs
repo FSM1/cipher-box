@@ -18,8 +18,9 @@ pub mod floor;
 mod adoption;
 
 pub use adoption::{
-    Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
-    ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred, record_cut_epoch_floor,
+    Adopted, Candidate, Committed, FLOOR_VERDICTS, GateError, GateRejection, GateStage,
+    PendingAdoption, ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred,
+    record_cut_epoch_floor,
 };
 pub(crate) use adoption::{
     read_cut_epoch_floor, refuse_below_cut_floor, verify_commitment_in_force,

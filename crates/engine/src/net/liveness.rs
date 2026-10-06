@@ -441,7 +441,7 @@ async fn renew_held<T, H, C, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     name: &IpnsName,
     held: &HeldRecord,
-) -> Result<Option<PublishReceipt>, PublishError>
+) -> Result<Option<Renewed>, PublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -516,16 +516,25 @@ where
         return Ok(None);
     };
     let receipt = receipt?;
-    // This device authored the renewal from the admitted value, so the next
-    // pass renews from it under the same exact-floor rule. A failed write is
-    // safe: the next pass refuses at the floor check, and the next adoption
-    // through the gate raises the floor.
-    if let (PublishOutcome::Published { sequence }, FloorRule::Exact) = (&receipt.outcome, rule) {
-        let _ = floors
-            .raise_sequence_floor(name.as_str().as_bytes(), *sequence)
-            .await;
-    }
-    Ok(Some(receipt))
+    // The exact-floor rule renews only a record at the floor, so the held
+    // entry follows only a renewal whose floor rose to it.
+    let follow = match (&receipt.outcome, rule) {
+        (PublishOutcome::Published { sequence }, FloorRule::Exact) => {
+            floors
+                .raise_sequence_floor(name.as_str().as_bytes(), *sequence)
+                .await
+                == Ok(*sequence)
+        }
+        (outcome, _) => matches!(outcome, PublishOutcome::Published { .. }),
+    };
+    Ok(Some(Renewed { receipt, follow }))
+}
+
+/// A renewal that [`renew_held`] published or reported.
+struct Renewed {
+    receipt: PublishReceipt,
+    /// Whether the held entry may follow the renewal to its record.
+    follow: bool,
 }
 
 /// One held record's sub-EOL renewal outcome.
@@ -584,9 +593,9 @@ where
         if hr.head_cid() == Some("") {
             continue;
         }
-        let outcome = renew_held(api, seams, &name, &hr).await.map(|receipt| {
-            receipt.map(|receipt| {
-                if matches!(receipt.outcome, PublishOutcome::Published { .. }) {
+        let outcome = renew_held(api, seams, &name, &hr).await.map(|renewed| {
+            renewed.map(|Renewed { receipt, follow }| {
+                if follow {
                     hold_if_unchanged(
                         held,
                         key,
@@ -1633,6 +1642,71 @@ mod tests {
     #[test]
     fn a_renewed_node_record_renews_again_when_it_falls_due() {
         a_followed_renewal_renews_again(Arm::Sealed, HeldKey::Node([6u8; 16]));
+    }
+
+    /// A renewal whose floor raise the store did not take leaves the held
+    /// entry at the record it renewed, and reports only the publish.
+    fn a_renewal_whose_floor_did_not_rise_is_not_followed(arm: Arm, key: HeldKey) {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, record) = due(&world, &device, arm);
+        let renewed = record.record_bytes.clone();
+        let held = RefCell::new(HeldRecords::from([(key, record)]));
+        device
+            .floor_store
+            .under_report_sequence_raises_for(name.as_str().as_bytes());
+        device.http.enqueue_response(ok_200());
+        let results = block_on(eol_renew_pass(
+            &api,
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &RefCell::default(),
+            },
+            &held,
+        ));
+
+        assert_eq!(seq_at(&device, &name), 2);
+        assert_eq!(
+            results.into_iter().next().unwrap().outcome,
+            Ok(Some(PublishOutcome::Published { sequence: 2 })),
+        );
+        assert_eq!(
+            held.borrow().get(&key).unwrap().record_bytes,
+            renewed,
+            "the held entry stays at the record it renewed",
+        );
+
+        let next = block_on(eol_renew_pass(
+            &api,
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &RefCell::default(),
+            },
+            &held,
+        ));
+        assert_eq!(next.into_iter().next().unwrap().outcome, Ok(None));
+        assert_eq!(seq_at(&device, &name), 2, "the next pass signs nothing");
+    }
+
+    #[test]
+    fn a_settings_renewal_whose_floor_did_not_rise_is_not_followed() {
+        a_renewal_whose_floor_did_not_rise_is_not_followed(Arm::Head, HeldKey::VaultSettings);
+    }
+
+    #[test]
+    fn a_node_renewal_whose_floor_did_not_rise_is_not_followed() {
+        a_renewal_whose_floor_did_not_rise_is_not_followed(Arm::Sealed, HeldKey::Node([6u8; 16]));
     }
 
     #[test]
