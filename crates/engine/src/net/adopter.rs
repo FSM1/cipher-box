@@ -354,6 +354,16 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             .map(OwnScopeMaterial::from))
     }
 
+    async fn recover_dark_root(
+        &self,
+        name: &IpnsName,
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
+        Ok(self
+            .recover_cached_owner_root(name)
+            .await?
+            .map(OwnScopeMaterial::from))
+    }
+
     async fn gates_tie(&self, name: &IpnsName, bytes: &[u8]) -> bool {
         matches!(self.gate_and_recover(name, bytes).await, Err(GateError::Rejected(GateRejection {
             reason: RejectionReason::SequenceNotNewer { floor, sequence }, ..

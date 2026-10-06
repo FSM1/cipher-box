@@ -14,7 +14,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use crate::facade::NodeId;
 use crate::seams::{OpId, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
-use crate::sync::drain::{owner_scoped_key, published_op_mark};
+use crate::sync::drain::{PUBLISHED_OP_MARK_PREFIX, owner_scoped_key, published_op_mark};
 use crate::sync::duration_millis;
 use crate::sync::op::OpKind;
 use crate::sync::owed_rotation::DROP_BOUND;
@@ -199,6 +199,12 @@ pub(crate) fn keeps(kind: &OpKind) -> bool {
         kind,
         OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
     )
+}
+
+/// Whether `staging_key` holds an identity's published-op mark or kept-op notes.
+pub(crate) fn is_kept_op_key(staging_key: &[u8]) -> bool {
+    staging_key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+        || staging_key.starts_with(KEPT_OP_NOTES_PREFIX)
 }
 
 /// Whether `op_id` is a kept op: at or below the published-op mark, or noted.

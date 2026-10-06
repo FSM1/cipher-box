@@ -1687,6 +1687,8 @@ surviving committed grants uniformly in the republish it already does.
   uses it through `RootFallback::last_copy` and follows ADR 0068: move the root
   first, publish nothing at the old name, and keep no grant row. The refused
   record is never adopted or enrolled for renewal.
+  A cold start whose root resolve reads as unavailable paints the confirmed
+  copy at the current floors.
   The cache covers a restart and loss of the snapshot or gateway copy on the
   same device. It does not cover a new owner device, deletion of local state,
   or content sealed only under a withheld epoch. That content needs a valid-seed

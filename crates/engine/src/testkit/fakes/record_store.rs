@@ -60,6 +60,8 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose GET is refused at every endpoint, so one node of a
     /// tree can be unresolvable while the rest of it reads normally.
     get_failing_keys: Arc<Mutex<HashSet<String>>>,
+    /// (endpoint, routing key) pairs whose GET is refused at that endpoint only.
+    get_failing_at: Arc<Mutex<HashSet<(EndpointId, String)>>>,
     /// GETs served per routing key, so a test can count what a pass spends on
     /// one name rather than inferring it from what the pass published.
     gets: Arc<Mutex<HashMap<String, usize>>>,
@@ -102,6 +104,7 @@ impl InMemoryRecordStore {
             put_answers: Arc::default(),
             get_answers: Arc::default(),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
+            get_failing_at: Arc::default(),
             gets: Arc::new(Mutex::new(HashMap::new())),
             puts: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
@@ -299,6 +302,15 @@ impl InMemoryRecordStore {
             .insert(routing_key.to_owned());
     }
 
+    /// Refuse every GET under `routing_key` at `endpoint` alone, while other
+    /// endpoints and other names answer normally.
+    pub fn fail_get_at_for(&self, endpoint: &EndpointId, routing_key: &str) {
+        self.get_failing_at
+            .lock()
+            .expect("lock")
+            .insert((endpoint.clone(), routing_key.to_owned()));
+    }
+
     /// Restore `routing_key`'s GET path.
     pub fn heal_get_for(&self, routing_key: &str) {
         self.get_failing_keys
@@ -405,6 +417,13 @@ impl InMemoryRecordStore {
             .expect("lock")
             .contains(routing_key)
     }
+
+    fn get_failing_at(&self, endpoint: &EndpointId, routing_key: &str) -> bool {
+        self.get_failing_at
+            .lock()
+            .expect("lock")
+            .contains(&(endpoint.clone(), routing_key.to_owned()))
+    }
 }
 
 impl RecordTransport for InMemoryRecordStore {
@@ -462,7 +481,7 @@ impl RecordTransport for InMemoryRecordStore {
                 *status,
             ));
         }
-        if self.get_failing_key(routing_key) {
+        if self.get_failing_key(routing_key) || self.get_failing_at(endpoint, routing_key) {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
         let record = match self.swapped(routing_key) {
