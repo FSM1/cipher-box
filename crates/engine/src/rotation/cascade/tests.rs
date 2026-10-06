@@ -1413,27 +1413,28 @@ fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
             &RootFx::new(net.clone()).plan(&plan_root),
             || Box::pin(async {}),
             &|scope_id, epoch| {
-                assert_eq!(epoch, 5, "the hook names the new epoch");
                 let floor = block_on(floors.epoch_floor(&scope_id)).expect("the floor reads");
                 assert_eq!(
                     floor,
-                    Some(5),
+                    Some(epoch),
                     "the hook runs once the new epoch is the floor"
                 );
-                cuts.borrow_mut().push(scope_id);
+                cuts.borrow_mut().push((scope_id, epoch));
             },
         ));
         (outcome.is_ok(), cuts.into_inner())
     };
-    let nested = || FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
+    // Each scope starts at its own epoch, so a note carries the scope's own
+    // new epoch, never the root's.
+    let nested = || FakeNet::new().scope(0x0a, 7, &[0x0b]).scope(0x0b, 9, &[]);
 
     assert_eq!(
         noted(nested()),
-        (true, vec![sid(0x00), sid(0x0a), sid(0x0b)])
+        (true, vec![(sid(0x00), 5), (sid(0x0a), 8), (sid(0x0b), 10)])
     );
     assert_eq!(
         noted(nested().publish_fault(0x0b, RotationPublishError::NotPublished)),
-        (false, vec![sid(0x00), sid(0x0a)]),
+        (false, vec![(sid(0x00), 5), (sid(0x0a), 8)]),
         "the cuts before the stop stay noted"
     );
 }

@@ -20961,3 +20961,34 @@ fn the_sweep_a_stalled_mint_spawns_reports_no_cut_of_the_parent() {
         "no cut of the parent occurred"
     );
 }
+
+/// A manual rotation cuts the scope's read epoch: the sweep it enqueues
+/// reports the cut time and the new epoch.
+#[test]
+fn the_sweep_a_rotate_now_enqueues_reports_its_cut_time_and_new_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<(u64, Option<UnixMillis>)> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                read_epoch,
+                cut_at,
+                ..
+            } if scope_root == fx.folder => Some((read_epoch, cut_at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, vec![(2, Some(cut_at))]);
+}
