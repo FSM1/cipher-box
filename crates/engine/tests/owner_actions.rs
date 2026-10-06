@@ -9361,8 +9361,10 @@ fn a_navigation_after_a_name_wave_and_a_grant_by_another_device_reads_nothing() 
 }
 
 /// Another owner device grants a folder, then this device grants another one
-/// over that publish before a walk. The own publish does not hold the root, so
-/// a navigation into the first folder reads nothing and sends no abuse event.
+/// over that publish before a walk, and repeats that grant. The own publish
+/// does not hold the root, and the repeat raises the floor at the root without
+/// a walk. A navigation into the first folder reads nothing and sends no abuse
+/// event.
 #[test]
 fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
     let mut fx = GrantScenario::new();
@@ -9370,14 +9372,19 @@ fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let folder = fx.folder;
     let doc = grant_inner_on_second_device(&fx, folder);
-    assert_eq!(
+    let grant_other = |fx: &mut GrantScenario| {
         block_on(fx.engine.command(Command::Grant {
             node: other,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
             grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done)
+        }))
+    };
+    assert_eq!(grant_other(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(
+        grant_other(&mut fx),
+        Ok(CommandOutcome::Done),
+        "the repeat lands"
     );
 
     navigate_into_the_new_root(&mut fx, folder, doc);

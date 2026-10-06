@@ -10274,9 +10274,11 @@ where {
     /// name ([`crate::session::RootSequences`]): a grant in that record can
     /// name a scope root the legs would read as a plain child. The name is the
     /// one the last walk gated, else `name`. A moved root reads nothing until
-    /// the next walk. An unavailable plane or floor store counts as moved; an
-    /// absent record names no scope. The probe adopts nothing and raises no
-    /// floor.
+    /// the next walk. The sequence floor is no proof of a walk, as a gated
+    /// read outside a walk raises it, so it bars only a replay: a served
+    /// record below it, or a floor store with no answer, also counts as moved.
+    /// An unavailable plane counts as moved; an absent record names no scope.
+    /// The probe adopts nothing and raises no floor.
     async fn scope_root_moved(
         &self,
         probes: &RootProbes,
@@ -10294,17 +10296,14 @@ where {
                 FanoutRecord::Found(served, _) => {
                     let name = name.as_str().as_bytes();
                     self.state.root_sequences.borrow().held(name) < Some(served.sequence)
-                        && match floor::check_sequence(
+                        || floor::check_sequence(
                             floors,
                             name,
                             served.sequence,
-                            floor::Strictness::StrictlyNewer,
+                            floor::Strictness::AtOrAboveFloor,
                         )
                         .await
-                        {
-                            Ok(()) | Err(GateError::Seam(_)) => true,
-                            Err(GateError::Rejected(_)) => false,
-                        }
+                        .is_err()
                 }
                 FanoutRecord::Absent => false,
                 FanoutRecord::Unavailable(_) => true,
@@ -21139,11 +21138,11 @@ mod focus_access_tests {
         (shared_file, own_file)
     }
 
-    /// The probe compares a served root above every held sequence with the
-    /// floor at its name. A floor store with no answer counts as moved, as an
-    /// unavailable plane does.
+    /// A served root above every name-bound sequence counts as moved, even
+    /// when the floor at its name holds it: a gated read outside a walk raises
+    /// that floor. A floor store with no answer counts as moved.
     #[test]
-    fn a_probe_whose_floor_read_fails_counts_the_root_as_moved() {
+    fn a_probe_measures_the_root_against_the_walk_not_the_floor() {
         use crate::testkit::fakes::InMemoryFloorStore;
         use cipherbox_core::ipns::IpnsRecord;
 
@@ -21178,19 +21177,25 @@ mod focus_access_tests {
             block_on(engine.scope_root_moved(&RootProbes::default(), FOLDER, Some(&name), floors))
         };
 
+        let floored = InMemoryFloorStore::default();
+        block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
+        assert!(moved(&floored), "a floor at the served sequence is no walk");
+
+        engine
+            .state
+            .root_sequences
+            .borrow_mut()
+            .note_walked(FOLDER, &name, 2);
+        assert!(!moved(&floored), "the walk gated the served sequence");
         let failing = InMemoryFloorStore::default();
         failing.fail_floor_reads();
         assert!(
             moved(&failing),
             "a floor store with no answer counts as moved"
         );
-        assert!(
-            moved(&InMemoryFloorStore::default()),
-            "no floor at the name"
-        );
-        let walked = InMemoryFloorStore::default();
-        block_on(walked.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
-        assert!(!moved(&walked), "the floor holds the served sequence");
+        let above = InMemoryFloorStore::default();
+        block_on(above.raise_sequence_floor(name.as_str().as_bytes(), 3)).unwrap();
+        assert!(moved(&above), "a served record below the floor is a replay");
     }
 
     /// A record in a shared scope unseals only under that scope's own read
