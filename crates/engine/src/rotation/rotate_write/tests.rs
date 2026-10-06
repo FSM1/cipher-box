@@ -221,6 +221,8 @@ struct WaveState {
     /// Every order the wave issued, in call order — the rewrite material the
     /// concrete publisher acts on.
     orders: Rc<RefCell<Vec<RepublishedNode>>>,
+    /// Every `(moved, total)` the wave reported, in call order.
+    moved: Rc<RefCell<Vec<(usize, usize)>>>,
 }
 
 /// A fake publisher over shared [`WaveState`], optionally scripted to fail once
@@ -346,6 +348,10 @@ impl WriteWavePublisher for FakePublisher {
         self.state.repoint_channels.borrow_mut().push(channel);
         self.state.events.borrow_mut().push(Event::Repoint(channel));
         Ok(())
+    }
+
+    fn node_moved(&self, moved: usize, total: usize) {
+        self.state.moved.borrow_mut().push((moved, total));
     }
 }
 
@@ -898,6 +904,42 @@ fn mid_wave_crash_resumes_from_published_records_only() {
     assert!(
         retired.is_disjoint(&live),
         "no name a node currently lives at is retired"
+    );
+}
+
+/// The wave reports each node once, the root last, and a resumed wave reports
+/// the nodes a prior run already moved.
+#[test]
+fn the_wave_reports_each_node_once_and_the_root_last() {
+    let owner = owner();
+    let (c, sig) = commitment(&owner);
+    let current_root = old_name_of(&SCOPE);
+    let every_node: Vec<(usize, usize)> = (1..=5).map(|moved| (moved, 5)).collect();
+
+    let state = WaveState::default();
+    let resolver = tree_on(state.clone());
+    let crashing = FakePublisher::refusing(state.clone(), RepointChannel::ScopePointer);
+    block_on(rotate_scope_write(
+        &mut SeededEntropy::new(9),
+        &resolver,
+        &crashing,
+        &plan(&owner, &c, &sig, &current_root),
+    ))
+    .expect_err("the wave stops at the pointer flip");
+    assert_eq!(*state.moved.borrow(), every_node);
+
+    state.moved.borrow_mut().clear();
+    block_on(rotate_scope_write(
+        &mut SeededEntropy::new(9),
+        &resolver,
+        &FakePublisher::new(state.clone()),
+        &plan(&owner, &c, &sig, &current_root),
+    ))
+    .expect("the resumed wave completes");
+    assert_eq!(
+        *state.moved.borrow(),
+        every_node,
+        "the resume republished nothing and still reports every node"
     );
 }
 

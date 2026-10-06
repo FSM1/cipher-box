@@ -130,6 +130,10 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   rotationWorkAbandoned: true,
   nodeDropped: true,
   writeCutUnfinished: true,
+  nameWaveStarted: true,
+  nameWaveProgress: true,
+  nameWaveEnded: true,
+  sweepConvergence: true,
   granteeJoined: true,
   opProgress: true,
 };

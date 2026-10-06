@@ -379,6 +379,13 @@ impl SweepOutcome {
                 .any(|(_, reason)| reason.is_retryable())
     }
 
+    /// The interior nodes this outcome does not prove at
+    /// [`scope_read_epoch`](Self::scope_read_epoch): every node not re-sealed
+    /// or already there.
+    pub fn old_epoch_nodes(&self) -> usize {
+        self.dropped_lost_race.len() + self.unreachable.len()
+    }
+
     /// The nodes this pass could not read, without the verdicts — what a caller
     /// proving convergence names as unconverged.
     pub fn unreachable_nodes(&self) -> impl Iterator<Item = [u8; 16]> + '_ {

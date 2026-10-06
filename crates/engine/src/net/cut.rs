@@ -20,7 +20,7 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
-use crate::facade::{Event, NodeId};
+use crate::facade::{Event, NodeId, saturating_count};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
@@ -426,6 +426,10 @@ where
             reason,
         };
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
+        let _ = self.events.unbounded_send(Event::NameWaveStarted {
+            scope_root,
+            at: self.scheduler.now(),
+        });
         let outcome = self
             .bounded(async || {
                 // Re-read after the read arm: a full revoke re-keyed the scope, and
@@ -524,6 +528,12 @@ where
                 cause: dropped.cause,
             });
         }
+        let _ = self.events.unbounded_send(Event::NameWaveEnded {
+            scope_root,
+            interior_nodes: saturating_count(outcome.interior_node_count),
+            dropped: saturating_count(outcome.dropped.len()),
+            at: self.scheduler.now(),
+        });
         Ok(outcome)
     }
 }

@@ -75,7 +75,7 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
+use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row, saturating_count};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, PendingAdoption, RejectionReason, floor,
@@ -6171,6 +6171,15 @@ where
                     .map(|_| ())
             }
         }
+    }
+
+    fn node_moved(&self, moved: usize, total: usize) {
+        let _ = self.events.unbounded_send(Event::NameWaveProgress {
+            scope_root: NodeId(self.scope_id),
+            moved: saturating_count(moved),
+            total: saturating_count(total),
+            at: self.scheduler.now(),
+        });
     }
 }
 
