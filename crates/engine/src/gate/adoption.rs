@@ -310,6 +310,18 @@ pub struct Adopted {
     pub epoch: u64,
 }
 
+/// A committed gate pass and the sequence floor its commit left. Only a
+/// record at exactly that floor may be held for renewal: the exact-floor
+/// renewal refuses any other.
+#[derive(Debug)]
+pub struct Committed {
+    /// The adopted state the commit advanced the floors to.
+    pub adopted: Adopted,
+    /// The stored sequence floor after the commit, `None` when the store
+    /// reports none.
+    pub floor: Option<u64>,
+}
+
 /// A gate pass whose floor-law advance is **deferred**: all six stages
 /// succeeded and the read-body unsealed, but the durable floors have not moved
 /// yet. A caller that must durably persist accepted state (the accept flow's
@@ -429,6 +441,22 @@ impl PendingAdoption {
     /// cross-writer contention is resolved on the publish plane, never on the
     /// local floor read.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
+        self.advance(floors).await?;
+        Ok(self.adopted)
+    }
+
+    /// [`commit`](Self::commit), and read back the sequence floor it left for
+    /// the hold decision ([`Committed`]).
+    pub async fn commit_for_hold<F: FloorStore>(self, floors: &F) -> Result<Committed, SeamError> {
+        self.advance(floors).await?;
+        let floor = floors.sequence_floor(&self.ipns_name).await?;
+        Ok(Committed {
+            adopted: self.adopted,
+            floor,
+        })
+    }
+
+    async fn advance<F: FloorStore>(&self, floors: &F) -> Result<(), SeamError> {
         // The restrictive floor goes first, so an interrupt between the two
         // leaves this device refusing a pre-cut set it would otherwise
         // re-adopt, never the reverse. A scope the owner never cut carries
@@ -445,8 +473,7 @@ impl PendingAdoption {
             self.adopted.sequence,
             self.adopted.epoch,
         )
-        .await?;
-        Ok(self.adopted)
+        .await
     }
 }
 

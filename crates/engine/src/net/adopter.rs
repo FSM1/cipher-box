@@ -37,8 +37,8 @@ use super::resolve::{AdoptOutcome, Adopter, GatePass, OwnScopeMaterial};
 use crate::content::limits::{resealable_root_rest_bytes, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
-    Adopted, Candidate, GateError, GateRejection, GateStage, PendingAdoption, ReaderContext,
-    RejectionReason, SeedBlob, adopt_deferred, floor,
+    Adopted, Candidate, Committed, GateError, GateRejection, GateStage, PendingAdoption,
+    ReaderContext, RejectionReason, SeedBlob, adopt_deferred, floor,
 };
 use crate::grants::owner_entry::OwnerSeedCache;
 use crate::grants::{recipient_blinded_tag, self_locate_signed};
@@ -323,8 +323,10 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         })
     }
 
-    async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
-        self.commit_root(pending).await
+    async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Committed, SeamError> {
+        self.remember_confirmed(pending.owner_seed_record.as_ref())
+            .await;
+        pending.commit_for_hold(self.floors).await
     }
 
     async fn recover_own_scope_material(
@@ -2341,6 +2343,113 @@ mod tests {
         let resolved = resolve().expect("a healthy commit resolves").resolved;
         assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
         assert!(held.borrow().get(&HeldKey::Node(root_id)).is_some());
+    }
+
+    /// A [`RootAdopter`] whose first commit waits while a second resolve of
+    /// the same name, one sequence higher, runs to its end.
+    struct Overtaken<'a> {
+        inner: RootAdopter<'a, ScriptedHttp, InMemoryFloorStore>,
+        fx: &'a Fixture,
+        http: &'a ScriptedHttp,
+        transport: &'a InMemoryRecordStore,
+        endpoint: &'a EndpointId,
+        snapshots: &'a InMemorySnapshotCache,
+        held: &'a RefCell<crate::net::HeldRecords>,
+        material: &'a crate::net::HeldMaterial,
+        overtaken: core::cell::Cell<bool>,
+    }
+
+    impl Adopter for Overtaken<'_> {
+        async fn adopt(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<AdoptOutcome, GateError> {
+            self.inner.adopt(name, record_bytes).await
+        }
+
+        async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Committed, SeamError> {
+            if !self.overtaken.replace(true) {
+                self.transport
+                    .seed_record(self.endpoint, self.fx.name.as_str(), self.fx.record(2));
+                self.http
+                    .enqueue_response(ok_response(self.fx.head_block.clone()));
+                crate::net::resolve_and_hold(
+                    self.transport,
+                    self.snapshots,
+                    &self.inner,
+                    &self.fx.name,
+                    self.held,
+                    self.material,
+                    ResolveMode::CacheFirst,
+                )
+                .await
+                .expect("the newer resolve holds its record");
+            }
+            self.inner.commit_adoption(pending).await
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+            self.inner.probe_read_scope_seed(name, record_bytes).await
+        }
+    }
+
+    /// Two vault-root resolves that complete in reverse order: the older
+    /// completion holds nothing, and the newer held record stays.
+    #[test]
+    fn a_vault_head_resolve_that_completes_late_never_replaces_a_newer_hold() {
+        use crate::net::{HeldKey, HeldMaterial, HeldRecords, resolve_and_hold};
+
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        transport.seed_record(&endpoint, fx.name.as_str(), fx.record(1));
+        let snapshots = InMemorySnapshotCache::default();
+        let http = ScriptedHttp::default();
+        let gw = gateway();
+        let held = RefCell::new(HeldRecords::new());
+        let root_id = [0x55; 16];
+        let material = HeldMaterial {
+            node_id: root_id,
+            write_scope_seed: None,
+        };
+        let adopter = Overtaken {
+            inner: fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw),
+            fx: &fx,
+            http: &http,
+            transport: &transport,
+            endpoint: &endpoint,
+            snapshots: &snapshots,
+            held: &held,
+            material: &material,
+            overtaken: core::cell::Cell::new(false),
+        };
+
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        block_on(resolve_and_hold(
+            &transport,
+            &snapshots,
+            &adopter,
+            &fx.name,
+            &held,
+            &material,
+            ResolveMode::CacheFirst,
+        ))
+        .expect("the older resolve completes");
+
+        assert_eq!(
+            held.borrow()
+                .get(&HeldKey::Node(root_id))
+                .expect("the newer record is held")
+                .record_bytes,
+            fx.record(2),
+        );
     }
 
     /// The stage a recovery the gate refused names.

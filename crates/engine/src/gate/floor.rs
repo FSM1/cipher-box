@@ -56,7 +56,7 @@ use std::collections::BTreeSet;
 
 use cipherbox_core::payload::RepointObject;
 
-use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
+use crate::gate::{Adopted, Committed, GateError, GateRejection, GateStage, RejectionReason};
 use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 
 /// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
@@ -426,18 +426,25 @@ impl PendingSequenceRaise {
         }
     }
 
-    /// Commit the deferred raise ([`advance_sequence_on_unseal`]), then yield
-    /// the [`Adopted`] result. Call only after the record is durable.
-    ///
-    /// A floor left below the record's sequence is a store fault: the
-    /// exact-floor renewal would refuse the record, so it must not be held.
+    /// Raise the name's sequence floor to the record's sequence, then yield
+    /// the [`Adopted`] result. Call only after the record is durable. A floor
+    /// left below the sequence is a store fault.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
+        Ok(self.commit_for_hold(floors).await?.adopted)
+    }
+
+    /// [`commit`](Self::commit), with the floor the raise left for the hold
+    /// decision ([`Committed`]).
+    pub async fn commit_for_hold<F: FloorStore>(self, floors: &F) -> Result<Committed, SeamError> {
         let sequence = self.adopted.sequence;
         let stored = floors
             .raise_sequence_floor(&self.ipns_name, sequence)
             .await?;
         crate::seams::refuse_short_raise(stored, sequence)?;
-        Ok(self.adopted)
+        Ok(Committed {
+            adopted: self.adopted,
+            floor: Some(stored),
+        })
     }
 }
 

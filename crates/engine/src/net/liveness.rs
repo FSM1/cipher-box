@@ -435,14 +435,13 @@ where
 /// node record's [`HeldEnvelope`] also refuses a foreign version once the
 /// record is due, and signs under the scope bar. `Ok(None)` when the drain is
 /// publishing the name, when the record is not due, when the network serves
-/// another record, or when the durable floor moved. The flag beside the
-/// receipt says whether the held entry may follow the renewal.
+/// another record, or when the durable floor moved.
 async fn renew_held<T, H, C, F, Sch>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     name: &IpnsName,
     held: &HeldRecord,
-) -> Result<Option<(PublishReceipt, bool)>, PublishError>
+) -> Result<Option<Renewed>, PublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -517,11 +516,8 @@ where
         return Ok(None);
     };
     let receipt = receipt?;
-    // This device authored the renewal from the admitted value, so the next
-    // pass renews from it under the same exact-floor rule. A floor that did
-    // not reach the renewal keeps the held entry at the record it renewed: the
-    // next pass then finds another pick and signs nothing, and the next
-    // adoption through the gate raises the floor.
+    // The exact-floor rule renews only a record at the floor, so the held
+    // entry follows only a renewal whose floor rose to it.
     let follow = match (&receipt.outcome, rule) {
         (PublishOutcome::Published { sequence }, FloorRule::Exact) => {
             floors
@@ -531,7 +527,14 @@ where
         }
         (outcome, _) => matches!(outcome, PublishOutcome::Published { .. }),
     };
-    Ok(Some((receipt, follow)))
+    Ok(Some(Renewed { receipt, follow }))
+}
+
+/// A renewal that [`renew_held`] published or reported.
+struct Renewed {
+    receipt: PublishReceipt,
+    /// Whether the held entry may follow the renewal to its record.
+    follow: bool,
 }
 
 /// One held record's sub-EOL renewal outcome.
@@ -591,7 +594,7 @@ where
             continue;
         }
         let outcome = renew_held(api, seams, &name, &hr).await.map(|renewed| {
-            renewed.map(|(receipt, follow)| {
+            renewed.map(|Renewed { receipt, follow }| {
                 if follow {
                     hold_if_unchanged(
                         held,
@@ -1680,6 +1683,20 @@ mod tests {
             renewed,
             "the held entry stays at the record it renewed",
         );
+
+        let next = block_on(eol_renew_pass(
+            &api,
+            &RenewalSeams {
+                transport: &device.record_store,
+                floors: &device.floor_store,
+                scheduler: &world.scheduler,
+                profile: &SyncTimingProfile::CI,
+                publishing: &RefCell::default(),
+            },
+            &held,
+        ));
+        assert_eq!(next.into_iter().next().unwrap().outcome, Ok(None));
+        assert_eq!(seq_at(&device, &name), 2, "the next pass signs nothing");
     }
 
     #[test]

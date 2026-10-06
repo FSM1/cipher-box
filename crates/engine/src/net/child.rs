@@ -839,8 +839,8 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
     async fn commit_sequence_adoption(
         &self,
         pending: floor::PendingSequenceRaise,
-    ) -> Result<Adopted, SeamError> {
-        pending.commit(self.floors).await
+    ) -> Result<crate::gate::Committed, SeamError> {
+        pending.commit_for_hold(self.floors).await
     }
 
     /// [`ChildAdopter::open_at_floor`], with the head this adopter assembled

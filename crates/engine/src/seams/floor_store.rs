@@ -60,7 +60,8 @@ pub trait FloorStore {
     /// and re-converges idempotently on retry. The web IndexedDB seam rides this
     /// fallback — its JS boundary exposes only the per-key methods — and
     /// web-atomic commit is deferred as a durability/liveness concern, not a
-    /// trust hole.
+    /// trust hole. The default refuses a raise that reports a floor below its
+    /// value; an override must refuse it too.
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         for raise in raises {
             let stored = match raise.namespace {
