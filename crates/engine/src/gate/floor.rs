@@ -12,7 +12,8 @@
 //! of them keeps:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
-//!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
+//!    gate-adopted roots; [`advance_sequence_on_unseal`] or
+//!    [`PendingSequenceRaise::commit_for_hold`] for child records) —
 //!    the sole record-sourced paths. A record's sequence/epoch move the floors
 //!    only after its body cryptographically unsealed (the adoption gate's
 //!    stage 6), never from a claimed-but-unconfirmed field.
@@ -56,7 +57,7 @@ use std::collections::BTreeSet;
 
 use cipherbox_core::payload::RepointObject;
 
-use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
+use crate::gate::{Adopted, Committed, GateError, GateRejection, GateStage, RejectionReason};
 use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 
 /// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
@@ -355,7 +356,8 @@ pub async fn check<F: FloorStore>(
 /// or deferred via [`PendingAdoption::commit`](crate::gate::PendingAdoption::commit)
 /// — so a record whose body never unsealed can never move a floor; the
 /// provenance the plain scalar arguments cannot express is enforced at those
-/// call sites. Child unseals go through [`advance_sequence_on_unseal`] instead.
+/// call sites. Child unseals go through [`advance_sequence_on_unseal`] or
+/// [`PendingSequenceRaise::commit_for_hold`] instead.
 ///
 /// **Fail-safe ordering.** The read-epoch (revocation) and sequence floors are
 /// distinctly keyed. The batch lists the trust-critical **read-epoch
@@ -426,11 +428,25 @@ impl PendingSequenceRaise {
         }
     }
 
-    /// Commit the deferred raise ([`advance_sequence_on_unseal`]), then yield
-    /// the [`Adopted`] result. Call only after the record is durable.
+    /// Raise the name's sequence floor to the record's sequence, then yield
+    /// the [`Adopted`] result. Call only after the record is durable. A floor
+    /// left below the sequence is a store fault.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
-        advance_sequence_on_unseal(floors, &self.ipns_name, self.adopted.sequence).await?;
-        Ok(self.adopted)
+        Ok(self.commit_for_hold(floors).await?.adopted)
+    }
+
+    /// [`commit`](Self::commit), with the floor the raise left for the hold
+    /// decision ([`Committed`]).
+    pub async fn commit_for_hold<F: FloorStore>(self, floors: &F) -> Result<Committed, SeamError> {
+        let sequence = self.adopted.sequence;
+        let stored = floors
+            .raise_sequence_floor(&self.ipns_name, sequence)
+            .await?;
+        crate::seams::refuse_short_raise(stored, sequence)?;
+        Ok(Committed {
+            adopted: self.adopted,
+            floor: Some(stored),
+        })
     }
 }
 
@@ -791,6 +807,40 @@ mod tests {
             assert_eq!(sequence_floor(&floors, NAME).await.unwrap(), Some(5));
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
         });
+    }
+
+    fn pending_raise(sequence: u64) -> PendingSequenceRaise {
+        PendingSequenceRaise::new(
+            NAME,
+            Adopted {
+                read_body: cipherbox_core::seal::ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: Vec::new(),
+                    unknown: cipherbox_core::seal::PreservedFields::new(),
+                },
+                sequence,
+                epoch: 1,
+            },
+        )
+    }
+
+    #[test]
+    fn a_deferred_raise_the_store_did_not_take_fails_as_a_store_fault() {
+        let floors = InMemoryFloorStore::default();
+        floors.under_report_sequence_raises_for(NAME);
+        assert!(block_on(pending_raise(2).commit(&floors)).is_err());
+
+        floors.heal_floors();
+        let adopted = block_on(pending_raise(2).commit(&floors)).expect("a healthy raise");
+        assert_eq!(adopted.sequence, 2);
+    }
+
+    #[test]
+    fn a_deferred_raise_below_a_newer_floor_still_commits() {
+        let floors = InMemoryFloorStore::default();
+        block_on(pending_raise(3).commit(&floors)).expect("the newer record commits");
+        block_on(pending_raise(2).commit(&floors)).expect("an older commit is no fault");
     }
 
     #[test]
