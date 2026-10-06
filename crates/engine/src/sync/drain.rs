@@ -107,8 +107,8 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_op::{
-    KeptNote, KeptNotes, KeptPlace, KeptVerdict, is_kept, keeps, kept_verdict, load_kept_notes,
-    store_kept_notes,
+    KeptNote, KeptNotes, KeptOps, KeptPlace, KeptVerdict, is_kept, keeps, kept_verdict,
+    load_kept_notes, store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -2681,15 +2681,14 @@ where
             &rest[..]
         };
         // A kept op under a keyless scope does not apply again ([`KeptPlace::Keyless`]).
-        let kept = self.kept_ids(scope).await?;
-        let notes = self.kept_notes(scope).await?;
+        let kept = self.kept_ops(scope).await?;
         let mut end = pending.len();
         for (index, (op_id, op)) in pending.iter().enumerate() {
-            if !kept(*op_id, op) {
+            if !kept.holds(*op_id, op) {
                 continue;
             }
             if let KeptPlace::Keyless { root } =
-                self.kept_place(scope, op, notes.parent(*op_id)).await?
+                self.kept_place(scope, op, kept.parent(*op_id)).await?
             {
                 if index == 0 {
                     let halt = halt_below_another_scope_root(
@@ -2707,7 +2706,7 @@ where
         }
         let pending = &pending[..end];
 
-        let opened = self.open_rebased_pass(scope, pending).await;
+        let opened = self.open_rebased_pass(scope, pending, &kept).await;
         // A halt that names its op reaches the valve to be bounded and named
         // ([`HeadHalt`]).
         if let Err(HeadHalt { halt, at: Some(at) }) = &opened
@@ -2723,7 +2722,7 @@ where
             };
             // A kept op's version landed, and a live record may still name what
             // it registered: it leaves with no retire and no notice.
-            if kept(*op_id, op) {
+            if kept.holds(*op_id, op) {
                 self.dequeue_op(*op_id).await?;
                 report.dropped.push(*op_id);
                 continue;
@@ -2858,7 +2857,10 @@ where
         // A kept op leaves with no notice, as its rebase dead letter does.
         if matches!(halt, Halt::Permanent(_))
             && keeps(&op.kind)
-            && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))
+            && self
+                .kept_ops(scope)
+                .await
+                .is_ok_and(|kept| kept.holds(op_id, op))
         {
             if self.dequeue_op(op_id).await.is_ok() {
                 report.dropped.push(op_id);
@@ -3115,23 +3117,34 @@ where
                     // This pass cannot check the op, so the floor of the root
                     // it published under decides whether the bound runs. A
                     // delete whose anchor the base does not hold under a proved
-                    // root leaves at the bound (ADR 0069 D6).
+                    // root leaves at the bound; past a flip, a folder its note
+                    // names took the node with it, so it leaves now (ADR 0069 D6).
+                    let mut gone = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
-                        && (!matches!(op.kind, OpKind::Delete { .. })
-                            || self
-                                .cells
-                                .base
-                                .borrow()
-                                .node(kept_anchor(&op, note.parent))
-                                .is_some()
-                            || !scope.scope_roots.contains(&root))
                     {
-                        place = self.unchecked_place(scope, root).await?;
+                        let anchor_held = self
+                            .cells
+                            .base
+                            .borrow()
+                            .node(kept_anchor(&op, note.parent))
+                            .is_some();
+                        if !matches!(op.kind, OpKind::Delete { .. })
+                            || anchor_held
+                            || !scope.scope_roots.contains(&root)
+                        {
+                            place = self.unchecked_place(scope, root).await?;
+                        } else if reads_kept_parent(&op, note.parent) {
+                            gone = matches!(
+                                self.unchecked_place(scope, root).await?,
+                                KeptPlace::Unchecked { live_write_epoch, .. }
+                                    if live_write_epoch > note.write_epoch
+                            );
+                        }
                     }
                     // A later op of this device on the same node decides what
                     // that node shows, so a check of this one would undo it.
-                    if last_on.get(&op.target) != Some(&op_id) {
+                    if gone || last_on.get(&op.target) != Some(&op_id) {
                         KeptVerdict::Expired
                     } else {
                         kept_verdict(&note, place, now)
@@ -3165,13 +3178,12 @@ where
         })
     }
 
-    /// Which ops of this identity are kept ops ([`is_kept`], [`keeps`]).
-    async fn kept_ids(&self, scope: &DrainScope<'_>) -> Result<impl Fn(OpId, &Op) -> bool, Halt> {
+    /// This identity's published-op mark and kept-op notes.
+    async fn kept_ops(&self, scope: &DrainScope<'_>) -> Result<KeptOps, Halt> {
         let mark = published_op_mark(&self.seams.staging, scope.enc_secret)
             .await
             .map_err(seam)?;
-        let notes = self.kept_notes(scope).await?;
-        Ok(move |op_id, op: &Op| keeps(&op.kind) && is_kept(op_id, mark, &notes))
+        Ok(KeptOps::new(mark, self.kept_notes(scope).await?))
     }
 
     /// This identity's kept-op notes ([`crate::sync::kept_op`]).
@@ -3335,6 +3347,7 @@ where
         &self,
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
+        kept: &KeptOps,
     ) -> Result<(Pass, ReplayReport), HeadHalt> {
         let at_head = |queued: &[(OpId, Op)]| {
             let head = queued.first().map(|(op_id, _)| *op_id);
@@ -3348,8 +3361,10 @@ where
             .open_pass(scope, &resolved)
             .await
             .map_err(at_head(queued))?;
-        let mut landed = self.read_kept_parents(scope, &mut pass, queued).await?;
-        landed.extend(self.read_kept_heads(scope, &mut pass, queued).await?);
+        let mut landed = self
+            .read_kept_parents(scope, &mut pass, queued, kept)
+            .await?;
+        landed.extend(self.read_kept_heads(scope, &mut pass, queued, kept).await?);
         if landed.is_empty() {
             return self
                 .rebase_on_pass(scope, pass, &others, queued)
@@ -3408,22 +3423,19 @@ where
     /// Read at its live name the folder that each kept delete under a flip
     /// unlinked its node from (ADR 0069 D6). The read repaints the base, so
     /// the rebase applies the delete again when the node is alive, and drops
-    /// it when the node is gone. Return the deletes whose folder the live tree
-    /// no longer holds: the node went with it.
+    /// it when the node is gone. Return the deletes whose folder its old
+    /// parent no longer names: the node went with it.
     async fn read_kept_parents(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         queued: &[(OpId, Op)],
+        kept: &KeptOps,
     ) -> Result<BTreeSet<OpId>, HeadHalt> {
-        let notes = self
-            .kept_notes(scope)
-            .await
-            .map_err(|halt| HeadHalt { halt, at: None })?;
         let mut gone = BTreeSet::new();
         for (op_id, op) in queued {
             // Only a noted op names a parent, and a note makes the op kept.
-            let parent = notes.parent(*op_id);
+            let parent = kept.parent(*op_id);
             if !reads_kept_parent(op, parent) {
                 continue;
             }
@@ -3444,18 +3456,15 @@ where
         Ok(gone)
     }
 
-    /// Load `folder` into the pass at its live name, and each folder between it
-    /// and its nearest proved scope root first. `false` when the read of a
-    /// folder on the way no longer names the next one.
+    /// Load `folder`, which the base holds, into the pass at its live name,
+    /// and each folder between it and its nearest proved scope root first.
+    /// `false` when the read of a folder on the way no longer names the next.
     async fn read_live_folder(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         folder: NodeId,
     ) -> Result<bool, Halt> {
-        if !self.cells.base.borrow().contains(folder) {
-            return Ok(false);
-        }
         let mut chain = self.cells.base.borrow().ancestors(folder);
         chain.reverse();
         chain.push(folder);
@@ -3482,14 +3491,11 @@ where
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         queued: &[(OpId, Op)],
+        kept: &KeptOps,
     ) -> Result<BTreeSet<OpId>, HeadHalt> {
-        let kept = self
-            .kept_ids(scope)
-            .await
-            .map_err(|halt| HeadHalt { halt, at: None })?;
         let mut landed = BTreeSet::new();
         for (op_id, op) in queued {
-            if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
+            if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept.holds(*op_id, op) {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -12322,10 +12328,10 @@ mod tests {
         assert!(!harness.state.snapshot.borrow().contains(parent));
     }
 
-    /// A folder the base no longer holds went with the node: a delete whose
-    /// parent a proved root's base lacks leaves at the bound.
+    /// A folder the base no longer holds went with the node: past a flip, a
+    /// delete whose parent a proved root's base lacks leaves.
     #[test]
-    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_at_the_bound() {
+    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_after_the_flip() {
         let harness = drain_harness(Some(harness_root_envelope()));
 
         let (op_id, queue, report) =

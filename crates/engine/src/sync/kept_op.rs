@@ -21,7 +21,7 @@ use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{PUBLISHED_OP_MARK_PREFIX, owner_scoped_key, published_op_mark};
 use crate::sync::duration_millis;
-use crate::sync::op::OpKind;
+use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::DROP_BOUND;
 
 /// The staging-key prefix of one identity's kept-op notes
@@ -121,6 +121,8 @@ pub enum KeptNoteError {
     NameTooLong,
     /// A content CID longer than [`CONTENT_CID_LEN`].
     CidTooLong,
+    /// An entry longer than its two-byte length can state.
+    EntryTooLong,
 }
 
 fn check_name(name: &str) -> Result<(), KeptNoteError> {
@@ -375,7 +377,7 @@ impl KeptNotes {
         let mut bytes = Zeroizing::new(vec![NOTE_FORMAT_V2]);
         for (op_id, note) in &self.notes {
             let entry = encode_entry(*op_id, note)?;
-            put_length(&mut bytes, entry.len()).ok_or(KeptNoteError::NameTooLong)?;
+            put_length(&mut bytes, entry.len()).ok_or(KeptNoteError::EntryTooLong)?;
             bytes.extend_from_slice(&entry);
         }
         Ok(bytes)
@@ -501,6 +503,28 @@ pub(crate) fn is_kept_op_key(staging_key: &[u8]) -> bool {
 /// Whether `op_id` is a kept op: at or below the published-op mark, or noted.
 pub(crate) fn is_kept(op_id: OpId, published_mark: Option<u64>, notes: &KeptNotes) -> bool {
     published_mark.is_some_and(|mark| op_id.0 <= mark) || notes.holds(op_id)
+}
+
+/// The published-op mark and the notes of one identity, read once for a pass.
+pub(crate) struct KeptOps {
+    mark: Option<u64>,
+    notes: KeptNotes,
+}
+
+impl KeptOps {
+    pub(crate) fn new(mark: Option<u64>, notes: KeptNotes) -> Self {
+        Self { mark, notes }
+    }
+
+    /// Whether `op` is a kept op ([`is_kept`], [`keeps`]).
+    pub(crate) fn holds(&self, op_id: OpId, op: &Op) -> bool {
+        keeps(&op.kind) && is_kept(op_id, self.mark, &self.notes)
+    }
+
+    /// The folder the note of `op_id` names.
+    pub(crate) fn parent(&self, op_id: OpId) -> Option<NodeId> {
+        self.notes.parent(op_id)
+    }
 }
 
 /// Drop the kept ops from `ops`, leaving the pending ones (ADR 0069 D7).
@@ -976,12 +1000,12 @@ mod tests {
         assert!(v2_12::KeptNotes::decode(&written).notes.is_empty());
     }
 
-    /// One version 2 body of one entry, laid out by hand: op 1 under scope
-    /// `[5; 16]` at write epoch 3, published at 1000, under parent `[6; 16]`,
-    /// then `result`.
-    fn v2_body(result: &[u8]) -> Vec<u8> {
+    /// One version 2 entry with its length, laid out by hand: `op_id` under
+    /// scope `[5; 16]` at write epoch 3, published at 1000, under parent
+    /// `[6; 16]`, then `result`.
+    fn v2_entry(op_id: u64, result: &[u8]) -> Vec<u8> {
         let mut entry = Vec::new();
-        entry.extend_from_slice(&1u64.to_be_bytes());
+        entry.extend_from_slice(&op_id.to_be_bytes());
         entry.push(1);
         entry.extend_from_slice(&[5; 16]);
         entry.extend_from_slice(&3u64.to_be_bytes());
@@ -989,10 +1013,13 @@ mod tests {
         entry.push(1);
         entry.extend_from_slice(&[6; 16]);
         entry.extend_from_slice(result);
-        let mut body = vec![NOTE_FORMAT_V2];
-        body.extend_from_slice(&u16::try_from(entry.len()).expect("short").to_be_bytes());
-        body.extend_from_slice(&entry);
-        body
+        let len = u16::try_from(entry.len()).expect("short").to_be_bytes();
+        [&len[..], &entry].concat()
+    }
+
+    /// A version 2 body of one entry, op 1 ([`v2_entry`]).
+    fn v2_body(result: &[u8]) -> Vec<u8> {
+        [&[NOTE_FORMAT_V2][..], &v2_entry(1, result)].concat()
     }
 
     fn named(len: usize) -> Vec<u8> {
@@ -1026,13 +1053,18 @@ mod tests {
         )));
     }
 
-    /// Each body below breaks one bound in one part, and the whole body reads
-    /// as no notes, the good entry in it included.
+    /// Each body below breaks one bound in one part, beside good entries of
+    /// other ops, and the whole body reads as no notes: a decoder that skips
+    /// only the bad entry fails.
     #[test]
     fn a_body_that_breaks_a_bound_reads_as_no_notes() {
-        let good = v2_body(&[RESULT_NONE]);
-        let mut refused: Vec<(&str, Vec<u8>)> = Vec::new();
+        let before = v2_entry(2, &[RESULT_NONE]);
+        let after = v2_entry(3, &[RESULT_NONE]);
+        let around = |bad: &[u8]| [&[NOTE_FORMAT_V2][..], &before, bad, &after].concat();
+        let good = around(&v2_entry(1, &[RESULT_NONE]));
+        assert_eq!(KeptNotes::decode(&good).notes.len(), 3);
 
+        let mut refused: Vec<(&str, Vec<u8>)> = Vec::new();
         let mut unknown_tag = good.clone();
         unknown_tag[0] = 3;
         refused.push(("an unknown format tag", unknown_tag));
@@ -1040,21 +1072,24 @@ mod tests {
         refused.push(("a trailing byte", [&good[..], &[0]].concat()));
         refused.push((
             "a trailing byte inside an entry",
-            v2_body(&[RESULT_NONE, 0]),
+            around(&v2_entry(1, &[RESULT_NONE, 0])),
         ));
-        refused.push(("an unknown result tag", v2_body(&[9])));
+        refused.push(("an unknown result tag", around(&v2_entry(1, &[9]))));
         let cid = [&[3u8][..], &[1; 3]].concat();
         refused.push((
             "a result tag that does not match its fields",
-            v2_body(&[&[RESULT_RENAME][..], &cid, &cid].concat()),
+            around(&v2_entry(1, &[&[RESULT_RENAME][..], &cid, &cid].concat())),
         ));
         refused.push((
             "a name past the bound",
-            v2_body(&rename_result(&named(MAX_NODE_NAME_BYTES + 1), &named(1))),
+            around(&v2_entry(
+                1,
+                &rename_result(&named(MAX_NODE_NAME_BYTES + 1), &named(1)),
+            )),
         ));
         refused.push((
             "a name that is not UTF-8",
-            v2_body(&rename_result(&[0, 1, 0xff], &named(1))),
+            around(&v2_entry(1, &rename_result(&[0, 1, 0xff], &named(1)))),
         ));
         let long_cid = [
             &[u8::try_from(CONTENT_CID_LEN + 1).expect("short")][..],
@@ -1063,25 +1098,27 @@ mod tests {
         .concat();
         refused.push((
             "a CID past the bound",
-            v2_body(&[&[RESULT_RESTORE_VERSION][..], &long_cid, &cid].concat()),
+            around(&v2_entry(
+                1,
+                &[&[RESULT_RESTORE_VERSION][..], &long_cid, &cid].concat(),
+            )),
         ));
-        let mut bad_scope_flag = good.clone();
-        bad_scope_flag[3 + 8] = 2;
-        refused.push(("a scope flag past 1", bad_scope_flag));
-        let mut bad_parent_flag = good.clone();
-        bad_parent_flag[3 + 8 + 17 + 16] = 2;
-        refused.push(("a parent flag past 1", bad_parent_flag));
-        refused.push(("a duplicate op id", [&good[..], &good[1..]].concat()));
+        let mut bad_scope_flag = v2_entry(1, &[RESULT_NONE]);
+        bad_scope_flag[2 + 8] = 2;
+        refused.push(("a scope flag past 1", around(&bad_scope_flag)));
+        let mut bad_parent_flag = v2_entry(1, &[RESULT_NONE]);
+        bad_parent_flag[2 + 8 + 17 + 16] = 2;
+        refused.push(("a parent flag past 1", around(&bad_parent_flag)));
+        refused.push(("a duplicate op id", around(&before)));
 
-        assert!(reads(&good));
         for (case, body) in refused {
-            assert!(!reads(&body), "{case}");
+            assert!(KeptNotes::decode(&body).notes.is_empty(), "{case}");
         }
         let mut frozen = hex::decode(FROZEN_V1_BODY).expect("hex");
-        frozen[1 + 8] = 2;
+        frozen[1 + 41 + 8] = 2;
         assert!(
-            !KeptNotes::decode(&frozen).holds(OpId(7)),
-            "a version 1 scope flag past 1"
+            KeptNotes::decode(&frozen).notes.is_empty(),
+            "a version 1 scope flag past 1 in the second entry"
         );
     }
 
