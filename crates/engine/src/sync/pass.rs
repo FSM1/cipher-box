@@ -391,7 +391,8 @@ where
         self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
             .await;
         self.repost_claims(state, &pass).await;
-        self.refresh_received_shares(state, &pass).await;
+        self.refresh_received_shares(state, &pass, verdict == RefreshVerdict::Reconciled)
+            .await;
         PassReport {
             verdict,
             stop: false,
@@ -1461,7 +1462,12 @@ where
     /// The received-share status refresh. Last, after the drain: the
     /// grantee's own read leg is the slowest in the pass, and a host refresh
     /// waits on nothing it reports.
-    async fn refresh_received_shares(&self, state: &SessionState, pass: &Pass) {
+    async fn refresh_received_shares(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        root_reconciled: bool,
+    ) {
         ReceivedShareStatus {
             transport: &self.seams.transport,
             gateway: &self.seams.gateway,
@@ -1471,6 +1477,7 @@ where
             contact_label_seed: &pass.contact_label_seed,
             list_lock: &state.received_shares_lock,
             mode: pass.mode,
+            other_resolves_succeeding: root_reconciled,
         }
         .refresh(
             &self.seams.staging,

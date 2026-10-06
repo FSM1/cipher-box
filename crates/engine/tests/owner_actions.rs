@@ -13029,6 +13029,102 @@ fn a_refresh_whose_root_head_fails_its_content_address_is_a_trust_violation() {
     assert_eq!(listed(&grantee), rendered, "the render does not move");
 }
 
+/// The withheld-update escalations on the stream, by name.
+fn escalations(events: &[Event]) -> Vec<Vec<u8>> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::WithheldUpdateEscalation { ipns_name } => Some(ipns_name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A grantee whose accepted scope root endpoint B serves one sequence behind
+/// the floor while endpoint A fails (ADR 0071 D1), and the scope root's name.
+fn withheld_share() -> (
+    GrantScenario,
+    Engine<FakeSeamTypes>,
+    EventStream,
+    Vec<BoxedTask>,
+    Vec<u8>,
+) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        block_on(grantee.received_shares())
+            .expect("the list reads")
+            .len(),
+        1,
+        "the grantee accepted the share"
+    );
+    let name = fx
+        .granted_scope_repoint()
+        .current_root
+        .as_str()
+        .as_bytes()
+        .to_vec();
+    let endpoints = fx.world.record_store.endpoints();
+    let (a, b) = (endpoints[0].clone(), endpoints[1].clone());
+    fx.world.record_store.fail_put_endpoint(&b);
+    create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "later",
+    );
+    fx.world.record_store.heal_put_endpoint(&b);
+    settle(&fx, &grantee, &mut tasks);
+    fx.world.record_store.fail_endpoint(&a);
+    let _ = events_so_far(&mut events);
+    (fx, grantee, events, tasks, name)
+}
+
+/// ADR 0071 Residuals: a shared scope held withheld past the escalation
+/// window, while the vault root still resolves, sends one escalation and no
+/// trust event.
+#[test]
+fn a_shared_scope_withheld_past_the_window_sends_one_escalation() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_share();
+    settle(&fx, &grantee, &mut tasks);
+    settle(&fx, &grantee, &mut tasks);
+
+    let seen = events_so_far(&mut events);
+    assert_eq!(escalations(&seen), vec![name]);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "the hold is unavailable, not a trust verdict"
+    );
+
+    settle(&fx, &grantee, &mut tasks);
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "one time per hold"
+    );
+}
+
+/// A hold while no other resolve succeeds is an outage: the vault root does
+/// not resolve either, so no escalation goes out.
+#[test]
+fn a_shared_scope_withheld_in_a_full_outage_sends_no_escalation() {
+    let (fx, grantee, mut events, mut tasks, name) = withheld_share();
+    let store = &fx.world.record_store;
+    for key in store.routing_keys(&store.endpoints()[1]) {
+        if key.as_bytes() != name.as_slice() {
+            store.fail_get_for(&key);
+        }
+    }
+    settle(&fx, &grantee, &mut tasks);
+    settle(&fx, &grantee, &mut tasks);
+
+    assert!(escalations(&events_so_far(&mut events)).is_empty());
+}
+
 /// A pointer no endpoint answers is availability, never a verdict.
 #[test]
 fn a_preview_whose_pointer_does_not_answer_is_unresolvable() {

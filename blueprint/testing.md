@@ -282,6 +282,14 @@ scenario fails the meta-test):
   failed body cancellation keeps the known answer (`net::fanout`, the desktop
   record transport, the web `recordTransport`). The fix tests fail on the code
   before ADR 0071.
+  The withheld-update escalation bounds that hold on a shared scope: a
+  received share held withheld past the escalation window, while the vault
+  root resolves, sends one escalation and no trust event, and a full outage
+  sends none (`tests/owner_actions.rs`
+  `a_shared_scope_withheld_past_the_window_sends_one_escalation`,
+  `a_shared_scope_withheld_in_a_full_outage_sends_no_escalation`); a read that
+  reaches a record ends the hold, a pass that reaches no record keeps it, and
+  an owned scope never escalates (`grants::received_status`).
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;
