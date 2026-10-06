@@ -513,9 +513,9 @@ pub(crate) struct SessionState {
     /// the merge already dropped from the base is not lost on a failed pass
     /// (ADR 0010 item 5).
     pub(crate) observed_unlinks: Rc<RefCell<Vec<UnlinkedChild>>>,
-    /// Each own scope's capture walk, resumed across passes, and the captures a
-    /// complete walk proved no folder of the scope names.
-    pub(crate) capture_proofs: Rc<RefCell<BTreeMap<NodeId, CaptureProofs>>>,
+    /// The vault's capture walk, resumed across passes, and the captures a
+    /// complete walk proved no folder names.
+    pub(crate) capture_proofs: Rc<RefCell<CaptureProofs>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -645,7 +645,7 @@ impl SessionState {
             placement: Rc::new(RefCell::new(None)),
             settings_summary: Rc::new(RefCell::new(None)),
             observed_unlinks: Rc::new(RefCell::new(Vec::new())),
-            capture_proofs: Rc::new(RefCell::new(BTreeMap::new())),
+            capture_proofs: Rc::default(),
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
         }

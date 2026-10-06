@@ -975,7 +975,7 @@ where
         // command that could overrule that.
         if bin_retention_days(&state.settings_summary) == 0 {
             state.observed_unlinks.borrow_mut().clear();
-            state.capture_proofs.borrow_mut().clear();
+            state.capture_proofs.take();
         }
         root_verdict
     }
@@ -3143,11 +3143,8 @@ mod report_tests {
                 ipns_name: Vec::new(),
                 deleted_at: 9,
             });
-        harness
-            .state
-            .capture_proofs
-            .borrow_mut()
-            .insert(ROOT, crate::sync::drain::CaptureProofs::default());
+        *harness.state.capture_proofs.borrow_mut() =
+            crate::sync::drain::CaptureProofs::of_scope(ROOT);
 
         block_on(harness.pass.run(&harness.state, TickCause::Poll));
 

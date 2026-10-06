@@ -783,9 +783,11 @@ the grantee that removed it stops reading it.
   the move, does not show the new link. So the drain holds the capture and walks
   the whole vault from its root, each proved scope under its own material: it
   reads every node fresh through the gate, then reads each one again, from a
-  read budget the tick shares across its passes. A walk that meets a child it
+  read budget the tick shares across its passes. One walk serves every own
+  scope: each own pass of a tick steps it, and it proves each capture that an
+  own scope of the tick held when it started. A walk that meets a child it
   cannot read, at a name its scope's write seed does not derive or below a
-  scope root with no material this tick, holds every capture of the scope, as a
+  scope root with no material this tick, holds every capture of the walk, as a
   failed read does. Residual: this hold has no exit and sends no event, so a
   writer of the scope, or a ref a name wave left at an old name, holds that
   scope's captures for the session; the per-scope cap bounds them. Residual: a
@@ -795,28 +797,36 @@ the grantee that removed it stops reading it.
   captures of every scope. Residual: the walk bound of 65,536 nodes applies to
   the whole vault. The walk starts
   after the device saw the departure and proves only that departure. The walk
-  makes one attempt at a read on each pass, up to three attempts. A refused
+  makes one attempt at a read on each tick, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
   third attempt with no answer starts the walk again on a later pass. The drain
   bins only a capture that a settled walk proved, that no folder names and that
   the base does not link just before its re-key, and a capture it gives back
-  needs a new walk. A scope past the walk bound drops its captures and is not
-  walked again in that session, and a scope that holds 1024 captures drops each
-  new one. Residual: such a scope re-keys no orphan, and the grantee that
-  unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
+  needs a new walk. A walk past the bound drops the captures of each scope it
+  served, those scopes are not walked again in that session, and a scope that
+  holds 1024 captures drops each new one. Residual: such a scope re-keys no
+  orphan, and the grantee that unlinked it keeps its key. Residual: four scopes
+  at 1024 fill the session's
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
-  the destination before the source. A capture of a scope root, proved or by
-  its name, drops before any read.
+  the destination before the source. A capture of a proved scope root, or one
+  at a name that no own scope derives for the node, drops before any read. A
+  tick with no vault scope may lack the scope that derives the name, so it holds
+  such a capture for a tick that has the vault scope.
 - **The record decides the capture's scope.** A grant can leave a node sealed
   in a scope other than the one whose folder it left, and no tree rule names
-  the sealing scope on every device. Before the re-key, the drain opens the
-  node's record through the gate under the capture's own scope, then, on a
-  seal-open refusal only, under each other own scope whose write seed derives
-  the captured name. A node a re-key already moved opens under the bin's held
-  key, at any epoch. The scope that opens the record is the one the node
-  re-keys and bins under. Any other refusal under the capture's own scope
+  the sealing scope on every device. A write grant's name wave can also leave
+  a capture at the name the node had before the wave. Before the re-key, the
+  drain opens the node's record through the gate at the name the capture's own
+  scope derives, then, on a seal-open refusal only, under each other own scope
+  whose write seed derives that name. A node a re-key already moved opens
+  under the bin's held key, at any epoch. The scope that opens the record is
+  the one the node re-keys and bins under, and the bin entry carries the name
+  that scope derives. The re-key seals the record that decided the scope, and
+  a re-key that loses its race to a record its target key does not open sends
+  no violation: the next pass decides that record. Any other refusal under the
+  capture's own scope
   sends one trust violation and drops the capture. When no own scope opens it,
   the drain sends one trust violation and drops the capture; a read with no
   answer keeps the capture for a later pass. One pass spends at most 64 such
