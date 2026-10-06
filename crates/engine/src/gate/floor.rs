@@ -12,7 +12,8 @@
 //! of them keeps:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
-//!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
+//!    gate-adopted roots; [`advance_sequence_on_unseal`] or
+//!    [`PendingSequenceRaise::commit_for_hold`] for child records) —
 //!    the sole record-sourced paths. A record's sequence/epoch move the floors
 //!    only after its body cryptographically unsealed (the adoption gate's
 //!    stage 6), never from a claimed-but-unconfirmed field.
@@ -355,7 +356,8 @@ pub async fn check<F: FloorStore>(
 /// or deferred via [`PendingAdoption::commit`](crate::gate::PendingAdoption::commit)
 /// — so a record whose body never unsealed can never move a floor; the
 /// provenance the plain scalar arguments cannot express is enforced at those
-/// call sites. Child unseals go through [`advance_sequence_on_unseal`] instead.
+/// call sites. Child unseals go through [`advance_sequence_on_unseal`] or
+/// [`PendingSequenceRaise::commit_for_hold`] instead.
 ///
 /// **Fail-safe ordering.** The read-epoch (revocation) and sequence floors are
 /// distinctly keyed. The batch lists the trust-critical **read-epoch

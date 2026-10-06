@@ -324,9 +324,10 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     }
 
     async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Committed, SeamError> {
-        self.remember_confirmed(pending.owner_seed_record.as_ref())
-            .await;
-        pending.commit_for_hold(self.floors).await
+        self.confirmed(pending)
+            .await
+            .commit_for_hold(self.floors)
+            .await
     }
 
     async fn recover_own_scope_material(
@@ -546,9 +547,14 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 
     /// Commit the floor advance that [`Self::gate_and_recover`] deferred.
     pub(crate) async fn commit_root(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        self.confirmed(pending).await.commit(self.floors).await
+    }
+
+    /// Remember the owner seed a deferred pass confirmed, before its commit.
+    async fn confirmed(&self, pending: PendingAdoption) -> PendingAdoption {
         self.remember_confirmed(pending.owner_seed_record.as_ref())
             .await;
-        pending.commit(self.floors).await
+        pending
     }
 
     fn prepare_owner_seed(
@@ -2345,10 +2351,23 @@ mod tests {
         assert!(held.borrow().get(&HeldKey::Node(root_id)).is_some());
     }
 
-    /// A [`RootAdopter`] whose first commit waits while a second resolve of
-    /// the same name, one sequence higher, runs to its end.
+    /// What reaches the floor or the held set around the first commit of a
+    /// vault-root resolve at sequence 1.
+    #[derive(Clone, Copy)]
+    enum Overtake {
+        /// A resolve at sequence 2 runs to its end before the commit.
+        ResolveBefore,
+        /// The floor rises to 2 before the commit, and nothing is held.
+        FloorBefore,
+        /// The commit reads floor 1, then a resolve at sequence 2 runs to its
+        /// end before the first resolve holds.
+        ResolveAfter,
+    }
+
+    /// A [`RootAdopter`] whose first commit meets a second actor ([`Overtake`]).
     struct Overtaken<'a> {
         inner: RootAdopter<'a, ScriptedHttp, InMemoryFloorStore>,
+        floors: &'a InMemoryFloorStore,
         fx: &'a Fixture,
         http: &'a ScriptedHttp,
         transport: &'a InMemoryRecordStore,
@@ -2356,7 +2375,27 @@ mod tests {
         snapshots: &'a InMemorySnapshotCache,
         held: &'a RefCell<crate::net::HeldRecords>,
         material: &'a crate::net::HeldMaterial,
-        overtaken: core::cell::Cell<bool>,
+        overtake: core::cell::Cell<Option<Overtake>>,
+    }
+
+    impl Overtaken<'_> {
+        async fn resolve_newer(&self) {
+            self.transport
+                .seed_record(self.endpoint, self.fx.name.as_str(), self.fx.record(2));
+            self.http
+                .enqueue_response(ok_response(self.fx.head_block.clone()));
+            crate::net::resolve_and_hold(
+                self.transport,
+                self.snapshots,
+                &self.inner,
+                &self.fx.name,
+                self.held,
+                self.material,
+                ResolveMode::CacheFirst,
+            )
+            .await
+            .expect("the newer resolve holds its record");
+        }
     }
 
     impl Adopter for Overtaken<'_> {
@@ -2369,22 +2408,19 @@ mod tests {
         }
 
         async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Committed, SeamError> {
-            if !self.overtaken.replace(true) {
-                self.transport
-                    .seed_record(self.endpoint, self.fx.name.as_str(), self.fx.record(2));
-                self.http
-                    .enqueue_response(ok_response(self.fx.head_block.clone()));
-                crate::net::resolve_and_hold(
-                    self.transport,
-                    self.snapshots,
-                    &self.inner,
-                    &self.fx.name,
-                    self.held,
-                    self.material,
-                    ResolveMode::CacheFirst,
-                )
-                .await
-                .expect("the newer resolve holds its record");
+            match self.overtake.take() {
+                Some(Overtake::ResolveBefore) => self.resolve_newer().await,
+                Some(Overtake::FloorBefore) => {
+                    self.floors
+                        .raise_sequence_floor(self.fx.name.as_str().as_bytes(), 2)
+                        .await?;
+                }
+                Some(Overtake::ResolveAfter) => {
+                    let committed = self.inner.commit_adoption(pending).await;
+                    self.resolve_newer().await;
+                    return committed;
+                }
+                None => {}
             }
             self.inner.commit_adoption(pending).await
         }
@@ -2398,10 +2434,9 @@ mod tests {
         }
     }
 
-    /// Two vault-root resolves that complete in reverse order: the older
-    /// completion holds nothing, and the newer held record stays.
-    #[test]
-    fn a_vault_head_resolve_that_completes_late_never_replaces_a_newer_hold() {
+    /// Resolve the vault root at sequence 1 while `overtake` acts around its
+    /// commit, and answer the record the held set holds for it.
+    fn held_after(overtake: Overtake) -> Option<Vec<u8>> {
         use crate::net::{HeldKey, HeldMaterial, HeldRecords, resolve_and_hold};
 
         let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
@@ -2421,6 +2456,7 @@ mod tests {
         };
         let adopter = Overtaken {
             inner: fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw),
+            floors: &floors,
             fx: &fx,
             http: &http,
             transport: &transport,
@@ -2428,7 +2464,7 @@ mod tests {
             snapshots: &snapshots,
             held: &held,
             material: &material,
-            overtaken: core::cell::Cell::new(false),
+            overtake: core::cell::Cell::new(Some(overtake)),
         };
 
         http.enqueue_response(ok_response(fx.head_block.clone()));
@@ -2442,14 +2478,31 @@ mod tests {
             ResolveMode::CacheFirst,
         ))
         .expect("the older resolve completes");
+        held.borrow()
+            .get(&HeldKey::Node(root_id))
+            .map(|record| record.record_bytes.clone())
+    }
 
-        assert_eq!(
-            held.borrow()
-                .get(&HeldKey::Node(root_id))
-                .expect("the newer record is held")
-                .record_bytes,
-            fx.record(2),
-        );
+    /// Two vault-root resolves that complete in reverse order: the older
+    /// completion holds nothing, and the newer held record stays.
+    #[test]
+    fn a_vault_head_resolve_that_completes_late_never_replaces_a_newer_hold() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        assert_eq!(held_after(Overtake::ResolveBefore), Some(fx.record(2)));
+    }
+
+    /// A commit that leaves the floor above its sequence holds nothing.
+    #[test]
+    fn a_vault_head_whose_commit_left_a_higher_floor_is_not_held() {
+        assert_eq!(held_after(Overtake::FloorBefore), None);
+    }
+
+    /// A pass that committed at its own floor still never replaces a newer
+    /// record that another pass held before it.
+    #[test]
+    fn a_vault_head_held_by_a_newer_pass_after_the_commit_stays_held() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        assert_eq!(held_after(Overtake::ResolveAfter), Some(fx.record(2)));
     }
 
     /// The stage a recovery the gate refused names.
