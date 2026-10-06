@@ -2770,7 +2770,7 @@ where
         record: &ResealedScopeRoot,
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
-    ) -> Result<(RepublishBase, Vec<u8>), RotationPublishError> {
+    ) -> Result<(RepublishBase, Vec<u8>, u64), RotationPublishError> {
         let name = current.observed.name();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
@@ -2857,6 +2857,7 @@ where
                     ..current
                 },
                 receipt.record_bytes,
+                sequence,
             )),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
@@ -2912,7 +2913,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<u64, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
 
@@ -2929,7 +2930,7 @@ where
             )
             .map_err(|_| RotationPublishError::Rejected)?,
         };
-        let (published, record_bytes) = self
+        let (published, record_bytes, sequence) = self
             .root_publish()
             .run(record, &override_seed, current)
             .await?;
@@ -2937,7 +2938,7 @@ where
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
         self.gated.park(published);
-        Ok(())
+        Ok(sequence)
     }
 }
 
@@ -2956,7 +2957,7 @@ where
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError> {
+    ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The promoted root replaces the record read at the node's own name, and
         // that read is the CAS basis. At any other name the publish would have
@@ -2992,12 +2993,12 @@ where
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
-        let (_, record_bytes) = self
+        let (_, record_bytes, sequence) = self
             .root_publish()
             .run(record, &override_seed, base)
             .await?;
         self.keep_own_publish(&name, &record_bytes).await;
-        Ok(children)
+        Ok((children, sequence))
     }
 }
 
@@ -3366,7 +3367,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<u64, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // [`new_override_seed`]'s grantee mirror, on the same release-active
         // rule: a section this rotator can no longer reopen is never signed
@@ -3395,10 +3396,11 @@ where
             .granted_root(NodeId(record.scope_id))
             .map_err(|_| RotationPublishError::Rejected)?;
         let floors = self.granted_floors(granted);
-        self.root_publish(&floors)
+        let (_, _, sequence) = self
+            .root_publish(&floors)
             .run(record, &override_seed, current)
             .await?;
-        Ok(())
+        Ok(sequence)
     }
 }
 
@@ -4070,6 +4072,7 @@ where
             section,
         })
         .await
+        .map(drop)
     }
 }
 

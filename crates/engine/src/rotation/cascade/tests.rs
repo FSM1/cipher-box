@@ -324,7 +324,7 @@ impl ScopeRootPublisher for FakeNet {
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<u64, RotationPublishError> {
         if let Some(err) = self.publish_faults.borrow().get(&record.scope_id) {
             return Err(err.clone());
         }
@@ -334,7 +334,7 @@ impl ScopeRootPublisher for FakeNet {
         self.published
             .borrow_mut()
             .insert(record.scope_id, record.clone());
-        Ok(())
+        Ok(record.read_epoch)
     }
 }
 

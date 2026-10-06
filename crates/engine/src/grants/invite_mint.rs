@@ -72,6 +72,10 @@ impl fmt::Debug for MintedInviteLink {
 /// A link whose committing scope root landed.
 #[derive(Debug)]
 pub struct InviteMintOutcome {
+    /// [`CreateGrantOutcome::published_roots`]; empty when the handover stalled.
+    pub published_roots: Vec<([u8; 16], u64)>,
+    /// [`PromotedGrant::root_sequence`] of the minted scope root.
+    pub root_sequence: Option<u64>,
     /// The link the host presents.
     pub link: MintedInviteLink,
     /// The minted scope's read material, for the owner's own reads.
@@ -182,10 +186,16 @@ where
         .await
         .map_err(InviteMintError::Create)?;
 
+    let (published_roots, stalled) = match promoted.handover {
+        Ok(outcome) => (outcome.published_roots, None),
+        Err(stalled) => (Vec::new(), Some(stalled)),
+    };
     Ok(InviteMintOutcome {
         link: MintedInviteLink { fragment },
         read_scope: promoted.read_scope,
-        stalled: promoted.handover.err(),
+        root_sequence: promoted.root_sequence,
+        published_roots,
+        stalled,
     })
 }
 
@@ -507,16 +517,17 @@ mod tests {
             _node: &NodeRef,
             record: &ResealedScopeRoot,
             _held_outside: &[crate::grants::HeldNode],
-        ) -> Result<Vec<NodeRef>, RotationPublishError> {
-            self.publish_scope_root(record).await?;
-            Ok(self
+        ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
+            let sequence = self.publish_scope_root(record).await?;
+            let children = self
                 .interior
                 .iter()
                 .map(|node_id| NodeRef {
                     node_id: *node_id,
                     ipns_name: b"invited-folder-interior".to_vec(),
                 })
-                .collect())
+                .collect();
+            Ok((children, sequence))
         }
     }
 
@@ -524,7 +535,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), RotationPublishError> {
+        ) -> Result<u64, RotationPublishError> {
             if self.refuse_publish
                 || self
                     .publishes_before_refusal
@@ -532,8 +543,9 @@ mod tests {
             {
                 return Err(RotationPublishError::NotPublished);
             }
-            self.published.borrow_mut().push(record.clone());
-            Ok(())
+            let mut published = self.published.borrow_mut();
+            published.push(record.clone());
+            Ok(published.len() as u64)
         }
     }
 

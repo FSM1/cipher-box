@@ -175,11 +175,12 @@ impl std::error::Error for RotationPublishError {}
 pub trait ScopeRootPublisher {
     /// Register-first CAS-publish `record` at its scope root's `ipnsName`. `Ok`
     /// means the record is durably the freshest at the name; `Err` means nothing
-    /// was cut (the caller must not advance the floor).
+    /// was cut (the caller must not advance the floor). `Ok` carries the
+    /// sequence the landed record was signed at.
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError>;
+    ) -> Result<u64, RotationPublishError>;
 }
 
 /// The inputs to one scope root's read-plane rotation: its identity, its current

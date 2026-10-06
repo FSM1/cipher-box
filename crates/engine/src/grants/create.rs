@@ -206,6 +206,8 @@ pub struct ParentScopePlan<'a> {
 /// The result of a successful read-grant creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateGrantOutcome {
+    /// Each scope root this grant published, with the sequence it was signed at.
+    pub published_roots: Vec<([u8; 16], u64)>,
     /// The new grantee scope id.
     pub scope_id: [u8; 16],
     /// The recipient's blinded tag committed at the new scope root.
@@ -556,14 +558,15 @@ pub trait ScopeRootPromoter {
     /// root's, so its children are the interior the fresh scope now owns: taking
     /// them from the publish rather than from a read of the caller's own binds
     /// the re-seal to the record this call made current. The promoted body
-    /// drops its refs to `held_outside` ([`drop_held_refs`]).
+    /// drops its refs to `held_outside` ([`drop_held_refs`]). The `u64` is
+    /// the sequence it signed.
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError>;
+    ) -> Result<(Vec<NodeRef>, u64), RotationPublishError>;
 }
 
 /// The two reads a stalled grant's resume runs — the read-side counterpart of
@@ -1138,6 +1141,9 @@ where
 pub struct PromotedGrant {
     /// The promoted scope's read material, known once its root landed.
     pub read_scope: GrantedReadScope,
+    /// The sequence this call signed on the promoted root; `None` when an
+    /// earlier attempt published it.
+    pub root_sequence: Option<u64>,
     /// The interior, descendant and parent publishes after the root.
     pub handover: Result<CreateGrantOutcome, CreateGrantError>,
 }
@@ -1273,7 +1279,7 @@ where
     // reparented descendants before they are removed from the parent
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
-    let promoted_children = net
+    let (promoted_children, root_sequence) = net
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(|error| match error {
@@ -1310,6 +1316,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
+        root_sequence: Some(root_sequence),
         handover,
     })
 }
@@ -1394,6 +1401,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
+        root_sequence: None,
         handover,
     })
 }
@@ -1446,6 +1454,7 @@ where
     // blueprint/engine.md "subtree swept in"). Metadata-only, threaded
     // top-down as the eager cascade does (rotation/cascade.rs). Register-first: the grantee root published above
     // already lists these descendants, so each points back at a parent that exists.
+    let mut published_roots = Vec::new();
     for descendant in grantee.subtree_child_index {
         let target = net.resolve(descendant).await.map_err(|reason| {
             CreateGrantError::DescendantResolve {
@@ -1484,12 +1493,13 @@ where
             write_epoch: target.write_epoch,
             section,
         };
-        net.publish_scope_root(&record).await.map_err(|error| {
+        let sequence = net.publish_scope_root(&record).await.map_err(|error| {
             CreateGrantError::DescendantPublish {
                 scope_id: descendant.scope_id,
                 error,
             }
         })?;
+        published_roots.push((descendant.scope_id, sequence));
     }
 
     // Parent index update — a metadata-only re-seal at the same epoch.
@@ -1533,11 +1543,14 @@ where
         write_epoch: parent.seeds.write_epoch,
         section: parent_section,
     };
-    net.publish_scope_root(&parent_record)
+    let sequence = net
+        .publish_scope_root(&parent_record)
         .await
         .map_err(CreateGrantError::ParentPublish)?;
+    published_roots.push((parent_record.scope_id, sequence));
 
     Ok(CreateGrantOutcome {
+        published_roots,
         scope_id: grantee.scope_id,
         tag,
         parent_child_index: parent_index,
@@ -2448,7 +2461,7 @@ mod tests {
             _node: &NodeRef,
             record: &ResealedScopeRoot,
             _held_outside: &[HeldNode],
-        ) -> Result<Vec<NodeRef>, RotationPublishError> {
+        ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);
             }
@@ -2456,7 +2469,7 @@ mod tests {
             *self.promotion.borrow_mut() = Some(record.clone());
             // The promoted body is the granted folder's, so its children are
             // the nodes inside the folder.
-            Ok(self.promoted_children())
+            Ok((self.promoted_children(), 1))
         }
     }
 
@@ -2464,7 +2477,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), RotationPublishError> {
+        ) -> Result<u64, RotationPublishError> {
             let call = {
                 let mut c = self.publish_calls.borrow_mut();
                 let call = *c;
@@ -2478,8 +2491,9 @@ mod tests {
             }
             match &self.publish_result {
                 Ok(()) => {
-                    self.published.borrow_mut().push(record.clone());
-                    Ok(())
+                    let mut published = self.published.borrow_mut();
+                    published.push(record.clone());
+                    Ok(published.len() as u64)
                 }
                 Err(e) => Err(e.clone()),
             }

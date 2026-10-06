@@ -187,6 +187,8 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(crate) profile: &'a SyncTimingProfile,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
+    /// The session's own confirmed scope root sequences.
+    pub(crate) own_root_sequences: &'a RefCell<BTreeMap<NodeId, u64>>,
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     pub(crate) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
@@ -878,7 +880,7 @@ where
             .iter()
             .any(|delivery| delivery.outcome == ClaimOutcome::Granted)
         {
-            publish_edited_set(
+            let sequence = publish_edited_set(
                 &net,
                 self.entropy,
                 self.enc_secret,
@@ -887,6 +889,11 @@ where
                 &commitment_sig,
             )
             .await?;
+            crate::session::note_own_root_sequence(
+                self.own_root_sequences,
+                NodeId(target.scope.scope_id),
+                sequence,
+            );
         }
         // The record carries every row now. An entry settles once its
         // pointer lands, and until then the pointer alone is posted again.
@@ -1047,6 +1054,7 @@ where
         parent_net
             .publish_scope_root(&resealed)
             .await
+            .map(drop)
             .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 

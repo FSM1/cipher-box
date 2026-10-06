@@ -216,16 +216,17 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        self.root.publish_scope_root(record).await?;
+    ) -> Result<u64, RotationPublishError> {
+        let sequence = self.root.publish_scope_root(record).await?;
         let Some(anchor) = self.anchor else {
-            return Ok(());
+            return Ok(sequence);
         };
         // A fresh read, not the cut's refusal check: the CAS bar must follow
         // the root publish, or another device's re-point in between is lost.
         anchor
             .vouch_read_epoch(&record.ipns_name, record.read_epoch)
-            .await
+            .await?;
+        Ok(sequence)
     }
 }
 

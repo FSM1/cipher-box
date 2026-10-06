@@ -443,6 +443,10 @@ pub(crate) struct SessionState {
     /// the only writer; read by
     /// [`SessionState::named_scope_roots`].
     pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The highest root sequence this session published and confirmed, per
+    /// scope. Session memory only: the snapshot's `record_sequence` stays the
+    /// walked base, which the rebase reads as "another device's edit".
+    pub(crate) own_root_sequences: Rc<RefCell<BTreeMap<NodeId, u64>>>,
     /// The conversion entries the last conversion pass counted.
     pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
     /// Set while a conversion pass runs (`ConversionPass::running`).
@@ -526,7 +530,26 @@ pub(crate) struct SessionState {
     pub(crate) fork_sightings: Rc<ForkSightings>,
 }
 
+/// Hold the higher of `sequence` and the value already held for `scope`.
+pub(crate) fn note_own_root_sequence(
+    sequences: &RefCell<BTreeMap<NodeId, u64>>,
+    scope: NodeId,
+    sequence: u64,
+) {
+    let mut sequences = sequences.borrow_mut();
+    let held = sequences.entry(scope).or_insert(sequence);
+    *held = (*held).max(sequence);
+}
+
 impl SessionState {
+    pub(crate) fn note_own_root_sequence(&self, scope: NodeId, sequence: u64) {
+        note_own_root_sequence(&self.own_root_sequences, scope, sequence);
+    }
+
+    pub(crate) fn own_root_sequence(&self, scope: NodeId) -> Option<u64> {
+        self.own_root_sequences.borrow().get(&scope).copied()
+    }
+
     /// Every scope boundary this session has named: the roots its own grants
     /// minted, the roots a gated descent proved, and the roots the walk named
     /// without material. Wider than the set the drain drives, which lists only
@@ -628,6 +651,7 @@ impl SessionState {
             grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
             grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
             minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            own_root_sequences: Rc::new(RefCell::new(BTreeMap::new())),
             pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
             conversion_running: Rc::new(Cell::new(false)),
             owed_rotation: Rc::new(OwedCell::default()),

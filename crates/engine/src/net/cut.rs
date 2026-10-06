@@ -323,6 +323,7 @@ where
                 section,
             })
             .await
+            .map(drop)
             .map_err(|error| CascadeError::Publish {
                 scope_id: scope_root.0,
                 error,

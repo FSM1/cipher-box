@@ -949,7 +949,16 @@ where
         )
         .await
         {
-            Ok(Some(_)) => Ok(()),
+            Ok(Some(outcome)) => {
+                for (scope, sequence) in outcome.published_roots {
+                    crate::session::note_own_root_sequence(
+                        self.own_root_sequences,
+                        NodeId(scope),
+                        sequence,
+                    );
+                }
+                Ok(())
+            }
             // A parent-scope writer can publish a record at the folder's name,
             // so a root with no grant section does not prove the promotion
             // never ran.

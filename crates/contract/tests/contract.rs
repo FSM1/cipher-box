@@ -1741,8 +1741,8 @@ impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
         _record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        Ok(())
+    ) -> Result<u64, RotationPublishError> {
+        Ok(1)
     }
 }
 
@@ -1753,8 +1753,8 @@ impl ScopeRootPromoter for LocalNet {
         _node: &NodeRef,
         _record: &ResealedScopeRoot,
         _held_outside: &[cipherbox_engine::grants::HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError> {
-        Ok(Vec::new())
+    ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
+        Ok((Vec::new(), 1))
     }
 }
 

@@ -1383,6 +1383,7 @@ where
             scheduler: &seams.scheduler,
             profile: &seams.profile,
             on_access_misses: &state.on_access_misses,
+            own_root_sequences: &state.own_root_sequences,
             entropy: &seams.entropy,
             staging: &seams.staging,
             identity: &signer,

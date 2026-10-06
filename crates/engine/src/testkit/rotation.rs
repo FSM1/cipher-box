@@ -453,8 +453,8 @@ impl ScopeRootPublisher for ScriptedPublisher {
     async fn publish_scope_root(
         &self,
         _record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        self.0.clone()
+    ) -> Result<u64, RotationPublishError> {
+        self.0.clone().map(|()| 1)
     }
 }
 
