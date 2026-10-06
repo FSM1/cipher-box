@@ -241,6 +241,7 @@ The received-share refresh reports one class per bookmark (ADR 0025 D5):
 | `RenameGrantee`          | owner       | ADR 0027 D3     |
 | `Revoke`                 | owner       | ADR 0025 D3, D4 |
 | `RevokeInviteLink`       | owner       | ADR 0025 D1, D4 |
+| `RotateWriteNow`         | owner       | ADR 0063        |
 
 ## Known windows
 

@@ -131,8 +131,8 @@ use crate::rotation::{
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, cut_from_last_copy, derive_write_name,
-    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_grants,
-    revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
+    record_grant_floor, recut_from_last_copy, reseal_at_current_epoch, reseal_scope_root,
+    revoke_grants, revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
@@ -1969,6 +1969,21 @@ pub enum Command {
         )]
         node: NodeId,
     },
+    /// Run a write-scope cut of a scope below the vault root from its
+    /// published state (owner-only), so any owner device finishes a write cut
+    /// another device left owed (ADR 0063 consequence 6). It runs one write
+    /// wave in the call, by the re-drive of this device's own entry or by a new
+    /// cut. Work owed before the cut refuses retryably; a wave that stops after
+    /// the cut set lands is owed (ADR 0063 D5).
+    RotateWriteNow {
+        /// The scope root to cut.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
+        node: NodeId,
+    },
 
     // --- vault settings ---
     /// Publish the account's vault settings record — the member's placement,
@@ -2094,6 +2109,7 @@ impl Command {
             Command::ConvertInviteClaims { .. } => "convertInviteClaims",
             Command::DismissRefusedClaims { .. } => "dismissRefusedClaims",
             Command::RotateNow { .. } => "rotateNow",
+            Command::RotateWriteNow { .. } => "rotateWriteNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLink { .. } => "siweLink",
             Command::EmailLinkSendCode { .. } => "emailLinkSendCode",
@@ -2390,8 +2406,9 @@ pub enum Event {
         cause: DropCause,
     },
     /// The renewal walk met an owned scope root whose name its write seed does
-    /// not derive: a write cut that did not finish, which only the device that
-    /// owes it finishes. Its names lapse until then (ADR 0063 consequence 8).
+    /// not derive: a write cut that did not finish. The device that owes it
+    /// finishes it, or [`Command::RotateWriteNow`] on any owner device. Its
+    /// names lapse until then (ADR 0063 consequence 8).
     WriteCutUnfinished {
         /// The scope root whose names the walk cannot renew.
         #[cfg_attr(
@@ -7195,6 +7212,9 @@ where {
             Command::RotateNow { node } => Box::pin(self.rotate_now(node))
                 .await
                 .map(|()| CommandOutcome::Done),
+            Command::RotateWriteNow { node } => Box::pin(self.rotate_write_now(node))
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
@@ -7659,6 +7679,68 @@ where {
         .map_err(EngineError::from_rotate)
     }
 
+    /// Run a write-scope cut of the scope root at `node` from its published
+    /// state ([`Command::RotateWriteNow`]), after this device re-drives its own
+    /// entry there (ADR 0063 D5). A re-drive that ran a wave is the cut, so a
+    /// second one does not run. The command read falls back to
+    /// the last copy as every owner command's does (ADR 0068 D1), and a cut
+    /// from that copy keeps no grant row (ADR 0068 D5).
+    async fn rotate_write_now(&self, node: NodeId) -> Result<(), EngineError> {
+        // The cold-start floor has no bar for a vault anchor that a write cut
+        // moved.
+        if node == self.state.snapshot.borrow().root {
+            return Err(EngineError::UnsupportedTarget {
+                check: "rotate-write-target-is-the-vault-root",
+            });
+        }
+        let check = "rotate-write-target-is-not-a-scope-root";
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let pass_keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &pass_keys);
+        // One write wave runs in this call: the re-drive's own, or the cut below.
+        match pass.redrive_scope(&self.sites(session, api), node).await? {
+            Redriven::Finished { waved: true } | Redriven::Dropped { waved: true } => {
+                return Ok(());
+            }
+            Redriven::StillOwed => return Err(EngineError::rotation_work_owed()),
+            Redriven::Finished { waved: false }
+            | Redriven::NoEntry
+            | Redriven::Dropped { waved: false }
+            | Redriven::NotLanded => {}
+        }
+        let keys = OwnerActionKeys::new(session);
+        let target = self
+            .owner_scope(node, api, keys.rotation(), check, UnindexedScope::Refuse)
+            .await?;
+        let gated = self
+            .resolve_owned_scope_read(&keys, target, check, true)
+            .await?;
+        let scope_root_name = parsed_scope_name(&gated.target.scope.ipns_name)?;
+        let plan = GrantCutPlan::over(&gated.current, &scope_root_name, session.identity());
+        let cut = if gated.net.fell_back() {
+            recut_from_last_copy(&plan, true)
+        } else {
+            cut_for_write_scope(&plan)
+        }
+        .map_err(EngineError::from_revoke)?;
+        // A wave that stops after the cut set lands is owed work, which the
+        // owed event already reported (ADR 0063 D5).
+        self.drive_owed_cut(
+            node,
+            &gated.target,
+            &scope_root_name,
+            &cut,
+            gated.current.write_epoch,
+        )
+        .await?;
+        if gated.net.fell_back() {
+            let unasked = !gated.current.commitment.entries.is_empty();
+            self.notice_rows_dropped(node, cut.commitment.cut_epoch, unasked);
+        }
+        Ok(())
+    }
+
     /// Revoke a recipient's grant at `node`'s scope root.
     ///
     /// The recipient is the one the owner-attested ledger rows name, so any
@@ -7862,6 +7944,11 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
+        // The rows the owner asked to remove; a downgrade keeps its row.
+        let asked = match kind {
+            CutKind::Revoke(tags) => tags.len(),
+            CutKind::Downgrade(_) => 0,
+        };
         let cut = match kind {
             CutKind::Revoke(tags) if from_last_copy => cut_from_last_copy(&plan, tags),
             CutKind::Downgrade(tag) if from_last_copy => {
@@ -7874,8 +7961,29 @@ where {
         }
         .map_err(EngineError::from_revoke)?;
         self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
-            .await
-            .map(|_| ())
+            .await?;
+        if from_last_copy {
+            let unasked = current.commitment.entries.len() > asked;
+            self.notice_rows_dropped(node, cut.commitment.cut_epoch, unasked);
+        }
+        Ok(())
+    }
+
+    /// Tell the host, once per session, that a cut from the last copy at
+    /// `cut_epoch`, which ran or stands owed, removed grant rows the owner did
+    /// not ask to remove (`unasked`, ADR 0068 D5).
+    fn notice_rows_dropped(&self, scope_root: NodeId, cut_epoch: u64, unasked: bool) {
+        if unasked
+            && self
+                .state
+                .owed_rotation
+                .note_rows_dropped(scope_root, cut_epoch)
+        {
+            let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+                scope_root,
+                detail: owed_rotation::OWED_GRANTS_DROPPED.to_owned(),
+            });
+        }
     }
 
     /// Drive an authorized cut at `target` through the planes it demands
@@ -8111,7 +8219,7 @@ where {
             Box::pin(pass.redrive_scope(&sites, node)).await?,
             owed_delivery,
         ) {
-            (Redriven::Finished, Some(recipient)) => {
+            (Redriven::Finished { .. }, Some(recipient)) => {
                 self.contact_store(session)
                     .vouch(&recipient)
                     .await
@@ -8133,7 +8241,10 @@ where {
             }
             (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
             (
-                Redriven::NoEntry | Redriven::Finished | Redriven::Dropped | Redriven::NotLanded,
+                Redriven::NoEntry
+                | Redriven::Finished { .. }
+                | Redriven::Dropped { .. }
+                | Redriven::NotLanded,
                 _,
             ) => {}
         }

@@ -63,6 +63,10 @@ export function fakeEngine() {
   let failFocus: ((error: Error) => void) | null = null;
   let refreshes = 0;
   let refuseRefresh: Error | null = null;
+  const writeCuts: Uint8Array[] = [];
+  let refuseWriteCut: Error | null = null;
+  let heldWriteCut: ((error: Error) => void) | null = null;
+  let holdWriteCut = false;
 
   const client = {
     facade: {
@@ -89,6 +93,17 @@ export function fakeEngine() {
       vaultStorage(): Promise<VaultStorageDescriptor> {
         return Promise.resolve(FAKE_VAULT_STORAGE);
       },
+      rotateWriteNow(node: Uint8Array) {
+        writeCuts.push(node);
+        if (holdWriteCut) {
+          return new Promise((_resolve, reject) => {
+            heldWriteCut = reject;
+          });
+        }
+        return refuseWriteCut === null
+          ? Promise.resolve({ kind: 'done' })
+          : Promise.reject(refuseWriteCut);
+      },
     },
     // No session: this fake drives the browse plane, and a surface that reads
     // the account off it must see a tab that holds none.
@@ -112,6 +127,11 @@ export function fakeEngine() {
     rejectFocus: (error: Error) => failFocus?.(error),
     refreshes: () => refreshes,
     refuseRefresh: (error: Error) => (refuseRefresh = error),
+    writeCuts,
+    refuseWriteCut: (error: Error | null) => (refuseWriteCut = error),
+    /** Holds the next write cut open until `refuseHeldWriteCut`. */
+    holdWriteCut: () => (holdWriteCut = true),
+    refuseHeldWriteCut: (error: Error) => heldWriteCut?.(error),
     subscriberCount: () => listeners.size,
   };
 }

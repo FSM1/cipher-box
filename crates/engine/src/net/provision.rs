@@ -120,6 +120,7 @@ where
                 head,
                 content_cids: Vec::new(),
             },
+            None,
         )
         .await
         .map_err(publish_record_verdict)?;

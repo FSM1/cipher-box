@@ -1255,6 +1255,30 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
     assert_eq!(repoint.write_epoch, EPOCH);
 }
 
+/// A write rotate-now at the vault root is refused before it publishes, so
+/// the vault pointer stays on the same root at the same write epoch.
+#[test]
+fn a_write_rotate_now_of_the_vault_root_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateWriteNow { node: ROOT })),
+        Err(EngineError::UnsupportedTarget {
+            check: "rotate-write-target-is-the-vault-root"
+        }),
+    );
+    tick_n(&world, &engine, &mut tasks, 4);
+
+    let repoint = vault_repoint(&world);
+    assert_eq!(repoint.current_root, root_name);
+    assert_eq!(repoint.write_epoch, EPOCH);
+}
+
 // ---------------------------------------------------------------------------
 // A folder a grant promoted to a scope root of its own
 // ---------------------------------------------------------------------------

@@ -137,6 +137,14 @@ fn a_command_decodes_from_its_generated_shape() {
             }
     );
 
+    let rotate_write = object(&[("kind", text("rotateWriteNow")), ("node", node(4))]);
+    assert!(
+        decode_command(&rotate_write).unwrap()
+            == Command::RotateWriteNow {
+                node: NodeId([4; 16]),
+            }
+    );
+
     let manual = object(&[("kind", text("manualRefresh"))]);
     assert!(decode_command(&manual).unwrap() == Command::ManualRefresh);
 }

@@ -83,6 +83,12 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             },
         ),
         (
+            Command::RotateWriteNow { node },
+            EngineError::UnsupportedTarget {
+                check: "rotate-write-target-is-not-a-scope-root",
+            },
+        ),
+        (
             Command::RevokeInviteLink {
                 node,
                 link_tag: None,

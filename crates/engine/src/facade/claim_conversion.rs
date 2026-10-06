@@ -441,6 +441,32 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
         command: bool,
     ) -> Result<CutRotationReport, RotateOnCutError> {
+        let reads = CutRootReads::default();
+        self.rotate_planes_reading(
+            node,
+            target,
+            scope_root_name,
+            cut,
+            vault_pointer_signer,
+            command,
+            &reads,
+        )
+        .await
+    }
+
+    /// [`Self::rotate_planes`], noting what the cut's root reads met in
+    /// `reads`.
+    #[expect(clippy::too_many_arguments, reason = "one cut's full input set")]
+    pub(super) async fn rotate_planes_reading(
+        &self,
+        node: NodeId,
+        target: &OwnerScope,
+        scope_root_name: &IpnsName,
+        cut: &RevokedCommittedSet,
+        vault_pointer_signer: Option<&Ed25519Signer>,
+        command: bool,
+        reads: &CutRootReads,
+    ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
         let owed_bound = self.owed_bound(node).await;
         let bound = owed_bound
@@ -477,9 +503,9 @@ where
                 RootWait::Bound(bound)
             },
             root_reports: self.owed.root_reports(),
-            root_reads: CutRootReads::default(),
+            root_reads: reads,
         };
-        rotate_on_cut(&rotator, node, cut).await
+        Box::pin(rotate_on_cut(&rotator, node, cut)).await
     }
 
     /// Show the counts `record` holds, and repaint when they moved.

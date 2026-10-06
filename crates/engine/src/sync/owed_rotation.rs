@@ -198,6 +198,9 @@ pub struct OwedCell {
     /// The scopes whose entry a re-drive this session found with a cut that
     /// never landed, within the bound. Another command may replace it.
     not_landed: RefCell<BTreeSet<NodeId>>,
+    /// The scopes and cut epochs whose dropped rows this session already told
+    /// the host of (ADR 0068 D5).
+    rows_dropped: RefCell<BTreeSet<(NodeId, u64)>>,
     /// This session's [`RootReports`].
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
@@ -246,6 +249,9 @@ impl OwedCell {
         if let Ok(mut not_landed) = self.not_landed.try_borrow_mut() {
             not_landed.clear();
         }
+        if let Ok(mut rows_dropped) = self.rows_dropped.try_borrow_mut() {
+            rows_dropped.clear();
+        }
         if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
             reports.clear();
         }
@@ -254,6 +260,12 @@ impl OwedCell {
     /// This session's [`RootReports`].
     pub(crate) fn root_reports(&self) -> &RootReports {
         &self.root_reports
+    }
+
+    /// Note that the host hears of the rows a cut at `scope` and `cut_epoch`
+    /// dropped. Answers whether it is the first time this session.
+    pub(crate) fn note_rows_dropped(&self, scope: NodeId, cut_epoch: u64) -> bool {
+        self.rows_dropped.borrow_mut().insert((scope, cut_epoch))
     }
 
     fn reset_held(&self, scope: NodeId) {

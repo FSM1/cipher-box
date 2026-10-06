@@ -33,8 +33,9 @@ use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeTarget, CommittedSet, CutRotator,
     MAX_ROTATION_ATTEMPTS, NodeBound, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan, RotationPublishError,
-    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome,
-    bounded, cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
+    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WritePublishError, WriteRotateError,
+    WriteRotationOutcome, bounded, cascade_rotate_scope, derive_write_name, reseal_scope_root,
+    rotate_scope_write,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
@@ -100,7 +101,7 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// The refused root records this session already reported.
     pub root_reports: &'a RootReports,
     /// What this cut's own root reads met ([`CutRootReads`]).
-    pub root_reads: CutRootReads,
+    pub root_reads: &'a CutRootReads,
 }
 
 /// Whether a root read of one cut fell back to the last copy, and the root a
@@ -109,6 +110,14 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
 pub(crate) struct CutRootReads {
     fell_back: Cell<bool>,
     moved_root: RefCell<Option<IpnsName>>,
+    put_sent: Cell<bool>,
+}
+
+impl CutRootReads {
+    /// Whether this cut sent a PUT of its scope root's record.
+    pub(crate) fn put_sent(&self) -> bool {
+        self.put_sent.get()
+    }
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
@@ -190,11 +199,10 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
-            root_fallback: Some(RootFallback::new(
-                self.scope_id,
-                self.root_wait,
-                self.root_reports,
-            )),
+            root_fallback: Some(
+                RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
+                    .noting_root_puts(&self.root_reads.put_sent),
+            ),
         }
     }
 
@@ -241,15 +249,17 @@ where
                 .resolve_root(&net, &scope)
                 .await
                 .map_err(resolve_failed)?;
+            if keeps_rows_over_a_copy(net.fell_back(), cut) {
+                return Err(set_superseded(scope_root));
+            }
             // Idempotent by comparison, never by assumption: a read cascade or a
             // grant mint may already have published this set, and republishing
-            // would spend a CAS to change nothing. Both halves are compared —
-            // the wave re-mints from the ledger and refuses one the commitment
-            // does not commit (`net/rotation.rs` `remint_grants`), so an equal
-            // commitment over a divergent ledger is a record this step still
-            // owes a republish.
+            // would spend a CAS to change nothing.
             if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
+            }
+            if superseded(&current, cut) {
+                return Err(set_superseded(scope_root));
             }
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
@@ -342,12 +352,15 @@ where
                 .resolve_root(&net, &scope)
                 .await
                 .map_err(resolve_failed)?;
+            let moved = self.root_reads.moved_root.borrow().is_some();
+            if !moved && superseded(&current, cut) {
+                return Err(set_superseded(scope_root));
+            }
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
             }
             // At the moved root the wave already re-minted the cut set under the
             // new name; the cut still withholds its recipients.
-            let moved = self.root_reads.moved_root.borrow().is_some();
             let (commitment, commitment_sig, grant_ledger) = if moved {
                 (
                     &current.commitment,
@@ -418,10 +431,20 @@ where
                 // Re-read after the read arm: a full revoke re-keyed the scope, and
                 // the wave derives every per-node read key from the seed that cut
                 // published.
+                let net = self.rotation_net();
                 let current = self
-                    .resolve_root(&self.rotation_net(), &scope)
+                    .resolve_root(&net, &scope)
                     .await
                     .map_err(resolve_failed)?;
+                // The wave re-mints the authorized set, so a root, or a last
+                // copy, that carries a later one stops it.
+                if superseded(&current, cut) || keeps_rows_over_a_copy(net.fell_back(), cut) {
+                    return Err(WriteRotateError::Publish {
+                        stage: "republish",
+                        node_id: scope_root.0,
+                        error: WritePublishError::Superseded,
+                    });
+                }
                 // The durable floor is the owner-vouched `minReadEpoch` the re-point
                 // carries; a scope that has never been rotated has none, and its record's
                 // own epoch is the floor a reader would derive.
@@ -502,5 +525,28 @@ where
             });
         }
         Ok(outcome)
+    }
+}
+
+/// Whether `current` carries a set other than `cut`'s at `cut`'s cut epoch or
+/// above: another cut or row landed after the cut was authorized, and running
+/// it would drop that work.
+fn superseded(current: &CascadeTarget, cut: &RevokedCommittedSet) -> bool {
+    (current.commitment != cut.commitment || current.grant_ledger != cut.grant_ledger)
+        && current.commitment.cut_epoch >= cut.commitment.cut_epoch
+}
+
+/// Whether a cut that keeps grant rows meets a root read from its last copy:
+/// such a cut keeps no row (ADR 0068 D5), so it is refused, not run.
+fn keeps_rows_over_a_copy(fell_back: bool, cut: &RevokedCommittedSet) -> bool {
+    fell_back && !cut.commitment.entries.is_empty()
+}
+
+/// The retryable refusal of a cut that [`superseded`] or
+/// [`keeps_rows_over_a_copy`] names.
+fn set_superseded(scope_root: NodeId) -> CascadeError {
+    CascadeError::Publish {
+        scope_id: scope_root.0,
+        error: RotationPublishError::Superseded,
     }
 }

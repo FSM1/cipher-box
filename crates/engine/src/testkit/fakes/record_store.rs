@@ -63,6 +63,8 @@ pub struct InMemoryRecordStore {
     /// GETs served per routing key, so a test can count what a pass spends on
     /// one name rather than inferring it from what the pass published.
     gets: Arc<Mutex<HashMap<String, usize>>>,
+    /// PUTs asked for per routing key, whatever fault is injected.
+    puts: Arc<Mutex<HashMap<String, usize>>>,
     /// Records held back until a PUT lands
     /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
     deferred: Arc<Mutex<DeferredRecords>>,
@@ -101,6 +103,7 @@ impl InMemoryRecordStore {
             get_answers: Arc::default(),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             gets: Arc::new(Mutex::new(HashMap::new())),
+            puts: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
@@ -315,6 +318,17 @@ impl InMemoryRecordStore {
             .unwrap_or(0)
     }
 
+    /// How many PUTs this store has been asked for at `routing_key`, across
+    /// every endpoint and whatever fault is injected.
+    pub fn put_count(&self, routing_key: &str) -> usize {
+        self.puts
+            .lock()
+            .expect("lock")
+            .get(routing_key)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Ack every PUT and retain nothing, so a confirm re-resolve reads no
     /// record at all — an endpoint that answers 200 and stores nothing.
     pub fn drop_puts(&self) {
@@ -476,6 +490,12 @@ impl RecordTransport for InMemoryRecordStore {
         routing_key: &str,
         record: &[u8],
     ) -> SeamResult<()> {
+        *self
+            .puts
+            .lock()
+            .expect("lock")
+            .entry(routing_key.to_owned())
+            .or_default() += 1;
         if self.put_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",

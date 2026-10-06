@@ -88,9 +88,19 @@ const ROTATION_TRUST_STOP =
 const ROTATION_ABANDONED =
   'a change to who can open a shared folder could not be finished and was stopped - check the folder sharing and try again';
 
-/** Another device started a write cut that has not finished; that device finishes it. */
+/** Another device started a write cut that has not finished; any owner device can finish it. */
 const WRITE_CUT_UNFINISHED =
-  'a shared folder has a write-access change that another of your devices has not finished - open CipherBox on that device';
+  'a shared folder has a write-access change that another of your devices has not finished - finish it here, or open CipherBox on that device';
+
+const FINISH_WRITE_CUT = 'finish it here';
+
+/** The engine refused the write cut this device asked for. */
+const WRITE_CUT_FAILED =
+  'the write-access change of a shared folder did not finish on this device - try again later';
+
+/** The write cut met a record that failed verification; no retry clears that. */
+const WRITE_CUT_TRUST_STOP =
+  'the write-access change of a shared folder stopped because a record in that folder failed verification - CipherBox will not finish it while that record stands';
 
 const IDLE: SnapshotState = { view: null, error: null };
 
@@ -245,7 +255,32 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     } else if (event.kind === 'rotationWorkAbandoned') {
       notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
     } else if (event.kind === 'writeCutUnfinished') {
-      notificationStore.warn(`unfinished:${toHex(event.scopeRoot)}`, WRITE_CUT_UNFINISHED);
+      const scope = toHex(event.scopeRoot);
+      const key = `unfinished:${scope}`;
+      const failed = `unfinished-failed:${scope}`;
+      const clear = () => {
+        notificationStore.dismiss(key);
+        notificationStore.dismiss(failed);
+      };
+      notificationStore.warn(key, WRITE_CUT_UNFINISHED, {
+        label: FINISH_WRITE_CUT,
+        run: () =>
+          client.facade.rotateWriteNow(event.scopeRoot).then(
+            () => {
+              if (!disposed) clear();
+            },
+            (refusal: unknown) => {
+              if (disposed) return;
+              if (refusal instanceof EngineRequestError && refusal.code === 'trustViolation') {
+                // The same key, so a later report of the scope offers no retry.
+                clear();
+                notificationStore.warn(key, WRITE_CUT_TRUST_STOP);
+              } else {
+                notificationStore.warn(failed, WRITE_CUT_FAILED);
+              }
+            }
+          ),
+      });
     } else if (event.kind === 'attributableAbuse') {
       notificationStore.warn(
         `abuse:${event.description}`,

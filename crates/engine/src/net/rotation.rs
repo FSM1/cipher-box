@@ -61,7 +61,7 @@ use super::pointer_fetch::{
 };
 use super::publish::{
     InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
-    RefusedRead, publish_inline, refuse_foreign_version,
+    PutMark, RefusedRead, publish_inline, refuse_foreign_version,
 };
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -452,6 +452,8 @@ pub(crate) struct RootFallback<'a> {
     wait: RootWait<'a>,
     reported: &'a RootReports,
     fell_back: Cell<bool>,
+    /// Raised at the transport PUT of this scope root's record.
+    put_sent: Option<&'a Cell<bool>>,
 }
 
 /// The trust-event text for a fallback that finds no copy to run on.
@@ -490,6 +492,15 @@ impl<'a> RootFallback<'a> {
             wait,
             reported,
             fell_back: Cell::new(false),
+            put_sent: None,
+        }
+    }
+
+    /// Raise `put_sent` at the transport PUT of this scope root's record.
+    pub(crate) fn noting_root_puts(self, put_sent: &'a Cell<bool>) -> Self {
+        Self {
+            put_sent: Some(put_sent),
+            ..self
         }
     }
 
@@ -2734,6 +2745,8 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The contact-anchored owner identity the authored root must verify under
     /// (`author_scope_root_with_section`'s pre-publish mirror of gate stage 2).
     owner_identity: &'a EcdsaVerifier,
+    /// The scope root whose PUT raises the flag ([`RootFallback`]).
+    put_sent: Option<([u8; 16], &'a Cell<bool>)>,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
@@ -2811,6 +2824,10 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
 
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
+        let mark = self
+            .put_sent
+            .filter(|(scope_id, _)| *scope_id == record.scope_id)
+            .map(|(_, sent)| PutMark::Sent(sent));
         let receipt = publish_record(
             self.transport,
             self.api,
@@ -2823,6 +2840,7 @@ where
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
+            mark,
         )
         .await
         .map_err(record_publish_verdict)?;
@@ -2862,6 +2880,10 @@ where
             entropy: self.entropy,
             events: self.events,
             owner_identity: self.keys.identity,
+            put_sent: self
+                .root_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.put_sent.map(|sent| (fallback.scope_id, sent))),
         }
     }
 }
@@ -3327,6 +3349,7 @@ where
             entropy: self.entropy,
             events: self.events,
             owner_identity: self.keys.owner_identity,
+            put_sent: None,
         }
     }
 }
@@ -3930,6 +3953,7 @@ where
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
+            None,
         )
         .await
         .map_err(record_publish_verdict)?;
@@ -4803,6 +4827,7 @@ fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
         WritePublishError::Unreadable => ResolveFailure::Unreadable,
         WritePublishError::NotLanded
         | WritePublishError::LostRace
+        | WritePublishError::Superseded
         | WritePublishError::RegistryFull => ResolveFailure::Unavailable,
     }
 }
@@ -5114,6 +5139,11 @@ where
             .map_err(|verdict| wave_read_verdict(verdict.into()))?;
         if !gated.reseals_as(&self.scope_id) {
             return Err(WritePublishError::Rejected);
+        }
+        // A wave over a last copy keeps no row (ADR 0068 D5): refused here,
+        // before the first publish.
+        if fell_back && !self.authorized_commitment.entries.is_empty() {
+            return Err(WritePublishError::Superseded);
         }
         let envelope = gated.envelope;
         let read_scope_seed = gated.read_scope_seed;
@@ -5454,12 +5484,18 @@ where
         // what proves the mint runs off the owner's own attestation
         // ([`WriteWaveNet::authorized_commitment`]).
         // A root read from its last copy re-mints from the authorized cut set,
-        // so a pre-cut copy gives the revokee no new seed (ADR 0068 D3).
+        // so a pre-cut copy gives the revokee no new seed (ADR 0068 D3), and
+        // that set keeps no row (D5).
         let ledger = if plane.fell_back {
+            if !self.authorized_commitment.entries.is_empty() {
+                return Err(WritePublishError::Superseded);
+            }
             self.authorized_ledger
         } else {
+            // The gate passed the root, so another set is a race with another
+            // owner cut or a lagging endpoint, never a trust verdict.
             if plane.section.commitment != *self.authorized_commitment {
-                return Err(WritePublishError::Rejected);
+                return Err(WritePublishError::Superseded);
             }
             &plane.write_body.grant_ledger
         };
@@ -5818,6 +5854,7 @@ where
                 head: &preflighted,
                 content_cids,
             },
+            None,
         )
         .await
         .map_err(publish_record_verdict)?;
@@ -12856,8 +12893,9 @@ mod tests {
     #[test]
     fn the_wave_refuses_a_root_whose_committed_set_diverges_from_the_owner_plan_release_active() {
         // The staged record carries the PRE-REVOKE set, which the owner's plan
-        // dropped the write grant from — the replay
-        // [`WriteWaveNet::authorized_commitment`] exists to refuse. Release-active.
+        // dropped the write grant from — the stale root
+        // [`WriteWaveNet::authorized_commitment`] exists to refuse. The gate
+        // passed it, so the refusal is retryable. Release-active.
         let harness = Harness::plain();
         let root = granted_root(Vec::new());
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -12882,7 +12920,7 @@ mod tests {
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
-            Err(WritePublishError::Rejected)
+            Err(WritePublishError::Superseded)
         );
         assert!(
             !published_at(&harness, &moved.new_name),
@@ -12919,7 +12957,7 @@ mod tests {
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
-            Err(WritePublishError::Rejected)
+            Err(WritePublishError::Superseded)
         );
         assert!(
             !published_at(&harness, &moved.new_name),

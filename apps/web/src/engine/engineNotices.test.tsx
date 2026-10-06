@@ -1,3 +1,4 @@
+import { EngineRequestError } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NotificationToast } from '../components/NotificationToast';
@@ -16,6 +17,19 @@ function draw(client: ReturnType<typeof fakeEngine>['client']) {
       <NotificationToast />
     </EngineProvider>
   );
+}
+
+/** Reports `scopeRoot`'s unfinished write cut and presses the notice action. */
+async function finishFromNotice(
+  engine: ReturnType<typeof fakeEngine>,
+  scopeRoot = new Uint8Array(16).fill(9)
+) {
+  await act(async () => {
+    engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+  });
 }
 
 describe('engine warnings', () => {
@@ -105,6 +119,81 @@ describe('engine warnings', () => {
 
     const notice = await screen.findByTestId('notification-notice');
     expect(notice.textContent).toContain('another of your devices');
+  });
+
+  it('finishes a write cut another device has not finished from the notice', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const scopeRoot = new Uint8Array(16).fill(9);
+
+    await finishFromNotice(engine, scopeRoot);
+
+    expect(engine.writeCuts).toEqual([scopeRoot]);
+    expect(screen.queryByTestId('notification-toast')).toBeNull();
+  });
+
+  it('keeps the notice and says so when the engine refuses the write cut', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new Error('rotation-work-owed'));
+    draw(engine.client);
+
+    await finishFromNotice(engine);
+
+    const notices = screen.getAllByTestId('notification-notice');
+    expect(notices).toHaveLength(2);
+    expect(notices[1].textContent).toContain('did not finish on this device');
+    expect(notices[1].textContent).not.toContain('rotation-work-owed');
+    expect(screen.getByRole('button', { name: '[finish it here]' })).toHaveProperty(
+      'disabled',
+      false
+    );
+  });
+
+  it('shows a trust refusal of the write cut as a stop and offers no retry', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new EngineRequestError('the root failed the gate', 'trustViolation'));
+    draw(engine.client);
+    const scopeRoot = new Uint8Array(16).fill(9);
+
+    await finishFromNotice(engine, scopeRoot);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+    });
+
+    const notices = screen.getAllByTestId('notification-notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain('failed verification');
+    expect(notices[0].textContent).not.toContain('try again');
+    expect(screen.queryByRole('button', { name: '[finish it here]' })).toBeNull();
+  });
+
+  it('clears the failure notice once a later write cut lands', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new Error('unavailable'));
+    draw(engine.client);
+    await finishFromNotice(engine);
+    expect(screen.getAllByTestId('notification-notice')).toHaveLength(2);
+
+    engine.refuseWriteCut(null);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '[finish it here]' }));
+    });
+
+    expect(screen.queryByTestId('notification-toast')).toBeNull();
+  });
+
+  it('raises no notice for a write cut that settles after the engine went away', async () => {
+    const engine = fakeEngine();
+    engine.holdWriteCut();
+    const { unmount } = draw(engine.client);
+    await finishFromNotice(engine);
+
+    unmount();
+    await act(async () => {
+      engine.refuseHeldWriteCut(new Error('unavailable'));
+    });
+
+    expect(notificationStore.getState()).toHaveLength(0);
   });
 
   it('collapses a scope that escalates on every tick', async () => {

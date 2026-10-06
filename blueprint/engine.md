@@ -224,7 +224,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
   root whose name its write seed does not derive, it emits
   `writeCutUnfinished`, so every owner device shows a write cut that did not
-  finish.
+  finish and can finish it.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
@@ -1380,6 +1380,10 @@ rebases and signs above.
 - Restart: the time of the last command run is in memory, so after a restart
   the bound of a cut that never landed runs from its first stop, and the
   re-drive can drop the entry early with `rotationWorkAbandoned` (ADR 0068).
+  The rows-dropped notice mark is in memory too, so after a restart the
+  re-drive sends the notice again. The re-drive cannot know which rows the
+  owner asked to remove, so when the command sent no notice, the re-drive sends
+  it for every row it drops, also in the same session.
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).
@@ -1740,10 +1744,11 @@ Accepted by ADRs 0023 to 0028 and ADR 0063:
   (ADR 0024 E1).
 - Owed rotation work is local: only the device that holds the entry re-drives
   it. On another owner device, a revoked writer keeps the old write seed until
-  the first device runs a pass; an owner action there runs a write-scope cut
-  from the published state. A lost first device leaves a revoke and an interior
-  move owed for ever. No manual "rotate write keys now" action exists yet
-  (ADR 0063 consequence 6).
+  the first device runs a pass, or until the owner runs "rotate write keys now"
+  (`RotateWriteNow`) there: any owner device runs that write-scope cut from the
+  published state, below the vault root, and its root reads follow ADR 0068
+  like every owner command. A lost first device leaves an owed read cut and an
+  interior move owed for ever (ADR 0063 consequence 6).
 
 ## Mailbox logic
 
