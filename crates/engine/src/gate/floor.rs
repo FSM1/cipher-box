@@ -428,8 +428,20 @@ impl PendingSequenceRaise {
 
     /// Commit the deferred raise ([`advance_sequence_on_unseal`]), then yield
     /// the [`Adopted`] result. Call only after the record is durable.
+    ///
+    /// A floor left below the record's sequence is a store fault: the
+    /// exact-floor renewal would refuse the record, so it must not be held.
+    /// A floor above the sequence is a newer adoption, not a fault.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
-        advance_sequence_on_unseal(floors, &self.ipns_name, self.adopted.sequence).await?;
+        let sequence = self.adopted.sequence;
+        let stored = floors
+            .raise_sequence_floor(&self.ipns_name, sequence)
+            .await?;
+        if stored < sequence {
+            return Err(SeamError::new(format!(
+                "floor_store: the sequence floor is {stored} after a raise to {sequence}"
+            )));
+        }
         Ok(self.adopted)
     }
 }
@@ -791,6 +803,40 @@ mod tests {
             assert_eq!(sequence_floor(&floors, NAME).await.unwrap(), Some(5));
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
         });
+    }
+
+    fn pending_raise(sequence: u64) -> PendingSequenceRaise {
+        PendingSequenceRaise::new(
+            NAME,
+            Adopted {
+                read_body: cipherbox_core::seal::ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: Vec::new(),
+                    unknown: cipherbox_core::seal::PreservedFields::new(),
+                },
+                sequence,
+                epoch: 1,
+            },
+        )
+    }
+
+    #[test]
+    fn a_deferred_raise_the_store_did_not_take_fails_as_a_store_fault() {
+        let floors = InMemoryFloorStore::default();
+        floors.under_report_sequence_raises_for(NAME);
+        assert!(block_on(pending_raise(2).commit(&floors)).is_err());
+
+        floors.heal_floors();
+        let adopted = block_on(pending_raise(2).commit(&floors)).expect("a healthy raise");
+        assert_eq!(adopted.sequence, 2);
+    }
+
+    #[test]
+    fn a_deferred_raise_below_a_newer_floor_still_commits() {
+        let floors = InMemoryFloorStore::default();
+        block_on(pending_raise(3).commit(&floors)).expect("the newer record commits");
+        block_on(pending_raise(2).commit(&floors)).expect("an older commit is no fault");
     }
 
     #[test]

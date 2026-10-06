@@ -1184,6 +1184,84 @@ mod tests {
         IpnsRecord::create_v2(signer, VALUE, sequence, TTL_NANOS, &validity).marshal()
     }
 
+    /// [`StubAdopter`] that commits a deferred raise against a floor store.
+    struct Committing<'f> {
+        stub: StubAdopter,
+        floors: &'f crate::testkit::fakes::InMemoryFloorStore,
+    }
+
+    impl super::Adopter for Committing<'_> {
+        async fn adopt(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<super::AdoptOutcome, GateError> {
+            self.stub.adopt(name, record_bytes).await
+        }
+
+        async fn commit_sequence_adoption(
+            &self,
+            pending: PendingSequenceRaise,
+        ) -> Result<Adopted, crate::seams::SeamError> {
+            pending.commit(self.floors).await
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            name: &IpnsName,
+            record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+            self.stub.probe_read_scope_seed(name, record_bytes).await
+        }
+    }
+
+    /// A raise the store did not take fails the resolve as a store fault and
+    /// holds nothing; the next resolve after a healthy raise holds the head.
+    #[test]
+    fn a_head_whose_floor_raise_fell_short_is_held_only_after_a_healthy_raise() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [9u8; 32];
+        let node_id = [7u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 1));
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+        };
+        let adopter = Committing {
+            stub: StubAdopter::new(Verdict::DeferSequence),
+            floors: &device.floor_store,
+        };
+        let resolve = || {
+            block_on(resolve_and_hold(
+                &device.record_store,
+                &device.snapshot_cache,
+                &adopter,
+                &name,
+                &held,
+                &material,
+                ResolveMode::CacheFirst,
+            ))
+        };
+
+        device
+            .floor_store
+            .under_report_sequence_raises_for(name.as_str().as_bytes());
+        assert!(resolve().is_err(), "a short raise is a store fault");
+        assert!(held.borrow().is_empty(), "the head is not enrolled");
+
+        device.floor_store.heal_floors();
+        let resolved = resolve().expect("a healthy raise resolves").resolved;
+        assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+        assert!(held.borrow().get(&HeldKey::Node(node_id)).is_some());
+    }
+
     #[test]
     fn resolve_and_hold_holds_a_gate_passing_record() {
         let world = FakeWorld::new();
