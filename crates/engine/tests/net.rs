@@ -1,6 +1,6 @@
 //! The net-plane simulation harness: the gated resolve/publish pipeline, CAS
 //! races, any-ack/retry fan-out, virtual-time multi-day EOL timelines, the
-//! keyless re-PUT Scheduler job, and revival — driven over the in-memory fake
+//! and the keyless re-PUT Scheduler job — driven over the in-memory fake
 //! record store and virtual clock, no network and no docker
 //! (blueprint/engine.md "Resolve/publish pipeline"; blueprint/testing.md
 //! "the simulation harness").
@@ -23,8 +23,8 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
     HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, PublishError, PublishOutcome,
-    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
-    keyless_re_put, publish, resolve, revive, run_liveness_loop,
+    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, eol_republish, keyless_re_put, publish,
+    resolve, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
@@ -96,15 +96,6 @@ fn ok_200() -> HttpResponse {
     }
 }
 
-/// A 2xx response carrying `body` (recovery fetch returns the body verbatim).
-fn ok_200_body(body: Vec<u8>) -> HttpResponse {
-    HttpResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: body.into(),
-    }
-}
-
 /// Assert every configured endpoint holds a record for `name` at `sequence`.
 fn assert_all_endpoints_at(store: &InMemoryRecordStore, name: &IpnsName, sequence: u64) {
     for endpoint in store.endpoints() {
@@ -128,17 +119,6 @@ fn assert_no_endpoint_holds(store: &InMemoryRecordStore, name: &IpnsName) {
             endpoint.0
         );
     }
-}
-
-fn head_value_at(store: &InMemoryRecordStore, name: &IpnsName) -> Vec<u8> {
-    let bytes = store
-        .record_at(&store.endpoints()[0], name.as_str())
-        .expect("endpoint holds a record");
-    IpnsRecord::unmarshal(&bytes)
-        .expect("record parses")
-        .verify(name)
-        .expect("record verifies")
-        .value
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,443 +1120,12 @@ fn eol_republish_renews_at_seq_plus_one_only_inside_the_window() {
 }
 
 // ---------------------------------------------------------------------------
-// Revival — re-mint after a >EOL lapse via the recovery endpoint.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn revive_re_mints_a_fresh_record_strictly_newer_than_the_lapsed_one() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(14);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // The recovery endpoint holds the last-known record (sequence 5) — the
-    // network copy has lapsed and been GC'd.
-    let lapsed = record(&s, b"/ipfs/bafyrecovered", 5, 0);
-    device.http.enqueue_response(ok_200_body(lapsed)); // recovery fetch
-    device.http.enqueue_response(ok_200()); // register for the re-mint
-
-    let request = ReviveRequest {
-        name: &name,
-        signer: &s,
-        content_cids: vec!["bafyrecovered".into()],
-    };
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        request,
-    ))
-    .expect("revive");
-
-    // Strictly newer than the recovered sequence 5, even from a cold floor.
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 6 });
-    for endpoint in world.record_store.endpoints() {
-        let bytes = world
-            .record_store
-            .record_at(&endpoint, name.as_str())
-            .unwrap();
-        let verified = IpnsRecord::unmarshal(&bytes)
-            .unwrap()
-            .verify(&name)
-            .unwrap();
-        assert_eq!(verified.sequence, 6);
-        assert_eq!(verified.value, b"/ipfs/bafyrecovered", "same CID re-minted");
-    }
-}
-
-#[test]
-fn revive_fails_closed_when_the_recovery_endpoint_is_unauthorized() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(15);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    device.http.enqueue_response(HttpResponse {
-        status: 403,
-        headers: Vec::new(),
-        body: Vec::new().into(),
-    });
-
-    let request = ReviveRequest {
-        name: &name,
-        signer: &s,
-        content_cids: Vec::new(),
-    };
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        request,
-    ))
-    .expect_err("a refused recovery fetch fails closed");
-    assert!(matches!(error, ReviveError::Recovery(_)));
-    // Nothing was published.
-    for endpoint in world.record_store.endpoints() {
-        assert!(
-            world
-                .record_store
-                .record_at(&endpoint, name.as_str())
-                .is_none()
-        );
-    }
-}
-
-#[test]
-fn revive_prefers_a_fresher_corroborating_record_over_the_recovery_endpoint() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(17);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // A replaying recovery endpoint serves an old but validly signed record,
-    // while an endpoint that still holds the name serves the real head.
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafystale", 3, 0)));
-    device.http.enqueue_response(ok_200()); // register for the re-mint
-    world.record_store.seed_record(
-        &world.record_store.endpoints()[0],
-        name.as_str(),
-        record(&s, b"/ipfs/bafyfresh", 9, 0),
-    );
-
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect("revive");
-
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 10 });
-    assert_all_endpoints_at(&world.record_store, &name, 10);
-    assert_eq!(
-        head_value_at(&world.record_store, &name),
-        b"/ipfs/bafyfresh",
-        "the CID rides out of the same record as the sequence"
-    );
-}
-
-#[test]
-fn revive_takes_the_fan_out_side_of_a_same_sequence_fork() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(23);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // An unconfirmed publish retry forks the name: two validly signed records at
-    // one sequence, pointing at different CIDs. The routing set is canonical, so
-    // it takes the tie — the recovery endpoint does not get to pick a side.
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecoveryside", 5, 0)));
-    device.http.enqueue_response(ok_200()); // register for the re-mint
-    world.record_store.seed_record(
-        &world.record_store.endpoints()[0],
-        name.as_str(),
-        record(&s, b"/ipfs/bafyfanoutside", 5, 0),
-    );
-
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect("revive");
-
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 6 });
-    assert_all_endpoints_at(&world.record_store, &name, 6);
-    assert_eq!(
-        head_value_at(&world.record_store, &name),
-        b"/ipfs/bafyfanoutside",
-        "a corroborated sequence never rides with the recovery endpoint's CID"
-    );
-}
-
-#[test]
-fn revive_keeps_the_recovery_record_when_the_fan_out_is_older() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(19);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 7, 0)));
-    device.http.enqueue_response(ok_200());
-    world.record_store.seed_record(
-        &world.record_store.endpoints()[0],
-        name.as_str(),
-        record(&s, b"/ipfs/bafyolder", 2, 0),
-    );
-
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect("revive");
-
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 8 });
-    assert_eq!(
-        head_value_at(&world.record_store, &name),
-        b"/ipfs/bafyrecovered",
-        "an older fan-out record never displaces the recovery record"
-    );
-}
-
-#[test]
-fn revive_fails_closed_when_the_sequence_floor_cannot_be_read() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(20);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 5, 0)));
-
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &failing_floor_store(),
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect_err("the corroboration cannot run without the floor");
-    assert!(matches!(error, ReviveError::FloorRead(_)));
-    assert_no_endpoint_holds(&world.record_store, &name);
-}
-
-#[test]
-fn revive_fails_closed_when_every_source_is_below_the_durable_floor() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(18);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // This device durably adopted sequence 9; the recovery endpoint replays 3.
-    block_on(
-        device
-            .floor_store
-            .raise_sequence_floor(name.as_str().as_bytes(), 9),
-    )
-    .unwrap();
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
-
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect_err("a source below the durable floor is a replay, not a lapse");
-    assert_eq!(
-        error,
-        ReviveError::StaleSource {
-            floor: 9,
-            sequence: 3
-        }
-    );
-    assert_no_endpoint_holds(&world.record_store, &name);
-}
-
-#[test]
-fn revive_fails_closed_when_the_routing_set_is_unreachable() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(24);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // The replay the corroboration exists to deny: a recovery endpoint under the
-    // attacker serves an old owner-signed record while the routing set is held
-    // unreachable, and the device has no durable floor for the name.
-    for endpoint in world.record_store.endpoints() {
-        world.record_store.fail_endpoint(&endpoint);
-    }
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
-
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect_err("a silent routing set corroborates nothing");
-    assert_eq!(error, ReviveError::Uncorroborated);
-    assert_no_endpoint_holds(&world.record_store, &name);
-}
-
-#[test]
-fn revive_fails_closed_when_only_part_of_the_endpoint_set_answers_vacant() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(25);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // One endpoint answers "no record" and the other never answers. One
-    // endpoint's word against a failure is not evidence that the name is vacant.
-    world
-        .record_store
-        .fail_endpoint(&world.record_store.endpoints()[0]);
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
-
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect_err("a partial answer is not a vacancy");
-    assert_eq!(error, ReviveError::Uncorroborated);
-    assert_no_endpoint_holds(&world.record_store, &name);
-}
-
-#[test]
-fn revive_fails_closed_when_an_endpoint_serves_unverifiable_bytes() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(26);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // Bytes that do not verify against the name are not an answer about the
-    // name, so the set is not unanimous and the recovery record stays
-    // uncorroborated.
-    world.record_store.seed_record(
-        &world.record_store.endpoints()[0],
-        name.as_str(),
-        b"not a record".to_vec(),
-    );
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
-
-    let error = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect_err("unverifiable bytes leave the set silent");
-    assert_eq!(error, ReviveError::Uncorroborated);
-    assert_eq!(
-        world
-            .record_store
-            .record_at(&world.record_store.endpoints()[1], name.as_str()),
-        None,
-        "nothing was re-minted"
-    );
-}
-
-#[test]
-fn revive_accepts_the_recovery_record_when_the_whole_set_agrees_the_name_is_vacant() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(27);
-    let name = name_of(&s);
-    let api = api_for(&device);
-
-    // The lapsed shape: every endpoint answers, and every answer is "no record".
-    device
-        .http
-        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 4, 0)));
-    device.http.enqueue_response(ok_200()); // register for the re-mint
-
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &device.scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect("a unanimous vacancy corroborates the recovery endpoint");
-
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 5 });
-    assert_all_endpoints_at(&world.record_store, &name, 5);
-}
-
-// ---------------------------------------------------------------------------
 // An end-to-end multi-day EOL timeline on virtual time: publish → live →
-// renewal → lapse → revival, one narrative over ~250 virtual days.
+// renewal → lapse, one narrative over ~185 virtual days.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn multi_day_eol_timeline_publish_renew_lapse_revive() {
+fn multi_day_eol_timeline_publish_renew_lapse() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
     let s = signer(16);
@@ -1633,7 +1182,6 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
     )
     .unwrap();
 
-    // Capture the live seq-2 bytes the recovery endpoint would return later.
     let seq2_bytes = world
         .record_store
         .record_at(&endpoint, name.as_str())
@@ -1650,25 +1198,6 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
         eol::is_expired(scheduler.now(), &seq2_validity),
         "the record has lapsed past its EOL"
     );
-
-    // Revival: recovery returns the last-known seq-2 record; re-mint at seq 3.
-    device.http.enqueue_response(ok_200_body(seq2_bytes));
-    device.http.enqueue_response(ok_200());
-    let outcome = block_on(revive(
-        &device.record_store,
-        &api,
-        &device.floor_store,
-        &scheduler,
-        &SyncTimingProfile::CI,
-        ReviveRequest {
-            name: &name,
-            signer: &s,
-            content_cids: Vec::new(),
-        },
-    ))
-    .expect("revive after lapse");
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 3 });
-    assert_all_endpoints_at(&world.record_store, &name, 3);
 }
 
 #[test]
