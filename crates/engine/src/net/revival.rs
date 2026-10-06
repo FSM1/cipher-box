@@ -1040,6 +1040,38 @@ mod tests {
     }
 
     #[test]
+    fn a_device_that_adopted_the_file_record_revives_it_at_its_floor() {
+        let (world, device) = after_100_days();
+        let (signer, record, head) = file_record(READ_SCOPE_SEED, 4);
+        let name = name_of(&signer);
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 4),
+        )
+        .unwrap();
+        recover(&device, record);
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+
+        let revived = revive_one(
+            &world,
+            &device,
+            &signer,
+            child_read(&device, &gateway, &http, Some(head)),
+        )
+        .expect("the at-floor read admits the recovered record");
+
+        assert_eq!(
+            revived,
+            Revived {
+                outcome: PublishOutcome::Published { sequence: 5 },
+                restored_from_server_copy: false,
+            }
+        );
+        assert_eq!(floor_of(&device, &name), Some(4));
+    }
+
+    #[test]
     fn a_file_record_the_gate_refuses_is_a_trust_violation() {
         let (world, device) = after_100_days();
         let (signer, record, head) = file_record([0xB2; 32], 4);

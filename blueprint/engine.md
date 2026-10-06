@@ -234,7 +234,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   recovered sequence. No answer refuses, and a record below the durable floor
   is refused. (3) Give the record to the read of its plane: the root adopt for
   a scope root, the gated child resolve for another node, `open_repoint` and
-  the pointer bar for a scope pointer, and the bin index load for the bin
+  the pointer bar for a pointer record, and the bin index load for the bin
   index. A refusal of bytes the plane served is a `TrustViolation`; a body
   that is not available is an availability failure. (4) Register the admitted
   names in batches of up to `REGISTRY_BATCH_MAX`. (5) The fan-out still reads
