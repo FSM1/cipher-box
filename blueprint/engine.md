@@ -1035,11 +1035,16 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   decides: a landed op drops, and a lost op applies again under the new seed.
   A content edit reads its file's live record first, and it landed when the
   history names its version. A second apply that a rebase or a permanent halt
-  refuses leaves with no notice. A device with no new seed rebases the op on
-  the old tree it last read: where that tree shows the op, the op leaves with
-  no notice; where it does not, the apply finds no write seed, and the op
-  dead-letters with a notice once its attempt budget is spent. A kept op is
-  not pending (ADR 0069 D7).
+  refuses leaves with no notice; a charged halt is charged, and the op
+  dead-letters with a notice once its attempt budget is spent. A pass that
+  cannot check the op, because the walk did not prove its root (a gate-refused
+  one included) or another pass writes it, reads the durable write-epoch
+  floor of the root: at the note's root and epoch the op waits out T, and a
+  higher floor or another root keeps it with no bound until a pass can check
+  it. A delete whose node the base does not hold still leaves at T. A
+  device with no new seed does not rebase the op: the op holds the head on
+  the keyless charge and dead-letters with a notice once that budget is spent
+  (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
@@ -1071,7 +1076,9 @@ it, only new uploads fail fast; metadata ops queue unbounded).
 An op over a record at an envelope version this build does not read is charged
 no attempt on any path, the bin read included; a spent unattributed budget
 dead-letters it as `newerRelease`, so the member is told to update (owner
-decision of 2026-10-02).
+decision of 2026-10-02). While it waits, it is a reported `newer-release` hold
+that tells the member to update; the next pass tries the head again, and the
+hold comes back if the version refusal does.
 
 ## Rotation primitives
 
@@ -1396,12 +1403,15 @@ rebases and signs above.
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
 - Late writes: a write that a revoked or downgraded writer puts in the old
-  tree after the walk leaves the queue of its own device with no notice when
-  the old tree it last read shows the write, and the dead letter of ADR 0069
-  D3 is not landed. A rename, a move or a history edit that lands in the old
-  tree after the walk is lost, because only a create, a delete and a content
-  edit stay kept. A kept op whose device sees no flip within T leaves the
-  queue at T, so a flip after T loses the write (ADR 0069).
+  tree after the walk dead-letters on its own device (ADR 0069 D3). A
+  read-only graft does not read the moved tree, so each kept op of that
+  writer dead-letters, also one that the wave carried. Its copy stays
+  preserved on the device, and its notice reads as `attemptsExhausted`,
+  though the write can be in the shared folder. A rename, a move or a
+  history edit that lands in the old tree after the walk is lost, because
+  only a create, a delete and a content edit stay kept. A kept op whose device
+  sees no flip within T leaves the queue at T, so a flip after T loses the
+  write (ADR 0069).
 - Kept ops over a later writer: the op does not record its result, so the
   check cannot tell a lost op from a later change. A kept create links again
   a node that a later writer deleted, with its initial content. A kept edit

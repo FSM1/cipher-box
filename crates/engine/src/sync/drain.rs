@@ -419,6 +419,26 @@ impl Attempts {
     }
 }
 
+/// A halt that opening a pass raised, with the op the valve charges for it:
+/// the op a kept edit's head read stopped at, or the head of the ops the
+/// rebase read for a record at a newer envelope version. `None` for a halt
+/// the valve does not attribute.
+struct HeadHalt {
+    halt: Halt,
+    at: Option<OpId>,
+}
+
+impl HeadHalt {
+    /// A newer release rewrites the anchor on each write, so its halt is
+    /// charged to `head` to be bounded and named.
+    fn at_head(halt: Halt, head: Option<OpId>) -> Self {
+        Self {
+            halt,
+            at: head.filter(|_| halt == Halt::ForeignVersion),
+        }
+    }
+}
+
 /// What stopped a drain pass, and what the valve does about it. Strict
 /// FIFO throughout: the op that stopped the pass keeps its place at the head of
 /// the durable queue.
@@ -805,6 +825,11 @@ pub enum QueueHoldReason {
     /// Reported for the same reason as [`Self::BinIndex`]: a party who
     /// withholds the target's record otherwise stops the queue in silence.
     DeletePlane,
+    /// A record the op builds on is at an envelope version this build does
+    /// not read ([`Halt::ForeignVersion`]). The exit is a pass whose head
+    /// meets no such record; the bound and the `newerRelease` dead letter
+    /// stay the unattributed budget's.
+    NewerRelease,
 }
 
 /// The queue head is held over rather than failed: it keeps its place and its
@@ -826,7 +851,8 @@ pub struct QueueHold {
 }
 
 /// Whether a halt frees a hold whose exit is the pass itself:
-/// [`QueueHoldReason::BinIndex`] or [`QueueHoldReason::DeletePlane`].
+/// [`QueueHoldReason::BinIndex`], [`QueueHoldReason::DeletePlane`] or
+/// [`QueueHoldReason::NewerRelease`].
 ///
 /// The exit is a classified verdict on the held op itself. A pass whose scope
 /// does not author that op takes [`Halt::Unclassified`] for it and knows
@@ -840,6 +866,7 @@ fn probed_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool 
     let still_held = match hold.reason {
         QueueHoldReason::BinIndex(_) => matches!(halt, Halt::HeldByBinIndex(_)),
         QueueHoldReason::DeletePlane => halt == Halt::DeletePlaneUnavailable,
+        QueueHoldReason::NewerRelease => halt == Halt::ForeignVersion,
         QueueHoldReason::Quota { .. } | QueueHoldReason::Settings(_) => return false,
     };
     hold.op_id == halted && !still_held && halt != Halt::Unclassified
@@ -1337,6 +1364,10 @@ pub(crate) struct DrainScope<'a> {
     pub(crate) scope_roots: &'a [NodeId],
     /// Includes boundaries whose material the current walk could not prove.
     pub(crate) known_scope_roots: &'a [NodeId],
+    /// The floor namespace of each scope root another identity granted, `None`
+    /// for a root no one granting identity names. Every other root reads its
+    /// floors in this identity's own namespace.
+    pub(crate) granted_namespaces: &'a [(NodeId, Option<FloorNamespace>)],
     /// The proved scope roots whose own records carry no write plane this
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
@@ -2645,16 +2676,40 @@ where
                 .collect();
             &rest[..]
         };
+        // A kept op under a keyless scope does not apply again ([`KeptPlace::Keyless`]).
+        let kept = self.kept_ids(scope).await?;
+        let mut end = pending.len();
+        for (index, (op_id, op)) in pending.iter().enumerate() {
+            if !kept(*op_id, op) {
+                continue;
+            }
+            if let KeptPlace::Keyless { root } = self.kept_place(scope, op).await? {
+                if index == 0 {
+                    let halt = halt_below_another_scope_root(
+                        scope.keyless_roots,
+                        scope.charges_the_identity,
+                        root,
+                    );
+                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                        .await;
+                    return Err(halt);
+                }
+                end = index;
+                break;
+            }
+        }
+        let pending = &pending[..end];
 
         let opened = self.open_rebased_pass(scope, pending).await;
-        // A newer release rewrites the anchor on each write, so its halt must
-        // reach the valve to be bounded and named.
-        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, pending.first()) {
+        // A halt that names its op reaches the valve to be bounded and named
+        // ([`HeadHalt`]).
+        if let Err(HeadHalt { halt, at: Some(at) }) = &opened
+            && let Some((op_id, op)) = pending.iter().find(|(op_id, _)| op_id == at)
+        {
             self.apply_valve(scope, *op_id, op, *halt, attempts, report)
                 .await;
         }
-        let (mut pass, rebased) = opened?;
-        let kept = self.kept_ids(scope).await?;
+        let (mut pass, rebased) = opened.map_err(|head| head.halt)?;
         for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2721,6 +2776,7 @@ where
                     .await;
                 return Err(halt);
             }
+            self.release_hold_of(applied.op_id);
             // An op that is not kept leaves at its publish ([`keeps`]).
             if !self.kept_now.get() {
                 self.dequeue_op(applied.op_id).await?;
@@ -2786,9 +2842,9 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
-        // The bin index load and the delete's plane proof are their own probes,
-        // so their holds exit here, on a classified halt at the held op. Every
-        // other reason has an exit the pre-pass gate can try.
+        // Each probed hold exits here, on a classified halt at the held op
+        // ([`probed_hold_exits`]). Every other reason has an exit the pre-pass
+        // gate can try.
         if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
@@ -2809,10 +2865,15 @@ where
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
             Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope | Halt::ForeignVersion => {
+                let newer_release = halt == Halt::ForeignVersion;
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
+                    if newer_release {
+                        self.hold_head(op_id, op, QueueHoldReason::NewerRelease);
+                    }
                     return;
                 }
-                let reason = if halt == Halt::ForeignVersion {
+                let reason = if newer_release {
+                    self.release_hold();
                     DeadLetterReason::NewerRelease
                 } else {
                     DeadLetterReason::AttemptsExhausted
@@ -2938,11 +2999,14 @@ where
                         return false;
                     }
                 }
-                // The bin index load and the delete's plane proof are their
-                // own probes, so neither reason stops a pass nor clears before
-                // one: [`Self::apply_valve`] is the exit of both, and
+                // The bin index load, the delete's plane proof and the
+                // envelope version read are their own probes, so none of these
+                // reasons stops a pass nor clears before one:
+                // [`Self::apply_valve`] is the exit of each, and
                 // [`Self::establish_bin_index`] also frees a bin index hold.
-                QueueHoldReason::BinIndex(_) | QueueHoldReason::DeletePlane => return true,
+                QueueHoldReason::BinIndex(_)
+                | QueueHoldReason::DeletePlane
+                | QueueHoldReason::NewerRelease => return true,
             }
         }
         self.release_hold();
@@ -2982,6 +3046,18 @@ where
 
     fn release_hold(&self) {
         *self.cells.hold.borrow_mut() = None;
+    }
+
+    /// A hold on an op that published has no cause left.
+    fn release_hold_of(&self, op_id: OpId) {
+        let held = self
+            .cells
+            .hold
+            .borrow()
+            .is_some_and(|hold| hold.op_id == op_id);
+        if held {
+            self.release_hold();
+        }
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -3027,7 +3103,19 @@ where
             if is_kept(op_id, published, &notes) {
                 // Its record publish was confirmed, so its version is live.
                 let verdict = if keeps(&op.kind) {
-                    let place = self.kept_place(scope, &op).await?;
+                    let mut place = self.kept_place(scope, &op).await?;
+                    // This pass cannot check the op, so the floor of the root
+                    // it published under decides whether the bound runs. A
+                    // delete whose node the base does not hold under a proved
+                    // root leaves at the bound (ADR 0069 D6).
+                    if place == KeptPlace::Elsewhere
+                        && let Some(root) = notes.note_at(op_id, now).scope
+                        && (!matches!(op.kind, OpKind::Delete { .. })
+                            || self.cells.base.borrow().node(op.target).is_some()
+                            || !scope.scope_roots.contains(&root))
+                    {
+                        place = self.unchecked_place(scope, root).await?;
+                    }
                     // A later op of this device on the same node decides what
                     // that node shows, so a check of this one would undo it.
                     if last_on.get(&op.target) != Some(&op_id) {
@@ -3100,8 +3188,9 @@ where
     }
 
     /// Where the write scope of a kept op stands for this pass: the nearest
-    /// proved scope root above the node the op writes under, as
-    /// [`Self::ensure_folder`] finds it.
+    /// known scope root above the node the op writes under, when the boundary
+    /// walk proved it. An unproved root reports its durable write-epoch floor
+    /// ([`KeptPlace::Unchecked`]).
     async fn kept_place(&self, scope: &DrainScope<'_>, op: &Op) -> Result<KeptPlace, Halt> {
         let anchor = match &op.kind {
             OpKind::Create { parent, .. } => *parent,
@@ -3113,16 +3202,27 @@ where
             let Some(meta) = base.node(anchor) else {
                 return Ok(KeptPlace::Elsewhere);
             };
-            let nearest = enclosing_scope_root(&base, anchor, scope.scope_roots);
-            (nearest, meta.ipns_name.clone())
+            let known: Vec<NodeId> = scope
+                .scope_roots
+                .iter()
+                .chain(scope.known_scope_roots)
+                .copied()
+                .collect();
+            (
+                enclosing_scope_root(&base, anchor, &known),
+                meta.ipns_name.clone(),
+            )
         };
         let Some(root) = nearest else {
             return Ok(KeptPlace::Elsewhere);
         };
+        if !scope.scope_roots.contains(&root) {
+            return self.unchecked_place(scope, root).await;
+        }
         let end = match scope.second_end() {
             Ok(Some(destination)) if destination.end.root == root => destination.end,
             _ if scope.source.root == root => scope.source,
-            _ if scope.keyless_roots.contains(&root) => return Ok(KeptPlace::Keyless),
+            _ if scope.keyless_roots.contains(&root) => return Ok(KeptPlace::Keyless { root }),
             _ => return Ok(KeptPlace::Elsewhere),
         };
         // A write cut moves every node to a name of the new seed, so a base
@@ -3134,6 +3234,32 @@ where
             root,
             live_write_epoch: self.write_epoch_of(&end).await?,
             anchor_read_live,
+        })
+    }
+
+    /// [`KeptPlace::Unchecked`] at `root`, under its durable write-epoch floor
+    /// in the namespace of `root`, whichever pass reads it.
+    async fn unchecked_place(
+        &self,
+        scope: &DrainScope<'_>,
+        root: NodeId,
+    ) -> Result<KeptPlace, Halt> {
+        let namespace = match scope
+            .granted_namespaces
+            .iter()
+            .find(|(granted, _)| *granted == root)
+        {
+            None => FloorNamespace::Own,
+            Some((_, Some(namespace))) => *namespace,
+            Some((_, None)) => return Ok(KeptPlace::Unnamespaced),
+        };
+        let floors = namespace.view(&self.seams.floors);
+        Ok(KeptPlace::Unchecked {
+            root,
+            live_write_epoch: floor::write_epoch_floor(&floors, &root.0)
+                .await
+                .map_err(seam)?
+                .unwrap_or(GENESIS_EPOCH),
         })
     }
 
@@ -3190,19 +3316,35 @@ where
         &self,
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
-    ) -> Result<(Pass, ReplayReport), Halt> {
-        let (resolved, others) = self.scope_root_candidates(scope).await?;
-        let mut pass = self.open_pass(scope, &resolved).await?;
+    ) -> Result<(Pass, ReplayReport), HeadHalt> {
+        let at_head = |queued: &[(OpId, Op)]| {
+            let head = queued.first().map(|(op_id, _)| *op_id);
+            move |halt| HeadHalt::at_head(halt, head)
+        };
+        let (resolved, others) = self
+            .scope_root_candidates(scope)
+            .await
+            .map_err(at_head(queued))?;
+        let mut pass = self
+            .open_pass(scope, &resolved)
+            .await
+            .map_err(at_head(queued))?;
         let landed = self.read_kept_heads(scope, &mut pass, queued).await?;
         if landed.is_empty() {
-            return self.rebase_on_pass(scope, pass, &others, queued).await;
+            return self
+                .rebase_on_pass(scope, pass, &others, queued)
+                .await
+                .map_err(at_head(queued));
         }
         let rest: Vec<(OpId, Op)> = queued
             .iter()
             .filter(|(op_id, _)| !landed.contains(op_id))
             .cloned()
             .collect();
-        let (pass, mut rebased) = self.rebase_on_pass(scope, pass, &others, &rest).await?;
+        let (pass, mut rebased) = self
+            .rebase_on_pass(scope, pass, &others, &rest)
+            .await
+            .map_err(at_head(&rest))?;
         rebased.dropped.extend(
             landed
                 .into_iter()
@@ -3253,17 +3395,24 @@ where
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         queued: &[(OpId, Op)],
-    ) -> Result<BTreeSet<OpId>, Halt> {
-        let kept = self.kept_ids(scope).await?;
+    ) -> Result<BTreeSet<OpId>, HeadHalt> {
+        let kept = self
+            .kept_ids(scope)
+            .await
+            .map_err(|halt| HeadHalt { halt, at: None })?;
         let mut landed = BTreeSet::new();
         for (op_id, op) in queued {
             if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
                 continue;
             }
+            let at = |halt| HeadHalt {
+                halt,
+                at: Some(*op_id),
+            };
             // Only a folder the base read at its live name shows the history;
             // any other edit is left to its rebase.
             if !matches!(
-                self.kept_place(scope, op).await?,
+                self.kept_place(scope, op).await.map_err(at)?,
                 KeptPlace::Writes {
                     anchor_read_live: true,
                     ..
@@ -3271,19 +3420,15 @@ where
             ) {
                 continue;
             }
-            let plane = self
-                .ensure_folder(scope, pass, self.published_parent(op.target)?)
-                .await?;
+            let parent = self.published_parent(op.target).map_err(at)?;
+            let plane = self.ensure_folder(scope, pass, parent).await.map_err(at)?;
+            let anchor = pass.anchor_for(&plane).map_err(at)?;
             let loaded = self
-                .load_child_node(
-                    &plane,
-                    pass.anchor_for(&plane)?,
-                    op.target,
-                    ResolveMode::NoCache,
-                )
-                .await?;
+                .load_child_node(&plane, anchor, op.target, ResolveMode::NoCache)
+                .await
+                .map_err(at)?;
             let ReadBody::File { versions, .. } = &loaded.body else {
-                return Err(Halt::Unclassified);
+                return Err(at(Halt::Unclassified));
             };
             if let Some(content) = op.staged_content()
                 && versions
@@ -9561,6 +9706,7 @@ mod tests {
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
             known_scope_roots: roots,
+            granted_namespaces: &[],
             keyless_roots: &[],
             charges_the_identity: true,
             enc_secret: &seams.enc_secret,
@@ -10727,6 +10873,15 @@ mod tests {
             report.dead_letters.is_empty(),
             "one pass is inside the budget"
         );
+        assert_eq!(
+            *drain.cells.hold.borrow(),
+            Some(QueueHold {
+                op_id,
+                node: NodeId([9; 16]),
+                reason: QueueHoldReason::NewerRelease,
+            }),
+            "and the head waits on a reported hold"
+        );
         // The budget's passes but the last, as earlier ticks spend them.
         for _ in 1..UNATTRIBUTED_BUDGET - 1 {
             attempts.charge_unattributed(op_id);
@@ -10738,6 +10893,23 @@ mod tests {
             vec![DeadLetterReason::NewerRelease]
         );
         assert!(harness.queued_op_ids().is_empty());
+        assert_eq!(*drain.cells.hold.borrow(), None, "the dead letter ends it");
+    }
+
+    /// The newer-release hold exits on the pass whose head meets no record
+    /// at another envelope version, and only a pass that authors the head
+    /// can say so.
+    #[test]
+    fn a_newer_release_hold_exits_on_the_next_classified_halt_at_its_head() {
+        let held = Some(QueueHold {
+            op_id: OpId(3),
+            node: NodeId([9; 16]),
+            reason: QueueHoldReason::NewerRelease,
+        });
+        assert!(!probed_hold_exits(held, OpId(3), Halt::ForeignVersion));
+        assert!(!probed_hold_exits(held, OpId(3), Halt::Unclassified));
+        assert!(!probed_hold_exits(held, OpId(4), Halt::Attempt));
+        assert!(probed_hold_exits(held, OpId(3), Halt::Attempt));
     }
 
     fn dead_letter_reasons(report: &DrainReport) -> Vec<DeadLetterReason> {
@@ -11116,6 +11288,7 @@ mod tests {
         write_scope_seed: Zeroizing<[u8; 32]>,
         scope_roots: Vec<NodeId>,
         known_scope_roots: Vec<NodeId>,
+        granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -11165,6 +11338,7 @@ mod tests {
                 destination: None,
                 scope_roots: &self.scope_roots,
                 known_scope_roots: &self.known_scope_roots,
+                granted_namespaces: &self.granted_namespaces,
                 keyless_roots: &self.keyless_roots,
                 charges_the_identity: false,
                 enc_secret: &self.enc_secret,
@@ -11310,6 +11484,7 @@ mod tests {
             write_scope_seed,
             scope_roots: vec![HARNESS_ROOT],
             known_scope_roots: vec![HARNESS_ROOT],
+            granted_namespaces: Vec::new(),
             keyless_roots: Vec::new(),
             enc_secret,
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
@@ -11809,6 +11984,177 @@ mod tests {
     /// A contact whose grant this vault holds, and the label its floors ratchet
     /// under.
     const SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
+
+    /// A kept create under `root`, noted at write epoch 2, with `root`'s write
+    /// floor raised to 3 in `namespace` and the clock past the kept-op bound.
+    /// Returns the op's id.
+    fn kept_create_past_the_bound_after_a_cut(
+        harness: &DrainHarness,
+        root: NodeId,
+        namespace: FloorNamespace,
+    ) -> OpId {
+        let op = Op::create(
+            NodeId([0x62; 16]),
+            NodeId([0x63; 16]),
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        kept_op_past_the_bound_after_a_cut(harness, &op, root, namespace)
+    }
+
+    /// [`kept_create_past_the_bound_after_a_cut`] for `op`.
+    fn kept_op_past_the_bound_after_a_cut(
+        harness: &DrainHarness,
+        op: &Op,
+        root: NodeId,
+        namespace: FloorNamespace,
+    ) -> OpId {
+        let op_id = harness.queue_an_op(op);
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let mut notes = KeptNotes::default();
+        notes.insert(
+            op_id,
+            KeptNote {
+                scope: Some(root),
+                write_epoch: 2,
+                published_at: harness.seams.scheduler.now(),
+            },
+        );
+        block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
+        block_on(floor::advance_write_epoch_on_sight(
+            &namespace.view(&harness.seams.floors),
+            &root.0,
+            3,
+        ))
+        .expect("the floor rises");
+        harness
+            .seams
+            .scheduler
+            .advance(crate::sync::kept_op::KEPT_OP_BOUND);
+        op_id
+    }
+
+    /// A grafted pass reads an own root's write floor in the owner's own
+    /// namespace, so a seen cut keeps the op past the bound.
+    #[test]
+    fn a_grafted_pass_reads_an_own_roots_floor_in_the_own_namespace() {
+        let mut harness = grafted_harness();
+        let root = NodeId([0x61; 16]);
+        harness.known_scope_roots.push(root);
+        let op_id = kept_create_past_the_bound_after_a_cut(&harness, root, FloorNamespace::Own);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// An own pass looks up a granted root's write floor in its sharer's
+    /// namespace. The test proves only that lookup, with an injected floor.
+    #[test]
+    fn an_own_pass_reads_a_granted_roots_floor_in_the_sharers_namespace() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x64; 16]);
+        let namespace = FloorNamespace::GrantedBy(sharer_label());
+        harness.known_scope_roots.push(root);
+        harness.granted_namespaces.push((root, Some(namespace)));
+        let op_id = kept_create_past_the_bound_after_a_cut(&harness, root, namespace);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A granted root that no one granting identity names has no floor this
+    /// device can read, so its kept op waits past the bound rather than read
+    /// this identity's own floor for it.
+    #[test]
+    fn a_kept_op_under_a_root_no_sharer_names_waits_past_the_bound() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x64; 16]);
+        harness.known_scope_roots.push(root);
+        harness.granted_namespaces.push((root, None));
+        let op_id = kept_create_past_the_bound_after_a_cut(
+            &harness,
+            root,
+            FloorNamespace::GrantedBy(sharer_label()),
+        );
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A kept delete under `root` after a seen cut, read by a pass anchored
+    /// at another root, so that pass cannot check it.
+    fn kept_delete_read_elsewhere(
+        harness: &DrainHarness,
+        root: NodeId,
+    ) -> (OpId, Queue, DrainReport) {
+        let target = NodeId([0x65; 16]);
+        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
+        let op_id = kept_op_past_the_bound_after_a_cut(harness, &op, root, FloorNamespace::Own);
+        let mut report = DrainReport::default();
+        let scope = harness.own_scope_at(NodeId([0x70; 16]));
+        let queue =
+            block_on(harness.drain().queued_ops(&scope, &mut report)).expect("the queue reads");
+        (op_id, queue, report)
+    }
+
+    /// The base still holds the deleted node, so the delete is not shown to
+    /// have landed, and a seen cut keeps it past the bound (ADR 0069 D5).
+    #[test]
+    fn a_kept_delete_of_a_node_the_base_holds_waits_past_the_bound() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        link_in_base(
+            &harness,
+            HARNESS_ROOT,
+            NodeId([0x65; 16]),
+            crate::facade::NodeKind::Folder,
+        );
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT);
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A proved root's base no longer holds the deleted node, so the delete
+    /// leaves at the bound (ADR 0069 D6).
+    #[test]
+    fn a_kept_delete_of_a_node_a_proved_base_lacks_leaves_at_the_bound() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT);
+
+        assert!(queue.kept.is_empty());
+        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
+    }
+
+    /// A base without the deleted node shows nothing under a root the walk
+    /// did not prove, so a seen cut keeps the delete past the bound.
+    #[test]
+    fn a_kept_delete_under_an_unproved_root_waits_past_the_bound() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x66; 16]);
+        harness.known_scope_roots.push(root);
+
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, root);
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
 
     fn sharer_label() -> crate::seams::ContactLabel {
         crate::seams::ContactLabel::of(

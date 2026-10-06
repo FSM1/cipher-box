@@ -187,6 +187,14 @@ describe('readSnapshot', () => {
     expect(readSnapshot(view).queueHold).toEqual(view.queueHold);
   });
 
+  it('reads a head held over a newer release with its target', () => {
+    const view = skewed<SnapshotView>({
+      ...baseView(),
+      queueHold: { reason: 'newer-release', opId: 15n, node: new Uint8Array(16).fill(8) },
+    });
+    expect(readSnapshot(view).queueHold).toEqual(view.queueHold);
+  });
+
   it('fails closed on a hold reason this build cannot name', () => {
     const view = skewed<SnapshotView>({
       ...baseView(),

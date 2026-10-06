@@ -150,8 +150,17 @@ scenario fails the meta-test):
   and a content edit. A rename, a move and a version restore leave at publish,
   so a later writer's change stays. A kept op leaves after the bound of
   ADR 0069 D5, a kept op with no note leaves once the live tree shows it, and a
-  second apply that cannot land leaves with no notice (ADR 0069,
-  `crates/engine/tests/owner_actions.rs`); a body of many
+  second apply that a rebase or a permanent halt refuses leaves with no notice;
+  a second apply that loses a tie once lands on a later pass, one under a
+  refused parent dead-letters with a notice and keeps a file's bytes across a
+  restart, a kept edit under a refused file record dead-letters with a notice
+  and frees the queue, a kept create under a refused scope root waits uncharged after a
+  restart and leaves at the bound, and one under a moved root the walk cannot
+  prove waits past the bound and applies again once the walk proves it (ADR 0069,
+  `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
+  grantee dead-letters on its device with a notice, also a late write that
+  the wave did not carry (ADR 0069 D3,
+  `crates/engine/tests/mount_convergence.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk
