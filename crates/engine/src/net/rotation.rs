@@ -59,14 +59,12 @@ use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
 };
-use super::publish::PutMark;
 use super::publish::{
     InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
-    RefusedRead, publish_inline, refuse_foreign_version,
+    PutMark, RefusedRead, publish_inline, refuse_foreign_version,
 };
 use super::record_publish::{
-    HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight, publish_record,
-    publish_record_placed,
+    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use super::register::register;
 use super::retire::{retire, root_retire_ready};
@@ -2830,7 +2828,7 @@ where
             .put_sent
             .filter(|(scope_id, _)| *scope_id == record.scope_id)
             .map(|(_, sent)| PutMark::Sent(sent));
-        let receipt = publish_record_placed(
+        let receipt = publish_record(
             self.transport,
             self.api,
             self.floors,
@@ -2842,8 +2840,6 @@ where
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
-            &self.api.placement().unwrap_or(crate::Placement::Hosted),
-            &mut MirrorLeg::once(),
             mark,
         )
         .await
@@ -3957,6 +3953,7 @@ where
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
+            None,
         )
         .await
         .map_err(record_publish_verdict)?;
@@ -5857,6 +5854,7 @@ where
                 head: &preflighted,
                 content_cids,
             },
+            None,
         )
         .await
         .map_err(publish_record_verdict)?;

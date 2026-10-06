@@ -7960,15 +7960,15 @@ where {
         Ok(())
     }
 
-    /// Note the cut from the last copy at `cut_epoch`, which ran or stands
-    /// owed, and tell the host once per session when it removed grant rows the
-    /// owner did not ask to remove (`unasked`, ADR 0068 D5).
+    /// Tell the host, once per session, that a cut from the last copy at
+    /// `cut_epoch`, which ran or stands owed, removed grant rows the owner did
+    /// not ask to remove (`unasked`, ADR 0068 D5).
     fn notice_rows_dropped(&self, scope_root: NodeId, cut_epoch: u64, unasked: bool) {
-        if self
-            .state
-            .owed_rotation
-            .note_rows_dropped(scope_root, cut_epoch)
-            && unasked
+        if unasked
+            && self
+                .state
+                .owed_rotation
+                .note_rows_dropped(scope_root, cut_epoch)
         {
             let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
                 scope_root,

@@ -229,17 +229,19 @@ pub enum RecordPublishError {
 
 /// Publish one authored record: place its head block where the session's
 /// placement puts bytes (hosted when it decided none), then run the
-/// register-first CAS publish and hand back the signed bytes. Only
+/// register-first CAS publish, raising `mark` just before the PUT
+/// ([`PutMark`]), and hand back the signed bytes. Only
 /// [`PublishOutcome::Published`] bytes may be self-adopted — adopting an
 /// unconfirmed publish would advance the sequence floor and destroy the
 /// idempotent-in-sequence retry.
-pub async fn publish_record<T, H, C, F, Sch>(
+pub(crate) async fn publish_record<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
     floors: &F,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     request: &RecordPublishRequest<'_>,
+    mark: Option<PutMark<'_>>,
 ) -> Result<PublishReceipt, RecordPublishError>
 where
     T: RecordTransport + Clone + 'static,
@@ -258,7 +260,7 @@ where
         request,
         &placement,
         &mut MirrorLeg::once(),
-        None,
+        mark,
     )
     .await
 }
@@ -494,6 +496,7 @@ mod tests {
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
+            None,
         ));
 
         assert_eq!(
@@ -558,6 +561,7 @@ mod tests {
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
+            None,
         ));
 
         assert_eq!(

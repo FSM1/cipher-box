@@ -14805,24 +14805,30 @@ fn a_wave_that_meets_the_honest_pre_cut_root_after_a_fallback_stops_retryably() 
     let outcome = command_across_retries(&mut fx, Command::RotateWriteNow { node: folder });
 
     let events = events_so_far(&mut fx._events);
+    assert_eq!(outcome, Ok(CommandOutcome::Done), "the wave stands owed");
+    // The re-mint's Superseded refusal reaches the host as the retryable
+    // availability stop of the write publish, never a trust stop.
     let owed: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
             Event::RotationWorkOwed {
-                retryable, class, ..
-            } => Some((*retryable, *class)),
+                detail,
+                retryable,
+                class,
+                ..
+            } => Some((detail.as_str(), *retryable, *class)),
             _ => None,
         })
         .collect();
-    assert!(
-        matches!(outcome, Err(EngineError::Seam { .. }))
-            || owed == vec![(true, OwedWorkClass::Availability)],
-        "a retryable stop: {outcome:?} {owed:?}"
+    assert_eq!(
+        owed,
+        vec![(
+            "rot-write-publish-failed",
+            true,
+            OwedWorkClass::Availability
+        )]
     );
-    assert!(
-        owed.iter().all(|(_, class)| *class != OwedWorkClass::Trust),
-        "no trust stop"
-    );
+    assert!(owed_entry(&fx).is_some(), "the wave is owed");
     assert_eq!(
         root_refusals(&fx, &events, sequence),
         1,
@@ -14831,43 +14837,159 @@ fn a_wave_that_meets_the_honest_pre_cut_root_after_a_fallback_stops_retryably() 
     assert_eq!(fx.granted_scope_repoint(), before, "no wave landed");
 }
 
-/// A revoke whose root publish fails before the PUT, at the floor gate,
-/// owes nothing: no PUT went out (ADR 0063 D5).
+/// A revoke whose root publish is refused at register-first, before the PUT,
+/// owes nothing, even when the follow-up read of the root finds no record: no
+/// PUT went out (ADR 0063 D5).
 #[test]
 fn a_revoke_whose_root_publish_fails_before_the_put_owes_nothing() {
     let mut fx = GrantScenario::new();
     write_granted_nested_subtree(&mut fx);
-    let mut cut_epoch_floor = fx.folder.0.to_vec();
-    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
-    fx.owner_device
-        .floor_store
-        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+    let root = fx.granted_scope_repoint().current_root;
+    fx.blocks.refuse_register(Vec::new());
+    // The reads before the publish answer; the follow-up read finds no record.
+    let endpoints = fx.world.record_store.endpoints().len();
+    fx.world
+        .record_store
+        .serve_gets_for_after(root.as_str(), 4 * endpoints, 64 * endpoints, None);
 
-    assert!(revoke_the_recipient(&mut fx).is_err());
-    fx.owner_device.floor_store.heal_floors();
+    let outcome = revoke_the_recipient(&mut fx);
+    fx.blocks.accept_registrations();
 
+    assert!(
+        matches!(&outcome, Err(EngineError::Seam { message })
+            if message.contains("cascade publish") && message.contains("not published")),
+        "the root publish stops before its PUT: {outcome:?}"
+    );
     assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
 }
 
-/// A revoke whose root publish fails before the PUT, and whose follow-up
-/// read of the root does not answer, owes nothing: no PUT went out.
+/// A cut from the last copy keeps no row. Its root PUT goes out and fails,
+/// and the read after it falls back to this device's own copy from before
+/// the PUT. The copy does not show whether the PUT landed, so the entry
+/// stands (ADR 0063 D5).
 #[test]
-fn a_revoke_with_no_put_and_an_unavailable_follow_up_read_owes_nothing() {
+fn a_cut_whose_put_went_out_and_whose_follow_up_read_falls_back_stays_owed() {
     let mut fx = GrantScenario::new();
-    write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
     let root = fx.granted_scope_repoint().current_root;
-    let mut cut_epoch_floor = fx.folder.0.to_vec();
-    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
-    fx.owner_device
-        .floor_store
-        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+    let endpoints = fx.world.record_store.endpoints();
+    let before_grant = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], root.as_str())
+        .expect("the root");
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second reader's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "a second reader"
+    );
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], root.as_str());
+    // Every endpoint serves a record below the sequence floor, which falls
+    // back, except to the plane reads, which meet the honest root.
+    for endpoint in &endpoints {
+        fx.world
+            .record_store
+            .seed_record(endpoint, root.as_str(), before_grant.clone());
+    }
+    fx.world.record_store.serve_gets_for_after(
+        root.as_str(),
+        endpoints.len(),
+        3 * endpoints.len(),
+        honest,
+    );
     fx.world.record_store.fail_put_for(root.as_str());
 
-    assert!(revoke_the_recipient(&mut fx).is_err());
-    fx.owner_device.floor_store.heal_floors();
+    let outcome = revoke_the_recipient(&mut fx);
     fx.world.record_store.heal_put_for(root.as_str());
 
-    assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. })),
+        "a retryable refusal: {outcome:?}"
+    );
+    assert!(owed_entry(&fx).is_some(), "the PUT can have landed");
+}
+
+/// A revoke from the last copy asks for the only row there, so it tells the
+/// host nothing, and its wave stops. Another owner device then grants a
+/// reader at the same cut epoch, and this device reads that row. The
+/// re-drive over a new plant drops the reader's row too, and tells the host
+/// once (ADR 0068 D5).
+#[test]
+fn a_redrive_that_drops_a_row_granted_after_a_silent_cut_tells_the_host_once() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, writer_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &writer_seed, grandchild);
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+    let root = fx.granted_scope_repoint().current_root;
+    let endpoints = fx.world.record_store.endpoints();
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], root.as_str())
+        .expect("the root");
+    plant_root_at(&fx, &writer_seed, sequence_at(&fx.world, &root) + 1);
+    let _ = events_so_far(&mut fx._events);
+
+    let _ = revoke_the_recipient(&mut fx);
+    let mut events = events_so_far(&mut fx._events);
+    assert!(owed_entry(&fx).is_some(), "the cut is owed");
+
+    for endpoint in &endpoints {
+        fx.world
+            .record_store
+            .seed_record(endpoint, root.as_str(), honest.clone());
+    }
+    block_on(other.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the reader's code imports");
+    assert_eq!(
+        block_on(other.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the other device grants a reader"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    events.extend(events_so_far(&mut fx._events));
+    plant_root_at(&fx, &writer_seed, sequence_at(&fx.world, &root) + 1);
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        events.extend(events_so_far(&mut fx._events));
+    }
+
+    let told: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::RotationWorkAbandoned { scope_root, detail } => {
+                Some((*scope_root, detail.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        told,
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())]
+    );
 }
 
 /// The re-drive runs the owed wave, and the owed delivery after it names a
@@ -19047,13 +19169,15 @@ fn owes_any(events: &[Event]) -> bool {
         .any(|event| matches!(event, Event::RotationWorkOwed { .. }))
 }
 
-/// The events that report work owed at `scope`, or abandoned there.
+/// The events that report work owed at `scope`, or abandoned there. The
+/// notice of rows a cut from the last copy dropped is not abandoned work.
 fn owed_or_abandoned(events: &[Event], scope: NodeId) -> (bool, bool) {
     let owed = events.iter().any(
         |event| matches!(event, Event::RotationWorkOwed { scope_root, .. } if *scope_root == scope),
     );
     let abandoned = events.iter().any(|event| {
-        matches!(event, Event::RotationWorkAbandoned { scope_root, .. } if *scope_root == scope)
+        matches!(event, Event::RotationWorkAbandoned { scope_root, detail }
+            if *scope_root == scope && detail != "owed-grants-dropped-from-last-copy")
     });
     (owed, abandoned)
 }

@@ -464,8 +464,8 @@ where
     /// Whether the root at `target` carries `cut`'s set, which is the first
     /// publish of a revoke or a downgrade. With no PUT of the root's record in
     /// this call ([`CutRootReads::put_sent`]) it does not. `None` when the
-    /// root does not read, and after a PUT when the read falls back to a last
-    /// copy and the cut keeps rows (ADR 0068 D5).
+    /// root does not read, and when the read falls back to a last copy other
+    /// than the cut set: the copy can be older than the PUT (ADR 0068 D5).
     async fn cut_set_published(
         &self,
         target: &OwnerScope,
@@ -484,11 +484,12 @@ where
         };
         let net = self.cut_net(target, wait);
         let current = net.resolve_anchored(&target.scope).await.ok()?;
-        // A last copy proves nothing about a cut that keeps rows (ADR 0068 D5).
-        if net.fell_back() && !cut.commitment.entries.is_empty() {
-            return None;
+        let carries =
+            current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger;
+        if net.fell_back() {
+            return carries.then_some(true);
         }
-        Some(current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger)
+        Some(carries)
     }
 
     /// Re-drive every owed entry, and tell the host of each one still owed
