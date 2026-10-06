@@ -114,7 +114,8 @@ pub(crate) struct WithheldPin {
 /// What one pass learned about a name a hold watches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PinRead {
-    /// A record below the sequence floor while an endpoint failed.
+    /// The read was held back: a record below the sequence floor while an
+    /// endpoint failed, or a scope pointer that no endpoint answered.
     Withheld,
     /// A record the read could use: the hold ends.
     Reached,

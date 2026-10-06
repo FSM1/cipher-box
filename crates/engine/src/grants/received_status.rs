@@ -137,6 +137,9 @@ pub(crate) struct ScopeRender<'a> {
     /// pass folds its scope-root bodies into, and every leg below a grafted
     /// root reads.
     pub claims: &'a RefCell<ClaimRecord>,
+    /// The withheld-update hold on each held bookmark's scope pointer, by
+    /// pointer name.
+    pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -489,6 +492,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let (pointers, heals) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
+        self.observe_pointer_pins(&received, &pointers, render, now, profile);
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
             received.heal_root_name(&key, root.clone());
@@ -772,6 +776,53 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             verdicts.insert(key, verdict);
         }
         (verdicts, heals)
+    }
+
+    /// Fold each held bookmark's pointer read into its hold. A pointer that no
+    /// endpoint answers is the pointer-plane suppression the escalation bounds
+    /// (blueprint/engine.md "Withheld-update escalation"); any answer ends the
+    /// hold. Rebuilt each pass, so a hold lives while its link hold does.
+    fn observe_pointer_pins(
+        &self,
+        received: &ReceivedSharesList,
+        pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
+        render: &ScopeRender<'_>,
+        now: UnixMillis,
+        profile: &SyncTimingProfile,
+    ) {
+        let mut pins = render.pointer_pins.borrow_mut();
+        let mut live = BTreeSet::new();
+        for share in received.iter() {
+            let key = share.key();
+            let Some(hold) = received.link_hold(&key) else {
+                continue;
+            };
+            let name = hold.scope_pointer_name.as_str().as_bytes().to_vec();
+            let read = match pointers.get(&key) {
+                Some(PointerVerdict::Unavailable) => PinRead::Withheld,
+                Some(_) => PinRead::Reached,
+                None => PinRead::Unread,
+            };
+            let shared = !is_own_scope(
+                render.own_root,
+                &render.own_descendants.borrow(),
+                &share.scope_id,
+            );
+            let mut pin = pins.get(&name).copied();
+            if observe_pin(&mut pin, read, now, shared, self.root_reconciled, profile) {
+                let _ = render
+                    .events
+                    .unbounded_send(Event::WithheldUpdateEscalation {
+                        ipns_name: name.clone(),
+                    });
+            }
+            match pin {
+                Some(pin) => pins.insert(name.clone(), pin),
+                None => pins.remove(&name),
+            };
+            live.insert(name);
+        }
+        pins.retain(|name, _| live.contains(name));
     }
 
     /// What the owner's live commitment permits this vault in `share`'s scope,
@@ -2221,6 +2272,7 @@ mod tests {
         reported: Cell<bool>,
         /// The names each withheld-update escalation named, across passes.
         escalations: RefCell<Vec<Vec<u8>>>,
+        pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
         /// What the pass reports about its vault root resolve.
         root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
@@ -2278,6 +2330,7 @@ mod tests {
                 granted: permission,
                 reported: Cell::new(false),
                 escalations: RefCell::new(Vec::new()),
+                pointer_pins: RefCell::new(BTreeMap::new()),
                 root_reconciled: Cell::new(true),
                 list_lock: ReceivedSharesLock::new(()),
             };
@@ -2480,6 +2533,7 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        pointer_pins: &self.pointer_pins,
                         events,
                     },
                     UnixMillis(at_millis),
@@ -3286,6 +3340,7 @@ mod tests {
         permissions: RefCell<BookmarkedPermissions>,
         claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
+        pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
     }
 
     impl TwoSharers {
@@ -3343,6 +3398,7 @@ mod tests {
                 permissions: RefCell::new(BookmarkedPermissions::new()),
                 claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
+                pointer_pins: RefCell::new(BTreeMap::new()),
             };
             let mine = my_enc();
             let contacts = StagingContactStore::new(&fx.staging, &mine, &fx.entropy);
@@ -3459,6 +3515,7 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        pointer_pins: &self.pointer_pins,
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -3821,6 +3878,7 @@ mod tests {
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
         let permissions = RefCell::new(BookmarkedPermissions::new());
         let claims = RefCell::new(ClaimRecord::default());
+        let pointer_pins = RefCell::new(BTreeMap::new());
         let (events, _rx) = mpsc::unbounded();
 
         let departed = depart_contested(
@@ -3835,6 +3893,7 @@ mod tests {
                 scope_roots: &scope_roots,
                 permissions: &permissions,
                 claims: &claims,
+                pointer_pins: &pointer_pins,
                 events: &events,
             },
         );
@@ -4401,6 +4460,114 @@ mod tests {
                 "no root the pointer did not vouch for is read"
             );
             assert!(!fx.reported.get(), "availability accuses nobody");
+        }
+
+        /// A held bookmark whose scope root opened, in a vault anchored at
+        /// `vault_root`.
+        fn granted_link(vault_root: [u8; 16]) -> RenderedScope {
+            let mut fx = RenderedScope::rooted_at(Vec::new(), vault_root);
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+            fx
+        }
+
+        fn pointer_escalations(fx: &RenderedScope) -> usize {
+            let name = pointer_name().as_str().as_bytes().to_vec();
+            fx.escalations
+                .borrow()
+                .iter()
+                .filter(|escalated| **escalated == name)
+                .count()
+        }
+
+        /// A scope pointer that no endpoint answers while the vault root
+        /// reconciles is the pointer-plane suppression: one escalation after
+        /// the window, and no trust event.
+        #[test]
+        fn a_pointer_no_endpoint_answers_escalates_once_past_the_window() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+
+            fx.forced_pass(1_000);
+            fx.forced_pass(5_999);
+            assert_eq!(pointer_escalations(&fx), 0, "inside the window");
+            fx.forced_pass(6_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+            assert!(!fx.reported.get(), "the escalation is no trust verdict");
+
+            fx.forced_pass(7_000);
+            fx.forced_pass(60_000);
+            assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
+        }
+
+        /// While the vault root does not reconcile, an unanswered pointer is an
+        /// outage, and the window starts when the vault root recovers.
+        #[test]
+        fn a_pointer_unanswered_in_a_full_outage_escalates_one_window_after_recovery() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.root_reconciled.set(false);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+
+            fx.root_reconciled.set(true);
+            fx.forced_pass(60_001);
+            fx.forced_pass(64_999);
+            assert_eq!(
+                pointer_escalations(&fx),
+                0,
+                "the outage time does not count"
+            );
+            fx.forced_pass(65_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A pointer that every endpoint answers with "no record" is an answer.
+        #[test]
+        fn an_absent_pointer_never_escalates() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            for at in [0, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// An answer ends the hold, so a new hold measures a new window.
+        #[test]
+        fn a_pointer_answer_ends_the_hold() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.forced_pass(1_000);
+            fx.forced_pass(4_000);
+            fx.records.heal_get_for(pointer_name().as_str());
+            fx.forced_pass(5_000);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.forced_pass(6_000);
+            fx.forced_pass(10_999);
+            assert_eq!(
+                pointer_escalations(&fx),
+                0,
+                "the answer restarted the window"
+            );
+            fx.forced_pass(11_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A pointer of a scope this vault owns never escalates.
+        #[test]
+        fn an_owned_scope_pointer_never_escalates() {
+            let fx = granted_link(SCOPE);
+            fx.records.fail_get_for(pointer_name().as_str());
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
         }
 
         /// A first read with no pointer answer keeps the link keys, and a later

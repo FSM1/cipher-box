@@ -293,9 +293,16 @@ scenario fails the meta-test):
   its record ends the hold (`tests/owner_actions.rs`
   `a_withheld_shared_child_sends_one_escalation_after_the_window`,
   `a_shared_child_no_endpoint_answers_sends_no_escalation`,
-  `a_reached_shared_child_ends_the_hold`); a pass that reaches no record keeps
-  the hold, and an owned scope never escalates (`grants::received_status`,
-  `sync::staleness`).
+  `a_reached_shared_child_ends_the_hold`); a held bookmark's scope pointer
+  that no endpoint answers past the window, while the vault root reconciles,
+  sends one escalation, with the vault root down it sends none until one
+  window after the root recovers, a pointer that every endpoint answers as
+  absent sends none, and an answer ends the hold (`grants::received_status`
+  `a_pointer_no_endpoint_answers_escalates_once_past_the_window`,
+  `a_pointer_unanswered_in_a_full_outage_escalates_one_window_after_recovery`,
+  `an_absent_pointer_never_escalates`, `a_pointer_answer_ends_the_hold`); a
+  pass that reaches no record keeps the hold, and an owned scope never
+  escalates (`grants::received_status`, `sync::staleness`).
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;

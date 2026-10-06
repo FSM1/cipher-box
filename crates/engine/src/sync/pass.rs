@@ -1528,6 +1528,7 @@ where
                 scope_roots: &state.bookmarked_scope_roots,
                 permissions: &state.bookmarked_permissions,
                 claims: &state.grafted_claims,
+                pointer_pins: &state.pointer_pins,
                 events: &self.seams.events,
             },
             pass.now,
