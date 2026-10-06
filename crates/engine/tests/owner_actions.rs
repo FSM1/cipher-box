@@ -3286,10 +3286,10 @@ fn a_capture_whose_bin_publish_failed_bins_after_a_rotation() {
 }
 
 /// The sequence-floor reads of the node's name that answer before the
-/// re-key's held-key read.
-const HELD_KEY_READ_BUDGET: u64 = 6;
+/// capture's held-key read.
+const HELD_KEY_READ_BUDGET: u64 = 2;
 
-/// The same, with the re-key's held-key read failing after the scope key
+/// The same, with the capture's held-key read failing after the scope key
 /// refused the record: the read did not answer, so no record is reported
 /// faulty, and the node bins once the reads answer again.
 #[test]
@@ -3324,8 +3324,14 @@ fn a_held_key_read_with_no_answer_is_no_trust_violation() {
 /// A second owner device loads a node in the vault scope. A grant then makes
 /// its folder a scope root, the node converges onto that scope, and a writer
 /// of the scope unlinks it. The departure is the granted scope's capture,
-/// which bins there with no faulty record reported.
-fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission) {
+/// which bins there with no faulty record reported, under the name the
+/// granted scope derives. With `reads_the_wave` unset, the second device does
+/// not read the folder between a write grant's name wave and the unlink, so
+/// its capture carries the name from before the wave.
+fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(
+    permission: Permission,
+    reads_the_wave: bool,
+) {
     let mut fx = GrantScenario::new();
     let (inner, doomed) = nested_subtree(&mut fx);
     let (mut second, mut events, mut tasks) = fx.second_owner_device();
@@ -3357,8 +3363,10 @@ fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission)
         }
         Permission::Write => {
             // The second device reads the folder as the wave left it, at the
-            // name its scope now derives.
-            block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+            // name its scope now derives, or reads only the granted root, so
+            // its base holds the folder's children at their old names.
+            let read = if reads_the_wave { inner } else { fx.folder };
+            block_on(second.command(Command::SetFocus { node: Some(read) })).unwrap();
             for _ in 0..2 {
                 tick(&fx.world, &second, &mut tasks);
             }
@@ -3387,16 +3395,35 @@ fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission)
         vec![fx.folder.0],
         "the unlinked node bins in the scope that seals it"
     );
+    assert_eq!(
+        published_bin_entries(&fx)
+            .iter()
+            .filter(|entry| entry.node_id == doomed.0)
+            .map(|entry| entry.ipns_name().to_vec())
+            .collect::<Vec<_>>(),
+        vec![
+            derive_write_name(&write_seed, &doomed.0)
+                .as_str()
+                .as_bytes()
+                .to_vec()
+        ],
+        "the entry names the record the re-key sealed"
+    );
 }
 
 #[test]
 fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
-    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Read);
+    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Read, true);
 }
 
 #[test]
 fn a_node_a_write_grant_moved_bins_in_the_granted_scope() {
-    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write);
+    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write, true);
+}
+
+#[test]
+fn a_node_a_write_grant_moved_bins_on_a_device_that_holds_its_old_name() {
+    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write, false);
 }
 
 /// A vault-scope writer unlinks `deep` from `keep`.
