@@ -42,6 +42,7 @@ use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
 };
+use crate::session::RootSequences;
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
@@ -134,6 +135,9 @@ pub(crate) struct ScopeRender<'a> {
     /// pass folds its scope-root bodies into, and every leg below a grafted
     /// root reads.
     pub claims: &'a RefCell<ClaimRecord>,
+    /// The sequence this pass gated at each grafted root, which a navigation
+    /// measures that root against.
+    pub root_sequences: &'a RefCell<RootSequences>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -233,6 +237,12 @@ fn report_refusal(
 fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRender<'_>) {
     let share = open.share;
     let root = NodeId(share.scope_id);
+    if let Ok(name) = scope_name(&share.scope_root_name) {
+        render
+            .root_sequences
+            .borrow_mut()
+            .note_walked(root, &name, open.sequence);
+    }
     let scope_roots = render.scope_roots.borrow();
     let mut base = render.base.borrow_mut();
     let split = GraftedPlane {
@@ -2409,6 +2419,7 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        root_sequences: &RefCell::default(),
                         events,
                     },
                     UnixMillis(at_millis),
@@ -3268,6 +3279,7 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        root_sequences: &RefCell::default(),
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -3644,6 +3656,7 @@ mod tests {
                 scope_roots: &scope_roots,
                 permissions: &permissions,
                 claims: &claims,
+                root_sequences: &RefCell::default(),
                 events: &events,
             },
         );

@@ -530,7 +530,7 @@ pub(crate) struct SessionState {
 }
 
 /// What a navigation measures a served scope root against: per scope, the
-/// name the last boundary walk gated and its sequence, and per name, the
+/// name the last boundary walk or graft gated and its sequence, and per name, the
 /// highest sequence this session published and confirmed. A sequence belongs
 /// to a name, so a root that moves to a fresh name holds neither. Session
 /// memory only.
@@ -549,10 +549,19 @@ impl RootSequences {
     /// Write in the same step as the scope sets that publish changed. A publish
     /// over a base above [`Self::held`] carries another device's edit, which
     /// can name a scope root the sets do not hold, so it writes nothing.
-    pub(crate) fn note_own(&mut self, published: &PublishedRoot) {
+    /// Answers whether it wrote.
+    pub(crate) fn note_own(&mut self, published: &PublishedRoot) -> bool {
         if published.base > self.held(&published.name).unwrap_or(0) {
-            return;
+            return false;
         }
+        self.note_promoted(published);
+        true
+    }
+
+    /// [`Self::note_own`] for a root a grant promoted, whose base is an
+    /// interior record: the caller checks that the sets hold each scope root
+    /// the promoted root names.
+    pub(crate) fn note_promoted(&mut self, published: &PublishedRoot) {
         let held = self
             .own
             .entry(published.name.clone())
@@ -726,6 +735,7 @@ impl SessionState {
             capture_proofs: &self.capture_proofs,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
+            root_sequences: &self.root_sequences,
         }
     }
 }

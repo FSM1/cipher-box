@@ -2962,7 +2962,7 @@ where
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The promoted root replaces the record read at the node's own name, and
         // that read is the CAS basis. At any other name the publish would have
@@ -2986,6 +2986,7 @@ where
         drop_held_refs(&mut current.read_body, node.node_id, held_outside)
             .map_err(|node_id| RotationPublishError::NotConverged { node_id })?;
         let children = body_children(&current.read_body);
+        let observed = current.observed.sequence();
         let base = RepublishBase {
             read_body: current.read_body,
             unknown: current.carried_unknown,
@@ -3003,7 +3004,14 @@ where
             .run(record, &override_seed, base)
             .await?;
         self.keep_own_publish(&name, &record_bytes).await;
-        Ok((children, sequence))
+        Ok((
+            children,
+            PublishedRoot {
+                name: record.ipns_name.clone(),
+                base: observed,
+                sequence,
+            },
+        ))
     }
 }
 

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::hex::lower as hex_lower;
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::seal::Permission as CommittedPermission;
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -710,6 +710,11 @@ where
             && let Some((name, root_bytes)) = held_root
             && let Ok(name) = IpnsName::parse(&name)
         {
+            // The sequence of the record the walk gates, read before its awaits.
+            let root_sequence = IpnsRecord::unmarshal(&root_bytes)
+                .and_then(|record| record.verify(&name))
+                .ok()
+                .map(|record| record.sequence);
             let walked = walk
                 .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
                 .await;
@@ -725,10 +730,7 @@ where
                     &state.root_sequences,
                     NodeId(self.root_id),
                     &name,
-                    state
-                        .snapshot
-                        .borrow()
-                        .record_sequence(NodeId(self.root_id)),
+                    root_sequence,
                     &walked.proved,
                 );
                 let departed = install_descendant_scopes(
@@ -1497,6 +1499,7 @@ where
                 scope_roots: &state.bookmarked_scope_roots,
                 permissions: &state.bookmarked_permissions,
                 claims: &state.grafted_claims,
+                root_sequences: &state.root_sequences,
                 events: &self.seams.events,
             },
             pass.now,

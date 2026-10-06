@@ -90,13 +90,15 @@ use crate::net::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
-use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
+use crate::rotation::{
+    LaggingSeedMiss, PublishedRoot, ScopeExitRotator, derive_write_name, lagging_read_seed,
+};
 use crate::seams::{
     CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
     UnixMillis,
 };
-use crate::session::SessionIdentity;
+use crate::session::{RootSequences, SessionIdentity};
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsHold};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
@@ -1692,6 +1694,8 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
+    /// The sequences a navigation measures a scope root against.
+    pub(crate) root_sequences: &'a RefCell<RootSequences>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -8409,6 +8413,7 @@ where
         lost_winner: LostWinner,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
+        let base = observed.sequence();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
         let read_key = plane.end.read_key(&node.0);
         let nonce = fresh_nonce(&mut *self.seams.entropy.borrow_mut())
@@ -8507,6 +8512,16 @@ where
             // `keep_published` drops the op from the render, so the base takes
             // the record first, or the render loses what the op wrote.
             self.paint_confirmed(scope, node, body, sequence, created.as_ref());
+            if is_scope_root {
+                self.cells
+                    .root_sequences
+                    .borrow_mut()
+                    .note_own(&PublishedRoot {
+                        name: name.as_str().as_bytes().to_vec(),
+                        base,
+                        sequence,
+                    });
+            }
             self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }

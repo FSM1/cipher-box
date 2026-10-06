@@ -518,8 +518,8 @@ mod tests {
             _node: &NodeRef,
             record: &ResealedScopeRoot,
             _held_outside: &[crate::grants::HeldNode],
-        ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
-            let sequence = self.publish_scope_root(record).await?.sequence;
+        ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
+            let published = self.publish_scope_root(record).await?;
             let children = self
                 .interior
                 .iter()
@@ -528,7 +528,7 @@ mod tests {
                     ipns_name: b"invited-folder-interior".to_vec(),
                 })
                 .collect();
-            Ok((children, sequence))
+            Ok((children, published))
         }
     }
 

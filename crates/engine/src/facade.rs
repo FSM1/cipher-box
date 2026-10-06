@@ -8505,9 +8505,21 @@ where {
 
         self.state.minted_scope_roots.borrow_mut().insert(node);
         {
+            let named = self.state.named_scope_roots();
             let mut sequences = self.state.root_sequences.borrow_mut();
-            for published in published_root.iter().chain(&published_roots) {
-                sequences.note_own(published);
+            // The parent publish lands last. When it held, no other device
+            // edited the parent, so the sets hold each root the subtree names.
+            let mut parent_held = false;
+            for published in &published_roots {
+                parent_held = sequences.note_own(published);
+            }
+            if let Some(promoted) = &published_root
+                && (parent_held
+                    || subtree
+                        .iter()
+                        .all(|child| named.contains(&NodeId(child.scope_id))))
+            {
+                sequences.note_promoted(promoted);
             }
         }
         // The grant re-sealed the folder's interior under this seed, so the
@@ -10273,7 +10285,7 @@ where {
     /// Whether the plane serves `scope`'s root above the sequence held at its
     /// name ([`crate::session::RootSequences`]): a grant in that record can
     /// name a scope root the legs would read as a plain child. The name is the
-    /// one the last walk gated, else `name`. A moved root reads nothing until
+    /// one the last walk or graft gated, else `name`. A moved root reads nothing until
     /// the next walk. The sequence floor is no proof of a walk, as a gated
     /// read outside a walk raises it, so it bars only a replay: a served
     /// record below it, or a floor store with no answer, also counts as moved.

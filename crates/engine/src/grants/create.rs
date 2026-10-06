@@ -558,15 +558,15 @@ pub trait ScopeRootPromoter {
     /// root's, so its children are the interior the fresh scope now owns: taking
     /// them from the publish rather than from a read of the caller's own binds
     /// the re-seal to the record this call made current. The promoted body
-    /// drops its refs to `held_outside` ([`drop_held_refs`]). The `u64` is
-    /// the sequence it signed.
+    /// drops its refs to `held_outside` ([`drop_held_refs`]), and the root it
+    /// published.
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<(Vec<NodeRef>, u64), RotationPublishError>;
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError>;
 }
 
 /// The two reads a stalled grant's resume runs — the read-side counterpart of
@@ -1279,7 +1279,7 @@ where
     // reparented descendants before they are removed from the parent
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
-    let (promoted_children, root_sequence) = net
+    let (promoted_children, published_root) = net
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(|error| match error {
@@ -1316,11 +1316,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
-        published_root: Some(PublishedRoot {
-            name: ipns_name.as_str().as_bytes().to_vec(),
-            base: 0,
-            sequence: root_sequence,
-        }),
+        published_root: Some(published_root),
         handover,
     })
 }
@@ -2465,7 +2461,7 @@ mod tests {
             _node: &NodeRef,
             record: &ResealedScopeRoot,
             _held_outside: &[HeldNode],
-        ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
+        ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);
             }
@@ -2473,7 +2469,7 @@ mod tests {
             *self.promotion.borrow_mut() = Some(record.clone());
             // The promoted body is the granted folder's, so its children are
             // the nodes inside the folder.
-            Ok((self.promoted_children(), 1))
+            Ok((self.promoted_children(), PublishedRoot::fresh(record, 1)))
         }
     }
 
