@@ -1025,12 +1025,31 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let name = observed.name();
-    match fanout_get_classified(seams.transport, name).await {
+    match fanout_get_classified(seams.transport, observed.name()).await {
         FanoutRecord::Found(_, live) if live == observed.bytes() => {}
         FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
         FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
     }
+    sign_admitted(seams, observed, bar, rule, signer, value).await
+}
+
+/// [`renew_admitted`] after its caller's own check of what the network
+/// serves: sign `value` at `S + 1` with the renewal EOL when the durable floor
+/// still meets `rule` and the drain has no publish of the name in flight.
+pub(crate) async fn sign_admitted<T, F, Sch>(
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    observed: &Observed,
+    bar: Option<PublishBar>,
+    rule: FloorRule,
+    signer: &Ed25519Signer,
+    value: &[u8],
+) -> Option<Result<PublishReceipt, PublishError>>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let name = observed.name();
     let gate = match SignatureGate::read_for_renewal(seams.floors, observed, bar).await {
         Ok(gate) => gate,
         Err(error) => return Some(Err(error)),
