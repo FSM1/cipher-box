@@ -11882,8 +11882,7 @@ mod tests {
     }
 
     /// An own pass looks up a granted root's write floor in its sharer's
-    /// namespace. The test checks the lookup only: the floor it raises there
-    /// stands in for one the grafted legs keep.
+    /// namespace. The test proves only that lookup, with an injected floor.
     #[test]
     fn an_own_pass_reads_a_granted_roots_floor_in_the_sharers_namespace() {
         let mut harness = drain_harness(Some(harness_root_envelope()));
