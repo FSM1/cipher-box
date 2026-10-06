@@ -108,11 +108,14 @@ pub fn withheld_escalation(
 /// read to the next read that reaches a record. Session memory only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WithheldPin {
-    /// The start of the window: the first withheld read, or the last pass
-    /// whose vault root did not reconcile, as only healthy time counts.
+    /// The start of the window: the first withheld read, or the first pass
+    /// whose vault root reconciled after an outage, as only healthy time
+    /// counts.
     pub(crate) since: UnixMillis,
     /// Whether this hold already sent its escalation.
     pub(crate) escalated: bool,
+    /// Whether the last pass that saw this hold had no reconciled vault root.
+    pub(crate) paused: bool,
 }
 
 /// What one pass learned about a name a hold watches.
@@ -146,12 +149,17 @@ fn observe_pin(
         (PinRead::Withheld, None) => pin.insert(WithheldPin {
             since: now,
             escalated: false,
+            paused: false,
         }),
         (_, Some(held)) => held,
     };
     if !root_reconciled {
-        held.since = now;
+        held.paused = true;
         return false;
+    }
+    if held.paused {
+        held.paused = false;
+        held.since = now;
     }
     if read != PinRead::Withheld
         || held.escalated
@@ -381,8 +389,12 @@ mod tests {
             !observe(PinRead::Withheld, 400_000, false),
             "an outage pass"
         );
-        assert!(!observe(PinRead::Withheld, 999_999, true));
-        assert!(observe(PinRead::Withheld, 1_000_000, true));
+        assert!(
+            !observe(PinRead::Withheld, 1_100_000, true),
+            "a pause past the window counts nothing: the window starts here"
+        );
+        assert!(!observe(PinRead::Withheld, 1_699_999, true));
+        assert!(observe(PinRead::Withheld, 1_700_000, true));
         assert!(!observe(PinRead::Withheld, 2_000_000, true), "one time");
         assert!(!observe(PinRead::Reached, 2_000_001, true));
         assert!(!observe(PinRead::Withheld, 2_000_002, true));

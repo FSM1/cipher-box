@@ -790,7 +790,8 @@ where
                 pass.report.rejected.push(name.as_str().to_owned());
                 None
             }
-            Err(
+            Ok(ChildRecord::Withheld)
+            | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {
                 pass.kept_back = true;

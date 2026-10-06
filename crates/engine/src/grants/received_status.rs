@@ -497,7 +497,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             profile,
             events: render.events,
         };
-        self.observe_pointer_pins(&received, &pointers, render, &pins);
+        self.observe_pointer_pins(&received, &pointers, render, &pins)
+            .await;
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
             received.heal_root_name(&key, root.clone());
@@ -774,23 +775,33 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// endpoint answers is the pointer-plane suppression the escalation bounds
     /// (blueprint/engine.md "Withheld-update escalation"); any answer ends the
     /// hold. Rebuilt each pass, so a hold lives while its link hold does.
-    fn observe_pointer_pins(
+    ///
+    /// A scope pointer exists only after a re-point, and a read that one
+    /// endpoint fails and another answers "no record" is also unanswered. So
+    /// only a scope whose write-epoch floor shows a pointer this device saw
+    /// opens a hold.
+    async fn observe_pointer_pins(
         &self,
         received: &ReceivedSharesList,
         pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
         render: &ScopeRender<'_>,
         pass: &PinPass<'_>,
     ) {
-        let mut pins = render.pointer_pins.borrow_mut();
-        let mut live = BTreeSet::new();
+        let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
             let Some(hold) = received.link_hold(&key) else {
                 continue;
             };
-            let name = hold.scope_pointer_name.as_str().as_bytes().to_vec();
             let read = match pointers.get(&key) {
-                Some(PointerVerdict::Unavailable) => PinRead::Withheld,
+                Some(PointerVerdict::Unavailable) => {
+                    match floor::write_epoch_floor(&self.sharer_floors(share), &share.scope_id)
+                        .await
+                    {
+                        Ok(Some(_)) => PinRead::Withheld,
+                        Ok(None) | Err(_) => PinRead::Unread,
+                    }
+                }
                 Some(_) => PinRead::Reached,
                 None => PinRead::Unread,
             };
@@ -799,10 +810,17 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 &render.own_descendants.borrow(),
                 &share.scope_id,
             );
-            pass.observe_in(&mut pins, &name, read, shared);
-            live.insert(name);
+            reads.push((
+                hold.scope_pointer_name.as_str().as_bytes().to_vec(),
+                read,
+                shared,
+            ));
         }
-        pins.retain(|name, _| live.contains(name));
+        let mut pins = render.pointer_pins.borrow_mut();
+        for (name, read, shared) in &reads {
+            pass.observe_in(&mut pins, name, *read, *shared);
+        }
+        pins.retain(|name, _| reads.iter().any(|(live, ..)| live == name));
     }
 
     /// What the owner's live commitment permits this vault in `share`'s scope,
@@ -2602,9 +2620,9 @@ mod tests {
         fx.root_reconciled.set(true);
         fx.forced_pass(60_001);
         assert_eq!(fx.escalated(), 0, "the outage time does not count");
-        fx.forced_pass(64_999);
-        assert_eq!(fx.escalated(), 0);
         fx.forced_pass(65_000);
+        assert_eq!(fx.escalated(), 0);
+        fx.forced_pass(65_001);
         assert_eq!(fx.escalated(), 1, "one window of healthy passes");
     }
 
@@ -4496,13 +4514,50 @@ mod tests {
 
             fx.root_reconciled.set(true);
             fx.forced_pass(60_001);
-            fx.forced_pass(64_999);
+            fx.forced_pass(65_000);
             assert_eq!(
                 pointer_escalations(&fx),
                 0,
                 "the outage time does not count"
             );
-            fx.forced_pass(65_000);
+            fx.forced_pass(65_001);
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A held bookmark over two endpoints, where `e1` holds no pointer
+        /// record and `e0` fails from now on. With `seen`, `e0` served the
+        /// pointer to an earlier pass.
+        fn pointer_one_endpoint_absent(seen: bool) -> RenderedScope {
+            let mut fx =
+                RenderedScope::over(Vec::new(), VAULT_ROOT, Permission::Read, &["e0", "e1"]);
+            join(&fx);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            if seen {
+                serve_pointer(&fx, &sharer_signer(), 1);
+            }
+            fx.forced_pass(0);
+            fx.records.fail_endpoint(&EndpointId::new("e0"));
+            fx
+        }
+
+        /// A failed endpoint and a "no record" answer for a pointer that this
+        /// device never saw is no suppression: the scope may have no pointer.
+        #[test]
+        fn a_pointer_never_seen_does_not_escalate_while_an_endpoint_fails() {
+            let fx = pointer_one_endpoint_absent(false);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// The same answers, for a pointer this device saw, is suppression.
+        #[test]
+        fn a_pointer_seen_before_escalates_while_an_endpoint_fails() {
+            let fx = pointer_one_endpoint_absent(true);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
             assert_eq!(pointer_escalations(&fx), 1);
         }
 

@@ -306,7 +306,7 @@ where
             }),
             root_name: owed.root_name.cloned(),
         }));
-        match resolve_child_record(
+        let read = resolve_child_record(
             self.transport,
             self.snapshot_cache,
             &adopter,
@@ -314,25 +314,25 @@ where
             self.scope_root_name,
             self.mode,
         )
-        .await
-        {
+        .await;
+        if self.plane.is_some() {
+            let pin = match &read {
+                Ok(ChildRecord::Admitted(read)) => read.pin,
+                Ok(ChildRecord::Withheld) => PinRead::Withheld,
+                _ => PinRead::Unread,
+            };
+            report.pins.push((name.as_str().as_bytes().to_vec(), pin));
+        }
+        match read {
             Ok(ChildRecord::Admitted(read)) => {
                 if let Some(fork) = read.fork {
                     self.forks.report(self.events, name.as_str(), fork.sequence);
-                }
-                if self.plane.is_some() {
-                    let pin = if read.withheld {
-                        PinRead::Withheld
-                    } else {
-                        PinRead::Reached
-                    };
-                    report.pins.push((name.as_str().as_bytes().to_vec(), pin));
                 }
                 let scope = adopter.opened_scope().unwrap_or(self.scope_id);
                 Some((name, read.adopted, scope))
             }
             // Availability: the base keeps rendering last-known-good.
-            Ok(ChildRecord::Absent)
+            Ok(ChildRecord::Absent | ChildRecord::Withheld)
             | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {

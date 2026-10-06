@@ -288,21 +288,30 @@ scenario fails the meta-test):
   sends none and does not count toward the window (`tests/owner_actions.rs`
   `a_shared_scope_withheld_past_the_window_sends_one_escalation`,
   `a_shared_scope_withheld_in_a_full_outage_sends_no_escalation`); a folder
-  inside a shared scope that the focus leg reads as withheld does the same,
-  a read of it that no endpoint answers sends none, and a read that reaches
-  its record ends the hold (`tests/owner_actions.rs`
+  inside a shared scope that the focus leg reads as withheld does the same, a
+  pass with no answer or a manual refresh keeps the hold, and a read that
+  reaches its record ends it (`tests/owner_actions.rs`
   `a_withheld_shared_child_sends_one_escalation_after_the_window`,
-  `a_shared_child_no_endpoint_answers_sends_no_escalation`,
-  `a_reached_shared_child_ends_the_hold`); a held bookmark's scope pointer
-  that no endpoint answers past the window, while the vault root reconciles,
-  sends one escalation, with the vault root down it sends none until one
-  window after the root recovers, a pointer that every endpoint answers as
-  absent sends none, and an answer ends the hold (`grants::received_status`
+  `a_shared_child_hold_survives_a_pass_with_no_answer`,
+  `a_manual_refresh_inside_the_window_keeps_the_shared_child_hold`,
+  `a_reached_shared_child_ends_the_hold`); a cached body below the read-epoch
+  floor behind a withheld read stays withheld (`net::child`
+  `a_withheld_read_of_a_lagging_cached_body_stays_withheld`); a held
+  bookmark's scope pointer that no endpoint answers past the window, while
+  the vault root reconciles, sends one escalation, with the vault root down
+  it sends none until one window after the root recovers, a pointer that
+  every endpoint answers as absent sends none, a failed endpoint and a "no
+  record" answer open a hold only for a pointer this device saw, and an
+  answer ends the hold (`grants::received_status`
   `a_pointer_no_endpoint_answers_escalates_once_past_the_window`,
   `a_pointer_unanswered_in_a_full_outage_escalates_one_window_after_recovery`,
-  `an_absent_pointer_never_escalates`, `a_pointer_answer_ends_the_hold`); a
-  pass that reaches no record keeps the hold, and an owned scope never
-  escalates (`grants::received_status`, `sync::staleness`).
+  `an_absent_pointer_never_escalates`,
+  `a_pointer_never_seen_does_not_escalate_while_an_endpoint_fails`,
+  `a_pointer_seen_before_escalates_while_an_endpoint_fails`,
+  `a_pointer_answer_ends_the_hold`); the window counts only healthy time, so
+  a pause past the window while the vault root is down sends nothing on the
+  first healthy pass (`sync::staleness`); a pass that reaches no record keeps
+  the hold, and an owned scope never escalates (`grants::received_status`).
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;

@@ -805,7 +805,6 @@ where
         // files stay queued for the pass that can.
         let mut folder_verdict = RefreshVerdict::Reconciled;
         let mut attempted_files: Vec<NodeId> = Vec::new();
-        let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
         let pins = PinPass {
             now: pass.now,
             root_reconciled: pass.root_reconciled,
@@ -851,6 +850,13 @@ where
                 .or_default();
         }
         let scope_roots = state.bookmarked_scope_roots.borrow().clone();
+        let in_focus = focus_names(
+            &state.snapshot.borrow(),
+            by_scope
+                .values()
+                .flat_map(|targets| targets.folders.iter().copied()),
+            state.focus.borrow().folders_in_view(),
+        );
         let legs = ScopeLegContext {
             floors: &self.seams.floors,
             sharers: grafted,
@@ -898,7 +904,6 @@ where
             let mut settle = |nodes: &[NodeId], report: FolderRefreshReport| {
                 for (name, read) in &report.pins {
                     pins.observe_in(&mut state.withheld_pins.borrow_mut(), name, *read, true);
-                    read_pins.insert(name.clone());
                 }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(
                     &state.observed_unlinks,
@@ -965,7 +970,7 @@ where
         state
             .withheld_pins
             .borrow_mut()
-            .retain(|name, _| read_pins.contains(name));
+            .retain(|name, _| in_focus.contains(name));
         (folder_verdict, scopes)
     }
 
@@ -1521,6 +1526,22 @@ where
         )
         .await;
     }
+}
+
+/// The record names of the focus window: each folder a leg targets, and each
+/// node a folder in view lists.
+fn focus_names(
+    base: &Snapshot,
+    targets: impl Iterator<Item = NodeId>,
+    in_view: impl Iterator<Item = NodeId>,
+) -> BTreeSet<Vec<u8>> {
+    let listed: Vec<NodeId> = in_view
+        .flat_map(|folder| base.children(folder).into_iter().map(|child| child.id))
+        .collect();
+    targets
+        .chain(listed)
+        .filter_map(|node| base.node(node)?.ipns_name.clone())
+        .collect()
 }
 
 /// The interior scope the **first** queued op that names one needs

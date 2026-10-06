@@ -13214,19 +13214,60 @@ fn a_withheld_shared_child_sends_one_escalation_after_the_window() {
     );
 }
 
-/// A folder inside a shared scope that no endpoint answers for is an
-/// outage of that read, not a withheld update.
+/// A pass that gets no answer for the folder keeps the hold: a no-answer
+/// read alone opens none, and the withheld reads around it count as one
+/// hold. The focus leg reads the folder once per staleness interval, so each
+/// phase spans at least one read.
 #[test]
-fn a_shared_child_no_endpoint_answers_sends_no_escalation() {
+fn a_shared_child_hold_survives_a_pass_with_no_answer() {
     let (fx, grantee, mut events, mut tasks, name) = withheld_shared_child();
-    fx.world
-        .record_store
-        .heal_endpoint(&fx.world.record_store.endpoints()[0]);
-    fx.world.record_store.fail_get_for(&name);
-    settle(&fx, &grantee, &mut tasks);
-    settle(&fx, &grantee, &mut tasks);
+    let store = &fx.world.record_store;
+    let ticks = |count: usize, tasks: &mut Vec<BoxedTask>| {
+        for _ in 0..count {
+            tick(&fx.world, &grantee, tasks);
+        }
+    };
+    store.fail_get_for(&name);
+    ticks(8, &mut tasks);
+    assert!(
+        escalations(&events_so_far(&mut events)).is_empty(),
+        "no answer opens no hold"
+    );
 
+    store.heal_get_for(&name);
+    ticks(3, &mut tasks);
+    store.fail_get_for(&name);
+    ticks(3, &mut tasks);
+    store.heal_get_for(&name);
+    ticks(4, &mut tasks);
+    assert_eq!(
+        escalations(&events_so_far(&mut events)),
+        vec![name.into_bytes()],
+        "the hold kept its start across the pass with no answer"
+    );
+}
+
+/// A manual refresh reads with no cache, so a withheld read there has no
+/// body to render. It still keeps the hold, and the event comes on time.
+#[test]
+fn a_manual_refresh_inside_the_window_keeps_the_shared_child_hold() {
+    let (fx, mut grantee, mut events, mut tasks, name) = withheld_shared_child();
+    let manual = |grantee: &mut Engine<FakeSeamTypes>, tasks: &mut Vec<BoxedTask>| {
+        let _ = block_on_while_ticking(grantee.command(Command::ManualRefresh), tasks);
+    };
+    tick(&fx.world, &grantee, &mut tasks);
+    manual(&mut grantee, &mut tasks);
+    for _ in 0..3 {
+        tick(&fx.world, &grantee, &mut tasks);
+    }
+    manual(&mut grantee, &mut tasks);
+    tick(&fx.world, &grantee, &mut tasks);
     assert!(escalations(&events_so_far(&mut events)).is_empty());
+    tick(&fx.world, &grantee, &mut tasks);
+    assert_eq!(
+        escalations(&events_so_far(&mut events)),
+        vec![name.into_bytes()]
+    );
 }
 
 /// A read of the folder that reaches a record ends the hold, so a later hold
