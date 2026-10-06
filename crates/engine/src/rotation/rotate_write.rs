@@ -434,6 +434,9 @@ pub enum WritePublishError {
     /// A concurrent writer won the CAS race at this name. The wave re-resolves and
     /// retries.
     LostRace,
+    /// The root carries a set the wave may not re-mint over
+    /// ([`RotationPublishError::Superseded`]). Retryable.
+    Superseded,
     /// Register-first was rejected by the name registry (quota). Retryable once
     /// capacity frees.
     RegistryFull,
@@ -465,7 +468,9 @@ impl WritePublishError {
     /// The class label a reject vector carries for this failure.
     pub fn class(&self) -> &'static str {
         match self {
-            Self::NotLanded | Self::LostRace | Self::RegistryFull => "availability",
+            Self::NotLanded | Self::LostRace | Self::Superseded | Self::RegistryFull => {
+                "availability"
+            }
             Self::Rejected => "trust",
             Self::Unreadable => "capability",
         }
@@ -474,7 +479,7 @@ impl WritePublishError {
     /// Whether a retry could land it: only availability, never a verdict.
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::NotLanded | Self::LostRace | Self::RegistryFull => true,
+            Self::NotLanded | Self::LostRace | Self::Superseded | Self::RegistryFull => true,
             Self::Rejected | Self::Unreadable => false,
         }
     }
@@ -485,6 +490,9 @@ impl core::fmt::Display for WritePublishError {
         match self {
             WritePublishError::NotLanded => f.write_str("write-plane record did not land"),
             WritePublishError::LostRace => f.write_str("write-plane publish lost the CAS race"),
+            WritePublishError::Superseded => {
+                f.write_str("the root carries a set the wave may not re-mint over")
+            }
             WritePublishError::RegistryFull => f.write_str("name registry rejected register-first"),
             WritePublishError::Rejected => f.write_str("write-plane publish refused fail-closed"),
             WritePublishError::Unreadable => f.write_str("node epoch beyond this scope's ratchet"),

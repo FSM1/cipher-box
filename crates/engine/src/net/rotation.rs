@@ -4803,6 +4803,7 @@ fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
         WritePublishError::Unreadable => ResolveFailure::Unreadable,
         WritePublishError::NotLanded
         | WritePublishError::LostRace
+        | WritePublishError::Superseded
         | WritePublishError::RegistryFull => ResolveFailure::Unavailable,
     }
 }
@@ -5114,6 +5115,11 @@ where
             .map_err(|verdict| wave_read_verdict(verdict.into()))?;
         if !gated.reseals_as(&self.scope_id) {
             return Err(WritePublishError::Rejected);
+        }
+        // A wave over a last copy keeps no row (ADR 0068 D5): refused here,
+        // before the first publish.
+        if fell_back && !self.authorized_commitment.entries.is_empty() {
+            return Err(WritePublishError::Superseded);
         }
         let envelope = gated.envelope;
         let read_scope_seed = gated.read_scope_seed;
@@ -5454,8 +5460,12 @@ where
         // what proves the mint runs off the owner's own attestation
         // ([`WriteWaveNet::authorized_commitment`]).
         // A root read from its last copy re-mints from the authorized cut set,
-        // so a pre-cut copy gives the revokee no new seed (ADR 0068 D3).
+        // so a pre-cut copy gives the revokee no new seed (ADR 0068 D3), and
+        // that set keeps no row (D5).
         let ledger = if plane.fell_back {
+            if !self.authorized_commitment.entries.is_empty() {
+                return Err(WritePublishError::Superseded);
+            }
             self.authorized_ledger
         } else {
             if plane.section.commitment != *self.authorized_commitment {

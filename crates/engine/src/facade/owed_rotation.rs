@@ -468,11 +468,12 @@ where
         } else {
             RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
         };
-        let current = self
-            .cut_net(target, wait)
-            .resolve_anchored(&target.scope)
-            .await
-            .ok()?;
+        let net = self.cut_net(target, wait);
+        let current = net.resolve_anchored(&target.scope).await.ok()?;
+        // A last copy proves nothing about a cut that keeps rows (ADR 0068 D5).
+        if net.fell_back() && !cut.commitment.entries.is_empty() {
+            return None;
+        }
         Some(current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger)
     }
 

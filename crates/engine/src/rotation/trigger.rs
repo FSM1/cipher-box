@@ -843,16 +843,16 @@ impl RotateOnCutError {
         }
     }
 
-    /// Whether the first step found a later set at the root, which no wave
-    /// run off this cut may write over.
+    /// Whether the first step found a set at the root that no wave run off
+    /// this cut may write over ([`RotationPublishError::Superseded`]).
     fn is_superseded_set(&self) -> bool {
         matches!(
             self,
             RotateOnCutError::PublishCut(CascadeError::Publish {
-                error: RotationPublishError::LostRace,
+                error: RotationPublishError::Superseded,
                 ..
             }) | RotateOnCutError::Read(CascadeError::Publish {
-                error: RotationPublishError::LostRace,
+                error: RotationPublishError::Superseded,
                 ..
             })
         )

@@ -96,6 +96,10 @@ pub enum RotationPublishError {
     /// A concurrent writer's record at a higher sequence won the CAS race; the
     /// caller re-resolves and rebases before retrying.
     LostRace,
+    /// The root carries a set the cut may not write over: a later cut set, or a
+    /// last copy under a cut that keeps rows (ADR 0068 D5). Nothing was
+    /// published; a re-run reads the root again.
+    Superseded,
     /// The record the publish had to read first failed the adoption gate — a
     /// fail-closed trust violation, never staleness (AGENTS.md rule 6). Kept
     /// distinct from [`Self::NotPublished`] so a forged or transplanted record
@@ -119,7 +123,7 @@ impl RotationPublishError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::NotPublished | Self::LostRace | Self::FloorUnrecorded
+            Self::NotPublished | Self::LostRace | Self::Superseded | Self::FloorUnrecorded
         )
     }
 
@@ -128,6 +132,7 @@ impl RotationPublishError {
         match self {
             Self::NotPublished
             | Self::LostRace
+            | Self::Superseded
             | Self::NotConverged { .. }
             | Self::FloorUnrecorded => "availability",
             Self::Rejected => "trust",
@@ -140,6 +145,9 @@ impl core::fmt::Display for RotationPublishError {
         match self {
             RotationPublishError::NotPublished => f.write_str("rotation record not published"),
             RotationPublishError::LostRace => f.write_str("rotation publish lost the CAS race"),
+            RotationPublishError::Superseded => {
+                f.write_str("the root carries a set the cut may not write over")
+            }
             RotationPublishError::Rejected => {
                 f.write_str("rotation record rejected by adoption gate")
             }

@@ -242,6 +242,9 @@ where
                 .resolve_root(&net, &scope)
                 .await
                 .map_err(resolve_failed)?;
+            if keeps_rows_over_a_copy(net.fell_back(), cut) {
+                return Err(set_superseded(scope_root));
+            }
             // Idempotent by comparison, never by assumption: a read cascade or a
             // grant mint may already have published this set, and republishing
             // would spend a CAS to change nothing.
@@ -421,17 +424,18 @@ where
                 // Re-read after the read arm: a full revoke re-keyed the scope, and
                 // the wave derives every per-node read key from the seed that cut
                 // published.
+                let net = self.rotation_net();
                 let current = self
-                    .resolve_root(&self.rotation_net(), &scope)
+                    .resolve_root(&net, &scope)
                     .await
                     .map_err(resolve_failed)?;
                 // The wave re-mints the authorized set, so a root, or a last
                 // copy, that carries a later one stops it.
-                if superseded(&current, cut) {
+                if superseded(&current, cut) || keeps_rows_over_a_copy(net.fell_back(), cut) {
                     return Err(WriteRotateError::Publish {
                         stage: "republish",
                         node_id: scope_root.0,
-                        error: WritePublishError::LostRace,
+                        error: WritePublishError::Superseded,
                     });
                 }
                 // The durable floor is the owner-vouched `minReadEpoch` the re-point
@@ -525,10 +529,17 @@ fn superseded(current: &CascadeTarget, cut: &RevokedCommittedSet) -> bool {
         && current.commitment.cut_epoch >= cut.commitment.cut_epoch
 }
 
-/// The retryable refusal of a cut whose set [`superseded`] names.
+/// Whether a cut that keeps grant rows meets a root read from its last copy:
+/// such a cut keeps no row (ADR 0068 D5), so it is refused, not run.
+fn keeps_rows_over_a_copy(fell_back: bool, cut: &RevokedCommittedSet) -> bool {
+    fell_back && !cut.commitment.entries.is_empty()
+}
+
+/// The retryable refusal of a cut that [`superseded`] or
+/// [`keeps_rows_over_a_copy`] names.
 fn set_superseded(scope_root: NodeId) -> CascadeError {
     CascadeError::Publish {
         scope_id: scope_root.0,
-        error: RotationPublishError::LostRace,
+        error: RotationPublishError::Superseded,
     }
 }
