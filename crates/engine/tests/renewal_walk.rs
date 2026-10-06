@@ -1732,8 +1732,11 @@ fn a_walk_reports_and_does_not_renew_a_root_at_a_foreign_envelope_version() {
 
 /// Every record lapses, and only the API's recovery cache keeps a copy.
 fn lapse_into_the_recovery_cache(world: &FakeWorld, blocks: &Blocks) {
-    for (routing_key, record) in world.record_store.lapse_all() {
-        blocks.cache_for_recovery(&routing_key, record);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    for routing_key in world.record_store.routing_keys(&endpoint) {
+        if let Some(record) = world.record_store.lapse(&routing_key) {
+            blocks.cache_for_recovery(&routing_key, record);
+        }
     }
 }
 

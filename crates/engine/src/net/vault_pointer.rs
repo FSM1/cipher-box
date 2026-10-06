@@ -366,7 +366,18 @@ fn standing_verdict(error: GateError, endpoint_failed: bool) -> RotationPublishE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use core::time::Duration;
+
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+
+    use crate::api::ApiError;
     use crate::gate::{GateRejection, GateStage, RejectionReason};
+    use crate::net::eol::eol_from;
+    use crate::seams::{HttpResponse, UnixMillis};
+    use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
+    use crate::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 
     fn sequence(floor: u64, sequence: u64) -> GateError {
         GateError::Rejected(GateRejection {
@@ -384,6 +395,186 @@ mod tests {
         assert_eq!(
             standing_verdict(sequence(3, 2), false),
             RotationPublishError::Rejected
+        );
+    }
+
+    const SECRET: [u8; 32] = [7; 32];
+    const SCOPE: [u8; 16] = [0x44; 16];
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    fn owner() -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[3u8; 32]).expect("a valid scalar")
+    }
+
+    fn read_key() -> SecretBytes {
+        kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE)
+    }
+
+    /// The record at `index` of the chain, signed on day 0 with a 90-day EOL.
+    fn pointer_record(index: u64, sequence: u64) -> Vec<u8> {
+        let block = seal_repoint(
+            SessionRole::Owner,
+            &mut SeededEntropy::new(index),
+            read_key().as_bytes(),
+            POINTER_PAYLOAD_VERSION,
+            &owner(),
+            &RepointObject {
+                scope_id: SCOPE,
+                current_root: vault_pointer_name(&SECRET, 99),
+                write_epoch: 1,
+                min_read_epoch: 1,
+                prev_root: None,
+            },
+        )
+        .expect("the owner seals the re-point");
+        IpnsRecord::create_v2(
+            &kdf::vault_pointer_index(&SECRET, index),
+            &block,
+            sequence,
+            2_000_000_000,
+            &eol_from(UnixMillis(0)),
+        )
+        .marshal()
+    }
+
+    fn answer(status: u16, body: Vec<u8>) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.into(),
+        }
+    }
+
+    /// Recovery serves `record`, and the registration succeeds.
+    fn recover(device: &FakeDevice, record: Vec<u8>) {
+        device.http.enqueue_response(answer(200, record));
+        device.http.enqueue_response(answer(200, Vec::new()));
+    }
+
+    fn after_100_days() -> (FakeWorld, FakeDevice) {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        world.scheduler.advance(100 * DAY);
+        (world, device)
+    }
+
+    fn revive_chain(
+        world: &FakeWorld,
+        device: &FakeDevice,
+    ) -> Vec<(String, Result<Revived, ReviveError>)> {
+        let publishing = RefCell::default();
+        let seams = RenewalSeams {
+            transport: &device.record_store,
+            floors: &device.floor_store,
+            scheduler: &world.scheduler,
+            profile: &SyncTimingProfile::CI,
+            publishing: &publishing,
+        };
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (owner, key) = (owner().verifying_key(), read_key());
+        block_on(revive_vault_pointer_chain(
+            &api,
+            &seams,
+            &RecoveryPace::default(),
+            &SECRET,
+            VaultPointerRead {
+                floors: &device.floor_store,
+                pointer_read_key: key.as_bytes(),
+                owner_identity: &owner,
+                scope_id: SCOPE,
+                payload_version: POINTER_PAYLOAD_VERSION,
+            },
+        ))
+    }
+
+    fn recovered_names(device: &FakeDevice) -> Vec<String> {
+        device
+            .http
+            .requests()
+            .into_iter()
+            .filter_map(|request| {
+                request
+                    .url
+                    .split_once("/recovery/")
+                    .map(|(_, name)| name.to_owned())
+            })
+            .collect()
+    }
+
+    fn served(device: &FakeDevice, index: u64) -> Option<IpnsRecord> {
+        let name = vault_pointer_name(&SECRET, index);
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let bytes = device.record_store.record_at(&endpoint, name.as_str())?;
+        Some(IpnsRecord::unmarshal(&bytes).expect("a record"))
+    }
+
+    #[test]
+    fn each_lapsed_index_revives_up_to_the_probe_one_past_the_last() {
+        let (world, device) = after_100_days();
+        for index in 0..2 {
+            recover(&device, pointer_record(index, 3));
+        }
+        device.http.enqueue_response(answer(404, Vec::new()));
+
+        let revivals = revive_chain(&world, &device);
+
+        let names: Vec<String> = (0..3)
+            .map(|index| vault_pointer_name(&SECRET, index).as_str().to_owned())
+            .collect();
+        assert_eq!(recovered_names(&device), names, "one past the last index");
+        assert!(revivals[..2].iter().all(|(_, result)| result.is_ok()));
+        assert!(matches!(
+            revivals[2].1,
+            Err(ReviveError::Recovery(ApiError::Status { status: 404, .. }))
+        ));
+        for index in 0..2 {
+            let name = vault_pointer_name(&SECRET, index);
+            let recovered = IpnsRecord::unmarshal(&pointer_record(index, 3))
+                .and_then(|record| record.verify(&name))
+                .unwrap();
+            let revived = served(&device, index)
+                .expect("the index revived")
+                .verify(&name)
+                .unwrap();
+            assert_eq!(revived.sequence, 4);
+            assert_eq!(revived.value, recovered.value, "the sealed block unchanged");
+        }
+        assert!(served(&device, 2).is_none());
+    }
+
+    #[test]
+    fn the_chain_revives_from_the_index_floor_and_reads_a_live_index() {
+        let (world, device) = after_100_days();
+        block_on(floor::advance_vault_pointer_index(
+            &device.floor_store,
+            &SCOPE,
+            1,
+        ))
+        .unwrap();
+        for endpoint in device.record_store.endpoints() {
+            device.record_store.seed_record(
+                &endpoint,
+                vault_pointer_name(&SECRET, 1).as_str(),
+                pointer_record(1, 3),
+            );
+        }
+        device.http.enqueue_response(answer(404, Vec::new()));
+
+        let revivals = revive_chain(&world, &device);
+
+        assert_eq!(
+            recovered_names(&device),
+            [vault_pointer_name(&SECRET, 2).as_str().to_owned()],
+            "no fetch below the floor, and none for the live index"
+        );
+        assert_eq!(revivals.len(), 1);
+        assert!(
+            served(&device, 0).is_none(),
+            "an abandoned index stays lapsed"
         );
     }
 }

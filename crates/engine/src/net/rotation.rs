@@ -17087,6 +17087,16 @@ mod tests {
         keys: &K,
         walked: &Cell<bool>,
     ) -> Vec<[u8; 16]> {
+        run_enrolment_owing(harness, keys, walked, &BTreeSet::new())
+    }
+
+    /// [`run_enrolment_walking`] while each scope in `owed` owes rotation work.
+    fn run_enrolment_owing<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+        owed: &BTreeSet<[u8; 16]>,
+    ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
             owner_seed_cache: None,
             api: &harness.api,
@@ -17109,7 +17119,7 @@ mod tests {
             on_access_misses: &harness.on_access_misses,
             publishing: &RefCell::default(),
             pace: &RecoveryPace::default(),
-            owed: &BTreeSet::new(),
+            owed,
         }))
     }
 
@@ -17124,6 +17134,49 @@ mod tests {
             stage_pointer_at(&harness, scope_id, &repoint_at(scope_id, OWNER_ROOT_EPOCH));
         }
         (harness, child)
+    }
+
+    /// A scope the enrolment proves whose pointer lapsed revives from the
+    /// recovery endpoint before it is held, at `S + 1` with the same value
+    /// (ADR 0062 D3), and not while the scope owes rotation work (ADR 0063 D4).
+    #[test]
+    fn a_lapsed_scope_pointer_revives_unless_its_scope_owes_rotation_work() {
+        for owed in [BTreeSet::from([CHILD_SCOPE]), BTreeSet::new()] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(pointer.as_str().to_owned(), lapsed.clone());
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &Cell::new(false), &owed);
+
+            let served = harness
+                .store
+                .record_at(&harness.store.endpoints()[0], pointer.as_str());
+            let held = harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE));
+            if owed.is_empty() {
+                let lapsed = IpnsRecord::unmarshal(&lapsed)
+                    .unwrap()
+                    .verify(&pointer)
+                    .unwrap();
+                let served = IpnsRecord::unmarshal(&served.expect("the pointer revived"))
+                    .unwrap()
+                    .verify(&pointer)
+                    .unwrap();
+                assert_eq!(served.sequence, lapsed.sequence + 1);
+                assert_eq!(served.value, lapsed.value, "the sealed block unchanged");
+                assert!(held, "the consult after the revival holds the pointer");
+            } else {
+                assert_eq!(served, None, "an owed scope revives nothing");
+                assert!(!held);
+            }
+        }
     }
 
     /// The walk exists to find the pointers earlier sessions flipped, and a flip

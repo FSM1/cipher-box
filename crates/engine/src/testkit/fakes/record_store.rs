@@ -172,16 +172,15 @@ impl InMemoryRecordStore {
         }
     }
 
-    /// Drop every record from every endpoint, as a lapse past the EOL does,
-    /// and return the record each routing key held on the first endpoint.
-    pub fn lapse_all(&self) -> BTreeMap<String, Vec<u8>> {
+    /// Drop the record at `routing_key` from every endpoint, as a lapse past
+    /// the EOL does, and return the one the first endpoint held.
+    pub fn lapse(&self, routing_key: &str) -> Option<Vec<u8>> {
         let mut inner = self.inner.lock().expect("lock");
         let lapsed = inner
             .get(&self.endpoints[0])
-            .map(|records| records.clone().into_iter().collect())
-            .unwrap_or_default();
+            .and_then(|records| records.get(routing_key).cloned());
         for records in inner.values_mut() {
-            records.clear();
+            records.remove(routing_key);
         }
         lapsed
     }
