@@ -6,6 +6,10 @@
 //! plane, the same read that admits a served record. Only a record that read
 //! admits is signed again, through the renewal walk's signature path.
 
+use core::cell::RefCell;
+use core::time::Duration;
+use std::collections::VecDeque;
+
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -27,7 +31,7 @@ use crate::grants::owner_entry::OwnerSeedCache;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
-    SeamResult, SnapshotCache,
+    SeamResult, SnapshotCache, UnixMillis,
 };
 use crate::sync::tick::ResolveMode;
 
@@ -167,6 +171,52 @@ impl<T: RecordTransport> RecordTransport for Recovered<'_, T> {
     }
 }
 
+/// The most recovery fetches one session makes in [`RECOVERY_PACE_WINDOW`],
+/// below the API's `recovery` throttle of 30 a minute for each account (ADR
+/// 0062 consequence 2).
+pub(crate) const RECOVERY_PACE: usize = 25;
+
+/// The window [`RECOVERY_PACE`] counts over.
+pub(crate) const RECOVERY_PACE_WINDOW: Duration = Duration::from_secs(60);
+
+/// The session's recovery fetch times inside the last window. Session memory
+/// only: a new session starts with an empty pace.
+#[derive(Default)]
+pub(crate) struct RecoveryPace {
+    fetches: RefCell<VecDeque<UnixMillis>>,
+}
+
+impl RecoveryPace {
+    /// Wait until one more fetch keeps the pace, then count it.
+    pub(crate) async fn slot<Sch: Scheduler>(&self, scheduler: &Sch) {
+        loop {
+            let now = scheduler.now();
+            let wait = {
+                let mut fetches = self.fetches.borrow_mut();
+                while fetches
+                    .front()
+                    .is_some_and(|at| now.reached(Some(at.saturating_add(RECOVERY_PACE_WINDOW))))
+                {
+                    fetches.pop_front();
+                }
+                if fetches.len() < RECOVERY_PACE {
+                    fetches.push_back(now);
+                    return;
+                }
+                fetches.front().map_or(RECOVERY_PACE_WINDOW, |oldest| {
+                    Duration::from_millis(
+                        oldest
+                            .saturating_add(RECOVERY_PACE_WINDOW)
+                            .0
+                            .saturating_sub(now.0),
+                    )
+                })
+            };
+            scheduler.sleep(wait).await;
+        }
+    }
+}
+
 /// A lapsed name that passed steps 1 to 3.
 struct Lapsed<'a> {
     name: &'a IpnsName,
@@ -178,10 +228,12 @@ struct Lapsed<'a> {
 
 /// Revive each lapsed name in `requests` (ADR 0062 D1): admit each through
 /// the read of its plane, register the admitted names in one batch, then sign
-/// each at `S + 1` with the renewal EOL. One result for each request, in order.
+/// each at `S + 1` with the renewal EOL. Each recovery fetch waits for a slot
+/// of `pace`. One result for each request, in order.
 pub(crate) async fn revive<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
     requests: &[ReviveRequest<'_, P>],
 ) -> Vec<Result<Revived, ReviveError>>
 where
@@ -194,7 +246,7 @@ where
 {
     let mut results = Vec::with_capacity(requests.len());
     for request in requests {
-        results.push(admit_lapsed(api, seams, request).await);
+        results.push(admit_lapsed(api, seams, pace, request).await);
     }
     let registrations: Vec<NameRegistration> = results
         .iter()
@@ -226,6 +278,7 @@ where
 async fn admit_lapsed<'a, T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
     request: &ReviveRequest<'a, P>,
 ) -> Result<Lapsed<'a>, ReviveError>
 where
@@ -233,12 +286,14 @@ where
     H: Http,
     C: CredentialStore,
     F: FloorStore,
+    Sch: Scheduler,
     P: PlaneRead,
 {
     let name = request.name;
     if IpnsName::from_public_key(&request.signer.verifying_key()) != *name {
         return Err(ReviveError::WrongSigner);
     }
+    pace.slot(seams.scheduler).await;
     let bytes = match api.recovery_fetch(name.as_str()).await {
         Ok(bytes) => bytes,
         Err(ApiError::Status { status: 429, .. }) => return Err(ReviveError::Throttled),
@@ -640,7 +695,12 @@ mod tests {
             profile: &SyncTimingProfile::CI,
             publishing: &publishing,
         };
-        block_on(revive(&api(device), &seams, requests))
+        block_on(revive(
+            &api(device),
+            &seams,
+            &RecoveryPace::default(),
+            requests,
+        ))
     }
 
     fn revive_one<P: PlaneRead>(
@@ -1280,5 +1340,24 @@ mod tests {
 
         assert_eq!(revived.outcome, PublishOutcome::Published { sequence: 3 });
         assert_eq!(served(&device, keys.name()).unwrap().value, value);
+    }
+
+    #[test]
+    fn a_fetch_over_the_pace_waits_for_the_next_slot() {
+        let world = FakeWorld::new();
+        let scheduler = world.scheduler.clone().with_auto_advance();
+        let pace = RecoveryPace::default();
+        let start = scheduler.now();
+        for _ in 0..RECOVERY_PACE {
+            block_on(pace.slot(&scheduler));
+        }
+        assert_eq!(scheduler.now(), start, "the pace holds 25 fetches at once");
+
+        block_on(pace.slot(&scheduler));
+        assert_eq!(
+            scheduler.now(),
+            start.saturating_add(RECOVERY_PACE_WINDOW),
+            "the 26th fetch waits until the first leaves the window"
+        );
     }
 }

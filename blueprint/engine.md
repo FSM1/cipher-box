@@ -245,7 +245,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
-  and reports that it restored the server copy (D5). The adoption gate
+  and reports that it restored the server copy (D5). A session makes at most
+  25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
+  for each account; a fetch over the pace waits for the next slot. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
