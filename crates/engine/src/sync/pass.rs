@@ -142,7 +142,7 @@ struct Assembly {
     grafted_scope_roots: BookmarkedScopeRoots,
     grafted_contested: ContestedNodes,
     proved_roots: Vec<NodeId>,
-    granted_namespaces: Vec<(NodeId, FloorNamespace)>,
+    granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
     descendants: Vec<DescendantScopeRoot>,
 }
 
@@ -1071,8 +1071,8 @@ where
             .collect();
         let granted_namespaces = {
             let sharers = state.grafted_sharers.borrow();
-            sharers
-                .keys()
+            grafted_scope_roots
+                .iter()
                 .filter_map(|scope_id| {
                     let namespace = floor_namespace(
                         &sharers,
@@ -1080,8 +1080,9 @@ where
                         &self.root_id,
                         &scopes.proved,
                         scope_id,
-                    )?;
-                    (namespace != FloorNamespace::Own).then_some((NodeId(*scope_id), namespace))
+                    );
+                    (namespace != Some(FloorNamespace::Own))
+                        .then_some((NodeId(*scope_id), namespace))
                 })
                 .collect()
         };

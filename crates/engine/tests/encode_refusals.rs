@@ -497,7 +497,7 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
         after,
         queued,
         ..
-    } = create_under_a_folder_at_newer_version(1);
+    } = create_under_a_folder_at_newer_version(1, false);
 
     assert_eq!(
         after,
@@ -518,7 +518,7 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
         queued,
         dead_letters,
         hold,
-    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1);
+    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1, false);
 
     assert_eq!(
         (queued, dead_letters),
@@ -543,7 +543,7 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_dead_letters_as_a_newer
         queued,
         dead_letters,
         hold,
-    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize + 1);
+    } = create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize + 1, false);
 
     assert_eq!(
         (queued, dead_letters),
@@ -553,9 +553,26 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_dead_letters_as_a_newer
     assert_eq!(after, Some(served), "the folder was never republished");
 }
 
+/// The pass that publishes the held op also ends its hold, so no status
+/// tells the member to update for an op that has left the queue.
+#[test]
+fn a_drain_op_whose_folder_returns_to_this_version_lands_and_ends_its_hold() {
+    let NewerVersionRun {
+        served,
+        after,
+        dead_letters,
+        hold,
+        ..
+    } = create_under_a_folder_at_newer_version(1, true);
+
+    assert_ne!(after, Some(served), "the op publishes");
+    assert_eq!(dead_letters, Vec::new());
+    assert_eq!(hold, None, "and its hold ends with it");
+}
+
 /// What [`create_under_a_folder_at_newer_version`] saw.
 struct NewerVersionRun {
-    /// The folder's record before the passes.
+    /// The folder's record the test last served.
     served: Vec<u8>,
     /// The folder's record after them.
     after: Option<Vec<u8>>,
@@ -567,8 +584,9 @@ struct NewerVersionRun {
 }
 
 /// Stage a create under a folder sealed at the next envelope version and run
-/// `passes` drain passes.
-fn create_under_a_folder_at_newer_version(passes: usize) -> NewerVersionRun {
+/// `passes` drain passes. With `then_current`, the folder is then sealed again
+/// at this version and one more pass runs.
+fn create_under_a_folder_at_newer_version(passes: usize, then_current: bool) -> NewerVersionRun {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -580,30 +598,34 @@ fn create_under_a_folder_at_newer_version(passes: usize) -> NewerVersionRun {
         unknown: PreservedFields::new(),
     };
     let read_key = kdf::read_key(kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &folder.0).as_bytes());
-    let envelope = seal_read_body(
-        read_key.as_bytes(),
-        &[0x4d; 24],
-        ENVELOPE_V + 1,
-        folder.0,
-        ACCOUNT_SCOPE,
-        OWNER_ROOT_EPOCH,
-        &body,
-    )
-    .expect("the folder seals");
-    let cid = blocks.put(encode_envelope(&envelope).expect("the head encodes"));
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0).as_bytes()),
-        format!("/ipfs/{cid}").as_bytes(),
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    for endpoint in world.record_store.endpoints() {
-        world
-            .record_store
-            .seed_record(&endpoint, name.as_str(), record.clone());
-    }
+    let serve_folder = |version, sequence| {
+        let envelope = seal_read_body(
+            read_key.as_bytes(),
+            &[0x4d; 24],
+            version,
+            folder.0,
+            ACCOUNT_SCOPE,
+            OWNER_ROOT_EPOCH,
+            &body,
+        )
+        .expect("the folder seals");
+        let cid = blocks.put(encode_envelope(&envelope).expect("the head encodes"));
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+            format!("/ipfs/{cid}").as_bytes(),
+            sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        for endpoint in world.record_store.endpoints() {
+            world
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record.clone());
+        }
+        record
+    };
+    let mut record = serve_folder(ENVELOPE_V + 1, 1);
     seed_account_with(
         &world,
         &blocks,
@@ -629,6 +651,11 @@ fn create_under_a_folder_at_newer_version(passes: usize) -> NewerVersionRun {
     }))
     .expect("the create stages");
     for _ in 0..passes {
+        tick(&world, &engine, &mut tasks);
+    }
+    if then_current {
+        record = serve_folder(ENVELOPE_V, 2);
+        serve_http(&device, &blocks, 16);
         tick(&world, &engine, &mut tasks);
     }
     let status = block_on(engine.status()).expect("the session status reads");

@@ -1319,9 +1319,10 @@ pub(crate) struct DrainScope<'a> {
     pub(crate) scope_roots: &'a [NodeId],
     /// Includes boundaries whose material the current walk could not prove.
     pub(crate) known_scope_roots: &'a [NodeId],
-    /// The floor namespace of each scope root another identity granted. Every
-    /// other root reads its floors in this identity's own namespace.
-    pub(crate) granted_namespaces: &'a [(NodeId, FloorNamespace)],
+    /// The floor namespace of each scope root another identity granted, `None`
+    /// for a root no one granting identity names. Every other root reads its
+    /// floors in this identity's own namespace.
+    pub(crate) granted_namespaces: &'a [(NodeId, Option<FloorNamespace>)],
     /// The proved scope roots whose own records carry no write plane this
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
@@ -2702,6 +2703,7 @@ where
                     .await;
                 return Err(halt);
             }
+            self.release_hold_of(applied.op_id);
             // An op that is not kept leaves at its publish ([`keeps`]).
             if !self.kept_now.get() {
                 self.dequeue_op(applied.op_id).await?;
@@ -2973,6 +2975,18 @@ where
         *self.cells.hold.borrow_mut() = None;
     }
 
+    /// A hold on an op that published has no cause left.
+    fn release_hold_of(&self, op_id: OpId) {
+        let held = self
+            .cells
+            .hold
+            .borrow()
+            .is_some_and(|hold| hold.op_id == op_id);
+        if held {
+            self.release_hold();
+        }
+    }
+
     /// This identity's queued ops, minus restore residue: an op at or below the
     /// durable drained-op mark already left this queue once, so the queue it
     /// came back in predates the completion record.
@@ -3157,11 +3171,15 @@ where
         scope: &DrainScope<'_>,
         root: NodeId,
     ) -> Result<KeptPlace, Halt> {
-        let namespace = scope
+        let namespace = match scope
             .granted_namespaces
             .iter()
             .find(|(granted, _)| *granted == root)
-            .map_or(FloorNamespace::Own, |(_, namespace)| *namespace);
+        {
+            None => FloorNamespace::Own,
+            Some((_, Some(namespace))) => *namespace,
+            Some((_, None)) => return Ok(KeptPlace::Unnamespaced),
+        };
         let floors = namespace.view(&self.seams.floors);
         Ok(KeptPlace::Unchecked {
             root,
@@ -11115,7 +11133,7 @@ mod tests {
         write_scope_seed: Zeroizing<[u8; 32]>,
         scope_roots: Vec<NodeId>,
         known_scope_roots: Vec<NodeId>,
-        granted_namespaces: Vec<(NodeId, FloorNamespace)>,
+        granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -11889,8 +11907,31 @@ mod tests {
         let root = NodeId([0x64; 16]);
         let namespace = FloorNamespace::GrantedBy(sharer_label());
         harness.known_scope_roots.push(root);
-        harness.granted_namespaces.push((root, namespace));
+        harness.granted_namespaces.push((root, Some(namespace)));
         let op_id = kept_create_past_the_bound_after_a_cut(&harness, root, namespace);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
+        assert!(report.dropped.is_empty());
+    }
+
+    /// A granted root that no one granting identity names has no floor this
+    /// device can read, so its kept op waits past the bound rather than read
+    /// this identity's own floor for it.
+    #[test]
+    fn a_kept_op_under_a_root_no_sharer_names_waits_past_the_bound() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let root = NodeId([0x64; 16]);
+        harness.known_scope_roots.push(root);
+        harness.granted_namespaces.push((root, None));
+        let op_id = kept_create_past_the_bound_after_a_cut(
+            &harness,
+            root,
+            FloorNamespace::GrantedBy(sharer_label()),
+        );
         let mut report = DrainReport::default();
 
         let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))

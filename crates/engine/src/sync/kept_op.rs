@@ -243,6 +243,9 @@ pub(crate) enum KeptPlace {
     /// runs the bound; a flip waits with no bound for a pass that can check it
     /// (ADR 0069 D5).
     Unchecked { root: NodeId, live_write_epoch: u64 },
+    /// As [`Self::Unchecked`], at a granted root that no one granting identity
+    /// names, so no floor can show it is no flip. It waits with no bound.
+    Unnamespaced,
     /// Another pass, or none this tick, answers for the op's scope.
     Elsewhere,
 }
@@ -266,6 +269,7 @@ pub(crate) enum KeptVerdict {
 pub(crate) fn kept_verdict(note: KeptNote, place: KeptPlace, now: UnixMillis) -> KeptVerdict {
     match place {
         KeptPlace::Keyless { .. } => return KeptVerdict::Recheck,
+        KeptPlace::Unnamespaced => return KeptVerdict::Stay,
         KeptPlace::Writes {
             root,
             live_write_epoch,
