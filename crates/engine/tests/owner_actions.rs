@@ -7608,7 +7608,8 @@ fn a_relink_the_grant_overtook_still_re_seals_and_cuts() {
 /// with the device stopped after the source-remove confirms and before the
 /// crossing commits. Answers the granted scope's read epoch before the stop.
 /// The caller boots the device again with [`resume`].
-fn stop_an_overtaken_relink_before_its_commit(fx: &mut GrantScenario) -> u64 {
+fn stop_an_overtaken_relink_before_its_commit() -> (GrantScenario, u64) {
+    let mut fx = GrantScenario::new();
     let holiday = create_published_folder(
         &fx.world,
         &mut fx.engine,
@@ -7628,7 +7629,7 @@ fn stop_an_overtaken_relink_before_its_commit(fx: &mut GrantScenario) -> u64 {
         vec![ScopeCrossing::Intra],
         "the grant leaves the relink queued as it was journaled"
     );
-    converge_into_granted_scope(fx, holiday);
+    converge_into_granted_scope(&fx, holiday);
     let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
 
     let mark = owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET));
@@ -7646,7 +7647,7 @@ fn stop_an_overtaken_relink_before_its_commit(fx: &mut GrantScenario) -> u64 {
     // The stop: the pass and its session go.
     fx._tasks.clear();
     staging.release_parked_write();
-    before
+    (fx, before)
 }
 
 /// Boot the stopped device again.
@@ -7669,8 +7670,7 @@ fn tells_cut_owed(events: &mut EventStream, scope_root: NodeId) -> bool {
 /// session lists.
 #[test]
 fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
-    let mut fx = GrantScenario::new();
-    let before = stop_an_overtaken_relink_before_its_commit(&mut fx);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
     resume(&mut fx);
     assert_eq!(
         published_read_epoch(&fx.world, &fx.blocks, fx.folder),
@@ -7697,8 +7697,7 @@ fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
 #[test]
 fn an_earlier_sessions_owed_cut_survives_a_resumed_relinks_cut() {
     const EARLIER: NodeId = NodeId([0x9d; 16]);
-    let mut fx = GrantScenario::new();
-    let before = stop_an_overtaken_relink_before_its_commit(&mut fx);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
     let enc_secret = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(77));
     let sealed = seal_owed_cuts(
@@ -7731,8 +7730,7 @@ fn an_earlier_sessions_owed_cut_survives_a_resumed_relinks_cut() {
 /// refused debt write keeps it queued for the next pass.
 #[test]
 fn a_refused_debt_write_keeps_the_resumed_relink_queued() {
-    let mut fx = GrantScenario::new();
-    let before = stop_an_overtaken_relink_before_its_commit(&mut fx);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
     let debt = scope_exit_debt_key(&kdf::enc_subkey(&SECRET));
     let staging = fx.owner_device.staging_store.inner().clone();
     let relink_queued = || {
@@ -7771,8 +7769,7 @@ fn a_refused_debt_write_keeps_the_resumed_relink_queued() {
 /// owing one needs only the boundary, and the cut waits for the material.
 #[test]
 fn a_resumed_relink_out_of_an_unproved_scope_still_owes_its_cut() {
-    let mut fx = GrantScenario::new();
-    let before = stop_an_overtaken_relink_before_its_commit(&mut fx);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
     let source = write_name(fx.folder);
     fx.world.record_store.fail_get_for(source.as_str());
 

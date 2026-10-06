@@ -660,66 +660,56 @@ struct ScopeExit {
     /// snapshot root, because an exit this op performed must rotate something
     /// ([`enclosing_scope_root`]).
     applied: Option<crate::facade::NodeId>,
-    /// What a **dropped** exit cuts: [`landed_exit`], with no fallback. A drop
-    /// is no evidence this op performed the exit, so a source folder a
+    /// What a **dropped** exit cuts: [`relocation_exit`], with no fallback. A
+    /// drop is no evidence this op performed the exit, so a source folder a
     /// concurrent writer deleted must not escalate into a whole-vault cut.
     dropped: Option<crate::facade::NodeId>,
 }
 
 impl ScopeExit {
     fn of(base: &Snapshot, op: &Op, scope_roots: &[crate::facade::NodeId]) -> Self {
-        let dropped = op.relocation().and_then(|(from_parent, new_parent, _)| {
-            landed_exit(base, from_parent, new_parent, scope_roots)
-        });
         let applied = op.scope_exit_source().map(|from_parent| {
             enclosing_scope_root(base, from_parent, scope_roots).unwrap_or(base.root)
         });
-        Self { applied, dropped }
+        Self {
+            applied,
+            dropped: relocation_exit(base, op, scope_roots, false),
+        }
     }
 }
 
-/// The interior scope root a relocation that already landed left, derived from
-/// the scope roots listed now and not from the crossing the op journaled: a
-/// grant minted after the journal entry still owes its cut (ADR 0045 D1).
-///
-/// `None` when the destination resolves to no listed root: a destination
-/// another writer deleted is no evidence of a crossing.
-pub(crate) fn landed_exit(
-    base: &Snapshot,
-    from_parent: crate::facade::NodeId,
-    new_parent: crate::facade::NodeId,
-    scope_roots: &[crate::facade::NodeId],
-) -> Option<crate::facade::NodeId> {
-    let source = interior_source(base, from_parent, scope_roots)?;
-    (enclosing_scope_root(base, new_parent, scope_roots)? != source).then_some(source)
-}
-
-/// The cut a relocation that the published-op mark drops owes: [`landed_exit`]
-/// while the destination resolves, else the journaled exit, because the mark
-/// is evidence the move published.
+/// The cut a relocation that the published-op mark drops owes: a destination
+/// that no longer resolves still owes the journaled exit, because the mark is
+/// evidence the move published.
 pub(crate) fn expired_exit(
     base: &Snapshot,
     op: &Op,
     scope_roots: &[crate::facade::NodeId],
 ) -> Option<crate::facade::NodeId> {
-    let (from_parent, new_parent, crossing) = op.relocation()?;
-    if enclosing_scope_root(base, new_parent, scope_roots).is_some() {
-        landed_exit(base, from_parent, new_parent, scope_roots)
-    } else if crossing == ScopeCrossing::ExitsGrantedSource {
-        interior_source(base, from_parent, scope_roots)
-    } else {
-        None
-    }
+    relocation_exit(base, op, scope_roots, true)
 }
 
-/// The listed scope root above a relocation's source end, unless it is
-/// `base.root`, which grants nobody.
-fn interior_source(
+/// The interior scope root a relocation left, derived from the scope roots
+/// listed now and not from the crossing the op journaled: a grant minted after
+/// the journal entry still owes its cut (ADR 0045 D1). `base.root` grants
+/// nobody, so a move out of it owes nothing.
+///
+/// A destination that resolves to no listed root, which another writer may have
+/// deleted, is no evidence of a crossing: it owes the journaled exit only when
+/// `published`.
+fn relocation_exit(
     base: &Snapshot,
-    from_parent: crate::facade::NodeId,
+    op: &Op,
     scope_roots: &[crate::facade::NodeId],
+    published: bool,
 ) -> Option<crate::facade::NodeId> {
-    enclosing_scope_root(base, from_parent, scope_roots).filter(|root| *root != base.root)
+    let (from_parent, new_parent, crossing) = op.relocation()?;
+    let source =
+        enclosing_scope_root(base, from_parent, scope_roots).filter(|root| *root != base.root)?;
+    match enclosing_scope_root(base, new_parent, scope_roots) {
+        Some(destination) => (destination != source).then_some(source),
+        None => (published && crossing == ScopeCrossing::ExitsGrantedSource).then_some(source),
+    }
 }
 
 /// The listed scope root at or above `node`, walking it and then its ancestors
