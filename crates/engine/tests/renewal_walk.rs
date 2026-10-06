@@ -24,6 +24,7 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, RetireLedger,
     Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
+use cipherbox_engine::sync::pointer::vault_pointer_name;
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
@@ -33,8 +34,8 @@ use cipherbox_engine::testkit::{
     SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig, LoginSecret,
-    NodeId, NodeKind, StoragePolicy, SyncTimingProfile, WriteTarget,
+    ApiBaseUrl, BinIndexKeys, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig,
+    LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile, WriteTarget,
 };
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -1727,4 +1728,128 @@ fn a_walk_reports_and_does_not_renew_a_root_at_a_foreign_envelope_version() {
         Some(bytes),
         "the liveness loop does not re-sign the held root"
     );
+}
+
+/// Every record lapses, and only the API's recovery cache keeps a copy.
+fn lapse_into_the_recovery_cache(world: &FakeWorld, blocks: &Blocks) {
+    for (routing_key, record) in world.record_store.lapse_all() {
+        blocks.cache_for_recovery(&routing_key, record);
+    }
+}
+
+fn recovery_fetches(device: &FakeDevice) -> usize {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.contains("/recovery/"))
+        .count()
+}
+
+/// ADR 0062 consequence 5: a device that starts after 100 days offline, while
+/// every name of the vault lapsed, finds its vault root and lists the vault.
+/// The anchors revive at the session start, and the walk revives the lapsed
+/// folder before it descends into it, so the file below renews in the same
+/// cycle. Each revival signs at `S + 1` with the renewal EOL and the same value.
+#[test]
+fn a_device_that_starts_after_100_days_offline_finds_its_vault_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "notes");
+        vec![
+            folder,
+            write_file(&world, engine, tasks, folder, "note.txt"),
+        ]
+    });
+    let anchors = [
+        vault_pointer_name(&SECRET, 0),
+        write_name(ROOT),
+        BinIndexKeys::derive(&SECRET).name().clone(),
+    ];
+    let subtree = [write_name(nodes[0]), write_name(nodes[1])];
+    let before: Vec<VerifiedRecord> = anchors
+        .iter()
+        .chain(&subtree)
+        .map(|name| record_at(&world, name))
+        .collect();
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+    let started = world.scheduler.now();
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+
+    assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
+    for (name, before) in anchors.iter().zip(&before) {
+        let after = record_at(&world, name);
+        assert_eq!(
+            after.sequence,
+            before.sequence + 1,
+            "an anchor revives at S + 1"
+        );
+        assert_eq!(after.value, before.value, "with the same value");
+        assert_eq!(
+            after.validity,
+            renewal_eol_from(started).into_bytes(),
+            "before the first tick of the session",
+        );
+    }
+    let root = write_name(ROOT);
+    assert_eq!(
+        block_on(
+            device
+                .floors(&SECRET)
+                .sequence_floor(root.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
+        Some(before[1].sequence + 1),
+        "the cold start read the revived root through the gate",
+    );
+
+    until_the_first_walk(&world, &engine, &mut tasks);
+    for (name, before) in subtree.iter().zip(&before[anchors.len()..]) {
+        assert_renewed_at_start(&world, name, before, started, "a lapsed node");
+    }
+}
+
+/// ADR 0062 consequence 2: one session makes at most 25 recovery fetches a
+/// minute, the session-start revival and the walk together, and a revival
+/// cycle waits for the pace rather than stopping at the walk budget.
+#[test]
+fn a_lapsed_vault_revives_at_the_recovery_pace() {
+    const FILES: usize = 30;
+    const RECOVERY_PACE: usize = 25;
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        (0..FILES)
+            .map(|at| write_file(&world, engine, tasks, ROOT, &format!("note-{at}.txt")))
+            .collect()
+    });
+    let before: Vec<VerifiedRecord> = nodes
+        .iter()
+        .map(|node| record_at(&world, &write_name(*node)))
+        .collect();
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(
+        recovery_fetches(&device),
+        RECOVERY_PACE,
+        "the first minute spends the whole pace and no more",
+    );
+
+    world.scheduler.advance(Duration::from_secs(60));
+    poll_tasks_until_parked(&mut tasks);
+    for (node, before) in nodes.iter().zip(&before) {
+        assert_eq!(
+            record_at(&world, &write_name(*node)).sequence,
+            before.sequence + 1,
+            "each file revives once the pace allows",
+        );
+    }
 }

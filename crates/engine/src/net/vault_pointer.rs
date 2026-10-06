@@ -21,7 +21,7 @@ use super::revival::{
     Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived, revive,
 };
 use super::rotation::{PointerPipeline, publish_pointer_over};
-use crate::api::{ApiClient, ApiError};
+use crate::api::ApiClient;
 use crate::entropy::Entropy;
 use crate::gate::GateError;
 use crate::gate::floor::{self, PointerPlane, Strictness};
@@ -259,18 +259,6 @@ impl<F> Clone for VaultPointerRead<'_, F> {
 
 impl<F> Copy for VaultPointerRead<'_, F> {}
 
-impl<F> VaultPointerRead<'_, F> {
-    fn open(&self, value: &[u8]) -> Result<RepointObject, PointerError> {
-        open_repoint(
-            self.pointer_read_key,
-            self.payload_version,
-            &self.scope_id,
-            self.owner_identity,
-            value,
-        )
-    }
-}
-
 impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
     async fn admit<T: RecordTransport>(
         &self,
@@ -279,9 +267,14 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
         recovered: &VerifiedRecord,
         bytes: &[u8],
     ) -> Result<Admitted, PlaneRefusal> {
-        let repoint = self
-            .open(&recovered.value)
-            .map_err(|_| PlaneRefusal::Rejected)?;
+        let repoint = open_repoint(
+            self.pointer_read_key,
+            self.payload_version,
+            &self.scope_id,
+            self.owner_identity,
+            &recovered.value,
+        )
+        .map_err(|_| PlaneRefusal::Rejected)?;
         match floor::repoint_regression(
             self.floors,
             &repoint,
@@ -304,16 +297,6 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
     }
 }
 
-/// What the session-start pass over the vault pointer chain found.
-#[derive(Default)]
-pub(crate) struct ChainRevival {
-    /// The re-point at the last index, when the chain ended cleanly: the
-    /// recovery endpoint holds no record one index past it.
-    pub(crate) last: Option<RepointObject>,
-    /// Each revival the pass ran, by routing key.
-    pub(crate) revivals: Vec<(String, Result<Revived, ReviveError>)>,
-}
-
 /// Revive each lapsed index of the vault pointer chain, from the durable index
 /// floor up, before `resolve_vault_pointer` reads it (ADR 0062 D3). An index
 /// that the fan-out reads `Absent` revives from the recovery endpoint. The
@@ -325,7 +308,7 @@ pub(crate) async fn revive_vault_pointer_chain<T, H, C, F, Sch>(
     pace: &RecoveryPace,
     login_secret: &[u8],
     read: VaultPointerRead<'_, F>,
-) -> ChainRevival
+) -> Vec<(String, Result<Revived, ReviveError>)>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -333,19 +316,18 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let mut pass = ChainRevival::default();
+    let mut revivals = Vec::new();
     // An index below the floor is abandoned, so its revival would re-sign a
     // superseded pointer.
     let Ok(floor) = floor::vault_pointer_index_floor(seams.floors, &read.scope_id).await else {
-        return pass;
+        return revivals;
     };
-    let mut last = None;
     let mut revived = None;
     let mut index = floor.unwrap_or(0);
     while index < MAX_VAULT_POINTER_PROBE {
         let name = vault_pointer_name(login_secret, index);
-        let value = match fanout_get_classified(seams.transport, &name).await {
-            FanoutRecord::Found(record, _) => record.value,
+        match fanout_get_classified(seams.transport, &name).await {
+            FanoutRecord::Found(..) => index += 1,
             FanoutRecord::Absent if revived != Some(index) => {
                 let signer = kdf::vault_pointer_index(login_secret, index);
                 let request = ReviveRequest {
@@ -354,33 +336,18 @@ where
                     plane: read,
                 };
                 let result = revive(api, seams, pace, &[request]).await.remove(0);
-                let ended = matches!(
-                    result,
-                    Err(ReviveError::Recovery(ApiError::Status { status: 404, .. }))
-                );
                 let signed = result.is_ok();
-                pass.revivals.push((name.as_str().to_owned(), result));
-                if ended {
-                    pass.last = last;
-                    return pass;
-                }
+                revivals.push((name.as_str().to_owned(), result));
                 if !signed {
-                    return pass;
+                    return revivals;
                 }
-                // The next read opens the record the endpoints now serve.
+                // The next read finds the record the endpoints now serve.
                 revived = Some(index);
-                continue;
             }
-            FanoutRecord::Absent | FanoutRecord::Unavailable(_) => return pass,
-        };
-        match read.open(&value) {
-            Ok(repoint) => last = Some(repoint),
-            Err(_) => return pass,
+            FanoutRecord::Absent | FanoutRecord::Unavailable(_) => return revivals,
         }
-        index += 1;
     }
-    pass.last = last;
-    pass
+    revivals
 }
 
 /// The standing re-point's sequence check on rule 6's axis: a record below the

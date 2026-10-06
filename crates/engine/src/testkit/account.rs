@@ -243,6 +243,8 @@ pub struct Blocks {
     retire_down: Arc<AtomicBool>,
     /// The blocks whose fetch fails at the transport, as a gateway timeout does.
     failing: Arc<Mutex<BTreeSet<String>>>,
+    /// The record the API's recovery cache holds for each name.
+    recovery: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
 }
 
 impl Blocks {
@@ -293,6 +295,15 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(cid.to_owned(), block);
+    }
+
+    /// Hold `record` in the recovery cache for `routing_key`, which the
+    /// recovery endpoint then serves.
+    pub fn cache_for_recovery(&self, routing_key: &str, record: Vec<u8>) {
+        self.recovery
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), record);
     }
 
     /// Make each fetch of `cid` fail at the transport, as a gateway timeout does.
@@ -501,9 +512,12 @@ impl Blocks {
             let cid = other.unwrap_or(declared);
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
         }
-        // The recovery cache has seen nothing: the vacancy probe first-run
-        // provisioning runs before it mints anything.
-        if url.contains("/recovery/") {
+        // A name the recovery cache has not seen answers 404, as the vacancy
+        // probe first-run provisioning runs before it mints anything expects.
+        if let Some((_, name)) = url.split_once("/recovery/") {
+            if let Some(record) = self.recovery.lock().expect("lock").get(name) {
+                return ok(record.clone());
+            }
             return Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),

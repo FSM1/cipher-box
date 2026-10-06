@@ -5543,10 +5543,14 @@ impl<T: SeamTypes> Engine<T> {
         let root = self.state.snapshot.borrow().root;
         let root_scope_id = root.0;
         // Before the first-run probe: a lapsed genesis pointer is no first run.
-        self.revive_anchors(&api, root_scope_id).await;
+        self.revive_vault_pointer_chain(&api, root_scope_id).await;
         let first_run_name = self.first_run_pointer_name(&api, root_scope_id).await;
         let first_run_name = first_run_name.as_ref();
         let mut outcome = self.cold_start_or_clear(root, first_run_name).await?;
+        if self.revive_vault_root(&api, &outcome, root_scope_id).await {
+            outcome = self.cold_start_or_clear(root, None).await?;
+        }
+        self.revive_bin_index(&api).await;
         // An empty chain is an account that has never published: mint its genesis
         // vault before anything reads one (`sync/provision.rs`). Register-first
         // has no offline form, so the harness's no-API mode skips provisioning
@@ -6281,36 +6285,45 @@ impl<T: SeamTypes> Engine<T> {
         matches!(api.name_registered(&name).await, Ok(false)).then_some(name)
     }
 
-    /// Revive the names no parent body names before anything reads them
-    /// (ADR 0062 D3): the vault pointer chain, the vault root its last index
-    /// names, then the bin index. Only a name the fan-out reads `Absent`
-    /// revives, and the vault root not while its scope owes rotation work.
-    async fn revive_anchors(
+    /// The seams one revival signs through, or `None` when the session has no
+    /// API to fetch the recovery record from.
+    fn revival_seams(
         &self,
-        api: &ApiClient<T::Http, T::CredentialStore>,
-        root_scope_id: [u8; 16],
-    ) {
-        if self.api_base_url.configured().is_none() {
-            return;
-        }
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let seams = RenewalSeams {
+    ) -> Option<
+        RenewalSeams<
+            '_,
+            RecordAccelerator<T::RecordTransport>,
+            OwnerScopedFloorStore<T::FloorStore>,
+            T::Scheduler,
+        >,
+    > {
+        self.api_base_url.configured()?;
+        Some(RenewalSeams {
             transport: &self.record_transport,
             floors: &self.seams.floor_store,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             publishing: &self.state.publishing,
+        })
+    }
+
+    /// Revive each lapsed index of the vault pointer chain before the first-run
+    /// probe and the cold start read it (ADR 0062 D3).
+    async fn revive_vault_pointer_chain(
+        &self,
+        api: &ApiClient<T::Http, T::CredentialStore>,
+        root_scope_id: [u8; 16],
+    ) {
+        let (Some(seams), Some(session)) = (self.revival_seams(), self.session.as_ref()) else {
+            return;
         };
-        let pace = &*self.state.recovery_pace;
         let identity = session.owner_identity();
         let owner_seed = kdf::owner_pointer_seed(session.login_secret());
         let pointer_read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &root_scope_id);
-        let chain = revive_vault_pointer_chain(
+        let revivals = revive_vault_pointer_chain(
             api,
             &seams,
-            pace,
+            &self.state.recovery_pace,
             session.login_secret(),
             VaultPointerRead {
                 floors: &self.seams.floor_store,
@@ -6321,13 +6334,30 @@ impl<T: SeamTypes> Engine<T> {
             },
         )
         .await;
-        let mut revivals = chain.revivals;
-        let lapsed = async |name: &IpnsName| {
-            matches!(
-                fanout_get_classified(&self.record_transport, name).await,
-                FanoutRecord::Absent
-            )
+        emit_revival_failures(&self.events, revivals);
+    }
+
+    /// Revive the vault root that the cold start found lapsed: the pointer it
+    /// adopted names a root the fan-out reads `Absent`. The cold seed has
+    /// raised the write floor, so the root adopt opens the owner write blob
+    /// that carries the signer of the root. Not while the root scope owes
+    /// rotation work (ADR 0063 D4). `true` when the revival signed.
+    async fn revive_vault_root(
+        &self,
+        api: &ApiClient<T::Http, T::CredentialStore>,
+        outcome: &ColdStartOutcome,
+        root_scope_id: [u8; 16],
+    ) -> bool {
+        let (Some(seams), Some(session)) = (self.revival_seams(), self.session.as_ref()) else {
+            return false;
         };
+        let Some(adopted) = outcome.vault_pointer.as_ref() else {
+            return false;
+        };
+        if outcome.read_scope_seed.is_some() {
+            return false;
+        }
+        let name = &adopted.repoint.current_root;
         let owed = owed_scopes_within_bound(
             &self.seams.staging_store,
             session.enc_subkey(),
@@ -6336,51 +6366,74 @@ impl<T: SeamTypes> Engine<T> {
             self.seams.scheduler.now(),
         )
         .await;
-        if let Some(last) = chain.last
-            && !owed.contains(&root_scope_id)
-            && lapsed(&last.current_root).await
+        if owed.contains(&root_scope_id)
+            || !matches!(
+                fanout_get_classified(&self.record_transport, name).await,
+                FanoutRecord::Absent
+            )
         {
-            let read = ScopeRootRead {
-                gateway: &self.gateway,
-                http: &self.seams.http,
-                floors: &self.seams.floor_store,
-                snapshot_cache: &self.seams.snapshot_cache,
-                owner_seed_cache: Some(
-                    session.owner_seed_cache(&self.seams.staging_store, &self.entropy),
-                ),
-                enc_secret: session.enc_subkey(),
-                identity: &identity,
-                scope_id: root_scope_id,
-                ascent: None,
-            };
-            let request = ReviveRequest {
-                name: &last.current_root,
-                signer: None,
-                plane: read,
-            };
-            let result = revive(api, &seams, pace, &[request]).await.remove(0);
-            revivals.push((last.current_root.as_str().to_owned(), result));
+            return false;
         }
+        let identity = session.owner_identity();
+        let read = ScopeRootRead {
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            snapshot_cache: &self.seams.snapshot_cache,
+            owner_seed_cache: Some(
+                session.owner_seed_cache(&self.seams.staging_store, &self.entropy),
+            ),
+            enc_secret: session.enc_subkey(),
+            identity: &identity,
+            scope_id: root_scope_id,
+            ascent: None,
+        };
+        let request = ReviveRequest {
+            name,
+            signer: None,
+            plane: read,
+        };
+        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
+            .await
+            .remove(0);
+        let signed = result.is_ok();
+        emit_revival_failures(&self.events, vec![(name.as_str().to_owned(), result)]);
+        signed
+    }
+
+    /// Revive the lapsed bin index before its load (ADR 0062 D3).
+    async fn revive_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
+        let (Some(seams), Some(session)) = (self.revival_seams(), self.session.as_ref()) else {
+            return;
+        };
         let keys = BinIndexKeys::derive(session.login_secret());
-        if lapsed(keys.name()).await {
-            let read = BinIndexRead {
-                gateway: &self.gateway,
-                http: &self.seams.http,
-                floors: &self.seams.floor_store,
-                snapshots: &self.seams.snapshot_cache,
-                scheduler: &self.seams.scheduler,
-                profile: &self.profile,
-                keys: &keys,
-            };
-            let request = ReviveRequest {
-                name: keys.name(),
-                signer: Some(keys.signer()),
-                plane: read,
-            };
-            let result = revive(api, &seams, pace, &[request]).await.remove(0);
-            revivals.push((keys.name().as_str().to_owned(), result));
+        if !matches!(
+            fanout_get_classified(&self.record_transport, keys.name()).await,
+            FanoutRecord::Absent
+        ) {
+            return;
         }
-        emit_revival_failures(&self.events, revivals);
+        let read = BinIndexRead {
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            snapshots: &self.seams.snapshot_cache,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            keys: &keys,
+        };
+        let request = ReviveRequest {
+            name: keys.name(),
+            signer: Some(keys.signer()),
+            plane: read,
+        };
+        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
+            .await
+            .remove(0);
+        emit_revival_failures(
+            &self.events,
+            vec![(keys.name().as_str().to_owned(), result)],
+        );
     }
 
     /// Fail-closed symmetry with the login path: clear the derived session and

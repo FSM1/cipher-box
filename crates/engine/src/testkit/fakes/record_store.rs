@@ -172,6 +172,20 @@ impl InMemoryRecordStore {
         }
     }
 
+    /// Drop every record from every endpoint, as a lapse past the EOL does,
+    /// and return the record each routing key held on the first endpoint.
+    pub fn lapse_all(&self) -> BTreeMap<String, Vec<u8>> {
+        let mut inner = self.inner.lock().expect("lock");
+        let lapsed = inner
+            .get(&self.endpoints[0])
+            .map(|records| records.clone().into_iter().collect())
+            .unwrap_or_default();
+        for records in inner.values_mut() {
+            records.clear();
+        }
+        lapsed
+    }
+
     /// Test-side read, bypassing the seam (publish observation).
     pub fn record_at(&self, endpoint: &EndpointId, routing_key: &str) -> Option<Vec<u8>> {
         self.inner
