@@ -2864,7 +2864,6 @@ fn a_first_save_with_no_recovery_answer_to_sign_above_is_refused() {
     .marshal();
     for (label, recovery) in [
         ("a server error", answer(500, Vec::new())),
-        ("a throttle", answer(429, Vec::new())),
         ("a record of another name", answer(200, other)),
         ("bytes that are no record", answer(200, b"garbage".to_vec())),
     ] {
@@ -2883,6 +2882,12 @@ fn a_first_save_with_no_recovery_answer_to_sign_above_is_refused() {
         );
         assert_eq!(first_save_floor(&device), None, "{label}: no floor");
     }
+
+    let (_, outcome) = first_save(answer(429, Vec::new()));
+    assert!(
+        matches!(outcome, Err(SettingsPublishError::RecoveryThrottled)),
+        "a throttle refuses the save, and a later save tries again"
+    );
 
     let (device, outcome) = first_save(answer(404, Vec::new()));
     outcome.expect("no recovery record is a first run");

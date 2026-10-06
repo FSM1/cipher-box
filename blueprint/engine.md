@@ -251,7 +251,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   equals the recovered sequence (`Strictness::AtFloor`); that read alone sets
   the EOL rule aside, and any other device takes the ADR 0034 ladder (D4).
   A session makes at most 25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
-  for each account; a fetch over the pace waits for the next slot. The adoption gate
+  for each account; a fetch over the pace waits for the next slot. The
+  recovery fetch of a first settings save (see "Vault settings load") is one
+  fetch for each user save, outside that pace. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
@@ -519,11 +521,12 @@ its degraded outcome applies a different policy rather than showing stale data.
   side needs no matching guard: the EOL is `now + 90 days` off the injected
   clock, so a publish structurally cannot mint an
   already-expired record.
-- **A save signs above a lapsed or unreadable record.** A first save on a
-  device with no floor signs above the recovery endpoint's record, verified
+- **A save signs above a lapsed or unreadable record.** A save on a device
+  with no floor also signs above the recovery endpoint's record, verified
   under the settings name, so it does not publish at sequence 1 and an older
-  device does not report `RolledBack`. A 404 answer means no record; another
-  failure, or bytes that do not verify, refuses the save. When the load reports
+  device does not report `RolledBack`. It signs above the higher of that
+  record and the record the load verified. A 404 answer means no record; a
+  429, another failure, or bytes that do not verify refuse the save. When the load reports
   `Expired` or `Unreadable` for a record that verified under the account's own
   settings key, a save signs above that record's sequence, and the floor rises
   only on a confirm. A body that a newer release wrote refuses the save

@@ -32,6 +32,7 @@ use crate::content::Gateway;
 use crate::gate::{GateError, floor};
 use crate::grants::owner_entry::OwnerSeedCache;
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::{DefaultsReason, Unopened};
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
     SeamResult, SnapshotCache, UnixMillis,
@@ -80,6 +81,33 @@ pub(crate) enum PlaneRefusal {
     /// The plane revives only at this device's floor, and the floor is
     /// another sequence or absent.
     NotAtFloor,
+}
+
+impl PlaneRefusal {
+    /// The refusal of a record plane load that degraded for `reason`. A body
+    /// that a newer release wrote accuses nobody: the revival holds nothing and
+    /// tries again later (ADR 0062 D4).
+    pub(crate) fn of_load(reason: DefaultsReason) -> Self {
+        match reason {
+            DefaultsReason::Unreadable {
+                cause: Unopened::NewerRelease,
+                ..
+            } => Self::Unavailable,
+            reason if reason.is_verdict() => Self::Rejected,
+            _ => Self::Unavailable,
+        }
+    }
+
+    /// Refuse a head record whose value names no block, before any fetch: a
+    /// load reads a block it cannot fetch as withheld.
+    pub(crate) fn unless_addressed(recovered: &VerifiedRecord) -> Result<(), Self> {
+        if head_cid_from_value(&recovered.value)
+            .is_none_or(|cid| decode_content_cid_str(&cid).is_err())
+        {
+            return Err(Self::Rejected);
+        }
+        Ok(())
+    }
 }
 
 /// The read of the plane a lapsed name lives on (ADR 0062 D1 step 3).
@@ -602,13 +630,7 @@ where
         if self.keys.name() != name {
             return Err(PlaneRefusal::Mismatch);
         }
-        // The load reads any head block it cannot fetch as withheld, so a
-        // value that names no block is refused here, before any fetch.
-        if head_cid_from_value(&recovered.value)
-            .is_none_or(|cid| decode_content_cid_str(&cid).is_err())
-        {
-            return Err(PlaneRefusal::Rejected);
-        }
+        PlaneRefusal::unless_addressed(recovered)?;
         let read = load_bin_index(
             transport,
             self.gateway,
@@ -623,11 +645,7 @@ where
         match read.load {
             BinIndexLoad::Resolved(_) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => {
-                Err(if reason.is_verdict() {
-                    PlaneRefusal::Rejected
-                } else {
-                    PlaneRefusal::Unavailable
-                })
+                Err(PlaneRefusal::of_load(reason))
             }
         }
     }
@@ -1732,11 +1750,25 @@ mod tests {
         device: &FakeDevice,
         sequence: u64,
     ) -> (Ed25519Signer, Vec<u8>, ScriptedHttp) {
-        let (_, block) = crate::settings::cached_settings_block(
-            SETTINGS_SECRET,
+        lapsed_settings_with(device, sequence, settings_block(SETTINGS_SECRET))
+    }
+
+    /// A settings head block sealed under the keys of `secret`.
+    fn settings_block(secret: &[u8]) -> Vec<u8> {
+        crate::settings::cached_settings_block(
+            secret,
             &crate::settings::VaultSettings::default(),
             &mut SeededEntropy::new(0x5E),
-        );
+        )
+        .1
+    }
+
+    /// [`lapsed_settings`] over the head block `block`.
+    fn lapsed_settings_with(
+        device: &FakeDevice,
+        sequence: u64,
+        block: Vec<u8>,
+    ) -> (Ed25519Signer, Vec<u8>, ScriptedHttp) {
         let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
         let signer = kdf::settings_ipns_keypair(SETTINGS_SECRET);
         let value = format!("/ipfs/{cid}").into_bytes();
@@ -1829,5 +1861,106 @@ mod tests {
             assert!(registrations(&device).is_empty(), "floor {floor:?}");
             assert!(nothing_published(&device, &name), "floor {floor:?}");
         }
+    }
+
+    /// The settings revival at the floor over `block`: the result, and whether
+    /// the name stays unpublished.
+    fn revive_settings_at_the_floor(block: Vec<u8>) -> (Result<Revived, ReviveError>, bool) {
+        let (world, device) = after_100_days();
+        let (signer, _, http) = lapsed_settings_with(&device, 5, block);
+        let name = name_of(&signer);
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 5),
+        )
+        .unwrap();
+        let result = revive_settings(&world, &device, &signer, &http);
+        (result, nothing_published(&device, &name))
+    }
+
+    #[test]
+    fn a_settings_body_from_a_newer_release_does_not_revive_and_accuses_nobody() {
+        let enc_secret = kdf::enc_subkey(SETTINGS_SECRET);
+        let body = cipherbox_core::seal::open_settings_record(
+            &enc_secret,
+            &settings_block(SETTINGS_SECRET),
+        )
+        .expect("the block opens");
+        let mut body = cipherbox_core::codec::decode(&body).expect("the body decodes");
+        if let cipherbox_core::codec::Value::Map(map) = &mut body {
+            map.insert("zFutureField", cipherbox_core::codec::Value::Unsigned(1));
+        }
+        let body = cipherbox_core::codec::encode(&body).expect("the body encodes");
+        let block = cipherbox_core::seal::seal_settings_record(&enc_secret, &[0x5F; 32], &body)
+            .expect("the body seals");
+
+        let (result, unpublished) = revive_settings_at_the_floor(block);
+        assert_eq!(result, Err(ReviveError::Unavailable));
+        assert!(unpublished, "nothing re-signed");
+    }
+
+    #[test]
+    fn a_settings_copy_sealed_under_another_key_is_a_trust_violation() {
+        let (result, unpublished) =
+            revive_settings_at_the_floor(settings_block(b"another-account-secret"));
+        assert_eq!(result, Err(ReviveError::TrustViolation));
+        assert!(unpublished, "nothing re-signed");
+    }
+
+    #[test]
+    fn a_settings_value_that_names_no_block_is_a_trust_violation() {
+        let (world, device) = after_100_days();
+        let signer = kdf::settings_ipns_keypair(SETTINGS_SECRET);
+        let name = name_of(&signer);
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 5),
+        )
+        .unwrap();
+        device
+            .http
+            .enqueue_response(answer(200, minted(&signer, b"/ipfs/not-a-cid", 5)));
+        let http = ScriptedHttp::default();
+
+        assert_eq!(
+            revive_settings(&world, &device, &signer, &http),
+            Err(ReviveError::TrustViolation)
+        );
+        assert!(http.requests().is_empty(), "no block fetch");
+        assert!(registrations(&device).is_empty());
+        assert!(nothing_published(&device, &name));
+    }
+
+    /// The bin index load reports every block that does not open as
+    /// malformed, so the newer-release rule of both reads is tested here.
+    #[test]
+    fn a_load_refusal_for_a_newer_release_is_no_trust_verdict() {
+        let unreadable = |cause| DefaultsReason::Unreadable { sequence: 3, cause };
+        assert!(matches!(
+            PlaneRefusal::of_load(unreadable(Unopened::NewerRelease)),
+            PlaneRefusal::Unavailable
+        ));
+        for cause in [
+            Unopened::Undecodable,
+            Unopened::Unsealed,
+            Unopened::Malformed,
+        ] {
+            assert!(
+                matches!(
+                    PlaneRefusal::of_load(unreadable(cause)),
+                    PlaneRefusal::Rejected
+                ),
+                "{cause:?}"
+            );
+        }
+        assert!(matches!(
+            PlaneRefusal::of_load(DefaultsReason::RolledBack {
+                floor: 4,
+                sequence: 3
+            }),
+            PlaneRefusal::Rejected
+        ));
     }
 }
