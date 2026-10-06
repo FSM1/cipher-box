@@ -156,8 +156,19 @@ scenario fails the meta-test):
   restart, a kept edit under a refused file record dead-letters with a notice
   and frees the queue, a kept create under a refused scope root waits uncharged after a
   restart and leaves at the bound, and one under a moved root the walk cannot
-  prove waits past the bound and applies again once the walk proves it (ADR 0069,
-  `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
+  prove waits past the bound and applies again once the walk proves it; a
+  kept delete that the wave carried back waits past the bound for the read
+  of its folder at the live name and applies again, also across a restart,
+  one that the wave carried leaves after that read with no notice, and one
+  whose folder a later writer deleted leaves by the bound (ADR 0069,
+  `crates/engine/tests/owner_actions.rs`); a kept delete whose folder the
+  live root dropped leaves at the read, and one whose note names no folder
+  leaves at the bound (`crates/engine/src/sync/drain.rs`); the kept-op note
+  reads frozen version 1 bytes with no folder and no result, a copy of the
+  version 1 decoder reads a version 2 body as no notes, and each bound the
+  decoder holds is refused at insert and at encode (ADR 0069 D4, ADR 0020,
+  `crates/engine/src/sync/kept_op.rs`,
+  `crates/engine/tests/encode_refusals.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, also a late write that
   the wave did not carry (ADR 0069 D3,
   `crates/engine/tests/mount_convergence.rs`); a body of many

@@ -17168,14 +17168,18 @@ mod tests {
             fn a_written_kept_op_note_ends_the_filter_memo() {
                 a_kept_op_filter_write_ends_the_memo(|engine, enc_subkey, op_id| {
                     let mut notes = KeptNotes::default();
-                    notes.insert(
-                        op_id,
-                        KeptNote {
-                            scope: None,
-                            write_epoch: 0,
-                            published_at: UnixMillis(0),
-                        },
-                    );
+                    notes
+                        .insert(
+                            op_id,
+                            KeptNote {
+                                scope: None,
+                                write_epoch: 0,
+                                published_at: UnixMillis(0),
+                                parent: None,
+                                result: None,
+                            },
+                        )
+                        .unwrap();
                     block_on(store_kept_notes(
                         &engine.seams.staging_store,
                         BookkeepingSeal::new(enc_subkey, &*engine.entropy),

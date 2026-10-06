@@ -58,12 +58,17 @@ the publish. Proposed: the note also holds the scope root, so the record seals a
 `kept-ops` kind, and an op with a note and no mark is a kept op, so a crash between the two writes
 keeps the op. The previous release removes a queued op at or below the mark as published, and its
 orphan sweep deletes the note record. Thus a downgrade drops a kept op as that release did, and no
-migration step is necessary (ADR 0020 D3).
+migration step is necessary (ADR 0020 D3). Amended on 2026-10-06 (owner ruling on
+FSM1/cipher-box#2285, option B): the note is format version 2. It also holds the folder the op
+wrote under and, for a kind whose live node alone cannot show that it landed, the value before and
+after the op. A version 1 note reads with neither. A release that reads only version 1 reads a
+version 2 note as no notes, so each of its kept ops gets one check (D6).
 
 **D5 — A kept op waits at its write epoch for T = 7 days, the bound of ADR 0065 D3.** The live
 write epoch is the write-epoch floor of the op's scope on this device. While the floor equals the
 epoch of the note, the op stays, and after T it leaves the queue and its staged blocks release. A
-higher floor sends the op to D3 at any time. Time enters through the clock seam. Proposed: a
+higher floor sends the op to D3 at any time, and a kept delete to the read of its folder (D6).
+Time enters through the clock seam. Proposed: a
 note time later than the clock reads as the clock. A nearest scope root other than the note's is
 also a flip, and a flip waits for its check with no limit, as a flip at T would lose the write.
 
@@ -73,8 +78,13 @@ epoch 0 when the drain first sees it, so it gets one check, and T runs from that
 of this test, not rulings: the check runs only when the base read the node that the op writes under
 at its name of the live write seed, because a stale base shows the old tree and the op as satisfied.
 A content edit landed when its file's live history names its version, because a later edit moves the
-head. A kept delete whose node the base does not hold leaves at T. Proposed: a kept op that this
-device edits again leaves with no check, because the later op sets what the node shows. A second
+head. A kept delete whose node the base does not hold leaves at T. Amended on 2026-10-06 (owner
+ruling on FSM1/cipher-box#2336, option 3): at a flip, a kept delete whose note names its folder
+waits for one read of that folder at its live name, which the drain makes itself. A live node
+applies the delete again, and a node that is gone ends the op with no notice. A folder that the live
+tree no longer holds took the node with it, so the op ends too. The sentence before now holds only
+for a delete whose note names no folder, or whose folder the base does not hold. Proposed: a kept
+op that this device edits again leaves with no check, because the later op sets what the node shows. A second
 apply that cannot land leaves with no retire and no notice, because its version landed once.
 
 **D7 — A kept op is not pending.** The pending-op overlay, the pending flags, the staged-content
