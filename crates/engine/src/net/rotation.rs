@@ -97,9 +97,9 @@ use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
-    DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed, RecoveredWave,
-    RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
-    ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan, RotationOutcome,
+    DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed, PublishedRoot,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan, RotationOutcome,
     RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher, SweepPublisher,
     SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope, WriteHistory,
     WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name,
@@ -2913,7 +2913,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<u64, RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
 
@@ -2930,6 +2930,7 @@ where
             )
             .map_err(|_| RotationPublishError::Rejected)?,
         };
+        let base = current.observed.sequence();
         let (published, record_bytes, sequence) = self
             .root_publish()
             .run(record, &override_seed, current)
@@ -2938,7 +2939,11 @@ where
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
         self.gated.park(published);
-        Ok(sequence)
+        Ok(PublishedRoot {
+            name: record.ipns_name.clone(),
+            base,
+            sequence,
+        })
     }
 }
 
@@ -3367,7 +3372,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<u64, RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // [`new_override_seed`]'s grantee mirror, on the same release-active
         // rule: a section this rotator can no longer reopen is never signed
@@ -3396,11 +3401,16 @@ where
             .granted_root(NodeId(record.scope_id))
             .map_err(|_| RotationPublishError::Rejected)?;
         let floors = self.granted_floors(granted);
+        let base = current.observed.sequence();
         let (_, _, sequence) = self
             .root_publish(&floors)
             .run(record, &override_seed, current)
             .await?;
-        Ok(sequence)
+        Ok(PublishedRoot {
+            name: record.ipns_name.clone(),
+            base,
+            sequence,
+        })
     }
 }
 

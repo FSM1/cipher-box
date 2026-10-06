@@ -44,11 +44,11 @@ use crate::mailbox::post_sealed;
 use crate::net::publish::Observed;
 use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope_current};
 use crate::rotation::{
-    AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
-    ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
-    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode,
-    SweptScope, WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch,
-    reseal_scope_root,
+    AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, PublishedRoot, ResealError,
+    ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError,
+    ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweptNode, SweptScope, WriteHistory, converge_subtree, derive_write_name,
+    reseal_at_current_epoch, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
 use crate::sync::model::{Link, link_rank};
@@ -206,8 +206,8 @@ pub struct ParentScopePlan<'a> {
 /// The result of a successful read-grant creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateGrantOutcome {
-    /// Each scope root this grant published, with the sequence it was signed at.
-    pub published_roots: Vec<([u8; 16], u64)>,
+    /// Each scope root this grant published.
+    pub published_roots: Vec<PublishedRoot>,
     /// The new grantee scope id.
     pub scope_id: [u8; 16],
     /// The recipient's blinded tag committed at the new scope root.
@@ -1141,9 +1141,9 @@ where
 pub struct PromotedGrant {
     /// The promoted scope's read material, known once its root landed.
     pub read_scope: GrantedReadScope,
-    /// The sequence this call signed on the promoted root; `None` when an
-    /// earlier attempt published it.
-    pub root_sequence: Option<u64>,
+    /// The promoted root this call published; `None` when an earlier attempt
+    /// published it.
+    pub published_root: Option<PublishedRoot>,
     /// The interior, descendant and parent publishes after the root.
     pub handover: Result<CreateGrantOutcome, CreateGrantError>,
 }
@@ -1316,7 +1316,11 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
-        root_sequence: Some(root_sequence),
+        published_root: Some(PublishedRoot {
+            name: ipns_name.as_str().as_bytes().to_vec(),
+            base: 0,
+            sequence: root_sequence,
+        }),
         handover,
     })
 }
@@ -1401,7 +1405,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
-        root_sequence: None,
+        published_root: None,
         handover,
     })
 }
@@ -1493,13 +1497,13 @@ where
             write_epoch: target.write_epoch,
             section,
         };
-        let sequence = net.publish_scope_root(&record).await.map_err(|error| {
+        let published = net.publish_scope_root(&record).await.map_err(|error| {
             CreateGrantError::DescendantPublish {
                 scope_id: descendant.scope_id,
                 error,
             }
         })?;
-        published_roots.push((descendant.scope_id, sequence));
+        published_roots.push(published);
     }
 
     // Parent index update — a metadata-only re-seal at the same epoch.
@@ -1543,11 +1547,11 @@ where
         write_epoch: parent.seeds.write_epoch,
         section: parent_section,
     };
-    let sequence = net
+    let published = net
         .publish_scope_root(&parent_record)
         .await
         .map_err(CreateGrantError::ParentPublish)?;
-    published_roots.push((parent_record.scope_id, sequence));
+    published_roots.push(published);
 
     Ok(CreateGrantOutcome {
         published_roots,
@@ -2477,7 +2481,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<u64, RotationPublishError> {
+        ) -> Result<PublishedRoot, RotationPublishError> {
             let call = {
                 let mut c = self.publish_calls.borrow_mut();
                 let call = *c;
@@ -2493,7 +2497,7 @@ mod tests {
                 Ok(()) => {
                     let mut published = self.published.borrow_mut();
                     published.push(record.clone());
-                    Ok(published.len() as u64)
+                    Ok(PublishedRoot::fresh(record, published.len() as u64))
                 }
                 Err(e) => Err(e.clone()),
             }

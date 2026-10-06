@@ -64,14 +64,14 @@ impl ScopeRootPublisher for FakePublisher {
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<u64, RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         // Snapshot the durable floor BEFORE the rotation raises it.
         let floor = self.floors.epoch_floor(&SCOPE).await.unwrap();
         *self.floor_at_publish.borrow_mut() = Some(floor);
         self.seen.borrow_mut().push(record.clone());
         self.result
             .clone()
-            .map(|()| self.seen.borrow().len() as u64)
+            .map(|()| PublishedRoot::fresh(record, self.seen.borrow().len() as u64))
     }
 }
 

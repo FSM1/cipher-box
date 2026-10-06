@@ -950,12 +950,9 @@ where
         .await
         {
             Ok(Some(outcome)) => {
-                for (scope, sequence) in outcome.published_roots {
-                    crate::session::note_own_root_sequence(
-                        self.own_root_sequences,
-                        NodeId(scope),
-                        sequence,
-                    );
+                let mut sequences = self.root_sequences.borrow_mut();
+                for published in &outcome.published_roots {
+                    sequences.note_own(published);
                 }
                 Ok(())
             }

@@ -58,7 +58,7 @@ use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
-use crate::session::{SessionSecrets, SessionState};
+use crate::session::{RootSequences, SessionSecrets, SessionState};
 use crate::settings::{
     PlacementDecision, SessionPlacement, adopt_settings_summary, bin_retention_days,
     load_settings_at, owner_bin_retention_days, owner_retention, redecide_placement,
@@ -721,6 +721,16 @@ where
                 .map(|walked| walked.refused.clone())
                 .unwrap_or_default();
             if let Ok(walked) = walked {
+                note_walked_sequences(
+                    &state.root_sequences,
+                    NodeId(self.root_id),
+                    &name,
+                    state
+                        .snapshot
+                        .borrow()
+                        .record_sequence(NodeId(self.root_id)),
+                    &walked.proved,
+                );
                 let departed = install_descendant_scopes(
                     &state.descendant_scope_roots,
                     &state.scope_read_seeds,
@@ -1383,7 +1393,7 @@ where
             scheduler: &seams.scheduler,
             profile: &seams.profile,
             on_access_misses: &state.on_access_misses,
-            own_root_sequences: &state.own_root_sequences,
+            root_sequences: &state.root_sequences,
             entropy: &seams.entropy,
             staging: &seams.staging,
             identity: &signer,
@@ -1945,6 +1955,24 @@ fn install_descendant_scopes(
         departed.extend(merged.observed_unlinks(scope.scope_id, root, observed_at));
     }
     departed
+}
+
+/// Hold the sequence one walk gated for the vault root and for each scope
+/// root it proved, in the same step as the scope sets it installs.
+fn note_walked_sequences(
+    sequences: &RefCell<RootSequences>,
+    root: NodeId,
+    root_name: &IpnsName,
+    root_sequence: Option<u64>,
+    proved: &[DescendantScopeRoot],
+) {
+    let mut sequences = sequences.borrow_mut();
+    if let Some(sequence) = root_sequence {
+        sequences.note_walked(root, root_name, sequence);
+    }
+    for scope in proved {
+        sequences.note_walked(NodeId(scope.scope_id), &scope.name, scope.adopted.sequence);
+    }
 }
 
 /// Report each scope whose root one walk read as a same-sequence fork.

@@ -1,5 +1,6 @@
 use super::*;
 use crate::grants::recipient_blinded_tag;
+use crate::rotation::PublishedRoot;
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
 use crate::testkit::{CARRIED_WRITE_HISTORY_LINK, SeededEntropy, SilentEntropy, block_on};
 use cipherbox_core::seal::{
@@ -324,7 +325,7 @@ impl ScopeRootPublisher for FakeNet {
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<u64, RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         if let Some(err) = self.publish_faults.borrow().get(&record.scope_id) {
             return Err(err.clone());
         }
@@ -334,7 +335,7 @@ impl ScopeRootPublisher for FakeNet {
         self.published
             .borrow_mut()
             .insert(record.scope_id, record.clone());
-        Ok(record.read_epoch)
+        Ok(PublishedRoot::fresh(record, record.read_epoch))
     }
 }
 

@@ -961,9 +961,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   back what that pass reconciled (ADR 0044). Any other cached folder refreshes
   on access past the staleness threshold — no background churn over the whole
   tree; cached shared scopes consult their scope pointer on access. The
-  navigation probes the root of each scope it reads under first: when that root
-  moved past the last walk and past this device's own confirmed publish, or the
-  probe has no answer, it reads nothing for that scope and the next tick reads.
+  navigation probes the root of each scope it reads under first, at the name
+  the last walk gated: when that root moved past the sequence the last walk
+  gated and past this device's own confirmed publish at that name, or the probe
+  has no answer, it reads nothing for that scope and the next tick reads.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is

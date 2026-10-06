@@ -22,6 +22,7 @@ use crate::entropy::Entropy;
 #[cfg(test)]
 use crate::grants::ScopeRootPromoter;
 use crate::grants::create::{MintNet, ScopePointerVoucher};
+use crate::rotation::PublishedRoot;
 #[cfg(test)]
 use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher, SweepResolver};
 
@@ -73,9 +74,9 @@ impl fmt::Debug for MintedInviteLink {
 #[derive(Debug)]
 pub struct InviteMintOutcome {
     /// [`CreateGrantOutcome::published_roots`]; empty when the handover stalled.
-    pub published_roots: Vec<([u8; 16], u64)>,
-    /// [`PromotedGrant::root_sequence`] of the minted scope root.
-    pub root_sequence: Option<u64>,
+    pub published_roots: Vec<PublishedRoot>,
+    /// [`PromotedGrant::published_root`] of the minted scope root.
+    pub published_root: Option<PublishedRoot>,
     /// The link the host presents.
     pub link: MintedInviteLink,
     /// The minted scope's read material, for the owner's own reads.
@@ -193,7 +194,7 @@ where
     Ok(InviteMintOutcome {
         link: MintedInviteLink { fragment },
         read_scope: promoted.read_scope,
-        root_sequence: promoted.root_sequence,
+        published_root: promoted.published_root,
         published_roots,
         stalled,
     })
@@ -518,7 +519,7 @@ mod tests {
             record: &ResealedScopeRoot,
             _held_outside: &[crate::grants::HeldNode],
         ) -> Result<(Vec<NodeRef>, u64), RotationPublishError> {
-            let sequence = self.publish_scope_root(record).await?;
+            let sequence = self.publish_scope_root(record).await?.sequence;
             let children = self
                 .interior
                 .iter()
@@ -535,7 +536,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<u64, RotationPublishError> {
+        ) -> Result<PublishedRoot, RotationPublishError> {
             if self.refuse_publish
                 || self
                     .publishes_before_refusal
@@ -545,7 +546,7 @@ mod tests {
             }
             let mut published = self.published.borrow_mut();
             published.push(record.clone());
-            Ok(published.len() as u64)
+            Ok(PublishedRoot::fresh(record, published.len() as u64))
         }
     }
 

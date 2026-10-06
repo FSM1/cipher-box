@@ -46,7 +46,7 @@ use crate::grants::received_status::ReceivedVerdicts;
 use crate::net::HeldRecords;
 use crate::net::retire::{OrphanHeads, ReclaimStall};
 use crate::net::rotation::OnAccessMisses;
-use crate::rotation::{SweepKeys, SweepTaskFactory, WalkedReadEpochs};
+use crate::rotation::{PublishedRoot, SweepKeys, SweepTaskFactory, WalkedReadEpochs};
 use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
@@ -443,10 +443,9 @@ pub(crate) struct SessionState {
     /// the only writer; read by
     /// [`SessionState::named_scope_roots`].
     pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// The highest root sequence this session published and confirmed, per
-    /// scope. Session memory only: the snapshot's `record_sequence` stays the
-    /// walked base, which the rebase reads as "another device's edit".
-    pub(crate) own_root_sequences: Rc<RefCell<BTreeMap<NodeId, u64>>>,
+    /// The root sequences a navigation measures a served scope root against
+    /// ([`RootSequences`]).
+    pub(crate) root_sequences: Rc<RefCell<RootSequences>>,
     /// The conversion entries the last conversion pass counted.
     pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
     /// Set while a conversion pass runs (`ConversionPass::running`).
@@ -530,26 +529,59 @@ pub(crate) struct SessionState {
     pub(crate) fork_sightings: Rc<ForkSightings>,
 }
 
-/// Hold the higher of `sequence` and the value already held for `scope`.
-pub(crate) fn note_own_root_sequence(
-    sequences: &RefCell<BTreeMap<NodeId, u64>>,
-    scope: NodeId,
-    sequence: u64,
-) {
-    let mut sequences = sequences.borrow_mut();
-    let held = sequences.entry(scope).or_insert(sequence);
-    *held = (*held).max(sequence);
+/// What a navigation measures a served scope root against: per scope, the
+/// name the last boundary walk gated and its sequence, and per name, the
+/// highest sequence this session published and confirmed. A sequence belongs
+/// to a name, so a root that moves to a fresh name holds neither. Session
+/// memory only.
+#[derive(Default)]
+pub(crate) struct RootSequences {
+    walked: BTreeMap<NodeId, (IpnsName, u64)>,
+    own: BTreeMap<Vec<u8>, u64>,
+}
+
+impl RootSequences {
+    /// Write in the same step as the scope sets the walk installs.
+    pub(crate) fn note_walked(&mut self, scope: NodeId, name: &IpnsName, sequence: u64) {
+        self.walked.insert(scope, (name.clone(), sequence));
+    }
+
+    /// Write in the same step as the scope sets that publish changed. A publish
+    /// over a base above [`Self::held`] carries another device's edit, which
+    /// can name a scope root the sets do not hold, so it writes nothing.
+    pub(crate) fn note_own(&mut self, published: &PublishedRoot) {
+        if published.base > self.held(&published.name).unwrap_or(0) {
+            return;
+        }
+        let held = self
+            .own
+            .entry(published.name.clone())
+            .or_insert(published.sequence);
+        *held = (*held).max(published.sequence);
+    }
+
+    /// The name the last walk gated for `scope`.
+    pub(crate) fn walked_name(&self, scope: NodeId) -> Option<IpnsName> {
+        self.walked.get(&scope).map(|(name, _)| name.clone())
+    }
+
+    /// The higher of the walked and the own sequence at `name`.
+    pub(crate) fn held(&self, name: &[u8]) -> Option<u64> {
+        self.walked
+            .values()
+            .filter(|(walked, _)| walked.as_str().as_bytes() == name)
+            .map(|(_, sequence)| *sequence)
+            .max()
+            .max(self.own.get(name).copied())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.walked.clear();
+        self.own.clear();
+    }
 }
 
 impl SessionState {
-    pub(crate) fn note_own_root_sequence(&self, scope: NodeId, sequence: u64) {
-        note_own_root_sequence(&self.own_root_sequences, scope, sequence);
-    }
-
-    pub(crate) fn own_root_sequence(&self, scope: NodeId) -> Option<u64> {
-        self.own_root_sequences.borrow().get(&scope).copied()
-    }
-
     /// Every scope boundary this session has named: the roots its own grants
     /// minted, the roots a gated descent proved, and the roots the walk named
     /// without material. Wider than the set the drain drives, which lists only
@@ -651,7 +683,7 @@ impl SessionState {
             grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
             grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
             minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-            own_root_sequences: Rc::new(RefCell::new(BTreeMap::new())),
+            root_sequences: Rc::new(RefCell::new(RootSequences::default())),
             pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
             conversion_running: Rc::new(Cell::new(false)),
             owed_rotation: Rc::new(OwedCell::default()),

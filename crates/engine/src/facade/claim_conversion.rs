@@ -22,6 +22,7 @@ use crate::grants::{
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
 use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
+use crate::session::RootSequences;
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -187,8 +188,7 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(crate) profile: &'a SyncTimingProfile,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
-    /// The session's own confirmed scope root sequences.
-    pub(crate) own_root_sequences: &'a RefCell<BTreeMap<NodeId, u64>>,
+    pub(crate) root_sequences: &'a RefCell<RootSequences>,
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     pub(crate) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
@@ -880,7 +880,7 @@ where
             .iter()
             .any(|delivery| delivery.outcome == ClaimOutcome::Granted)
         {
-            let sequence = publish_edited_set(
+            let published = publish_edited_set(
                 &net,
                 self.entropy,
                 self.enc_secret,
@@ -889,11 +889,7 @@ where
                 &commitment_sig,
             )
             .await?;
-            crate::session::note_own_root_sequence(
-                self.own_root_sequences,
-                NodeId(target.scope.scope_id),
-                sequence,
-            );
+            self.root_sequences.borrow_mut().note_own(&published);
         }
         // The record carries every row now. An entry settles once its
         // pointer lands, and until then the pointer alone is posted again.

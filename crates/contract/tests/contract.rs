@@ -41,10 +41,10 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use cipherbox_engine::rotation::{
-    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory,
+    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, PublishedRoot,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode,
+    SweptScope, WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
@@ -1740,9 +1740,13 @@ impl CascadeResealResolver for LocalNet {
 impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
-        _record: &ResealedScopeRoot,
-    ) -> Result<u64, RotationPublishError> {
-        Ok(1)
+        record: &ResealedScopeRoot,
+    ) -> Result<PublishedRoot, RotationPublishError> {
+        Ok(PublishedRoot {
+            name: record.ipns_name.clone(),
+            base: 0,
+            sequence: 1,
+        })
     }
 }
 
