@@ -16313,9 +16313,10 @@ fn plain_and_shared_folders(world: &FakeWorld, blocks: &Blocks, served: &[u8]) -
 }
 
 /// A folder the owner shared is a scope root of its own, so its rows unseal
-/// only under that scope's read seed. After a pass that read only the window
-/// the user left, the navigation is the only leg left to paint the rows. It
-/// paints an unshared folder's rows at once, and a shared one's alike.
+/// only under that scope's read seed. The navigation paints an unshared
+/// folder's rows at once. Another owner device moved the shared folder's root,
+/// so this device's scope sets do not hold it yet: the navigation reads
+/// nothing there and accuses nobody, and the next tick paints the rows.
 #[test]
 fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
     let world = FakeWorld::new();
@@ -16327,7 +16328,7 @@ fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
     // A cold session at the vault root, where the forced pass walks the
     // boundary and lists both folders.
     let bob = world.device(b"alice-second-device");
-    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     command_while_ticking(
         &mut engine_b,
         Command::SetFocus { node: None },
@@ -16352,6 +16353,21 @@ fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
             &mut tasks_b,
         )
         .expect("the window opens");
+        let size = |engine: &Engine<FakeSeamTypes>| {
+            block_on(engine.view())
+                .unwrap()
+                .attrs(file)
+                .and_then(|attrs| attrs.size)
+        };
+        if name == "shared" {
+            assert_eq!(
+                size(&engine_b),
+                None,
+                "the {name} folder's row waits for the next tick"
+            );
+            assert!(accused_nobody(&mut events_b), "the navigation read nothing");
+            tick(&world, &engine_b, &mut tasks_b);
+        }
         let view = block_on(engine_b.view()).expect("a rendered view");
         assert_eq!(
             view.children(folder)
@@ -16362,10 +16378,11 @@ fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
             "the {name} folder lists its row"
         );
         assert_eq!(
-            view.attrs(file).and_then(|attrs| attrs.size),
+            size(&engine_b),
             Some(served.len() as u64),
-            "the navigation paints the {name} folder's row, before any poll tick runs"
+            "the {name} folder's row is painted"
         );
+        assert!(accused_nobody(&mut events_b));
     }
 }
 
