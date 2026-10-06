@@ -180,3 +180,17 @@ When you remove an item from an accepted ADR, do not reuse its number. Replace t
 ### Releases & Versioning
 
 See the `releases` skill (`.claude/skills/releases/SKILL.md`) for the v2 release scheme, version surfaces, staging tag pipeline, and the v1 freeze. Normative source: `blueprint/deploy.md`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues of FSM1/cipher-box, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels, unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the root, ADRs in `decisions/`. See `docs/agents/domain.md`.
