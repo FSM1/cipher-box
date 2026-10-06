@@ -110,6 +110,10 @@ impl<S: QueueGeneration> QueueGeneration for LiveSeam<S> {
     fn generation(&self) -> u64 {
         self.seam.generation()
     }
+
+    fn kept_generation(&self) -> u64 {
+        self.seam.kept_generation()
+    }
 }
 
 impl<S: StagingStore> StagingStore for LiveSeam<S> {

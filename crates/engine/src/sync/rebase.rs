@@ -341,10 +341,28 @@ pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> Queue
 /// enumeration the decode needs is paid only on a miss. Nothing rewrites a
 /// queued record's bytes, so a hit re-serves a verdict that still binds, sender
 /// authentication included.
-#[derive(Default)]
-pub(crate) struct QueueScanMemo {
-    key: Option<QueueKey>,
+pub(crate) type QueueScanMemo = ScanMemo<QueueKey>;
+
+/// A memo of a [`QueueScan`] with its kept ops dropped (ADR 0069 D7). The
+/// published-op mark and the kept-op notes are not in the queue, so the key adds
+/// their own generation ([`QueueGeneration::kept_generation`]).
+///
+/// [`QueueGeneration::kept_generation`]: crate::seams::QueueGeneration::kept_generation
+pub(crate) type PendingScanMemo = ScanMemo<(QueueKey, u64)>;
+
+/// One scan, and the key it is the answer for.
+pub(crate) struct ScanMemo<K> {
+    key: Option<K>,
     scan: QueueScan,
+}
+
+impl<K> Default for ScanMemo<K> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            scan: QueueScan::default(),
+        }
+    }
 }
 
 /// The queue state a memoized scan is the answer for.
@@ -369,9 +387,9 @@ impl QueueKey {
     }
 }
 
-impl QueueScanMemo {
+impl<K: PartialEq> ScanMemo<K> {
     /// The scan `key` is the answer for, if this memo holds it.
-    pub(crate) fn hit(&self, key: &QueueKey) -> Option<&QueueScan> {
+    pub(crate) fn hit(&self, key: &K) -> Option<&QueueScan> {
         self.key
             .as_ref()
             .filter(|held| *held == key)
@@ -379,7 +397,7 @@ impl QueueScanMemo {
     }
 
     /// Files `scan` under `key`.
-    pub(crate) fn fill(&mut self, key: QueueKey, scan: QueueScan) {
+    pub(crate) fn fill(&mut self, key: K, scan: QueueScan) {
         self.scan = scan;
         self.key = Some(key);
     }
