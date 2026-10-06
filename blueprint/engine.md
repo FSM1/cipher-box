@@ -1358,6 +1358,14 @@ lands. A removed second ref emits nothing. The command or the re-drive that
 drops a node returns `Ok`. The event is a best-effort notice: a host that does
 not listen at the time of the wave gets no notice, and the tree shows the drop.
 
+The rotation progress events carry times from `Scheduler::now` only:
+
+- `nameWaveStarted` (scope root, time): a write cut starts its name wave.
+- `nameWaveProgress` (scope root, moved, total, time): sent once for each node, the root last. A node that a resumed wave already moved counts too.
+- `nameWaveEnded` (scope root, interior nodes, dropped nodes, time): the re-point landed and the old names retired. A wave that stops sends `rotationWorkOwed` and no end.
+- `sweepConvergence` (scope root, read epoch, old-epoch nodes, cut time, last re-seal time, time): sent at the end of each sweep run. A count of zero old-epoch nodes means that the scope converged.
+- The facade keeps the cut time (when a cut enqueues its sweep) and the last re-seal time for each scope in session memory only. A restart clears both.
+
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
