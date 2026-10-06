@@ -456,15 +456,19 @@ impl core::fmt::Display for PublishError {
     }
 }
 
-/// A durable mark raised just before the record PUT leaves the engine, so it
-/// marks exactly the attempts whose PUT can have landed. A monotonic-max raise
-/// in the sequence namespace, like every floor.
+/// A mark raised just before the record PUT leaves the engine, so it marks
+/// exactly the attempts whose PUT can have landed.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PutMark<'a> {
-    /// The floor-store key the mark lives at.
-    pub(crate) key: &'a [u8],
-    /// The value it is raised to.
-    pub(crate) value: u64,
+pub(crate) enum PutMark<'a> {
+    /// A monotonic-max raise in the sequence namespace, like every floor.
+    Durable {
+        /// The floor-store key the mark lives at.
+        key: &'a [u8],
+        /// The value it is raised to.
+        value: u64,
+    },
+    /// A note for the caller's own call, which nothing keeps.
+    Sent(&'a core::cell::Cell<bool>),
 }
 
 /// The durable floors one signature is checked against, read last before it.
@@ -719,16 +723,20 @@ where
         &eol::eol_from(scheduler.now()),
     )?;
 
-    if let Some(mark) = mark {
-        let stored = floors
-            .raise_sequence_floor(mark.key, mark.value)
-            .await
-            .map_err(PublishError::MarkUnrecorded)?;
-        if stored < mark.value {
-            return Err(PublishError::MarkUnrecorded(SeamError::new(
-                "the floor store did not take the mark",
-            )));
+    match mark {
+        Some(PutMark::Durable { key, value }) => {
+            let stored = floors
+                .raise_sequence_floor(key, value)
+                .await
+                .map_err(PublishError::MarkUnrecorded)?;
+            if stored < value {
+                return Err(PublishError::MarkUnrecorded(SeamError::new(
+                    "the floor store did not take the mark",
+                )));
+            }
         }
+        Some(PutMark::Sent(sent)) => sent.set(true),
+        None => {}
     }
 
     put_and_confirm(

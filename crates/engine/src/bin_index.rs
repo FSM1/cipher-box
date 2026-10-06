@@ -413,7 +413,7 @@ where
         },
         placement,
         mirror,
-        Some(PutMark {
+        Some(PutMark::Durable {
             key: &mint_key,
             value: revision,
         }),

@@ -14007,10 +14007,10 @@ fn a_write_rotate_now_cuts_a_planted_root_from_its_last_copy() {
 }
 
 /// ADR 0068 D5: a writer plants at the root name after the command read the
-/// root whole, and the root already carried the cut set. The wave's root read falls back to
-/// the last copy, and a cut that keeps rows does not run over a copy, so the
-/// wave stays owed. The next call re-drives it as a cut from the last copy
-/// that keeps no row.
+/// root whole, and the root already carried the cut set. The wave's root read
+/// falls back to the last copy, and a cut that keeps rows does not run over a
+/// copy, so the wave stays owed. The next call re-drives it as a cut from the
+/// last copy that keeps no row, and tells the host once.
 #[test]
 fn a_write_rotate_now_over_a_root_planted_after_its_read_owes_the_wave() {
     let mut fx = GrantScenario::new();
@@ -14063,6 +14063,10 @@ fn a_write_rotate_now_over_a_root_planted_after_its_read_owes_the_wave() {
         "the cut from the last copy keeps no row"
     );
     assert_eq!(published_value(&fx.world, &root), planted);
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(folder, "owed-grants-dropped-from-last-copy".to_owned())]
+    );
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }
 
@@ -14710,6 +14714,160 @@ fn a_downgrade_over_a_root_planted_before_its_plane_reads_cuts_every_row_on_the_
         "the cut from the last copy keeps no row"
     );
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// A revoke of one writer keeps the reader's row. Its root PUT goes out and
+/// fails, and the read after it falls back to the last copy, so the cut is
+/// unknown and its entry stands with no notice. The re-drive cuts every row
+/// from the last copy and tells the host once (ADR 0068 D5).
+#[test]
+fn a_redrive_that_cuts_every_row_after_an_unconfirmed_revoke_tells_the_host_once() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the reader's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "a reader"
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    assert_eq!(plant_root_at(&fx, &writer_seed, sequence), root);
+    // Every read before the PUT meets the honest root; the read after it
+    // meets the plant.
+    let endpoints = fx.world.record_store.endpoints().len();
+    fx.world
+        .record_store
+        .serve_gets_for_after(root.as_str(), 0, 4 * endpoints, honest);
+    fx.world.record_store.fail_put_for(root.as_str());
+    let _ = events_so_far(&mut fx._events);
+
+    assert!(revoke_the_recipient(&mut fx).is_err());
+    assert!(abandoned(&mut fx._events).is_empty(), "no notice yet");
+    assert!(
+        owed_entry(&fx).is_some(),
+        "the PUT went out, so the entry stands"
+    );
+
+    fx.world.record_store.heal_put_for(root.as_str());
+    let mut told = Vec::new();
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        told.extend(abandoned(&mut fx._events));
+    }
+    assert_eq!(
+        told,
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())],
+        "the host hears once that the rows went"
+    );
+    assert_the_revokee_is_cut(&fx, &writer_seed);
+    assert_no_grant_at(&fx, &fx.granted_scope_repoint().current_root);
+}
+
+/// The command read and the first plane read fall back to the last copy, and
+/// the endpoints then recover and serve the honest root from before the cut. The wave's
+/// re-mint meets a set other than the cut's, which is a race, so it stops
+/// retryably and sends no trust event.
+#[test]
+fn a_wave_that_meets_the_honest_pre_cut_root_after_a_fallback_stops_retryably() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    let before = fx.granted_scope_repoint();
+    let root = before.current_root.clone();
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    assert_eq!(plant_root_at(&fx, &writer_seed, sequence), root);
+    let endpoints = fx.world.record_store.endpoints().len();
+    fx.world.record_store.serve_gets_for_after(
+        root.as_str(),
+        2 * endpoints,
+        64 * endpoints,
+        honest,
+    );
+    let _ = events_so_far(&mut fx._events);
+    let folder = fx.folder;
+
+    let outcome = command_across_retries(&mut fx, Command::RotateWriteNow { node: folder });
+
+    let events = events_so_far(&mut fx._events);
+    let owed: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::RotationWorkOwed {
+                retryable, class, ..
+            } => Some((*retryable, *class)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. }))
+            || owed == vec![(true, OwedWorkClass::Availability)],
+        "a retryable stop: {outcome:?} {owed:?}"
+    );
+    assert!(
+        owed.iter().all(|(_, class)| *class != OwedWorkClass::Trust),
+        "no trust stop"
+    );
+    assert_eq!(
+        root_refusals(&fx, &events, sequence),
+        1,
+        "only the plant sends a trust event"
+    );
+    assert_eq!(fx.granted_scope_repoint(), before, "no wave landed");
+}
+
+/// A revoke whose root publish fails before the PUT, at the floor gate,
+/// owes nothing: no PUT went out (ADR 0063 D5).
+#[test]
+fn a_revoke_whose_root_publish_fails_before_the_put_owes_nothing() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+
+    assert!(revoke_the_recipient(&mut fx).is_err());
+    fx.owner_device.floor_store.heal_floors();
+
+    assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
+}
+
+/// A revoke whose root publish fails before the PUT, and whose follow-up
+/// read of the root does not answer, owes nothing: no PUT went out.
+#[test]
+fn a_revoke_with_no_put_and_an_unavailable_follow_up_read_owes_nothing() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+    fx.world.record_store.fail_put_for(root.as_str());
+
+    assert!(revoke_the_recipient(&mut fx).is_err());
+    fx.owner_device.floor_store.heal_floors();
+    fx.world.record_store.heal_put_for(root.as_str());
+
+    assert!(owed_entry(&fx).is_none(), "no PUT, so nothing is owed");
 }
 
 /// The re-drive runs the owed wave, and the owed delivery after it names a
@@ -19246,10 +19404,12 @@ fn the_sweep_cuts_an_expired_link_over_a_cut_that_never_landed() {
     let root = fx.granted_scope_repoint().current_root;
     let mut cut_epoch_floor = fx.folder.0.to_vec();
     cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    // The PUT goes out and fails, and the read after it does not answer, so
+    // the cut is unknown and its entry stands.
     fx.world.record_store.fail_put_for(root.as_str());
     fx.owner_device
         .floor_store
-        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 4);
     assert!(
         downgrade_the_recipient(&mut fx).is_err(),
         "the cut set did not publish"

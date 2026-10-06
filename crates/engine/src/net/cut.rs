@@ -114,7 +114,7 @@ pub(crate) struct CutRootReads {
 }
 
 impl CutRootReads {
-    /// Whether this cut sent a PUT at its scope root.
+    /// Whether this cut sent a PUT of its scope root's record.
     pub(crate) fn put_sent(&self) -> bool {
         self.put_sent.get()
     }
@@ -199,11 +199,10 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
-            root_fallback: Some(RootFallback::new(
-                self.scope_id,
-                self.root_wait,
-                self.root_reports,
-            )),
+            root_fallback: Some(
+                RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
+                    .noting_root_puts(&self.root_reads.put_sent),
+            ),
         }
     }
 
@@ -316,7 +315,6 @@ where
                 scope_id: scope_root.0,
                 error,
             })?;
-            self.root_reads.put_sent.set(true);
             net.publish_scope_root(&ResealedScopeRoot {
                 scope_id: scope_root.0,
                 ipns_name: self.scope_root_name.as_str().as_bytes().to_vec(),
@@ -372,7 +370,6 @@ where
             } else {
                 (&cut.commitment, &cut.commitment_sig, &cut.grant_ledger)
             };
-            self.root_reads.put_sent.set(true);
             cascade_rotate_scope(
                 &mut SharedEntropy(self.entropy),
                 self.floors,

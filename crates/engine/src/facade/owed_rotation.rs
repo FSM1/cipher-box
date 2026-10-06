@@ -462,7 +462,10 @@ where
     }
 
     /// Whether the root at `target` carries `cut`'s set, which is the first
-    /// publish of a revoke or a downgrade. `None` when the root does not read.
+    /// publish of a revoke or a downgrade. With no PUT of the root's record in
+    /// this call ([`CutRootReads::put_sent`]) it does not. `None` when the
+    /// root does not read, and after a PUT when the read falls back to a last
+    /// copy and the cut keeps rows (ADR 0068 D5).
     async fn cut_set_published(
         &self,
         target: &OwnerScope,
@@ -470,6 +473,9 @@ where
         command: bool,
         put_sent: bool,
     ) -> Option<bool> {
+        if !put_sent {
+            return Some(false);
+        }
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
         let wait = if command {
             RootWait::Command
@@ -478,11 +484,9 @@ where
         };
         let net = self.cut_net(target, wait);
         let current = net.resolve_anchored(&target.scope).await.ok()?;
-        // A last copy proves nothing about a cut that keeps rows (ADR 0068
-        // D5): with no PUT in this call the cut did not land, and after one it
-        // is unknown.
+        // A last copy proves nothing about a cut that keeps rows (ADR 0068 D5).
         if net.fell_back() && !cut.commitment.entries.is_empty() {
-            return (!put_sent).then_some(false);
+            return None;
         }
         Some(current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger)
     }
@@ -745,9 +749,6 @@ where
             first_stop: None,
             steps,
         };
-        // The first re-sign replaces the entry; a later pass meets the same
-        // entry, signs the same cut again and tells nothing new.
-        let first = standing.cut_epoch != recut.cut_epoch || standing.steps != recut.steps;
         self.owed()
             .rerun(scope, &standing, recut)
             .await
@@ -756,7 +757,7 @@ where
             || remaining
                 .iter()
                 .any(|step| matches!(step, OwedStep::DeliverGrant { .. }));
-        if drops && first {
+        if drops && self.owed.note_rows_dropped(scope, cut.commitment.cut_epoch) {
             let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
                 scope_root: scope,
                 detail: OWED_GRANTS_DROPPED.to_owned(),

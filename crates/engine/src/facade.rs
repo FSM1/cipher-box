@@ -7725,8 +7725,9 @@ where {
             gated.current.write_epoch,
         )
         .await?;
-        if gated.net.fell_back() && !gated.current.commitment.entries.is_empty() {
-            self.notice_rows_dropped(node);
+        if gated.net.fell_back() {
+            let unasked = !gated.current.commitment.entries.is_empty();
+            self.notice_rows_dropped(node, cut.commitment.cut_epoch, unasked);
         }
         Ok(())
     }
@@ -7952,20 +7953,28 @@ where {
         .map_err(EngineError::from_revoke)?;
         self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
             .await?;
-        if from_last_copy && current.commitment.entries.len() > asked {
-            self.notice_rows_dropped(node);
+        if from_last_copy {
+            let unasked = current.commitment.entries.len() > asked;
+            self.notice_rows_dropped(node, cut.commitment.cut_epoch, unasked);
         }
         Ok(())
     }
 
-    /// Tell the host that a cut from the last copy removed grant rows the
-    /// owner did not ask to remove (ADR 0068 D5). The cut ran or stands owed,
-    /// and an owed re-drive of it tells nothing new.
-    fn notice_rows_dropped(&self, scope_root: NodeId) {
-        let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
-            scope_root,
-            detail: owed_rotation::OWED_GRANTS_DROPPED.to_owned(),
-        });
+    /// Note the cut from the last copy at `cut_epoch`, which ran or stands
+    /// owed, and tell the host once per session when it removed grant rows the
+    /// owner did not ask to remove (`unasked`, ADR 0068 D5).
+    fn notice_rows_dropped(&self, scope_root: NodeId, cut_epoch: u64, unasked: bool) {
+        if self
+            .state
+            .owed_rotation
+            .note_rows_dropped(scope_root, cut_epoch)
+            && unasked
+        {
+            let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+                scope_root,
+                detail: owed_rotation::OWED_GRANTS_DROPPED.to_owned(),
+            });
+        }
     }
 
     /// Drive an authorized cut at `target` through the planes it demands
