@@ -408,7 +408,7 @@ where
         .signer
         .cloned()
         .or_else(|| admitted.signer.take())
-        .filter(|signer| signs_for(signer))
+        .filter(signs_for)
         .ok_or(ReviveError::WrongSigner)?;
     // D2: the value the plane admitted, unchanged.
     let value = super::fork::verified(name, admitted.observed.bytes())

@@ -4623,6 +4623,14 @@ async fn bin_roots<S: SnapshotCache>(snapshot_cache: &S, keys: &BinIndexKeys) ->
         .collect()
 }
 
+/// The renewal seams over the engine's own transport, floors and scheduler.
+type EngineRenewalSeams<'a, T> = RenewalSeams<
+    'a,
+    RecordAccelerator<<T as SeamTypes>::RecordTransport>,
+    OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
+    <T as SeamTypes>::Scheduler,
+>;
+
 /// The scopes whose owed rotation entry is within its bound, whose names no
 /// renewal or revival signs (ADR 0063 D4). A record that does not read owes
 /// nothing, as the renewal walk reads it.
@@ -6287,16 +6295,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// The seams one revival signs through, or `None` when the session has no
     /// API to fetch the recovery record from.
-    fn revival_seams(
-        &self,
-    ) -> Option<
-        RenewalSeams<
-            '_,
-            RecordAccelerator<T::RecordTransport>,
-            OwnerScopedFloorStore<T::FloorStore>,
-            T::Scheduler,
-        >,
-    > {
+    fn revival_seams(&self) -> Option<EngineRenewalSeams<'_, T>> {
         self.api_base_url.configured()?;
         Some(RenewalSeams {
             transport: &self.record_transport,
