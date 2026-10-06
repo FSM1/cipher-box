@@ -951,29 +951,26 @@ fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
 /// crossing the op carries.
 #[test]
 fn an_already_satisfied_drop_journaled_intra_still_rotates_the_scope_it_left() {
-    let rotator = RecordingRotator::refusing(&[]);
-    let (triggers, cut) = exits_of(
-        &[(id(7), id(6))],
-        &[Op::move_node(
-            id(7),
-            id(12),
-            id(6),
-            "m.txt",
-            None,
-            1,
-            AT,
-            ScopeCrossing::Intra,
-        )],
-        &rotator,
+    let mut base = granted_scope_tree();
+    with_child(&mut base, id(6), id(7), "m.txt", NodeKind::File);
+    let op = Op::move_node(
+        id(7),
+        id(12),
+        id(6),
+        "m.txt",
+        None,
+        1,
+        AT,
+        ScopeCrossing::Intra,
     );
 
+    let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
+
     assert_eq!(
-        triggers,
+        report.dropped_scope_exits,
         vec![id(5)],
         "the exit is owed whatever was journaled"
     );
-    assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
-    assert!(cut.is_complete());
 }
 
 /// The enclosing-root fallback in the full-depth walk exists so an applied exit

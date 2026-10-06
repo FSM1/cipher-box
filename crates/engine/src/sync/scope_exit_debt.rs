@@ -117,19 +117,42 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
 /// the cut is out of the queue by then. Every pass reaches
 /// [`settle_owed_cuts`], which writes the record again and reports a scope that
 /// is still owed one the store would not take.
+///
+/// The durable record is folded in first: a pass can owe a cut before any
+/// settle of this session read it, and the write replaces the whole record.
+/// Answers whether the record is durable.
 pub(crate) async fn owe_cut<St: StagingStore>(
     staging: &St,
     seal: BookkeepingSeal<'_>,
     enc_secret: &X25519Secret,
     session: &RefCell<BTreeSet<NodeId>>,
     scope_root: NodeId,
-) {
+) -> bool {
+    adopt_owed_cuts(staging, seal, enc_secret, session).await;
     let owed = {
         let mut session = session.borrow_mut();
         session.insert(scope_root);
         session.clone()
     };
-    let _ = record_owed_cuts(staging, seal, enc_secret, &owed).await;
+    record_owed_cuts(staging, seal, enc_secret, &owed).await
+}
+
+/// [`owe_cut`] for a caller that still holds what names the cut: a refused
+/// write leaves this session owing nothing new, so the caller keeps its own
+/// record and tries again rather than cutting once per pass meanwhile.
+pub(crate) async fn owe_cut_durably<St: StagingStore>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    session: &RefCell<BTreeSet<NodeId>>,
+    scope_root: NodeId,
+) -> bool {
+    let owed_before = session.borrow().contains(&scope_root);
+    let durable = owe_cut(staging, seal, enc_secret, session, scope_root).await;
+    if !durable && !owed_before {
+        session.borrow_mut().remove(&scope_root);
+    }
+    durable
 }
 
 /// Fold the durable debt into this session's owed set.
