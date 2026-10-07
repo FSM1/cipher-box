@@ -902,31 +902,7 @@ impl GrantScenario {
     /// `ephemeral`, and answer its identity key. The claim bytes turn on
     /// `index` alone, so a second call with a fresh `ephemeral` is a re-post.
     fn post_claimant(&self, fragment: &str, index: u8, ephemeral: u8) -> Vec<u8> {
-        let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
-        let invitee =
-            EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
-        let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
-        let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
-        let mut claim_id = [1u8; CLAIM_ID_LEN];
-        claim_id[0] = index;
-        let claim = InviteClaim {
-            claim_id,
-            scope_pointer_name: opened.scope_pointer_name.clone(),
-            contact_code: contact_code(&scalar),
-            name: String::new(),
-        };
-        self.post_claim(
-            &owner,
-            &invitee,
-            ephemeral,
-            &claim,
-            &format!("claim-{index}"),
-        );
-        EcdsaSigner::from_scalar(&scalar)
-            .expect("valid identity scalar")
-            .verifying_key()
-            .to_sec1()
-            .to_vec()
+        post_claimant_from(&self.recipient_device, fragment, index, ephemeral)
     }
 
     /// Post one claim under `idempotency_key`. `index` picks this post's own
@@ -940,17 +916,66 @@ impl GrantScenario {
         claim: &InviteClaim,
         idempotency_key: &str,
     ) {
-        block_on(post_invite_claim(
-            &self.recipient_device.mailbox,
+        post_claim_from(
+            &self.recipient_device,
             owner,
             invitee,
-            &[CLAIM_EPHEMERAL_BASE + index; 32],
-            ENVELOPE_V,
-            &claim.encode().expect("the claim encodes"),
+            index,
+            claim,
             idempotency_key,
-        ))
-        .expect("the claim posts");
+        );
     }
+}
+
+/// [`GrantScenario::post_claimant`] through `device`'s mailbox, for a test that
+/// posts while a command holds the scenario's engine.
+fn post_claimant_from(device: &FakeDevice, fragment: &str, index: u8, ephemeral: u8) -> Vec<u8> {
+    let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
+    let mut claim_id = [1u8; CLAIM_ID_LEN];
+    claim_id[0] = index;
+    let claim = InviteClaim {
+        claim_id,
+        scope_pointer_name: opened.scope_pointer_name.clone(),
+        contact_code: contact_code(&scalar),
+        name: String::new(),
+    };
+    post_claim_from(
+        device,
+        &owner,
+        &invitee,
+        ephemeral,
+        &claim,
+        &format!("claim-{index}"),
+    );
+    EcdsaSigner::from_scalar(&scalar)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec()
+}
+
+fn post_claim_from(
+    device: &FakeDevice,
+    owner: &Contact,
+    invitee: &EphemeralInvitee,
+    index: u8,
+    claim: &InviteClaim,
+    idempotency_key: &str,
+) {
+    block_on(post_invite_claim(
+        &device.mailbox,
+        owner,
+        invitee,
+        &[CLAIM_EPHEMERAL_BASE + index; 32],
+        ENVELOPE_V,
+        &claim.encode().expect("the claim encodes"),
+        idempotency_key,
+    ))
+    .expect("the claim posts");
 }
 
 // ---------------------------------------------------------------------------
@@ -12957,6 +12982,80 @@ fn a_link_grantee_revoke_waits_for_the_pass_that_holds_the_lock() {
         "the grantee is gone"
     );
     assert_eq!(fx.link_entries(), 0, "with the link that admitted it");
+}
+
+/// The person rows the owner-signed set at `folder`'s scope root commits now.
+fn person_rows(world: &FakeWorld, blocks: &Blocks, folder: NodeId) -> usize {
+    published_grant_section_at(world, blocks, &scope_repoint(world, &folder.0).current_root)
+        .expect("the folder's scope root answers")
+        .commitment
+        .entries
+        .iter()
+        .filter(|entry| entry.kind != GrantSetEntryKind::Link)
+        .count()
+}
+
+/// A link grantee revoke that waits for the lock holds it before its cut
+/// reads the root. A row that a tick pass publishes meanwhile is on the set
+/// the cut starts from, so the cut drops no row but the revoked person's.
+#[test]
+fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let first = fx.post_claimant(&fragment, 0, 0);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let other = park_the_sweep_on_another_folder(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let cadence = fx.engine.profile().poll_cadence;
+
+    let published = {
+        let mut revoke = pin!(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: first.clone(),
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(revoke.as_mut().poll(&mut cx).is_pending(), "it waits");
+        // The claim reaches the mailbox after the revoke polled it.
+        post_claimant_from(&fx.recipient_device, &fragment, 1, 1);
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        poll_tasks_until_parked(&mut fx._tasks);
+
+        fx.world.record_store.stall_gets_for_after(root.as_str(), 0);
+        fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+        assert!(
+            revoke.as_mut().poll(&mut cx).is_pending(),
+            "it reads the root"
+        );
+        let s0 = sequence_at(&fx.world, &root);
+        // A tick walks past the root and parks in its conversion.
+        fx.world.record_store.release_gets_for(root.as_str());
+        fx.world.record_store.stall_gets_for_after(root.as_str(), 2);
+        fx.world.scheduler.advance(cadence);
+        poll_tasks_until_parked(&mut fx._tasks);
+        assert_eq!(
+            sequence_at(&fx.world, &root),
+            s0,
+            "the tick parks before it publishes"
+        );
+        fx.world.record_store.release_gets_for(root.as_str());
+        let early = revoke.as_mut().poll(&mut cx);
+        poll_tasks_until_parked(&mut fx._tasks);
+        let published = person_rows(&fx.world, &fx.blocks, fx.folder);
+        let answer = match early {
+            Poll::Ready(answer) => answer,
+            Poll::Pending => drive_command(&fx.world, revoke, &mut fx._tasks),
+        };
+        assert_eq!(answer, Ok(CommandOutcome::Done));
+        published
+    };
+    let granted = fx.granted_to();
+    assert!(!granted.contains(&first), "the revoked grantee is gone");
+    assert!(
+        granted.len() + 1 >= published,
+        "the cut keeps every row but the revoked person's"
+    );
 }
 
 /// A dismiss of the refused claims waits for a tick pass that holds the

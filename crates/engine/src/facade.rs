@@ -8574,7 +8574,16 @@ where {
                 .await
         };
         let pointers = self.scope_pointer_index(session);
-        let held = RefCell::new(None);
+        // The waiting run holds the record before the cut reads the root, so
+        // no pass publishes a row between the read and the cut.
+        let held = RefCell::new(match on_running {
+            OnRunning::Wait if !still_owed => Some(
+                pass.hold_record(OnRunning::Wait)
+                    .await?
+                    .ok_or_else(EngineError::conversion_running)?,
+            ),
+            _ => None,
+        });
         let admitting = RefCell::new(Vec::new());
         let cut = self
             .cut_and_rotate(
@@ -8603,10 +8612,14 @@ where {
                             .iter()
                             .map(|link| link.ephemeral_identity_pk)
                             .collect();
-                        let mut record = pass
-                            .hold_record(on_running)
-                            .await?
-                            .ok_or_else(EngineError::conversion_running)?;
+                        let held_before = held.borrow_mut().take();
+                        let mut record = match held_before {
+                            Some(record) => record,
+                            None => pass
+                                .hold_record(OnRunning::Refuse)
+                                .await?
+                                .ok_or_else(EngineError::conversion_running)?,
+                        };
                         let pending = record.pending_links();
                         if links.iter().any(|link| pending.contains(link)) {
                             return Err(EngineError::Seam {

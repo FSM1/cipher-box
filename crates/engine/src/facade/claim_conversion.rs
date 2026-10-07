@@ -41,8 +41,8 @@ impl EngineError {
     }
 }
 
-/// How long an owner command waits for [`Running`] before it refuses. Longer
-/// than one tick pass under the production network budgets.
+/// How long an owner command waits for [`Running`] before it refuses. A command
+/// that meets a pass longer than this answers the old refusal.
 const RUNNING_WAIT_BUDGET: Duration = Duration::from_secs(30);
 
 /// How often a waiting command tries [`Running`] again.
