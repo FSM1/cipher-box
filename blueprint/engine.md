@@ -168,15 +168,28 @@ bytes (FSM1/cipher-box-next#28 D2).
   last, before `resolve_vault_pointer` runs; the vault root after the cold
   seed, whose write floor opens the owner write blob that carries the root's
   signer, and then the cold start runs again; the settings record, only at
-  its floor (D4), and then the settings load runs again; the bin index before
-  its load;
-  then each owned scope pointer when the hourly enrolment proves its scope.
+  its floor (D4), and then the settings load runs again and reports one
+  verdict; the bin index before its load; then each owned scope pointer that
+  the device holds a write-epoch floor for, when the hourly enrolment proves
+  its scope.
+  When the chain revival does not confirm the end of the chain (a 429, a 5xx,
+  or a revived index that still reads `Absent`), the session adopts no root,
+  mints nothing and reports `VaultUnprovisioned { retryable: true }`; the next
+  provision in the session runs the chain revival and the vault root revival
+  again. A bin index revival that can still land (any result other than a
+  signature or a 404 at the recovery endpoint) skips the genesis publish for
+  that start. A scope pointer revival that a later pass can land keeps the
+  enrolment open.
   The session-start revival and the walk share one recovery pace of 25
   fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
-  the first minute. A revival holds nothing in `HeldRecords` and raises no
-  floor: the gated read that follows it admits the record at `S + 1` and
-  raises the floor to it. No revival signs a name in a scope that has an owed
-  rotation entry (ADR 0063 D4).
+  the first minute. The vacancy probe and the first-save fetch are outside
+  the pace. A revival holds nothing in `HeldRecords` and raises no floor
+  above `S`; the gated read that follows it admits the record at `S + 1` and
+  raises the floor to it. After a bin index revival the session loads the bin
+  index through the gate and holds it. No revival signs a name in a scope that
+  has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
+  not read, the session sends `renewalFailed` for it and revives no vault root
+  and no scope pointer.
   A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve

@@ -105,18 +105,27 @@ renewal, and revival, including floor changes before signing, foreign envelope
 versions, and sequence exhaustion. On the virtual clock, the `net::revival` unit tests
 revive a lapsed file record through the gate at `S + 1` with the renewal EOL
 (ADR 0062 consequence 5), refuse each D1 step that fails, and hold the
-recovery pace. The two virtual-clock tests of ADR 0062 consequence 5 run end
-to end in `tests/renewal_walk.rs`: a device that starts after 100 days
-offline, with every name lapsed, revives the vault pointer, the vault root
-and the bin index before the first tick, lists the vault, and the walk
-revives a lapsed folder before the file below it, each at `S + 1`; and a
-session spends at most 25 recovery fetches in its first minute and revives
-the rest when the pace allows. At session start the settings record revives
+recovery pace; a record that another endpoint serves at `S` with other bytes
+stops the revival. The virtual-clock tests of ADR 0062 run end to end in
+`tests/renewal_walk.rs`: a device that starts after 100 days offline, with
+every name lapsed, revives the vault pointer, the vault root and the bin
+index before the first tick, lists the vault, and the walk revives a lapsed
+folder before the file below it, each at `S + 1`, on a new device and on the
+device that wrote the vault; a session spends at most 25 recovery fetches in
+its first minute and revives the rest when the pace allows; a 429 at the
+chain revival leaves the session retryable with no root, and a refresh
+revives the chain and provisions; and a 429 at the bin index revival
+publishes no genesis bin index, and the next start revives it at `S + 1`,
+holds it and renews it later. At session start the settings record revives
 only on the device whose floor equals the recovered sequence, and the
-settings load after it reads the saved settings. `net::vault_pointer` revives the chain up to
-the probe one index past the last and never below the index floor, and
-`net::rotation` revives a lapsed owned scope pointer, but not in a scope
-that has an owed rotation entry.
+settings load after it reads the saved settings. In `tests/write_plane.rs` a
+vault that only the API cache serves revives at session start, and a 429
+there leaves a retryable session that converges. `net::vault_pointer`
+revives the chain up to the probe one index past the last and never below
+the index floor, and a 429 inside the chain leaves its end unconfirmed.
+`net::rotation` revives a lapsed owned scope pointer only in a scope the
+device holds a write-epoch floor for and that has no owed rotation entry,
+and a revival that a later pass can land keeps the enrolment open.
 
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
