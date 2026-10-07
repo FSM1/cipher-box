@@ -8603,11 +8603,10 @@ where {
                             .iter()
                             .map(|link| link.ephemeral_identity_pk)
                             .collect();
-                        let mut record = pass.hold_record(on_running).await?.ok_or_else(|| {
-                            EngineError::Seam {
-                                message: CONVERSION_RUNNING.to_owned(),
-                            }
-                        })?;
+                        let mut record = pass
+                            .hold_record(on_running)
+                            .await?
+                            .ok_or_else(EngineError::conversion_running)?;
                         let pending = record.pending_links();
                         if links.iter().any(|link| pending.contains(link)) {
                             return Err(EngineError::Seam {
@@ -10273,11 +10272,11 @@ where {
         let pass = self.conversion_pass(session, api, &keys);
         let pointers = self.scope_pointer_index(session);
         // A running pass may hold acked claims this read cannot see.
-        let held = RefCell::new(pass.hold_record(OnRunning::Wait).await?.ok_or_else(|| {
-            EngineError::Seam {
-                message: CONVERSION_RUNNING.to_owned(),
-            }
-        })?);
+        let held = RefCell::new(
+            pass.hold_record(OnRunning::Wait)
+                .await?
+                .ok_or_else(EngineError::conversion_running)?,
+        );
         let pending = held.borrow().pending_links();
         let revoked = Cell::new(None);
         // Owner-only: the tags come from a link entry on a set this session's
@@ -21479,7 +21478,7 @@ mod tests {
     }
 
     /// The dialog's conversion refuses at once while another pass holds the
-    /// record: it does not wait, and the tick converts the claims anyway.
+    /// record.
     #[test]
     fn a_running_pass_refuses_the_dialog_conversion_at_once() {
         let (mut engine, device) = engine_for_account("account-7");

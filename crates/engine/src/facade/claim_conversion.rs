@@ -23,6 +23,7 @@ use crate::grants::{
 };
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
+use crate::record_plane::within;
 use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
 use crate::session::RootSequences;
 use crate::sync::BookkeepingSeal;
@@ -30,6 +31,15 @@ use crate::sync::owed_rotation::OwedCell;
 
 /// The refusal a record change answers while a conversion pass runs.
 pub(super) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
+
+impl EngineError {
+    /// The [`CONVERSION_RUNNING`] refusal.
+    pub(super) fn conversion_running() -> Self {
+        Self::Seam {
+            message: CONVERSION_RUNNING.to_owned(),
+        }
+    }
+}
 
 /// How long an owner command waits for [`Running`] before it refuses. Longer
 /// than one tick pass under the production network budgets.
@@ -232,22 +242,18 @@ impl<'a> Running<'a> {
         (!flag.replace(true)).then(|| Self(flag))
     }
 
-    /// The flag once it frees, or `None` while it stays held past `budget`.
-    pub(super) async fn wait(
-        flag: &'a Cell<bool>,
-        scheduler: &impl Scheduler,
-        budget: Duration,
-    ) -> Option<Self> {
-        let deadline = Some(scheduler.now().saturating_add(budget));
-        loop {
-            if let Some(running) = Self::take(flag) {
-                return Some(running);
+    /// The flag once it frees, or `None` while it stays held past
+    /// [`RUNNING_WAIT_BUDGET`].
+    pub(super) async fn wait(flag: &'a Cell<bool>, scheduler: &impl Scheduler) -> Option<Self> {
+        within(scheduler, RUNNING_WAIT_BUDGET, async move {
+            loop {
+                if let Some(running) = Self::take(flag) {
+                    return running;
+                }
+                scheduler.sleep(RUNNING_WAIT_SLICE).await;
             }
-            if scheduler.now().reached(deadline) {
-                return None;
-            }
-            scheduler.sleep(RUNNING_WAIT_SLICE).await;
-        }
+        })
+        .await
     }
 }
 
@@ -410,9 +416,7 @@ where
     async fn hold(&self, on_running: OnRunning) -> Option<Running<'_>> {
         match on_running {
             OnRunning::Refuse => Running::take(self.running),
-            OnRunning::Wait => {
-                Running::wait(self.running, self.scheduler, RUNNING_WAIT_BUDGET).await
-            }
+            OnRunning::Wait => Running::wait(self.running, self.scheduler).await,
         }
     }
 
@@ -587,9 +591,7 @@ where
         on_running: OnRunning,
     ) -> PassOutcome {
         let Some(_running) = self.hold(on_running).await else {
-            return PassOutcome::unheld(EngineError::Seam {
-                message: CONVERSION_RUNNING.to_owned(),
-            });
+            return PassOutcome::unheld(EngineError::conversion_running());
         };
         let mut record = match self.load().await {
             Ok(record) => record,
@@ -680,9 +682,7 @@ where
         retired: impl Fn(&AckedClaim) -> bool,
     ) -> Result<(), EngineError> {
         let Some(_running) = self.hold(OnRunning::Wait).await else {
-            return Err(EngineError::Seam {
-                message: CONVERSION_RUNNING.to_owned(),
-            });
+            return Err(EngineError::conversion_running());
         };
         let mut record = self.load().await?;
         if record.retire_refused(retired) > 0 {
@@ -1358,7 +1358,7 @@ mod tests {
         let scheduler = VirtualScheduler::new();
         let running = Cell::new(false);
         let held = Running::take(&running).expect("the flag is free");
-        let mut waiter = pin!(Running::wait(&running, &scheduler, RUNNING_WAIT_BUDGET));
+        let mut waiter = pin!(Running::wait(&running, &scheduler));
         let mut cx = Context::from_waker(Waker::noop());
         assert!(waiter.as_mut().poll(&mut cx).is_pending());
         scheduler.advance(RUNNING_WAIT_SLICE);
@@ -1378,7 +1378,7 @@ mod tests {
         let scheduler = VirtualScheduler::new();
         let running = Cell::new(false);
         let _held = Running::take(&running).expect("the flag is free");
-        let mut waiter = pin!(Running::wait(&running, &scheduler, RUNNING_WAIT_BUDGET));
+        let mut waiter = pin!(Running::wait(&running, &scheduler));
         let mut cx = Context::from_waker(Waker::noop());
         assert!(waiter.as_mut().poll(&mut cx).is_pending());
         scheduler.advance(RUNNING_WAIT_BUDGET - RUNNING_WAIT_SLICE);
