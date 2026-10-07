@@ -2031,7 +2031,8 @@ fn a_kept_file_create_under_a_refused_parent_keeps_its_bytes_across_a_restart() 
 
 /// A kept edit whose head read meets a record the gate refuses at the moved
 /// file's name is charged, so it dead-letters with a notice at the budget and
-/// the op behind it publishes.
+/// the op behind it publishes. A later edit does not end an earlier one, so
+/// each of the two kept edits dead-letters on its own.
 #[test]
 fn a_kept_edit_under_a_refused_file_record_dead_letters_and_frees_the_queue() {
     let mut fx = GrantScenario::new();
@@ -2085,13 +2086,13 @@ fn a_kept_edit_under_a_refused_file_record_dead_letters_and_frees_the_queue() {
     }
     let _ = dead_letter_events(&mut fx._events);
 
-    for _ in 0..12 {
+    for _ in 0..20 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
     assert_eq!(
         dead_letter_events(&mut fx._events).len(),
-        1,
-        "the edit dead-letters with a notice"
+        2,
+        "each kept edit dead-letters with a notice"
     );
     assert!(
         !queued_targets(&fx.owner_device).contains(&doc),

@@ -680,6 +680,25 @@ pub(crate) enum KeptVerdict {
     Expired,
 }
 
+/// Whether `place` shows a flip of the scope the op published under: a new
+/// write epoch, another scope root, or a scope this device no longer writes
+/// or cannot check.
+pub(crate) fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
+    match place {
+        KeptPlace::Keyless { .. } | KeptPlace::Unnamespaced => true,
+        KeptPlace::Writes {
+            root,
+            live_write_epoch,
+            ..
+        } => live_write_epoch > note.write_epoch || note.scope.is_some_and(|scope| scope != root),
+        KeptPlace::Unchecked {
+            root,
+            live_write_epoch,
+        } => note.scope != Some(root) || live_write_epoch > note.write_epoch,
+        KeptPlace::Elsewhere => false,
+    }
+}
+
 /// The verdict on one kept op at `now`. A new write epoch, or a scope root
 /// other than the one the op published under, is a flip. A flip waits for the
 /// read of the folder at its new name and does not expire.

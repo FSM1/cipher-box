@@ -1162,8 +1162,8 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   names at their live names, and a version restore reads its file's live
   record: a node that shows the result or another value ends the op with no
   apply, and one that shows the value before applies it again. A later
-  delete of this device expires every earlier op on its node at the check
-  of that op, a later bin
+  delete of this device expires every earlier op on its node once a flip
+  shows, a later bin
   restore cancels that delete so the earlier ops stay, and no other later op
   expires an earlier op; kept ops replay in queue order, and the check of a
   later op compares with the value that the earlier replay sets. A second apply that a rebase or a permanent halt

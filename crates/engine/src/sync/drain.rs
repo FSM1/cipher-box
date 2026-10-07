@@ -112,7 +112,8 @@ use crate::sync::doomed::{
 };
 use crate::sync::kept_op::{
     KeptNote, KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue,
-    is_kept, keeps, kept_outcome, kept_verdict, load_kept_notes, needs_result, store_kept_notes,
+    is_kept, keeps, kept_outcome, kept_verdict, load_kept_notes, needs_result, shows_a_flip,
+    store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -3158,21 +3159,17 @@ where
                     // With no result, a check cannot tell a later write.
                     // A cancelled delete leaves at once, while the bin restore
                     // that cancels it is still queued. An op under a later
-                    // delete waits for its check: a bin restore can still
-                    // cancel that delete.
+                    // delete leaves once a flip shows: before it, a bin
+                    // restore can still cancel that delete.
                     let later = overtaken.get(&op_id).copied();
                     if gone
                         || later == Some(Overtaken::ByRestore)
+                        || (later == Some(Overtaken::ByDelete) && shows_a_flip(&note, place))
                         || (needs_result(&op.kind) && note.result.is_none())
                     {
                         KeptVerdict::Expired
                     } else {
-                        match kept_verdict(&note, place, now) {
-                            KeptVerdict::Recheck if later == Some(Overtaken::ByDelete) => {
-                                KeptVerdict::Expired
-                            }
-                            verdict => verdict,
-                        }
+                        kept_verdict(&note, place, now)
                     }
                 } else {
                     KeptVerdict::Expired
@@ -9911,8 +9908,8 @@ enum Overtaken {
 }
 
 /// The ops of `queue` that a later op of this device on the same node
-/// decides: a later delete expires every earlier op on its node at the
-/// check of that op, a later bin restore cancels that delete so the earlier
+/// decides: a later delete expires every earlier op on its node once a
+/// flip shows, a later bin restore cancels that delete so the earlier
 /// ops stay, and no other later op expires an earlier op (ADR 0069 D6).
 fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
     let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
