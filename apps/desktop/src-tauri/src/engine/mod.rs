@@ -754,10 +754,14 @@ async fn status(projection: &mut Projection, warnings: &Warnings) -> Result<Vaul
 }
 
 /// Whether an event can change what [`VaultStatus`] reports. A transfer's
-/// per-block progress cannot, and it is the one event that arrives in bursts —
-/// repainting on it would cost a snapshot build per chunk.
+/// per-block progress and a name wave's per-node progress cannot, and they are
+/// the events that arrive in bursts — repainting on them would cost a snapshot
+/// build per chunk or per node.
 fn moves_the_status(event: &Event) -> bool {
-    !matches!(event, Event::OpProgress { .. })
+    !matches!(
+        event,
+        Event::OpProgress { .. } | Event::NameWaveProgress { .. }
+    )
 }
 
 #[cfg(test)]
@@ -1229,9 +1233,9 @@ mod tests {
         );
     }
 
-    /// A transfer's per-block progress moves nothing the window shows, and it
-    /// is the one event that arrives per chunk — repainting on it would cost a
-    /// snapshot build per block of every upload and download.
+    /// A transfer's per-block progress and a name wave's per-node progress
+    /// move nothing the window shows, and they arrive per chunk or per node —
+    /// repainting on them would cost a snapshot build each.
     #[test]
     fn per_block_progress_raises_no_repaint() {
         assert!(!moves_the_status(&Event::OpProgress {
@@ -1240,6 +1244,12 @@ mod tests {
             phase: OpPhase::UploadProgress,
             progress: None,
             error: None,
+        }));
+        assert!(!moves_the_status(&Event::NameWaveProgress {
+            scope_root: NodeId([0u8; 16]),
+            moved: 1,
+            total: 2,
+            at: cipherbox_engine::seams::UnixMillis(0),
         }));
         assert!(moves_the_status(&Event::SnapshotUpdated));
         assert!(moves_the_status(&Event::StalenessChanged {

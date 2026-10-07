@@ -495,7 +495,8 @@ where
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
-            sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
+            sweep: &|scope| (sweep.task)(scope, target.parent_node_seed.clone()),
+            cut_durable: &*sweep.cut,
             bound,
             root_wait: if command {
                 RootWait::Command

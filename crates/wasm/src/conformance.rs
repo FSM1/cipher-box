@@ -16,7 +16,7 @@
 //! suite can check what JS receives against the generated `Event` type.
 
 use cipherbox_engine::facade;
-use cipherbox_engine::seams::OpId;
+use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::testkit::conformance;
 use js_sys::{Function, Promise};
 use wasm_bindgen::JsCast;
@@ -147,7 +147,8 @@ pub async fn run_record_transport_conformance(
 }
 
 /// Test-only: one event of each field kind, encoded as `nextEvent` encodes
-/// them — a `u64`, bytes, an absent `Option`, a nested struct and an enum.
+/// them — a `u64`, bytes, an absent `Option`, a nested struct, an enum and a
+/// present `Option` of a time.
 #[wasm_bindgen(js_name = sampleEvents, unchecked_return_type = "Event[]")]
 pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
     [
@@ -180,6 +181,14 @@ pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
             level: facade::Staleness::Offline,
         },
         facade::Event::SnapshotUpdated,
+        facade::Event::SweepConvergence {
+            scope_root: facade::NodeId([6; 16]),
+            read_epoch: op_id,
+            old_epoch_nodes: 0,
+            cut_at: Some(UnixMillis(op_id)),
+            last_reseal_at: None,
+            at: UnixMillis(op_id),
+        },
     ]
     .iter()
     .map(|event| encode_event(event).map(JsValue::from))
