@@ -1298,10 +1298,6 @@ where
 /// record carries a bearer credential, so it revives only on a device whose
 /// floor equals the recovered sequence, and this is the one settings read
 /// that sets the EOL rule aside. Any other device takes the ADR 0034 ladder.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the session-start caller is not landed")
-)]
 pub(crate) struct SettingsRevivalRead<'a, H, F, Sn, Sch> {
     pub(crate) gateway: &'a Gateway,
     pub(crate) http: &'a H,

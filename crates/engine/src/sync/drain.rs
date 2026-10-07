@@ -44,8 +44,8 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::bin_index::{
-    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, cached_bin_index, load_bin_index,
-    publish_bin_index_placed,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, bin_floor_reaches,
+    cached_bin_index, load_bin_index, publish_bin_index_placed,
 };
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
@@ -1694,6 +1694,12 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
+    /// Set while a lapsed bin index can still revive (ADR 0062 D3), to the
+    /// sequence floor a load must reach: the revived sequence, or 0 when no
+    /// revival signed. A load that finds no record, or resolves one below that
+    /// floor, holds the queue rather than publish over the lapsed index. A
+    /// load that reaches it clears the cell.
+    pub(crate) bin_index_unsettled: &'a Cell<Option<u64>>,
     /// The sequences a navigation measures a scope root against.
     pub(crate) root_sequences: &'a RefCell<RootSequences>,
 }
@@ -6133,7 +6139,7 @@ where
     /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
         let observed = observed_at(self.cells.held, HeldKey::BinIndex);
-        let index = load_bin_index(
+        let load = load_bin_index(
             &self.seams.transport,
             &self.seams.gateway,
             &self.seams.http,
@@ -6144,9 +6150,14 @@ where
             self.inputs.bin_keys,
         )
         .await
-        .enrol(self.cells.held, observed)
-        .writable()
-        .map_err(|reason| {
+        .enrol(self.cells.held, observed);
+        let unsettled = self.cells.bin_index_unsettled.get();
+        if unsettled.is_some()
+            && matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun))
+        {
+            return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::UnprovenFirstRun));
+        }
+        let index = load.writable().map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
                 emit_trust_violation(
@@ -6157,6 +6168,12 @@ where
             }
             halt
         })?;
+        if let Some(min) = unsettled {
+            if !bin_floor_reaches(&self.seams.floors, self.inputs.bin_keys, min).await {
+                return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::Expired));
+            }
+            self.cells.bin_index_unsettled.set(None);
+        }
         self.establish_bin_index(index.clone());
         Ok(index)
     }

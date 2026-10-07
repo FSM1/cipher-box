@@ -5158,7 +5158,8 @@ fn a_genesis_publish_that_failed_before_its_put_is_retried_by_the_same_device() 
 
 /// The gate is the device's own durable marks, which decide what a resolve
 /// would: an account that already holds the record spends no publish, and the
-/// start pays no network round trip to find that out.
+/// load pays no network round trip to find that out. The start reads the name
+/// once, for the session-start revival check (ADR 0062 D3).
 #[test]
 fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let world = FakeWorld::new();
@@ -5174,10 +5175,11 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let (mut engine, _events) = engine_on_api(&alice, 43);
     block_on(engine.start(secret(), None)).expect("the second session starts");
 
+    let revival_check = resolves + world.record_store.endpoints().len();
     assert_eq!(
         world.record_store.get_count(bin_name().as_str()),
-        resolves,
-        "the durable mark answered, so the start resolved nothing",
+        revival_check,
+        "the durable mark answered, so the start resolved the name for the revival check only",
     );
     assert_eq!(
         standing_bin_record(&world),
@@ -5192,7 +5194,7 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     poll_tasks_until_parked(&mut tasks);
     assert_eq!(
         world.record_store.get_count(bin_name().as_str()),
-        resolves,
+        revival_check,
         "and the session spawned no resolve of the name either",
     );
     assert_eq!(
@@ -5206,8 +5208,9 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     let carol = world.device(b"alice-third-install");
     let (_engine, _tasks) = start_on_api(&world, &blocks, &carol, 44);
     assert!(
-        world.record_store.get_count(bin_name().as_str()) > resolves,
-        "an unmarked device resolves the name once",
+        world.record_store.get_count(bin_name().as_str())
+            > revival_check + world.record_store.endpoints().len(),
+        "an unmarked device resolves the name for its load too",
     );
 }
 
@@ -18417,34 +18420,6 @@ fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
 // published: the two legs of `start` that leave the session dark.
 // ---------------------------------------------------------------------------
 
-/// [`serve_http`], with the record-recovery route answering `record` for `name`
-/// — the API cache that still knows a vault this device's own fan-out cannot
-/// resolve yet.
-fn serve_http_with_cached_record(
-    device: &FakeDevice,
-    blocks: &Blocks,
-    calls: usize,
-    name: &IpnsName,
-    record: Vec<u8>,
-) {
-    let route = format!("/recovery/{}", name.as_str());
-    for _ in 0..calls {
-        let blocks = blocks.clone();
-        let route = route.clone();
-        let record = record.clone();
-        device.http.enqueue_derived(move |request| {
-            if request.url.ends_with(&route) {
-                return Ok(HttpResponse {
-                    status: 200,
-                    headers: Vec::new(),
-                    body: record.into(),
-                });
-            }
-            blocks.reply(request)
-        });
-    }
-}
-
 /// Provision a vault on `world` from one device and write `photos` into it — a
 /// mounted desktop that has been running for a while. Returns the root name and
 /// the record it published there.
@@ -18540,8 +18515,9 @@ fn a_tab_that_adopts_a_published_genesis_root_converges_on_that_devices_tree() {
 }
 
 /// The other leg: the tab's fan-out sees nothing at all, while the API's record
-/// cache still knows the account's vault. The vacancy probe refuses the mint on
-/// that answer — a verdict about the account, not about this device — so the
+/// cache still knows the account's vault. The recovery endpoint answers 429
+/// first, so the start cannot revive the vault pointer or confirm the end of
+/// its chain (ADR 0062 D1 step 1): it adopts no root and mints nothing. The
 /// session must stay retryable and converge on the refresh a host already
 /// drives, rather than render an empty tree forever.
 #[test]
@@ -18557,7 +18533,9 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
 
     let tab_world = FakeWorld::new();
     let tab = tab_world.device(b"alice-tab");
-    serve_http_with_cached_record(&tab, &blocks, 64, &pointer_name, published_pointer.clone());
+    blocks.cache_for_recovery(pointer_name.as_str(), published_pointer.clone());
+    blocks.throttle_recovery_once(pointer_name.as_str());
+    serve_http(&tab, &blocks, 64);
     let (mut engine, mut events) = engine_on_api(&tab, 43);
 
     block_on(engine.start(secret(), None))
@@ -18601,6 +18579,47 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
     );
     let children = block_on(engine.view()).unwrap().children(ROOT);
     assert_eq!(children.len(), 1, "the tab converged on the mount's tree");
+    assert_eq!(children[0].name, "photos");
+}
+
+/// The leg where the recovery endpoint answers: the API cache serves the
+/// lapsed vault pointer and root, the session-start revival restores them at
+/// `S + 1`, and the session provisions with no stall.
+#[test]
+fn a_vault_only_the_api_cache_can_see_revives_at_session_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (root_name, published_root) = a_mounted_device_publishes_a_vault(&world, &blocks);
+    let pointer_name = vault_pointer_name(&SECRET, 0);
+    let published_pointer = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
+        .expect("the mount published its vault pointer");
+    blocks.cache_for_recovery(pointer_name.as_str(), published_pointer);
+    blocks.cache_for_recovery(root_name.as_str(), published_root);
+
+    let tab_world = FakeWorld::new();
+    let tab = tab_world.device(b"alice-tab");
+    serve_http(&tab, &blocks, 64);
+    let (mut engine, mut events) = engine_on_api(&tab, 43);
+    block_on(engine.start(secret(), None)).expect("the session starts");
+
+    assert!(
+        engine.is_provisioned(),
+        "the write path opened on the revived vault"
+    );
+    assert!(
+        !core::iter::from_fn(|| events.try_next())
+            .any(|event| matches!(event, Event::VaultUnprovisioned { .. })),
+        "a vault the revival restores is no stall",
+    );
+    assert_eq!(
+        sequence_at(&tab_world, &root_name),
+        sequence_at(&world, &root_name) + 1,
+        "the root revives at S + 1",
+    );
+    let children = block_on(engine.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1, "the tab reads the mount's tree");
     assert_eq!(children[0].name, "photos");
 }
 
