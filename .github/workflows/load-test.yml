@@ -107,11 +107,11 @@ jobs:
     env:
       # A scheduled run has no inputs: it is the weekly rotation-wave run.
       SCENARIO: ${{ inputs.scenario || 'rotation-wave' }}
-      CLIENTS: ${{ inputs.clients }}
-      OPS_PER_CLIENT: ${{ inputs.ops_per_client }}
-      BLOCK_BYTES: ${{ inputs.block_bytes }}
-      BATCH_SIZE: ${{ inputs.batch_size }}
-      RAMP_MS: ${{ inputs.ramp_ms }}
+      CLIENTS: ${{ inputs.clients || '5' }}
+      OPS_PER_CLIENT: ${{ inputs.ops_per_client || '20' }}
+      BLOCK_BYTES: ${{ inputs.block_bytes || '65536' }}
+      BATCH_SIZE: ${{ inputs.batch_size || '25' }}
+      RAMP_MS: ${{ inputs.ramp_ms || '0' }}
       NODES: ${{ inputs.nodes || '16' }}
       TARGET: ${{ inputs.environment || 'local' }}
 
@@ -182,7 +182,6 @@ jobs:
               echo '::error::staging runs need the API_URL variable'
               exit 1
             fi
-            # Each engine leaves an account whose records the republisher keeps.
             if [ "$SCENARIO" = 'rotation-wave' ]; then
               echo '::error::rotation-wave runs on the local target only'
               exit 1

@@ -4,7 +4,9 @@
 //! seconds, or a clean run turning into an error storm — not normal variance,
 //! and staging's describe the 2-vCPU ceiling rather than headroom it does not
 //! have. They read the `all` row, which spans provisioning and teardown too, so
-//! they are a whole-run collapse detector and never a per-surface SLO.
+//! they are a whole-run collapse detector and never a per-surface SLO. A
+//! rotation-wave run reads its two measured rows instead
+//! ([`Thresholds::max_of_rows`]).
 
 use crate::metrics::OpSummary;
 use crate::plan::{Scenario, Target};
@@ -13,6 +15,10 @@ use crate::plan::{Scenario, Target};
 pub struct Thresholds {
     pub p95_ms: f64,
     pub max_error_rate: f64,
+    /// Rows whose maximum the band reads in place of the `all` row's p95: a
+    /// rotation run has one sweep and one wave, and a p95 over its other
+    /// samples hides a slow one.
+    pub max_of_rows: &'static [&'static str],
 }
 
 /// The band for a scenario on a target. Content ingest and gateway reads move
@@ -36,6 +42,11 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
         } else {
             0.01
         },
+        max_of_rows: if scenario == Scenario::RotationWave {
+            &["sweep-converge", "name-wave"]
+        } else {
+            &[]
+        },
     }
 }
 
@@ -57,11 +68,24 @@ pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<String> 
     }
 
     let mut breaches = Vec::new();
-    if total.p95_ms > thresholds.p95_ms {
-        breaches.push(format!(
-            "p95 {:.0}ms exceeds the {:.0}ms band",
-            total.p95_ms, thresholds.p95_ms
-        ));
+    if thresholds.max_of_rows.is_empty() {
+        if total.p95_ms > thresholds.p95_ms {
+            breaches.push(format!(
+                "p95 {:.0}ms exceeds the {:.0}ms band",
+                total.p95_ms, thresholds.p95_ms
+            ));
+        }
+    } else {
+        for row in summaries
+            .iter()
+            .filter(|row| thresholds.max_of_rows.contains(&row.op))
+            .filter(|row| row.max_ms > thresholds.p95_ms)
+        {
+            breaches.push(format!(
+                "{} max {:.0}ms exceeds the {:.0}ms band",
+                row.op, row.max_ms, thresholds.p95_ms
+            ));
+        }
     }
     if total.error_rate() > thresholds.max_error_rate {
         breaches.push(format!(
@@ -111,13 +135,40 @@ mod tests {
         assert!(breaches[0].contains("error rate"), "{}", breaches[0]);
     }
 
+    /// The samples of one 16-node rotation-wave run, as RESULTS.md records it.
+    fn sixteen_node_run(sweep_ms: f64) -> Vec<OpSummary> {
+        let mut collector = Collector::default();
+        for (op, ms) in [
+            ("engine-start", 209.0),
+            ("populate", 3_447.0),
+            ("link-mint", 898.0),
+            ("read-cut", 66.0),
+            ("sweep-converge", sweep_ms),
+            ("sweep-last-reseal", 734.0),
+            ("write-cut", 1_100.0),
+            ("name-wave", 1_021.0),
+        ] {
+            collector.record(Sample::new(op, Outcome::Ok, ms));
+        }
+        for _ in 0..17 {
+            collector.record(Sample::new("name-wave-node", Outcome::Ok, 35.0));
+        }
+        collector.summarize(1_000.0)
+    }
+
     #[test]
-    fn a_rotation_sample_at_the_convergence_budget_turns_the_run_red() {
+    fn a_sweep_at_the_convergence_budget_turns_a_full_run_red() {
         let bands = thresholds_for(Scenario::RotationWave, Target::Local);
         let budget = crate::rotation::CONVERGE_BUDGET.as_millis() as f64;
-        let breaches = evaluate(bands, &summaries(&[(Outcome::Ok, budget)]));
+        let breaches = evaluate(bands, &sixteen_node_run(budget));
         assert_eq!(breaches.len(), 1);
-        assert!(breaches[0].contains("p95"), "{}", breaches[0]);
+        assert!(breaches[0].contains("sweep-converge"), "{}", breaches[0]);
+    }
+
+    #[test]
+    fn a_full_run_with_every_sample_fast_breaches_nothing() {
+        let bands = thresholds_for(Scenario::RotationWave, Target::Local);
+        assert!(evaluate(bands, &sixteen_node_run(734.0)).is_empty());
     }
 
     #[test]
