@@ -20992,3 +20992,76 @@ fn the_sweep_a_rotate_now_enqueues_reports_its_cut_time_and_new_epoch() {
         .collect();
     assert_eq!(reports, vec![(2, Some(cut_at))]);
 }
+
+/// The sweep a write revoke enqueues reads the root at the name the cascade
+/// saw, and the name wave then moves the root. The sweep follows the root the
+/// scope pointer vouches and reports, with no wait for the idle job.
+#[test]
+fn the_sweep_a_write_revoke_enqueues_follows_the_moved_root() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<(u64, u32)> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                read_epoch,
+                old_epoch_nodes,
+                ..
+            } if scope_root == fx.folder => Some((read_epoch, old_epoch_nodes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reports,
+        vec![(2, 0)],
+        "one converged report at the cut epoch"
+    );
+}
+
+/// A sweep enqueued before a write cut moves the root still reads the current
+/// root: it follows the root the scope pointer vouches.
+#[test]
+fn a_sweep_enqueued_before_a_write_cut_reads_the_current_root() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let folder = fx.folder;
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: folder })),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        before,
+        "the write cut moved the root after the sweep was enqueued"
+    );
+    events_so_far(&mut fx._events);
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<u32> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                old_epoch_nodes,
+                ..
+            } if scope_root == folder => Some(old_epoch_nodes),
+            _ => None,
+        })
+        .collect();
+    assert!(!reports.is_empty(), "the enqueued sweep reports");
+    assert!(reports.iter().all(|nodes| *nodes == 0), "and converges");
+}

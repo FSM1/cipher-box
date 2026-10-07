@@ -2593,6 +2593,25 @@ where
         Err(failure)
     }
 
+    /// [`SweepResolveFailure::Superseded`] when the scope pointer vouches a
+    /// root other than `name`: a write cut moved the root, so the caller
+    /// re-resolves at the vouched name through the gate.
+    fn moved_from(&self, scope_id: [u8; 16], name: &IpnsName) -> Option<SweepResolveFailure>
+    where
+        Sch: Scheduler,
+    {
+        let now = self.scheduler.now();
+        match self
+            .on_access_misses
+            .recent(&scope_id, now, self.profile.pointer_consult_interval)
+        {
+            Some(OnAccessMiss::Vouched(current)) if *current != *name => {
+                Some(SweepResolveFailure::Superseded)
+            }
+            _ => None,
+        }
+    }
+
     /// The scope-pointer consult under this net's owner material.
     fn pointer_consult(&self) -> PointerConsult<'_> {
         PointerConsult {
@@ -3776,9 +3795,14 @@ where
             .map_err(SweepResolveFailure::from)?;
         let observed =
             root_observed(&root, over_sequence).map_err(|_| SweepResolveFailure::VersionSkew)?;
-        self.open_write_seed_on_access(&mut root, scope.scope_id)
+        if let Err(failure) = self
+            .open_write_seed_on_access(&mut root, scope.scope_id)
             .await
-            .map_err(SweepResolveFailure::from)?;
+        {
+            return Err(self
+                .moved_from(scope.scope_id, &name)
+                .unwrap_or(failure.into()));
+        }
         let GatedWriteBody {
             write_scope_seed,
             body: write_body,
