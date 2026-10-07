@@ -568,11 +568,11 @@ pub(crate) struct HeldRoot {
 }
 
 impl HeldRoot {
-    /// Whether `served` is this record, or a record below it. Another record
-    /// at this sequence is a same-sequence fork, which can name a scope root
-    /// the sets do not hold.
+    /// Whether `served` is this record. A record below it is an availability
+    /// outcome, and another record at this sequence is a same-sequence fork:
+    /// neither matches the scope sets the held record installed.
     pub(crate) fn holds(&self, served: &VerifiedRecord) -> bool {
-        served.sequence < self.sequence || self.is_record(served.sequence, &served.data)
+        self.is_record(served.sequence, &served.data)
     }
 
     fn is_record(&self, sequence: u64, data: &[u8]) -> bool {

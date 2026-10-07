@@ -10960,7 +10960,7 @@ where {
     /// (#33 D2): the newly focused chain refreshes now rather than a poll cadence
     /// later, and only past the staleness threshold — a repeat visit renders the
     /// state already held. A scope whose served root is not the held root
-    /// record or one below it ([`Self::scope_root_moved`]), or whose root
+    /// record ([`Self::scope_root_moved`]), or whose root
     /// probe has no answer, reads nothing here; the next tick reads it. Each
     /// root is probed once per navigation.
     ///
@@ -11153,10 +11153,10 @@ where {
         self.state.boundary_walk_landed.get()
     }
 
-    /// Whether the plane serves `scope`'s root above the record held at its
-    /// name, or another record at its sequence
-    /// ([`crate::session::RootSequences`]): a grant in that record can name a
-    /// scope root the legs would read as a plain child. The name is the one
+    /// Whether the plane serves `scope`'s root other than the record held at
+    /// its name ([`crate::session::RootSequences`]): a grant in a record above
+    /// or beside it can name a scope root the legs would read as a plain
+    /// child. A record below it is an availability outcome. The name is the one
     /// the last walk or graft gated, else `name`. A moved root reads nothing
     /// until the next walk. The sequence floor is no proof of a walk, as a gated
     /// read outside a walk raises it, so it bars only a replay: a served
@@ -22307,6 +22307,30 @@ mod focus_access_tests {
             held(b"/ipfs/bafkqaaa"),
         )]);
         assert!(!moved(&floored), "the walk gated the served record");
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            crate::session::HeldRoot::from(
+                IpnsRecord::create_v2(
+                    &signer,
+                    b"/ipfs/bafkqaab",
+                    3,
+                    2_000_000_000,
+                    "2099-01-01T00:00:00Z",
+                )
+                .verify(&name)
+                .expect("the record verifies"),
+            ),
+        )]);
+        assert!(
+            moved(&floored),
+            "a served record below the held one is an availability outcome"
+        );
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            held(b"/ipfs/bafkqaaa"),
+        )]);
         let failing = InMemoryFloorStore::default();
         failing.fail_floor_reads();
         assert!(

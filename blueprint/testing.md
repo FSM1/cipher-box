@@ -300,6 +300,10 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  The navigation probe reads nothing for a scope whose served root is a
+  record below the held one, or another record at its sequence, and sends no
+  abuse event; the next navigation after the endpoints catch up reads
+  (`facade`, `tests/owner_actions.rs`).
   A child or a vault root at a foreign envelope version is not renewed by the
   walk or the renewal set, and the walk emits `renewalFailed` with a version
   detail; a scope floor raised during the registration makes the walk refuse
