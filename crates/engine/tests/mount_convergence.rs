@@ -2360,6 +2360,73 @@ fn a_downgraded_grantees_kept_delete_dead_letters_at_the_keyless_budget() {
     );
 }
 
+/// A downgraded write grantee's kept delete of X in /shared/A/B/X, after a
+/// restart that does not read B before the grantee's passes run. The scope
+/// is keyless, so the delete still takes the keyless charge and
+/// dead-letters with a notice; it never leaves as gone (ADR 0069 D3).
+#[test]
+fn a_downgraded_grantees_deep_kept_delete_dead_letters_after_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let a = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "a");
+    let b = create_published_folder(&world, &mut engine_t, &mut tasks_t, a, "b");
+    let x = create_published_folder(&world, &mut engine_t, &mut tasks_t, b, "x");
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+    let (mut engine_r, _events_r, mut tasks_r) =
+        recipient_on_with_the_share(&world, &blocks, &recipient);
+    for folder in [a, b] {
+        block_on(engine_r.command(Command::SetFocus { node: Some(folder) }))
+            .expect("the grantee opens the folder");
+        tick_n(&world, &engine_r, &mut tasks_r, 2);
+    }
+    block_on(engine_r.command(Command::Delete { node: x })).expect("the grantee's delete stages");
+    tick_n(&world, &engine_r, &mut tasks_r, 4);
+    let holds_the_delete = || {
+        let raw =
+            block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
+        decode_queue(
+            &RecordReader::new(&kdf::enc_subkey(&RECIPIENT_SECRET)),
+            &raw,
+        )
+        .mine
+        .iter()
+        .any(|(_, op)| op.target == x)
+    };
+    assert_eq!(queued(&recipient), 0, "the delete published");
+    assert!(holds_the_delete(), "and the queue keeps it");
+
+    assert_eq!(
+        block_on(engine_t.command(Command::ChangePermission {
+            node: shared,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick_n(&world, &engine_t, &mut tasks_t, 2);
+    drop((engine_r, tasks_r));
+    let (mut engine_r, mut events_r) = engine_on_api(&recipient, 22);
+    block_on(engine_r.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
+        .expect("the grantee's session restarts");
+    let mut tasks_r = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks_r);
+    tick_n(&world, &engine_r, &mut tasks_r, 10);
+
+    assert!(!holds_the_delete(), "the kept delete left the queue");
+    assert_eq!(
+        dead_letter_events(&mut events_r).len(),
+        1,
+        "as a dead letter with a notice"
+    );
+}
+
 /// The dead-letter notices on `events` since the last read.
 fn dead_letter_events(events: &mut EventStream) -> Vec<Event> {
     events_so_far(events)

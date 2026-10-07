@@ -166,12 +166,18 @@ scenario fails the meta-test):
   whose folder a later writer deleted leaves before the bound, and one whose
   folder the gate refuses at the flip is charged and never read as gone
   (ADR 0069, `crates/engine/tests/owner_actions.rs`); a kept delete whose
-  folder the live root dropped leaves at the read, one whose folder a proved
-  base lacks leaves after the flip, and one whose note names no folder
-  leaves at the bound (`crates/engine/src/sync/drain.rs`); the kept-op note
-  reads frozen version 1 bytes with no folder and no result, a copy of the
-  version 1 decoder reads a version 2 body as no notes, and each bound the
-  decoder holds is refused at insert and at encode (ADR 0069 D4, ADR 0020,
+  folder the live root dropped leaves at the read, one whose folder this
+  session saw unlinked leaves at once, one whose folder a proved base lacks
+  waits and leaves at the bound, and one whose note names no folder leaves
+  at the bound (`crates/engine/src/sync/drain.rs`); after a restart, a kept
+  delete in /A/B/X does not leave before the bound with no read of B, and
+  leaves at once after a pass that reads B (`owner_actions.rs`), and the one
+  of a downgraded grantee dead-letters with a notice
+  (`mount_convergence.rs`); the kept-op note reads frozen version 1 bytes
+  with no folder and no result, a copy of the version 1 decoder reads a
+  version 2 body as no notes, and each name and CID bound the decoder holds
+  is refused at insert and at encode, while a compile-time assertion keeps
+  the longest entry within its two-byte length (ADR 0069 D4, ADR 0020,
   `crates/engine/src/sync/kept_op.rs`,
   `crates/engine/tests/encode_refusals.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, a kept delete included,

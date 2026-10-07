@@ -82,13 +82,12 @@ head. A kept delete whose node the base does not hold leaves at T. Amended on 20
 ruling on FSM1/cipher-box#2336, option 3): at a flip, a kept delete whose note names its folder
 waits for one read of that folder at its live name, which the drain makes itself. A live node
 applies the delete again, and a node that is gone ends the op with no notice. A folder that its old
-parent no longer names took the node with it, so the op ends too, at once when the root is a proved
-root of the pass and the base no longer holds the folder. The sentence before now holds only for a
-delete whose note names no folder, or whose root is not proved. A kept delete under a scope that this
-device can no longer write anchors on its folder, so it takes the keyless charge of D3 and
-dead-letters with a notice, as a kept create and a kept edit do. An accepted residual: a later
-writer that moves an ancestor of the folder to another parent in the scope makes the folder read as
-gone, so the delete leaves while its node is alive at the new place. Proposed: a kept
+parent no longer names took the node with it, so the op ends too, at once when a read of this
+session shows the old parent no longer names the folder. A base that does not hold the folder shows
+nothing, so with no such read the op waits for a pass that reads the folder, or leaves at T. A kept
+delete under a scope that this device can no longer write takes the keyless charge of D3 and
+dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold
+its folder. Proposed: a kept
 op that this device edits again leaves with no check, because the later op sets what the node shows. A second
 apply that cannot land leaves with no retire and no notice, because its version landed once.
 

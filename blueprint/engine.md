@@ -1064,12 +1064,13 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   higher floor or another root keeps it with no bound until a pass can check
   it. At a flip, a kept delete whose note names its folder waits for one
   read of that folder at its live name, which the drain makes before the
-  rebase: a live node applies the delete again, and a node gone, or a folder
-  that its old parent no longer names, ends the op with no notice. A delete
-  whose note names no folder, or whose root the walk did not prove, still
-  leaves at T when no pass can check it. A kept delete under a scope this
-  device can no longer write anchors on its folder, so it takes the keyless
-  charge below. A
+  rebase: a live node applies the delete again, and a node gone ends the op
+  with no notice. A folder that a read of this session shows its old parent
+  no longer names ends the op at once. A base that does not hold the folder
+  shows nothing, so with no such read the op waits for a pass that reads the
+  folder, or leaves at T. A kept delete under a scope this device can no
+  longer write takes the keyless charge below, also when the base does not
+  hold its folder. A
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
@@ -1454,6 +1455,9 @@ rebases and signs above.
   loses leaves a history that names bytes this writer already retired. A kept
   hard delete whose note names no folder and that leaves at T with no read
   of its folder leaves a child ref whose record is retired.
+- Kept delete under a moved ancestor: a later writer that moves an ancestor
+  of a kept delete's folder, in the scope or to another scope, makes the
+  folder read as gone, and the delete leaves while its node is alive (ADR 0069 D6).
 
 ## Pointer planes
 

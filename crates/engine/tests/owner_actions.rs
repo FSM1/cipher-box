@@ -2588,6 +2588,79 @@ fn a_kept_delete_that_waits_for_its_parent_keeps_its_note_across_a_restart() {
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// A kept delete of X in /A/B/X under the granted root, published before a
+/// cut, and a restart. No read of B at its live name answers until the
+/// returned name is served again, so nothing shows that B is gone. Returns
+/// B, X and B's live name.
+fn deep_kept_delete_after_a_cut_and_a_restart(
+    fx: &mut GrantScenario,
+) -> (NodeId, NodeId, IpnsName) {
+    let (a, _) = write_granted_child(fx);
+    let b = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, a, "b");
+    let x = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, b, "x");
+    block_on(fx.engine.command(Command::Delete { node: x })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_ops_on(&fx.owner_device, x)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete is kept"
+    );
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(fx, &mut phone);
+    let (root, _) = live_scope(fx);
+    let a_name = live_child(fx, &root, fx.folder, "child");
+    let b_name = live_child(fx, &a_name, a, "b");
+    fx.world
+        .record_store
+        .serve_gets_for_after(b_name.as_str(), 0, 10_000, None);
+    restart_owner(fx);
+    (b, x, b_name)
+}
+
+/// With no read of B after the restart, nothing shows that B is gone, so
+/// the delete does not leave before the bound.
+#[test]
+fn a_deep_kept_delete_does_not_leave_before_the_bound_with_no_read_of_its_folder() {
+    let mut fx = GrantScenario::new();
+    let (_, x, _) = deep_kept_delete_after_a_cut_and_a_restart(&mut fx);
+
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        queued_ops_on(&fx.owner_device, x)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete waits"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A pass that reads B at its live name after the restart shows X unlinked,
+/// so the delete leaves at once, before the bound, with no notice.
+#[test]
+fn a_deep_kept_delete_leaves_after_a_read_of_its_folder_after_a_restart() {
+    let mut fx = GrantScenario::new();
+    let (b, x, b_name) = deep_kept_delete_after_a_cut_and_a_restart(&mut fx);
+    passes_after_the_flip(&mut fx);
+    assert!(
+        !queued_ops_on(&fx.owner_device, x).is_empty(),
+        "the delete waits for a read of its folder"
+    );
+
+    fx.world
+        .record_store
+        .serve_gets_for_after(b_name.as_str(), 0, 0, None);
+    block_on(fx.engine.command(Command::SetFocus { node: Some(b) })).expect("the focus moves");
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        queued_ops_on(&fx.owner_device, x).is_empty(),
+        "the delete left before the bound"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
 /// After the flip, the folder of a kept delete reads at its live name as a
 /// record the gate refuses. The refusal is a trust violation, never a sign
 /// that the node is gone: the halt is charged to the delete, which

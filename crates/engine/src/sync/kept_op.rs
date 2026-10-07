@@ -39,6 +39,11 @@ pub const KEPT_OP_BOUND: Duration = DROP_BOUND;
 const NOTE_FORMAT_V1: u8 = 1;
 const NOTE_FORMAT_V2: u8 = 2;
 
+// The longest version 2 entry, the fixed fields and a move with two names at
+// the bound, fits its two-byte length.
+const _: () =
+    assert!(8 + 17 + 16 + 17 + 1 + 2 * (16 + 2 + MAX_NODE_NAME_BYTES) <= u16::MAX as usize);
+
 /// The result tags of a version 2 entry.
 const RESULT_NONE: u8 = 0;
 const RESULT_RENAME: u8 = 1;
@@ -519,6 +524,11 @@ impl KeptOps {
     /// The folder the note of `op_id` names.
     pub(crate) fn parent(&self, op_id: OpId) -> Option<NodeId> {
         self.notes.notes.get(&op_id).and_then(|note| note.parent)
+    }
+
+    /// The scope root the note of `op_id` names.
+    pub(crate) fn scope(&self, op_id: OpId) -> Option<NodeId> {
+        self.notes.notes.get(&op_id).and_then(|note| note.scope)
     }
 }
 

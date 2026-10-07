@@ -2687,8 +2687,9 @@ where
             if !kept.holds(*op_id, op) {
                 continue;
             }
-            if let KeptPlace::Keyless { root } =
-                self.kept_place(scope, op, kept.parent(*op_id)).await?
+            if let KeptPlace::Keyless { root } = self
+                .kept_place(scope, op, kept.parent(*op_id), kept.scope(*op_id))
+                .await?
             {
                 if index == 0 {
                     let halt = halt_below_another_scope_root(
@@ -3113,12 +3114,14 @@ where
                 // Its record publish was confirmed, so its version is live.
                 let verdict = if keeps(&op.kind) {
                     let note = notes.note_at(op_id, now);
-                    let mut place = self.kept_place(scope, &op, note.parent).await?;
+                    let mut place = self.kept_place(scope, &op, note.parent, note.scope).await?;
                     // This pass cannot check the op, so the floor of the root
                     // it published under decides whether the bound runs. A
                     // delete whose anchor the base does not hold under a proved
-                    // root leaves at the bound; past a flip, a folder its note
-                    // names took the node with it, so it leaves now (ADR 0069 D6).
+                    // root leaves at the bound, and at once when a read of this
+                    // session saw the folder its note names unlinked: the node
+                    // went with it (ADR 0069 D6). A base after a cold start
+                    // lacks deep folders, so absence alone shows nothing.
                     let mut gone = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
@@ -3132,12 +3135,15 @@ where
                             || !scope.scope_roots.contains(&root)
                         {
                             place = self.unchecked_place(scope, root).await?;
-                        } else if reads_kept_parent(&op, note.parent) {
-                            gone = matches!(
-                                self.unchecked_place(scope, root).await?,
-                                KeptPlace::Unchecked { live_write_epoch, .. }
-                                    if live_write_epoch > note.write_epoch
-                            );
+                        } else if let Some(folder) =
+                            note.parent.filter(|_| reads_kept_parent(&op, note.parent))
+                        {
+                            gone = self
+                                .cells
+                                .observed_unlinks
+                                .borrow()
+                                .iter()
+                                .any(|unlinked| unlinked.node == folder);
                         }
                     }
                     // A later op of this device on the same node decides what
@@ -3220,12 +3226,21 @@ where
         scope: &DrainScope<'_>,
         op: &Op,
         parent: Option<NodeId>,
+        noted_root: Option<NodeId>,
     ) -> Result<KeptPlace, Halt> {
         let anchor = kept_anchor(op, parent);
         let (nearest, anchor_name) = {
             let base = self.cells.base.borrow();
             let Some(meta) = base.node(anchor) else {
-                return Ok(KeptPlace::Elsewhere);
+                // A base after a cold start lacks deep folders, but the root
+                // the op published under still shows a scope this device can
+                // no longer write.
+                return Ok(match noted_root {
+                    Some(root) if scope.keyless_roots.contains(&root) => {
+                        KeptPlace::Keyless { root }
+                    }
+                    _ => KeptPlace::Elsewhere,
+                });
             };
             let known: Vec<NodeId> = scope
                 .scope_roots
@@ -3441,7 +3456,10 @@ where
                 halt,
                 at: Some(*op_id),
             };
-            let place = self.kept_place(scope, op, parent).await.map_err(at)?;
+            let place = self
+                .kept_place(scope, op, parent, kept.scope(*op_id))
+                .await
+                .map_err(at)?;
             if let (KeptPlace::Writes { .. }, Some(parent)) = (place, parent)
                 && !self
                     .read_live_folder(scope, pass, parent)
@@ -3503,7 +3521,7 @@ where
             // Only a folder the base read at its live name shows the history;
             // any other edit is left to its rebase.
             if !matches!(
-                self.kept_place(scope, op, None).await.map_err(at)?,
+                self.kept_place(scope, op, None, None).await.map_err(at)?,
                 KeptPlace::Writes {
                     anchor_read_live: true,
                     ..
@@ -12130,6 +12148,22 @@ mod tests {
         namespace: FloorNamespace,
         parent: Option<NodeId>,
     ) -> OpId {
+        let op_id = kept_op_after_a_cut(harness, op, root, namespace, parent);
+        harness
+            .seams
+            .scheduler
+            .advance(crate::sync::kept_op::KEPT_OP_BOUND);
+        op_id
+    }
+
+    /// [`kept_op_past_the_bound_after_a_cut`], before the bound.
+    fn kept_op_after_a_cut(
+        harness: &DrainHarness,
+        op: &Op,
+        root: NodeId,
+        namespace: FloorNamespace,
+        parent: Option<NodeId>,
+    ) -> OpId {
         let op_id = harness.queue_an_op(op);
         let drain = harness.drain();
         let scope = harness.scope();
@@ -12153,10 +12187,6 @@ mod tests {
             3,
         ))
         .expect("the floor rises");
-        harness
-            .seams
-            .scheduler
-            .advance(crate::sync::kept_op::KEPT_OP_BOUND);
         op_id
     }
 
@@ -12227,10 +12257,24 @@ mod tests {
         root: NodeId,
         parent: Option<NodeId>,
     ) -> (OpId, Queue, DrainReport) {
+        kept_delete_read_elsewhere_at(harness, root, parent, true)
+    }
+
+    /// [`kept_delete_read_elsewhere`], past the bound or before it.
+    fn kept_delete_read_elsewhere_at(
+        harness: &DrainHarness,
+        root: NodeId,
+        parent: Option<NodeId>,
+        past_the_bound: bool,
+    ) -> (OpId, Queue, DrainReport) {
         let target = NodeId([0x65; 16]);
         let op = Op::delete(target, 1, UnixMillis(0), 1, true);
-        let op_id =
-            kept_op_past_the_bound_after_a_cut(harness, &op, root, FloorNamespace::Own, parent);
+        let cut = if past_the_bound {
+            kept_op_past_the_bound_after_a_cut
+        } else {
+            kept_op_after_a_cut
+        };
+        let op_id = cut(harness, &op, root, FloorNamespace::Own, parent);
         let mut report = DrainReport::default();
         let scope = harness.own_scope_at(NodeId([0x70; 16]));
         let queue =
@@ -12326,17 +12370,42 @@ mod tests {
         assert!(!harness.state.snapshot.borrow().contains(parent));
     }
 
-    /// A folder the base no longer holds went with the node: past a flip, a
-    /// delete whose parent a proved root's base lacks leaves.
+    /// A base after a cold start lacks deep folders, so a folder the base
+    /// does not hold shows nothing: past a flip, the delete waits until the
+    /// bound, and leaves there.
     #[test]
-    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_after_the_flip() {
+    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_at_the_bound() {
+        let parent = Some(NodeId([0x67; 16]));
         let harness = drain_harness(Some(harness_root_envelope()));
-
         let (op_id, queue, report) =
-            kept_delete_read_elsewhere(&harness, HARNESS_ROOT, Some(NodeId([0x67; 16])));
+            kept_delete_read_elsewhere_at(&harness, HARNESS_ROOT, parent, false);
+        assert_eq!(queue.kept, vec![op_id], "the op waits before the bound");
+        assert!(report.dropped.is_empty());
 
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, parent);
         assert!(queue.kept.is_empty());
         assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
+    }
+
+    /// A read of this session saw the old parent unlink the folder a kept
+    /// delete's note names, so the node went with it: the delete leaves at
+    /// once, before the bound.
+    #[test]
+    fn a_kept_delete_whose_parent_this_session_saw_unlinked_leaves_at_once() {
+        let parent = NodeId([0x67; 16]);
+        let harness = drain_harness(Some(harness_root_envelope()));
+        *harness.state.observed_unlinks.borrow_mut() = vec![capture_of(&[0; 32], parent)];
+
+        let (op_id, queue, report) =
+            kept_delete_read_elsewhere_at(&harness, HARNESS_ROOT, Some(parent), false);
+
+        assert!(queue.kept.is_empty());
+        assert_eq!(
+            report.dropped,
+            vec![op_id],
+            "the op leaves before the bound"
+        );
     }
 
     /// A base without the deleted node shows nothing under a root the walk
