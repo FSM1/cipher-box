@@ -18417,44 +18417,6 @@ fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
 // published: the two legs of `start` that leave the session dark.
 // ---------------------------------------------------------------------------
 
-/// [`serve_http`], with the record-recovery route answering `record` for `name`
-/// — the API cache that still knows a vault this device's own fan-out cannot
-/// resolve yet. The first fetch answers 429, so the session-start revival
-/// signs nothing and the vacancy probe meets the cached record.
-fn serve_http_with_cached_record(
-    device: &FakeDevice,
-    blocks: &Blocks,
-    calls: usize,
-    name: &IpnsName,
-    record: Vec<u8>,
-) {
-    let route = format!("/recovery/{}", name.as_str());
-    let throttled = Arc::new(AtomicBool::new(false));
-    for _ in 0..calls {
-        let blocks = blocks.clone();
-        let route = route.clone();
-        let record = record.clone();
-        let throttled = throttled.clone();
-        device.http.enqueue_derived(move |request| {
-            if request.url.ends_with(&route) && !throttled.swap(true, Ordering::Relaxed) {
-                return Ok(HttpResponse {
-                    status: 429,
-                    headers: Vec::new(),
-                    body: Vec::new().into(),
-                });
-            }
-            if request.url.ends_with(&route) {
-                return Ok(HttpResponse {
-                    status: 200,
-                    headers: Vec::new(),
-                    body: record.into(),
-                });
-            }
-            blocks.reply(request)
-        });
-    }
-}
-
 /// Provision a vault on `world` from one device and write `photos` into it — a
 /// mounted desktop that has been running for a while. Returns the root name and
 /// the record it published there.
@@ -18550,8 +18512,9 @@ fn a_tab_that_adopts_a_published_genesis_root_converges_on_that_devices_tree() {
 }
 
 /// The other leg: the tab's fan-out sees nothing at all, while the API's record
-/// cache still knows the account's vault. The vacancy probe refuses the mint on
-/// that answer — a verdict about the account, not about this device — so the
+/// cache still knows the account's vault. The recovery endpoint answers 429
+/// first, so the start cannot revive the vault pointer or confirm the end of
+/// its chain (ADR 0062 D1 step 1): it adopts no root and mints nothing. The
 /// session must stay retryable and converge on the refresh a host already
 /// drives, rather than render an empty tree forever.
 #[test]
@@ -18567,7 +18530,9 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
 
     let tab_world = FakeWorld::new();
     let tab = tab_world.device(b"alice-tab");
-    serve_http_with_cached_record(&tab, &blocks, 64, &pointer_name, published_pointer.clone());
+    blocks.cache_for_recovery(pointer_name.as_str(), published_pointer.clone());
+    blocks.throttle_recovery_once(pointer_name.as_str());
+    serve_http(&tab, &blocks, 64);
     let (mut engine, mut events) = engine_on_api(&tab, 43);
 
     block_on(engine.start(secret(), None))
@@ -18611,6 +18576,47 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
     );
     let children = block_on(engine.view()).unwrap().children(ROOT);
     assert_eq!(children.len(), 1, "the tab converged on the mount's tree");
+    assert_eq!(children[0].name, "photos");
+}
+
+/// The leg where the recovery endpoint answers: the API cache serves the
+/// lapsed vault pointer and root, the session-start revival restores them at
+/// `S + 1`, and the session provisions with no stall.
+#[test]
+fn a_vault_only_the_api_cache_can_see_revives_at_session_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (root_name, published_root) = a_mounted_device_publishes_a_vault(&world, &blocks);
+    let pointer_name = vault_pointer_name(&SECRET, 0);
+    let published_pointer = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
+        .expect("the mount published its vault pointer");
+    blocks.cache_for_recovery(pointer_name.as_str(), published_pointer);
+    blocks.cache_for_recovery(root_name.as_str(), published_root);
+
+    let tab_world = FakeWorld::new();
+    let tab = tab_world.device(b"alice-tab");
+    serve_http(&tab, &blocks, 64);
+    let (mut engine, mut events) = engine_on_api(&tab, 43);
+    block_on(engine.start(secret(), None)).expect("the session starts");
+
+    assert!(
+        engine.is_provisioned(),
+        "the write path opened on the revived vault"
+    );
+    assert!(
+        !core::iter::from_fn(|| events.try_next())
+            .any(|event| matches!(event, Event::VaultUnprovisioned { .. })),
+        "a vault the revival restores is no stall",
+    );
+    assert_eq!(
+        sequence_at(&tab_world, &root_name),
+        sequence_at(&world, &root_name) + 1,
+        "the root revives at S + 1",
+    );
+    let children = block_on(engine.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1, "the tab reads the mount's tree");
     assert_eq!(children[0].name, "photos");
 }
 

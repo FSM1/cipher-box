@@ -245,6 +245,8 @@ pub struct Blocks {
     failing: Arc<Mutex<BTreeSet<String>>>,
     /// The record the API's recovery cache holds for each name.
     recovery: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    /// The names whose next recovery fetch answers 429.
+    recovery_throttled: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Blocks {
@@ -304,6 +306,14 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(routing_key.to_owned(), record);
+    }
+
+    /// Answer the next recovery fetch for `routing_key` with 429.
+    pub fn throttle_recovery_once(&self, routing_key: &str) {
+        self.recovery_throttled
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
     }
 
     /// Make each fetch of `cid` fail at the transport, as a gateway timeout does.
@@ -515,6 +525,13 @@ impl Blocks {
         // A name the recovery cache has not seen answers 404, as the vacancy
         // probe first-run provisioning runs before it mints anything expects.
         if let Some((_, name)) = url.split_once("/recovery/") {
+            if self.recovery_throttled.lock().expect("lock").remove(name) {
+                return Ok(HttpResponse {
+                    status: 429,
+                    headers: Vec::new(),
+                    body: br#"{"statusCode":429}"#.to_vec().into(),
+                });
+            }
             if let Some(record) = self.recovery.lock().expect("lock").get(name) {
                 return ok(record.clone());
             }

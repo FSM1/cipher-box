@@ -175,9 +175,19 @@ fn written_then_left(
     blocks: &Blocks,
     write: impl FnOnce(&mut Engine<FakeSeamTypes>, &mut [BoxedTask]) -> Vec<NodeId>,
 ) -> Vec<NodeId> {
-    seed_account(world, blocks);
     let device = world.device(b"the device that wrote");
-    let (mut engine, _events, mut tasks) = boot(world, blocks, &device, 1);
+    written_then_left_on(world, blocks, &device, write)
+}
+
+/// [`written_then_left`] on `device`, which the caller keeps.
+fn written_then_left_on(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    write: impl FnOnce(&mut Engine<FakeSeamTypes>, &mut [BoxedTask]) -> Vec<NodeId>,
+) -> Vec<NodeId> {
+    seed_account(world, blocks);
+    let (mut engine, _events, mut tasks) = boot(world, blocks, device, 1);
     let nodes = write(&mut engine, &mut tasks);
     drop(tasks);
     drop(engine);
@@ -1755,11 +1765,20 @@ fn recovery_fetches(device: &FakeDevice) -> usize {
 /// The anchors revive at the session start, and the walk revives the lapsed
 /// folder before it descends into it, so the file below renews in the same
 /// cycle. Each revival signs at `S + 1` with the renewal EOL and the same value.
+/// This holds for a new device and for the device that wrote the vault, whose
+/// seed cache opens the root without a resolve.
 #[test]
 fn a_device_that_starts_after_100_days_offline_finds_its_vault_root() {
+    for returning in [false, true] {
+        a_device_after_100_days_offline_finds_its_vault_root(returning);
+    }
+}
+
+fn a_device_after_100_days_offline_finds_its_vault_root(returning: bool) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+    let writer = world.device(b"the device that wrote");
+    let nodes = written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
         let folder = create_folder(&world, engine, tasks, ROOT, "notes");
         vec![
             folder,
@@ -1781,7 +1800,11 @@ fn a_device_that_starts_after_100_days_offline_finds_its_vault_root() {
     world.scheduler.advance(DAY * 100);
     let started = world.scheduler.now();
 
-    let device = world.device(b"a device after 100 days offline");
+    let device = if returning {
+        writer
+    } else {
+        world.device(b"a device after 100 days offline")
+    };
     let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
 
     assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
@@ -1902,5 +1925,102 @@ fn the_settings_record_revives_at_session_start_only_at_its_floor() {
     assert_eq!(
         storage.settings.bin_retention_days, 7,
         "the load after the revival reads the saved settings"
+    );
+}
+
+fn unprovisioned(events: &mut EventStream, retryable: bool) -> bool {
+    core::iter::from_fn(|| events.try_next()).any(|event| {
+        matches!(event, Event::VaultUnprovisioned { retryable: at, .. } if at == retryable)
+    })
+}
+
+/// ADR 0062 D1 step 1: a 429 at the recovery read of the vault pointer leaves
+/// the end of the chain unconfirmed. A new device adopts no root, mints
+/// nothing and stays retryable, and a refresh in the same session revives the
+/// chain and provisions.
+#[test]
+fn a_throttled_chain_revival_stays_retryable_and_a_refresh_revives_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let pointer = vault_pointer_name(&SECRET, 0);
+    let before = record_at(&world, &pointer);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(pointer.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (mut engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+    assert!(!engine.is_provisioned(), "the session adopts no root");
+    assert!(
+        unprovisioned(&mut events, true),
+        "a throttled revival is a stall, never a refusal",
+    );
+    assert!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], pointer.as_str())
+            .is_none(),
+        "the session mints no vault over the lapsed one",
+    );
+
+    block_on(engine.command(Command::ManualRefresh)).expect("the refresh revives the chain");
+    assert!(engine.is_provisioned(), "the refresh provisions the session");
+    assert_eq!(record_at(&world, &pointer).sequence, before.sequence + 1);
+    assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
+}
+
+/// ADR 0062 D3: a lapsed bin index that a 429 keeps from reviving gets no
+/// genesis publish over it. The next start revives it at `S + 1` with the same
+/// value, reads it through the gate and holds it, so the liveness loop renews
+/// it later.
+#[test]
+fn a_throttled_bin_index_revival_publishes_no_genesis_and_the_next_start_revives_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        let file = write_file(&world, engine, tasks, ROOT, "binned.txt");
+        block_on(engine.command(Command::Delete { node: file })).expect("the delete stages");
+        tick(&world, engine, tasks);
+        vec![file]
+    });
+    let bin = BinIndexKeys::derive(&SECRET).name().clone();
+    let before = record_at(&world, &bin);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(bin.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, tasks) = boot(&world, &blocks, &device, 2);
+    assert!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], bin.as_str())
+            .is_none(),
+        "no genesis publish replaces the lapsed bin index",
+    );
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 3);
+    let revived = record_at(&world, &bin);
+    assert_eq!(revived.sequence, before.sequence + 1);
+    assert_eq!(revived.value, before.value, "the same bin index");
+    assert_eq!(
+        block_on(device.floors(&SECRET).sequence_floor(bin.as_str().as_bytes()))
+            .expect("the floor store answers"),
+        Some(before.sequence + 1),
+        "the load after the revival reads it through the gate",
+    );
+
+    world.scheduler.advance(DAY * 61);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &bin).sequence,
+        before.sequence + 2,
+        "the session holds the bin index and renews it",
     );
 }
