@@ -33,6 +33,7 @@ pub(crate) async fn drive<H: Http>(
         Scenario::NameWave => name_wave(virtual_client, plan, collector).await,
         Scenario::Mixed => mixed(virtual_client, plan, collector).await,
         Scenario::ByoAdvisory => byo_advisory(virtual_client, plan, collector).await,
+        Scenario::RotationWave => unreachable!("an engine scenario runs in `rotation.rs`"),
     }
 }
 
@@ -293,7 +294,9 @@ mod tests {
             api_url: "http://localhost:3000".to_owned(),
             gateway_url: Some("http://localhost:8080".to_owned()),
             gateway_token: None,
+            routing_endpoints: Vec::new(),
             test_login_secret: "stub-secret".to_owned(),
+            nodes: 16,
             clients: 1,
             ops_per_client,
             block_bytes: 128,

@@ -217,6 +217,9 @@ async fn teardown(clients: Vec<VirtualClient<ReqwestHttp>>, collector: &mut Coll
 /// whole run took — provisioning and teardown included, since they are API
 /// surface the run exercised.
 pub async fn run(plan: &RunPlan) -> Result<(Collector, f64), String> {
+    if plan.scenario.runs_engine() {
+        return crate::rotation::run(plan).await;
+    }
     let http = build_http()?;
     let run_id = random_token(6);
     let mut collector = Collector::default();
