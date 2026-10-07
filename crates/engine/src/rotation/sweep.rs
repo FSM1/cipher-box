@@ -233,7 +233,8 @@ impl SweepResolveFailure {
     /// Whether re-running the pass could clear this: an availability stall, or a
     /// C2 conflict the write-rotation re-point wave repairs. A rejection is a
     /// trust violation, and a `Superseded` that survives the consult means the
-    /// re-pointed record is below the floor too.
+    /// re-pointed record is below the floor too, or the pointer moved the root
+    /// again inside the consult interval.
     fn is_retryable(self) -> bool {
         matches!(self, Self::Unavailable | Self::ConflictingChildLabel)
     }

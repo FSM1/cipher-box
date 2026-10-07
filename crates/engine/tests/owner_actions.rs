@@ -21001,6 +21001,7 @@ fn the_sweep_a_write_revoke_enqueues_follows_the_moved_root() {
     let mut fx = GrantScenario::new();
     write_granted_nested_subtree(&mut fx);
     events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
 
     assert_eq!(
         fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
@@ -21008,22 +21009,23 @@ fn the_sweep_a_write_revoke_enqueues_follows_the_moved_root() {
     );
     settle_filed_sweeps(&fx);
 
-    let reports: Vec<(u64, u32)> = events_so_far(&mut fx._events)
+    let reports: Vec<(u64, u32, Option<UnixMillis>)> = events_so_far(&mut fx._events)
         .into_iter()
         .filter_map(|event| match event {
             Event::SweepConvergence {
                 scope_root,
                 read_epoch,
                 old_epoch_nodes,
+                cut_at,
                 ..
-            } if scope_root == fx.folder => Some((read_epoch, old_epoch_nodes)),
+            } if scope_root == fx.folder => Some((read_epoch, old_epoch_nodes, cut_at)),
             _ => None,
         })
         .collect();
     assert_eq!(
         reports,
-        vec![(2, 0)],
-        "one converged report at the cut epoch"
+        vec![(2, 0, Some(cut_at))],
+        "one converged report at the cut epoch, with its cut time"
     );
 }
 

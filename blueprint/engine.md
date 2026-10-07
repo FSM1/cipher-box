@@ -1187,9 +1187,11 @@ typically a `directChildScopeIndex` entry naming a root a `rotateScopeWrite`
 has since moved. It resolves to a distinct _superseded_ verdict, handled by the
 pointer consult (FSM1/cipher-box-next#38 D4) and a re-resolve at `currentRootName`, failing closed
 if the fresh record is still below the floor. A root whose owner-write-blob
-stays closed while the scope pointer vouches another root gets the same
-verdict: a write cut moved the root after the sweep took its name, and the
-re-resolve reads the moved root through the gate. Admitting such a record would
+stays closed while the owner-signed re-point names it as the root it moved off
+gets the same verdict: a write cut moved the root after the sweep took its
+name, and the re-resolve reads the moved root through the gate. A pointer that
+vouches another root without that name proves no move, and the read stays
+unavailable. Admitting such a record would
 republish the scope's existing override seed at the current epoch — a
 revocation bypass, not a repair
 ([ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).

@@ -183,9 +183,14 @@ pub enum PointerConsultArm {
 pub(crate) enum OnAccessMiss {
     /// No pointer record stands at the scope's pointer name.
     Absent,
-    /// The owner-signed re-point vouches this root, and the blob stayed closed
-    /// at the floor it left.
-    Vouched(Box<IpnsName>),
+    /// The owner-signed re-point vouches `root`, moved off `prev_root`, and
+    /// the blob stayed closed at the floor it left.
+    Vouched {
+        /// The vouched current root.
+        root: Box<IpnsName>,
+        /// The root the re-point moved off.
+        prev_root: Option<Box<IpnsName>>,
+    },
     /// The re-point did not authenticate, or vouched below the floor.
     Rejected,
 }
@@ -194,7 +199,7 @@ impl OnAccessMiss {
     fn failure(&self) -> ResolveFailure {
         match self {
             Self::Rejected => ResolveFailure::Rejected,
-            Self::Absent | Self::Vouched(_) => ResolveFailure::Unavailable,
+            Self::Absent | Self::Vouched { .. } => ResolveFailure::Unavailable,
         }
     }
 }
@@ -262,6 +267,7 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
     let epoch = consulted.write_floor;
     Ok(Some(PointerSighting {
         current_root: consulted.current_root,
+        prev_root: consulted.prev_root,
         deferred: consulted.deferred,
         opened: open_write_scope_seed_at(enc_secret, envelope, owb, epoch)
             .map(|seed| (seed, epoch)),
@@ -272,6 +278,7 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
 /// with the epoch it opened at, when the blob opened.
 struct PointerSighting {
     current_root: IpnsName,
+    prev_root: Option<IpnsName>,
     /// See [`ConsultedPointer::deferred`].
     deferred: bool,
     opened: Option<(Zeroizing<[u8; SECRET_LEN]>, u64)>,
@@ -2574,9 +2581,14 @@ where
             Ok(Some(PointerSighting { deferred: true, .. })) => {
                 return Err(ResolveFailure::Unavailable);
             }
-            Ok(Some(PointerSighting { current_root, .. })) => {
-                OnAccessMiss::Vouched(Box::new(current_root))
-            }
+            Ok(Some(PointerSighting {
+                current_root,
+                prev_root,
+                ..
+            })) => OnAccessMiss::Vouched {
+                root: Box::new(current_root),
+                prev_root: prev_root.map(Box::new),
+            },
             Ok(None) => OnAccessMiss::Absent,
             Err(PointerConsultError::Unavailable) => return Err(ResolveFailure::Unavailable),
             Err(PointerConsultError::Rejected) => {
@@ -2593,21 +2605,20 @@ where
         Err(failure)
     }
 
-    /// [`SweepResolveFailure::Superseded`] when the scope pointer vouches a
-    /// root other than `name`: a write cut moved the root, so the caller
-    /// re-resolves at the vouched name through the gate.
-    fn moved_from(&self, scope_id: [u8; 16], name: &IpnsName) -> Option<SweepResolveFailure>
-    where
-        Sch: Scheduler,
-    {
+    /// [`SweepResolveFailure::Superseded`] when the owner-signed re-point
+    /// moved the root off `name`: the caller re-resolves at the vouched name
+    /// through the gate. A pointer that vouches another root without naming
+    /// `name` as the root it left proves no move of this root.
+    fn moved_from(&self, scope_id: [u8; 16], name: &IpnsName) -> Option<SweepResolveFailure> {
         let now = self.scheduler.now();
         match self
             .on_access_misses
             .recent(&scope_id, now, self.profile.pointer_consult_interval)
         {
-            Some(OnAccessMiss::Vouched(current)) if *current != *name => {
-                Some(SweepResolveFailure::Superseded)
-            }
+            Some(OnAccessMiss::Vouched {
+                prev_root: Some(prev_root),
+                ..
+            }) if *prev_root == *name => Some(SweepResolveFailure::Superseded),
             _ => None,
         }
     }
@@ -8040,6 +8051,49 @@ mod tests {
             proved[0].write.as_ref().err(),
             Some(&WritePlaneDark::Keyless),
             "the section settles it, so the drain charges the op rather than waiting"
+        );
+    }
+
+    /// A pointer that vouches another root proves a move of this root only
+    /// when the owner-signed re-point names this root as the one it left. Any
+    /// other pointer leaves the sweep's read unavailable, so the sweep never
+    /// walks a root that may not be the live one.
+    #[test]
+    fn a_pointer_that_vouches_another_root_moves_only_the_root_it_names_as_left() {
+        let (child, child_ref, _) = one_level();
+        let elsewhere = derive_write_name(&[0x4e; 32], &CHILD_SCOPE);
+        let read = |prev_root: Option<IpnsName>| {
+            let harness = Harness::plain();
+            harness.stage(CHILD_SCOPE, &child, None);
+            stage_scope_pointer(
+                &harness,
+                CHILD_SCOPE,
+                &owner_identity(),
+                &RepointObject {
+                    scope_id: CHILD_SCOPE,
+                    current_root: elsewhere.clone(),
+                    write_epoch: MINT_EPOCH + 1,
+                    min_read_epoch: MINT_EPOCH,
+                    prev_root,
+                },
+            );
+            block_on(harness.net(&[child_ref.clone()]).resolve_scope(&child_ref)).err()
+        };
+
+        assert_eq!(
+            read(None),
+            Some(SweepResolveFailure::Unavailable),
+            "a pointer that names no root it left proves no move"
+        );
+        assert_eq!(
+            read(Some(elsewhere.clone())),
+            Some(SweepResolveFailure::Unavailable),
+            "nor one that left another root"
+        );
+        assert_eq!(
+            read(Some(child.name.clone())),
+            Some(SweepResolveFailure::Superseded),
+            "a re-point off this root moves it"
         );
     }
 
@@ -17283,6 +17337,7 @@ mod tests {
             &SCOPE,
             ConsultedPointer {
                 current_root: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE),
+                prev_root: None,
                 write_floor: 1,
                 deferred: false,
                 record_bytes: b"a record read before the flip".to_vec(),
