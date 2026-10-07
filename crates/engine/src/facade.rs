@@ -27,8 +27,8 @@ use std::rc::Rc;
 
 pub(crate) use claim_conversion::ClaimCounts;
 use claim_conversion::{
-    CONVERSION_RUNNING, ConversionPass, CutAuthority, EngineSites, PassOutcome, PointerIndex,
-    claimed_pointer, placed, scope_pointer_index,
+    CONVERSION_RUNNING, ConversionPass, CutAuthority, EngineSites, OnRunning, PassOutcome,
+    PointerIndex, claimed_pointer, placed, scope_pointer_index,
 };
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
@@ -8583,6 +8583,26 @@ where {
         node: NodeId,
         recipient_identity_public_key: &[u8],
     ) -> Result<(), EngineError> {
+        // Only a link grantee's revoke reads the lock: a refusal runs it again,
+        // and the second run waits for the lock.
+        match self
+            .revoke_grant_with(node, recipient_identity_public_key, OnRunning::Refuse)
+            .await
+        {
+            Err(EngineError::Seam { message }) if message == CONVERSION_RUNNING => {
+                self.revoke_grant_with(node, recipient_identity_public_key, OnRunning::Wait)
+                    .await
+            }
+            answer => answer,
+        }
+    }
+
+    async fn revoke_grant_with(
+        &self,
+        node: NodeId,
+        recipient_identity_public_key: &[u8],
+        on_running: OnRunning,
+    ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
@@ -8604,10 +8624,20 @@ where {
         let converted = if still_owed {
             Ok(())
         } else {
-            self.convert_before_link_cut(session, api, node).await
+            self.convert_before_link_cut(session, api, node, on_running)
+                .await
         };
         let pointers = self.scope_pointer_index(session);
-        let held = RefCell::new(None);
+        // The waiting run holds the record before the cut reads the root, so
+        // no pass publishes a row between the read and the cut.
+        let held = RefCell::new(match on_running {
+            OnRunning::Wait if !still_owed => Some(
+                pass.hold_record(OnRunning::Wait)
+                    .await?
+                    .ok_or_else(EngineError::conversion_running)?,
+            ),
+            _ => None,
+        });
         let admitting = RefCell::new(Vec::new());
         let cut = self
             .cut_and_rotate(
@@ -8636,10 +8666,14 @@ where {
                             .iter()
                             .map(|link| link.ephemeral_identity_pk)
                             .collect();
-                        let mut record =
-                            pass.hold_record().await?.ok_or_else(|| EngineError::Seam {
-                                message: CONVERSION_RUNNING.to_owned(),
-                            })?;
+                        let held_before = held.borrow_mut().take();
+                        let mut record = match held_before {
+                            Some(record) => record,
+                            None => pass
+                                .hold_record(OnRunning::Refuse)
+                                .await?
+                                .ok_or_else(EngineError::conversion_running)?,
+                        };
                         let pending = record.pending_links();
                         if links.iter().any(|link| pending.contains(link)) {
                             return Err(EngineError::Seam {
@@ -10285,15 +10319,11 @@ where {
             .transpose()
             .map_err(|_| EngineError::from_invite(InviteError::LinkNotCommitted))?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        if self.state.conversion_running.get() {
-            return Err(EngineError::Seam {
-                message: CONVERSION_RUNNING.to_owned(),
-            });
-        }
         // A write conversion in the pass below moves the root, and each tag
         // with it; the link's ephemeral identity stays.
         let pinned = self.link_identity(session, node, link_tag.as_ref()).await?;
-        self.convert_before_link_cut(session, api, node).await?;
+        self.convert_before_link_cut(session, api, node, OnRunning::Wait)
+            .await?;
         let sources = if remove_grantees {
             Some(
                 self.contact_store(session)
@@ -10311,9 +10341,11 @@ where {
         let pass = self.conversion_pass(session, api, &keys);
         let pointers = self.scope_pointer_index(session);
         // A running pass may hold acked claims this read cannot see.
-        let held = RefCell::new(pass.hold_record().await?.ok_or_else(|| EngineError::Seam {
-            message: CONVERSION_RUNNING.to_owned(),
-        })?);
+        let held = RefCell::new(
+            pass.hold_record(OnRunning::Wait)
+                .await?
+                .ok_or_else(EngineError::conversion_running)?,
+        );
         let pending = held.borrow().pending_links();
         let revoked = Cell::new(None);
         // Owner-only: the tags come from a link entry on a set this session's
@@ -10371,6 +10403,7 @@ where {
         session: &SessionIdentity,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         node: NodeId,
+        on_running: OnRunning,
     ) -> Result<(), EngineError> {
         let items = self
             .poll_owned_claims(session, api)
@@ -10378,7 +10411,9 @@ where {
             .map_err(|_| EngineError::Seam {
                 message: MAILBOX_UNAVAILABLE.to_owned(),
             })?;
-        let pass = self.run_conversion(session, api, items, node).await;
+        let pass = self
+            .run_conversion(session, api, items, node, on_running)
+            .await;
         pass.intake?;
         if let Err(EngineError::TrustViolation { message }) = pass.conversion {
             let _ = self.events.unbounded_send(Event::AttributableAbuse {
@@ -10553,7 +10588,7 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let items = self.poll_owned_claims(session, api).await?;
-        self.run_conversion(session, api, items, node)
+        self.run_conversion(session, api, items, node, OnRunning::Refuse)
             .await
             .into_result()
     }
@@ -10578,6 +10613,7 @@ where {
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         items: Vec<OwnedClaim>,
         node: NodeId,
+        on_running: OnRunning,
     ) -> PassOutcome {
         let sites = self.sites(session, api);
         let keys = match self.pass_keys(session) {
@@ -10590,6 +10626,7 @@ where {
                 &self.scope_pointer_index(session),
                 items,
                 Some(node),
+                on_running,
             )
             .await
     }
@@ -21516,34 +21553,23 @@ mod tests {
         assert_eq!(body["label"], "Laptop");
     }
 
-    /// A conversion and a link revoke that start while another pass holds the
-    /// record answer the same retryable refusal, never `Done`.
+    /// The dialog's conversion refuses at once while another pass holds the
+    /// record.
     #[test]
-    fn a_running_pass_refuses_a_conversion_and_a_link_revoke() {
+    fn a_running_pass_refuses_the_dialog_conversion_at_once() {
         let (mut engine, device) = engine_for_account("account-7");
         let root = engine.state.snapshot.borrow().root;
         let running = engine.state.conversion_running.clone();
         let _held = claim_conversion::Running::take(&running).expect("no pass runs yet");
-        for command in [
-            Command::ConvertInviteClaims { node: root },
-            Command::RevokeInviteLink {
-                node: root,
-                link_tag: None,
-                remove_grantees: false,
-            },
-        ] {
-            let name = command.name();
-            device
-                .http
-                .enqueue_response(json_response(200, json!({ "messages": [] })));
-            assert_eq!(
-                block_on(engine.command(command)),
-                Err(EngineError::Seam {
-                    message: CONVERSION_RUNNING.to_owned()
-                }),
-                "{name}"
-            );
-        }
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "messages": [] })));
+        assert_eq!(
+            block_on(engine.command(Command::ConvertInviteClaims { node: root })),
+            Err(EngineError::Seam {
+                message: CONVERSION_RUNNING.to_owned()
+            }),
+        );
     }
 
     #[test]

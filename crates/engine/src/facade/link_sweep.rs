@@ -9,7 +9,7 @@
 //! expired links. Each cut resolves its scope root again right before it
 //! signs, so a link that another owner device already cut costs nothing here.
 
-use super::claim_conversion::HeldRecord;
+use super::claim_conversion::{HeldRecord, OnRunning};
 use super::*;
 use crate::grants::{CommittedLink, expired_links};
 
@@ -101,7 +101,7 @@ where
         pointers: &PointerIndex,
     ) -> Option<LinkSweepReport> {
         let mut report = LinkSweepReport::default();
-        let mut held = match self.hold_record().await {
+        let mut held = match self.hold_record(OnRunning::Refuse).await {
             Ok(Some(held)) => held,
             Ok(None) => return None,
             Err(e) => {

@@ -902,31 +902,7 @@ impl GrantScenario {
     /// `ephemeral`, and answer its identity key. The claim bytes turn on
     /// `index` alone, so a second call with a fresh `ephemeral` is a re-post.
     fn post_claimant(&self, fragment: &str, index: u8, ephemeral: u8) -> Vec<u8> {
-        let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
-        let invitee =
-            EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
-        let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
-        let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
-        let mut claim_id = [1u8; CLAIM_ID_LEN];
-        claim_id[0] = index;
-        let claim = InviteClaim {
-            claim_id,
-            scope_pointer_name: opened.scope_pointer_name.clone(),
-            contact_code: contact_code(&scalar),
-            name: String::new(),
-        };
-        self.post_claim(
-            &owner,
-            &invitee,
-            ephemeral,
-            &claim,
-            &format!("claim-{index}"),
-        );
-        EcdsaSigner::from_scalar(&scalar)
-            .expect("valid identity scalar")
-            .verifying_key()
-            .to_sec1()
-            .to_vec()
+        post_claimant_from(&self.recipient_device, fragment, index, ephemeral)
     }
 
     /// Post one claim under `idempotency_key`. `index` picks this post's own
@@ -940,17 +916,66 @@ impl GrantScenario {
         claim: &InviteClaim,
         idempotency_key: &str,
     ) {
-        block_on(post_invite_claim(
-            &self.recipient_device.mailbox,
+        post_claim_from(
+            &self.recipient_device,
             owner,
             invitee,
-            &[CLAIM_EPHEMERAL_BASE + index; 32],
-            ENVELOPE_V,
-            &claim.encode().expect("the claim encodes"),
+            index,
+            claim,
             idempotency_key,
-        ))
-        .expect("the claim posts");
+        );
     }
+}
+
+/// [`GrantScenario::post_claimant`] through `device`'s mailbox, for a test that
+/// posts while a command holds the scenario's engine.
+fn post_claimant_from(device: &FakeDevice, fragment: &str, index: u8, ephemeral: u8) -> Vec<u8> {
+    let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
+    let mut claim_id = [1u8; CLAIM_ID_LEN];
+    claim_id[0] = index;
+    let claim = InviteClaim {
+        claim_id,
+        scope_pointer_name: opened.scope_pointer_name.clone(),
+        contact_code: contact_code(&scalar),
+        name: String::new(),
+    };
+    post_claim_from(
+        device,
+        &owner,
+        &invitee,
+        ephemeral,
+        &claim,
+        &format!("claim-{index}"),
+    );
+    EcdsaSigner::from_scalar(&scalar)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec()
+}
+
+fn post_claim_from(
+    device: &FakeDevice,
+    owner: &Contact,
+    invitee: &EphemeralInvitee,
+    index: u8,
+    claim: &InviteClaim,
+    idempotency_key: &str,
+) {
+    block_on(post_invite_claim(
+        &device.mailbox,
+        owner,
+        invitee,
+        &[CLAIM_EPHEMERAL_BASE + index; 32],
+        ENVELOPE_V,
+        &claim.encode().expect("the claim encodes"),
+        idempotency_key,
+    ))
+    .expect("the claim posts");
 }
 
 // ---------------------------------------------------------------------------
@@ -12938,12 +12963,30 @@ fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts
     assert_eq!(fx.link_entries(), 0, "and then the link was cut");
 }
 
-/// A grantee revoke takes the conversion lock only for a grantee a link
-/// admitted, so the sweep holding it blocks no revoke of a direct grantee.
-#[test]
-fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
-    let mut fx = GrantScenario::new();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+/// A slice of virtual time per round of [`drive_command`], at least the
+/// engine's wait slice for the conversion lock, so each round wakes a waiter.
+const LOCK_WAIT_ROUND: Duration = Duration::from_millis(100);
+
+/// Drive `command` with the spawned loops, a round of virtual time at a time,
+/// so a command that waits for the conversion lock settles once it frees.
+fn drive_command<F: Future>(world: &FakeWorld, command: F, tasks: &mut [BoxedTask]) -> F::Output {
+    const MAX_ROUNDS: usize = 64;
+    let mut command = pin!(command);
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..MAX_ROUNDS {
+        if let Poll::Ready(output) = command.as_mut().poll(&mut cx) {
+            return output;
+        }
+        poll_tasks_until_parked(tasks);
+        world.scheduler.advance(LOCK_WAIT_ROUND);
+    }
+    panic!("the command never settled");
+}
+
+/// Mint a link at a second folder and let the next link sweep park on a
+/// stalled read of it, so the sweep holds the conversion lock. Answers the
+/// folder.
+fn park_the_sweep_on_another_folder(fx: &mut GrantScenario) -> NodeId {
     let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
     assert!(matches!(
         block_on(fx.engine.command(Command::CreateInviteLink {
@@ -12965,23 +13008,233 @@ fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
         .scheduler
         .advance(fx.engine.profile().link_sweep_cadence);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(
-        block_on(fx.engine.command(Command::RevokeInviteLink {
-            node: other,
-            remove_grantees: false,
-            link_tag: None,
-        })),
-        Err(EngineError::Seam {
-            message: "a-conversion-pass-is-running".to_owned()
-        }),
-        "the sweep holds the lock"
-    );
+    other
+}
+
+/// A grantee revoke takes the conversion lock only for a grantee a link
+/// admitted, so the sweep holding it blocks no revoke of a direct grantee. A
+/// link revoke waits for the sweep, and lands once the sweep ends.
+#[test]
+fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let other = park_the_sweep_on_another_folder(&mut fx);
 
     assert_eq!(
         fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
         Ok(CommandOutcome::Done),
     );
     assert!(fx.granted_to().is_empty());
+
+    let mut revoke = pin!(fx.engine.command(Command::RevokeInviteLink {
+        node: other,
+        remove_grantees: false,
+        link_tag: None,
+    }));
+    assert!(
+        revoke
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending(),
+        "the link revoke waits while the sweep reads"
+    );
+    fx.world
+        .record_store
+        .release_gets_for(write_name(other).as_str());
+    assert_eq!(
+        drive_command(&fx.world, revoke, &mut fx._tasks),
+        Ok(CommandOutcome::Done),
+    );
+}
+
+/// The nightly shape: a grantee a link admitted is revoked while a tick pass
+/// holds the conversion lock on a stalled read. The revoke waits for the pass
+/// rather than refuse, and lands once the read answers.
+#[test]
+fn a_link_grantee_revoke_waits_for_the_pass_that_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]));
+    let other = park_the_sweep_on_another_folder(&mut fx);
+
+    {
+        let mut revoke = pin!(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(revoke.as_mut().poll(&mut cx).is_pending());
+        for _ in 0..3 {
+            fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+            poll_tasks_until_parked(&mut fx._tasks);
+            assert!(
+                revoke.as_mut().poll(&mut cx).is_pending(),
+                "the revoke waits while the pass holds the lock"
+            );
+        }
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        assert_eq!(
+            drive_command(&fx.world, revoke, &mut fx._tasks),
+            Ok(CommandOutcome::Done),
+        );
+    }
+    assert!(
+        !fx.granted_to().contains(&claimants[0]),
+        "the grantee is gone"
+    );
+    assert_eq!(fx.link_entries(), 0, "with the link that admitted it");
+}
+
+/// The identity keys of the people the set at `folder`'s scope root commits
+/// now, read off the attested ledger rows of its person entries.
+fn ledger_people(world: &FakeWorld, blocks: &Blocks, folder: NodeId) -> BTreeSet<Vec<u8>> {
+    let people: BTreeSet<[u8; 32]> =
+        published_grant_section_at(world, blocks, &scope_repoint(world, &folder.0).current_root)
+            .expect("the folder's scope root answers")
+            .commitment
+            .entries
+            .iter()
+            .filter(|entry| entry.kind != GrantSetEntryKind::Link)
+            .map(|entry| entry.tag)
+            .collect();
+    published_ledger(world, blocks, folder)
+        .into_iter()
+        .filter(|row| people.contains(&row.tag))
+        .map(|row| row.recipient_identity_pk.to_vec())
+        .collect()
+}
+
+/// A link grantee revoke that waits for the lock holds it before its cut
+/// reads the root. No tick publishes a row meanwhile, and the cut keeps every
+/// row of the set it started from but the revoked person's.
+#[test]
+fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let first = fx.post_claimant(&fragment, 0, 0);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let other = park_the_sweep_on_another_folder(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let cadence = fx.engine.profile().poll_cadence;
+
+    let (second, cut_from) = {
+        let mut revoke = pin!(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: first.clone(),
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(revoke.as_mut().poll(&mut cx).is_pending(), "it waits");
+        // The claim reaches the mailbox after the revoke polled it.
+        let second = post_claimant_from(&fx.recipient_device, &fragment, 1, 1);
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        poll_tasks_until_parked(&mut fx._tasks);
+
+        fx.world.record_store.stall_gets_for_after(root.as_str(), 0);
+        fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+        assert!(
+            revoke.as_mut().poll(&mut cx).is_pending(),
+            "it reads the root"
+        );
+        let held_at = sequence_at(&fx.world, &root);
+        let mut cut_from = ledger_people(&fx.world, &fx.blocks, fx.folder);
+        // A tick walks past the root and parks in its conversion.
+        fx.world.record_store.release_gets_for(root.as_str());
+        fx.world.record_store.stall_gets_for_after(root.as_str(), 2);
+        fx.world.scheduler.advance(cadence);
+        poll_tasks_until_parked(&mut fx._tasks);
+        fx.world.record_store.release_gets_for(root.as_str());
+        let answer = match revoke.as_mut().poll(&mut cx) {
+            Poll::Ready(answer) => answer,
+            Poll::Pending => {
+                poll_tasks_until_parked(&mut fx._tasks);
+                if sequence_at(&fx.world, &root) != held_at {
+                    cut_from = ledger_people(&fx.world, &fx.blocks, fx.folder);
+                }
+                drive_command(&fx.world, revoke, &mut fx._tasks)
+            }
+        };
+        assert_eq!(answer, Ok(CommandOutcome::Done));
+        (second, cut_from)
+    };
+    assert!(
+        !cut_from.contains(&second),
+        "no tick published a row while the revoke held the record"
+    );
+    let mut kept = cut_from;
+    assert!(
+        kept.remove(&first),
+        "the cut starts from a set with the person"
+    );
+    assert_eq!(
+        ledger_people(&fx.world, &fx.blocks, fx.folder),
+        kept,
+        "the cut keeps every row but the revoked person's"
+    );
+}
+
+/// A dismiss of the refused claims waits for a tick pass that holds the
+/// conversion lock on a stalled read, and lands once the read answers.
+#[test]
+fn a_dismiss_waits_for_the_pass_that_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    a_link_past_its_cap(&mut fx);
+    let other = park_the_sweep_on_another_folder(&mut fx);
+    assert_eq!(recorded_refusals(&fx), 1);
+
+    {
+        let mut dismiss = pin!(
+            fx.engine
+                .command(Command::DismissRefusedClaims { node: fx.folder })
+        );
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(dismiss.as_mut().poll(&mut cx).is_pending());
+        for _ in 0..3 {
+            fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+            poll_tasks_until_parked(&mut fx._tasks);
+            assert!(
+                dismiss.as_mut().poll(&mut cx).is_pending(),
+                "the dismiss waits while the pass holds the lock"
+            );
+        }
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        assert_eq!(
+            drive_command(&fx.world, dismiss, &mut fx._tasks),
+            Ok(CommandOutcome::Done),
+        );
+    }
+    assert_eq!(recorded_refusals(&fx), 0, "the refused entry is gone");
+}
+
+/// A link revoke whose wait for the conversion lock outlasts the budget
+/// answers the retryable refusal.
+#[test]
+fn a_link_revoke_refuses_a_pass_that_outlasts_the_wait() {
+    let mut fx = GrantScenario::new();
+    let _fragment = fx.mint_link();
+    park_the_sweep_on_another_folder(&mut fx);
+
+    let mut revoke = pin!(fx.engine.command(Command::RevokeInviteLink {
+        node: fx.folder,
+        remove_grantees: false,
+        link_tag: None,
+    }));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(revoke.as_mut().poll(&mut cx).is_pending(), "it waits");
+    fx.world.scheduler.advance(Duration::from_secs(30));
+    assert_eq!(
+        revoke.as_mut().poll(&mut cx),
+        Poll::Ready(Err(EngineError::Seam {
+            message: "a-conversion-pass-is-running".to_owned()
+        })),
+    );
 }
 
 /// Republish the vault root with `extra` added to its direct-child-scope
