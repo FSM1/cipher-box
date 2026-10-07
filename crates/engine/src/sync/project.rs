@@ -117,6 +117,7 @@ impl FolderMerge {
         &self,
         scope_id: [u8; 16],
         parent: NodeId,
+        parent_name: &[u8],
         deleted_at: u64,
     ) -> Vec<UnlinkedChild> {
         self.departed
@@ -129,6 +130,7 @@ impl FolderMerge {
                     name: node.name().to_owned(),
                     kind: unmap_kind(node.kind),
                     ipns_name: node.ipns_name.clone()?,
+                    parent_name: parent_name.to_vec(),
                     deleted_at,
                 })
             })
@@ -149,6 +151,10 @@ pub(crate) struct UnlinkedChild {
     pub(crate) name: String,
     pub(crate) kind: CoreNodeKind,
     pub(crate) ipns_name: Vec<u8>,
+    /// The name of the parent record whose read saw the unlink; empty for an
+    /// unlink this device authored. Only a read at the parent's live name
+    /// shows the live tree (ADR 0069 D6).
+    pub(crate) parent_name: Vec<u8>,
     /// The time the capture was observed, minted once so a retry re-keys under
     /// the key the entry it will write names.
     pub(crate) deleted_at: u64,

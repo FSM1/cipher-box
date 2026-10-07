@@ -3,7 +3,9 @@
 //! under `--release`, where `debug_assert!` is compiled out, so a refusal that
 //! leans on one fails there.
 
-use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, compute_cid, encode_content_cid_str,
+};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -22,6 +24,7 @@ use cipherbox_engine::grants::conversion::{
 use cipherbox_engine::grants::{
     AckedClaim, CLAIM_ID_LEN, InviteClaim, InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES,
 };
+use cipherbox_engine::name::MAX_NODE_NAME_BYTES;
 use cipherbox_engine::net::author::ENVELOPE_V;
 use cipherbox_engine::net::renewal_walk::cursor::{
     CursorCodecError, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor,
@@ -32,10 +35,12 @@ use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
 use cipherbox_engine::rotation::derive_write_name;
+use cipherbox_engine::seams::OpId;
 use cipherbox_engine::seams::{
     BoxedTask, DebtOrigin, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger,
     StagingStore, UnixMillis,
 };
+use cipherbox_engine::sync::kept_op::{KeptNote, KeptNoteError, KeptNotes, KeptResult};
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
 };
@@ -55,6 +60,7 @@ use cipherbox_engine::{
     LoginSecret, NodeId, NodeKind, QueueHoldReason, StoragePolicy, SyncTimingProfile,
 };
 use core::cell::RefCell;
+use zeroize::Zeroizing;
 
 /// The decoder reads a retire-ledger entry whose name is not an IPNS name, or
 /// whose target set the settle could not send, as unwritten. So `owe` refuses
@@ -100,6 +106,65 @@ fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
         assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
     }
     assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
+}
+
+/// The kept-op note decoder reads a body with a name or a content CID past
+/// its bound as no notes. So `insert` refuses such a note, and the notes it
+/// holds still encode (ADR 0069 D4).
+#[test]
+fn a_kept_op_note_past_a_bound_is_refused_at_insert() {
+    let note = |result| KeptNote {
+        scope: Some(NodeId([5; 16])),
+        write_epoch: 1,
+        published_at: UnixMillis(1),
+        parent: Some(NodeId([6; 16])),
+        result: Some(result),
+    };
+    let name = |len: usize| Zeroizing::new("n".repeat(len));
+    let mut notes = KeptNotes::default();
+    notes
+        .insert(
+            OpId(1),
+            note(KeptResult::Rename {
+                before: name(1),
+                after: name(MAX_NODE_NAME_BYTES),
+            }),
+        )
+        .expect("a name at the bound is noted");
+    let refused = [
+        (
+            note(KeptResult::Rename {
+                before: name(1),
+                after: name(MAX_NODE_NAME_BYTES + 1),
+            }),
+            KeptNoteError::NameTooLong,
+        ),
+        (
+            note(KeptResult::Move {
+                from: NodeId([7; 16]),
+                from_name: name(MAX_NODE_NAME_BYTES + 1),
+                to: NodeId([8; 16]),
+                to_name: name(1),
+            }),
+            KeptNoteError::NameTooLong,
+        ),
+        (
+            note(KeptResult::RestoreVersion {
+                before: vec![1; CONTENT_CID_LEN],
+                after: vec![1; CONTENT_CID_LEN + 1],
+            }),
+            KeptNoteError::CidTooLong,
+        ),
+    ];
+    for (index, (refused, error)) in (2..).zip(refused) {
+        assert_eq!(
+            notes.insert(OpId(index), refused),
+            Err(error),
+            "note {index}"
+        );
+    }
+    let written = notes.encode().expect("the notes held still encode");
+    assert!(!written.is_empty());
 }
 
 fn pointer_name() -> IpnsName {

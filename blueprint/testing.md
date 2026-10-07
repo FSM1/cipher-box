@@ -159,10 +159,32 @@ scenario fails the meta-test):
   restart, a kept edit under a refused file record dead-letters with a notice
   and frees the queue, a kept create under a refused scope root waits uncharged after a
   restart and leaves at the bound, and one under a moved root the walk cannot
-  prove waits past the bound and applies again once the walk proves it (ADR 0069,
-  `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
-  grantee dead-letters on its device with a notice, also a late write that
-  the wave did not carry (ADR 0069 D3,
+  prove waits past the bound and applies again once the walk proves it; a
+  kept delete that the wave carried back waits past the bound for the read
+  of its folder at the live name and applies again, also across a restart,
+  one that the wave carried leaves after that read with no notice, and one
+  whose folder a later writer deleted leaves before the bound, and one whose
+  folder the gate refuses at the flip is charged and never read as gone
+  (ADR 0069, `crates/engine/tests/owner_actions.rs`); a kept delete whose
+  folder the live root dropped leaves at the read, one whose folder a read
+  of this session at the live parent name saw unlinked leaves at once and
+  one that only a read at an old parent name saw unlinked stays, one whose folder a proved base lacks
+  waits and leaves at the bound, and one whose note names no folder leaves
+  at the bound (`crates/engine/src/sync/drain.rs`); after a restart, a kept
+  delete in /A/B/X does not leave before the bound with no read of B, and
+  leaves at once after a pass that reads B, and one whose B a peer unlinked
+  only in the old tree in the wave window stays and applies again in the new
+  tree (`owner_actions.rs`), and the one
+  of a downgraded grantee dead-letters with a notice
+  (`mount_convergence.rs`); the kept-op note reads frozen version 1 bytes
+  with no folder and no result, a copy of the version 1 decoder reads a
+  version 2 body as no notes, and each name and CID bound the decoder holds
+  is refused at insert and at encode, while a compile-time assertion keeps
+  the longest entry within its two-byte length (ADR 0069 D4, ADR 0020,
+  `crates/engine/src/sync/kept_op.rs`,
+  `crates/engine/tests/encode_refusals.rs`); the kept op of a downgraded write
+  grantee dead-letters on its device with a notice, a kept delete included,
+  also a late write that the wave did not carry (ADR 0069 D3,
   `crates/engine/tests/mount_convergence.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own

@@ -1065,8 +1065,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
   Consequence 4). A published create, delete or content edit stays queued as a
-  kept op, with a sealed note of its scope root, write epoch and publish time,
-  until the live root of its write scope shows it (ADR 0069). Every other op
+  kept op, with a sealed note of its scope root, write epoch, publish time and
+  the folder it wrote under, until the live root of its write scope shows it
+  (ADR 0069). The note is format version 2; a version 1 note reads with no
+  folder. Every other op
   kind leaves at its publish. With no flip, a kept op waits at its write epoch
   for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
@@ -1079,7 +1081,15 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. A delete whose node the base does not hold still leaves at T. A
+  it. At a flip, a kept delete whose note names its folder waits for one
+  read of that folder at its live name, which the drain makes before the
+  rebase: a live node applies the delete again, and a node gone ends the op
+  with no notice. A folder that a read of this session at the live parent
+  name shows its old parent no longer names ends the op at once. A base that does not hold the folder
+  shows nothing, so with no such read the op waits for a pass that reads the
+  folder, or leaves at T. A kept delete under a scope this device can no
+  longer write takes the keyless charge below, also when the base does not
+  hold its folder. A
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
@@ -1478,8 +1488,11 @@ rebases and signs above.
   deleted.
 - Reclaimed bytes after a flip: a version delete or a prune that the flip
   loses leaves a history that names bytes this writer already retired. A kept
-  hard delete that leaves at T with no read of its folder leaves a child ref
-  whose record is retired.
+  hard delete whose note names no folder and that leaves at T with no read
+  of its folder leaves a child ref whose record is retired.
+- Kept delete under a moved ancestor: a later writer that moves an ancestor
+  of a kept delete's folder, in the scope or to another scope, makes the
+  folder read as gone, and the delete leaves while its node is alive (ADR 0069 D6).
 
 ## Pointer planes
 
