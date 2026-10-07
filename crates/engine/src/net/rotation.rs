@@ -2660,7 +2660,7 @@ where
             envelope,
             section,
             read_body,
-            sequence: _,
+            sequence,
             read_scope_seed,
             write_scope_seed,
         } = root;
@@ -2686,7 +2686,7 @@ where
             direct_child_scope_index: write_body.direct_child_scope_index,
             carried_history_links: section.history_links,
             carried_ascent_link: section.ascent_link.is_some(),
-            read_sequence: observed.sequence(),
+            read_sequence: sequence,
         };
         self.gated.park(RepublishBase {
             read_body,
@@ -9057,6 +9057,18 @@ mod tests {
             !harness.events().is_empty(),
             "the trade the fallback made is surfaced, never silent",
         );
+    }
+
+    /// A target read over the last gate-passing copy reports the sequence of
+    /// that copy, not the sequence of the refused record its publish clears.
+    #[test]
+    fn a_target_read_over_a_refused_record_reports_the_gated_sequence() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let scope = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+
+        let target = block_on(harness.net(&[]).resolve_anchored(&scope)).expect("the last copy");
+
+        assert_eq!(target.read_sequence, 1, "the gate adopted the copy at 1");
     }
 
     /// No cached copy, no fallback: a rotation that cannot prove a body under

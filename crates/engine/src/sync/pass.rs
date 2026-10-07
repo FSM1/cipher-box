@@ -1961,7 +1961,8 @@ fn install_descendant_scopes(
 }
 
 /// Hold the sequence one walk gated for the vault root and for each scope
-/// root it proved, in the same step as the scope sets it installs.
+/// root it proved, in place of the last walk's, in the same step as the scope
+/// sets it installs.
 fn note_walked_sequences(
     sequences: &RefCell<RootSequences>,
     root: NodeId,
@@ -1969,13 +1970,16 @@ fn note_walked_sequences(
     root_sequence: Option<u64>,
     proved: &[DescendantScopeRoot],
 ) {
-    let mut sequences = sequences.borrow_mut();
-    if let Some(sequence) = root_sequence {
-        sequences.note_walked(root, root_name, sequence);
-    }
-    for scope in proved {
-        sequences.note_walked(NodeId(scope.scope_id), &scope.name, scope.adopted.sequence);
-    }
+    let root = root_sequence.map(|sequence| (root, root_name.clone(), sequence));
+    sequences
+        .borrow_mut()
+        .note_walk(root.into_iter().chain(proved.iter().map(|scope| {
+            (
+                NodeId(scope.scope_id),
+                scope.name.clone(),
+                scope.adopted.sequence,
+            )
+        })));
 }
 
 /// Report each scope whose root one walk read as a same-sequence fork.
@@ -2390,6 +2394,34 @@ mod tests {
                 write_cut_unfinished: false,
                 fork: None,
             }
+        }
+
+        /// A scope root one walk gated and the next walk omits holds no walk
+        /// value, so after it moves the probe reads the name its leg holds,
+        /// not the name the earlier walk gated.
+        #[test]
+        fn a_scope_the_next_walk_omits_holds_no_walk_value() {
+            let sequences = RefCell::new(RootSequences::default());
+            let root = NodeId([0x01; 16]);
+            let root_name = derive_write_name(&WRITE_SCOPE_SEED, &root.0);
+            let shared = proved(Err(WritePlaneDark::Keyless));
+            let old_name = shared.name.clone();
+
+            note_walked_sequences(&sequences, root, &root_name, Some(4), &[shared]);
+            assert_eq!(
+                sequences.borrow().walked_name(NodeId(SHARED)),
+                Some(old_name.clone())
+            );
+
+            note_walked_sequences(&sequences, root, &root_name, Some(5), &[]);
+            let sequences = sequences.borrow();
+            assert_eq!(
+                sequences.walked_name(NodeId(SHARED)),
+                None,
+                "the walk omitted it"
+            );
+            assert_eq!(sequences.held(old_name.as_str().as_bytes()), None);
+            assert_eq!(sequences.held(root_name.as_str().as_bytes()), Some(5));
         }
 
         /// The vault root's end carries the stamp of the cached read seed, so

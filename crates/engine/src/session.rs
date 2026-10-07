@@ -530,20 +530,31 @@ pub(crate) struct SessionState {
 }
 
 /// What a navigation measures a served scope root against: per scope, the
-/// name the last boundary walk or graft gated and its sequence, and per name, the
-/// highest sequence this session published and confirmed. A sequence belongs
-/// to a name, so a root that moves to a fresh name holds neither. Session
-/// memory only.
+/// name the last boundary walk gated and its sequence, the same for each graft
+/// root a grafted pass gated, and per name, the highest sequence this session
+/// published and confirmed. A sequence belongs to a name, so a root that moves
+/// to a fresh name holds neither. Session memory only.
 #[derive(Default)]
 pub(crate) struct RootSequences {
     walked: BTreeMap<NodeId, (IpnsName, u64)>,
+    grafted: BTreeMap<NodeId, (IpnsName, u64)>,
     own: BTreeMap<Vec<u8>, u64>,
 }
 
 impl RootSequences {
-    /// Write in the same step as the scope sets the walk installs.
-    pub(crate) fn note_walked(&mut self, scope: NodeId, name: &IpnsName, sequence: u64) {
-        self.walked.insert(scope, (name.clone(), sequence));
+    /// Replace the walk values with what one walk gated, in the same step as
+    /// the scope sets the walk installs. A scope the walk omits holds no walk
+    /// value.
+    pub(crate) fn note_walk(&mut self, gated: impl IntoIterator<Item = (NodeId, IpnsName, u64)>) {
+        self.walked = gated
+            .into_iter()
+            .map(|(scope, name, sequence)| (scope, (name, sequence)))
+            .collect();
+    }
+
+    /// Write in the same step as the render tree the grafted pass merges.
+    pub(crate) fn note_grafted(&mut self, scope: NodeId, name: &IpnsName, sequence: u64) {
+        self.grafted.insert(scope, (name.clone(), sequence));
     }
 
     /// Write in the same step as the scope sets that publish changed. A publish
@@ -569,16 +580,20 @@ impl RootSequences {
         *held = (*held).max(published.sequence);
     }
 
-    /// The name the last walk gated for `scope`.
+    /// The name the last walk, else the last grafted pass, gated for `scope`.
     pub(crate) fn walked_name(&self, scope: NodeId) -> Option<IpnsName> {
-        self.walked.get(&scope).map(|(name, _)| name.clone())
+        self.walked
+            .get(&scope)
+            .or_else(|| self.grafted.get(&scope))
+            .map(|(name, _)| name.clone())
     }
 
-    /// The higher of the walked and the own sequence at `name`.
+    /// The highest walked, grafted or own sequence at `name`.
     pub(crate) fn held(&self, name: &[u8]) -> Option<u64> {
         self.walked
             .values()
-            .filter(|(walked, _)| walked.as_str().as_bytes() == name)
+            .chain(self.grafted.values())
+            .filter(|(gated, _)| gated.as_str().as_bytes() == name)
             .map(|(_, sequence)| *sequence)
             .max()
             .max(self.own.get(name).copied())
@@ -586,6 +601,7 @@ impl RootSequences {
 
     pub(crate) fn clear(&mut self) {
         self.walked.clear();
+        self.grafted.clear();
         self.own.clear();
     }
 }

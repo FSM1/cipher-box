@@ -21202,7 +21202,7 @@ mod focus_access_tests {
             .state
             .root_sequences
             .borrow_mut()
-            .note_walked(FOLDER, &name, 2);
+            .note_walk([(FOLDER, name.clone(), 2)]);
         assert!(!moved(&floored), "the walk gated the served sequence");
         let failing = InMemoryFloorStore::default();
         failing.fail_floor_reads();

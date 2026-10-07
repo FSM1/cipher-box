@@ -241,7 +241,7 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
         render
             .root_sequences
             .borrow_mut()
-            .note_walked(root, &name, open.sequence);
+            .note_grafted(root, &name, open.sequence);
     }
     let scope_roots = render.scope_roots.borrow();
     let mut base = render.base.borrow_mut();
