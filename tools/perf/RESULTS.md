@@ -219,18 +219,18 @@ from the engine events, on the engine clock.
 | ----: | --------------: | -----------------: | :------------ | ------------------: |
 |     4 |          165 ms |             165 ms | 335 ms        |      44 ms / 132 ms |
 |    16 |          734 ms |             734 ms | 1021 ms       |      35 ms / 404 ms |
-|    64 |       645211 ms |            1521 ms | stopped, owed |                   — |
+|    64 |       641867 ms |           31742 ms | stopped, owed |                   — |
 
 The API's per-account content bucket, 60 uploads a minute, sets both limits
 at 64 nodes. Each node that the sweep re-seals and each node that the wave moves
 uploads a block:
 
-- The sweep that the read cut files got `429` answers, and it ended with 13
-  nodes still at the old epoch. The idle sweep job proved the scope converged
-  on its first run, one `sweep_cadence` (900 s) after the engine started. That
-  run re-sealed no node, so the harness does not see when the 13 nodes were
-  re-sealed. For a scope with more nodes than the bucket, the proof that no
-  node is at the old epoch arrives up to one `sweep_cadence` after the cut.
+- The sweep that the read cut files got `429` answers. Its second pass
+  re-sealed more nodes 31.7 s after the cut, but the passes of the cut's task
+  left nodes at the old epoch. So the proof waits for the idle sweep job, one
+  `sweep_cadence` (900 s) after the engine started. For a scope with more nodes
+  than the bucket, the proof that no node is at the old epoch arrives up to one
+  `sweep_cadence` after the cut.
 - The name wave got `429` answers part way. It sent no end, and the cut became
   owed rotation work.
 
