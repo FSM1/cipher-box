@@ -1933,6 +1933,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         &grantee,
         &recipient,
         &grantee.ipns_name(),
+        &grantee.ipns_name(),
     )
     .await
     .expect("the live mailbox accepts the grant path's own address and idempotency key");
