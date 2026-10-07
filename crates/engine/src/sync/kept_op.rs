@@ -389,11 +389,6 @@ impl KeptNotes {
         self.notes.contains_key(&op_id)
     }
 
-    /// The folder the note of `op_id` names.
-    pub(crate) fn parent(&self, op_id: OpId) -> Option<NodeId> {
-        self.notes.get(&op_id).and_then(|note| note.parent)
-    }
-
     #[cfg(test)]
     fn get(&self, op_id: OpId) -> Option<KeptNote> {
         self.notes.get(&op_id).cloned()
@@ -523,7 +518,7 @@ impl KeptOps {
 
     /// The folder the note of `op_id` names.
     pub(crate) fn parent(&self, op_id: OpId) -> Option<NodeId> {
-        self.notes.parent(op_id)
+        self.notes.notes.get(&op_id).and_then(|note| note.parent)
     }
 }
 

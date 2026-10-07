@@ -2529,8 +2529,9 @@ fn carried_back_delete(fx: &mut GrantScenario) -> (NodeId, NodeId, IpnsName) {
 fn a_kept_delete_the_wave_carried_back_waits_past_the_bound_for_its_parent() {
     let mut fx = GrantScenario::new();
     let (child, gone, moved_child) = carried_back_delete(&mut fx);
-    let store = &fx.world.record_store;
-    store.serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
 
     passes_after_the_flip(&mut fx);
     fx.world.scheduler.advance(KEPT_OP_BOUND);
@@ -2561,8 +2562,9 @@ fn a_kept_delete_the_wave_carried_back_waits_past_the_bound_for_its_parent() {
 fn a_kept_delete_that_waits_for_its_parent_keeps_its_note_across_a_restart() {
     let mut fx = GrantScenario::new();
     let (child, gone, moved_child) = carried_back_delete(&mut fx);
-    let store = &fx.world.record_store;
-    store.serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
     passes_after_the_flip(&mut fx);
     fx.world.scheduler.advance(KEPT_OP_BOUND);
 

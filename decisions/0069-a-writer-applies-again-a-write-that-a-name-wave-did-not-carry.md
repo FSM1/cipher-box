@@ -86,7 +86,9 @@ parent no longer names took the node with it, so the op ends too, at once when t
 root of the pass and the base no longer holds the folder. The sentence before now holds only for a
 delete whose note names no folder, or whose root is not proved. A kept delete under a scope that this
 device can no longer write anchors on its folder, so it takes the keyless charge of D3 and
-dead-letters with a notice, as a kept create and a kept edit do. Proposed: a kept
+dead-letters with a notice, as a kept create and a kept edit do. An accepted residual: a later
+writer that moves an ancestor of the folder to another parent in the scope makes the folder read as
+gone, so the delete leaves while its node is alive at the new place. Proposed: a kept
 op that this device edits again leaves with no check, because the later op sets what the node shows. A second
 apply that cannot land leaves with no retire and no notice, because its version landed once.
 
@@ -130,8 +132,3 @@ Only the drain reads a kept op again, and the cancel command refuses it.
    (FSM1/cipher-box#2272). Amended on 2026-10-05: the dead letter landed. D5 and D6 each have a
    test, and each kind that is not kept has a test that a later writer's change stays.
 5. `blueprint/core.md` "Owner-local seals" adds the `kept-ops` kind (D4).
-
-## Residuals
-
-- A later writer that moves an ancestor of a kept delete's folder to another parent in the scope
-  makes the folder read as gone (D6), so the delete leaves while its node is alive at the new place.

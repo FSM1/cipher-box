@@ -3123,14 +3123,12 @@ where
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
                     {
-                        let anchor_held = self
-                            .cells
-                            .base
-                            .borrow()
-                            .node(kept_anchor(&op, note.parent))
-                            .is_some();
                         if !matches!(op.kind, OpKind::Delete { .. })
-                            || anchor_held
+                            || self
+                                .cells
+                                .base
+                                .borrow()
+                                .contains(kept_anchor(&op, note.parent))
                             || !scope.scope_roots.contains(&root)
                         {
                             place = self.unchecked_place(scope, root).await?;
@@ -3472,7 +3470,7 @@ where
             .iter()
             .rposition(|node| scope.scope_roots.contains(node))
             .ok_or(Halt::Unclassified)?;
-        for node in chain.drain(nearest..) {
+        for &node in &chain[nearest..] {
             if !self.cells.base.borrow().contains(node) {
                 return Ok(false);
             }
