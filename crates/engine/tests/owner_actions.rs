@@ -12984,20 +12984,28 @@ fn a_link_grantee_revoke_waits_for_the_pass_that_holds_the_lock() {
     assert_eq!(fx.link_entries(), 0, "with the link that admitted it");
 }
 
-/// The person rows the owner-signed set at `folder`'s scope root commits now.
-fn person_rows(world: &FakeWorld, blocks: &Blocks, folder: NodeId) -> usize {
-    published_grant_section_at(world, blocks, &scope_repoint(world, &folder.0).current_root)
-        .expect("the folder's scope root answers")
-        .commitment
-        .entries
-        .iter()
-        .filter(|entry| entry.kind != GrantSetEntryKind::Link)
-        .count()
+/// The identity keys of the people the set at `folder`'s scope root commits
+/// now, read off the attested ledger rows of its person entries.
+fn ledger_people(world: &FakeWorld, blocks: &Blocks, folder: NodeId) -> BTreeSet<Vec<u8>> {
+    let people: BTreeSet<[u8; 32]> =
+        published_grant_section_at(world, blocks, &scope_repoint(world, &folder.0).current_root)
+            .expect("the folder's scope root answers")
+            .commitment
+            .entries
+            .iter()
+            .filter(|entry| entry.kind != GrantSetEntryKind::Link)
+            .map(|entry| entry.tag)
+            .collect();
+    published_ledger(world, blocks, folder)
+        .into_iter()
+        .filter(|row| people.contains(&row.tag))
+        .map(|row| row.recipient_identity_pk.to_vec())
+        .collect()
 }
 
 /// A link grantee revoke that waits for the lock holds it before its cut
-/// reads the root. A row that a tick pass publishes meanwhile is on the set
-/// the cut starts from, so the cut drops no row but the revoked person's.
+/// reads the root. No tick publishes a row meanwhile, and the cut keeps every
+/// row of the set it started from but the revoked person's.
 #[test]
 fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
     let mut fx = GrantScenario::new();
@@ -13008,7 +13016,7 @@ fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
     let root = fx.granted_scope_repoint().current_root;
     let cadence = fx.engine.profile().poll_cadence;
 
-    let published = {
+    let (second, cut_from) = {
         let mut revoke = pin!(fx.engine.command(Command::Revoke {
             node: fx.folder,
             recipient_identity_public_key: first.clone(),
@@ -13016,7 +13024,7 @@ fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
         let mut cx = Context::from_waker(Waker::noop());
         assert!(revoke.as_mut().poll(&mut cx).is_pending(), "it waits");
         // The claim reaches the mailbox after the revoke polled it.
-        post_claimant_from(&fx.recipient_device, &fragment, 1, 1);
+        let second = post_claimant_from(&fx.recipient_device, &fragment, 1, 1);
         fx.world
             .record_store
             .release_gets_for(write_name(other).as_str());
@@ -13028,32 +13036,39 @@ fn a_waiting_grantee_revoke_drops_no_row_a_pass_publishes_meanwhile() {
             revoke.as_mut().poll(&mut cx).is_pending(),
             "it reads the root"
         );
-        let s0 = sequence_at(&fx.world, &root);
+        let held_at = sequence_at(&fx.world, &root);
+        let mut cut_from = ledger_people(&fx.world, &fx.blocks, fx.folder);
         // A tick walks past the root and parks in its conversion.
         fx.world.record_store.release_gets_for(root.as_str());
         fx.world.record_store.stall_gets_for_after(root.as_str(), 2);
         fx.world.scheduler.advance(cadence);
         poll_tasks_until_parked(&mut fx._tasks);
-        assert_eq!(
-            sequence_at(&fx.world, &root),
-            s0,
-            "the tick parks before it publishes"
-        );
         fx.world.record_store.release_gets_for(root.as_str());
-        let early = revoke.as_mut().poll(&mut cx);
-        poll_tasks_until_parked(&mut fx._tasks);
-        let published = person_rows(&fx.world, &fx.blocks, fx.folder);
-        let answer = match early {
+        let answer = match revoke.as_mut().poll(&mut cx) {
             Poll::Ready(answer) => answer,
-            Poll::Pending => drive_command(&fx.world, revoke, &mut fx._tasks),
+            Poll::Pending => {
+                poll_tasks_until_parked(&mut fx._tasks);
+                if sequence_at(&fx.world, &root) != held_at {
+                    cut_from = ledger_people(&fx.world, &fx.blocks, fx.folder);
+                }
+                drive_command(&fx.world, revoke, &mut fx._tasks)
+            }
         };
         assert_eq!(answer, Ok(CommandOutcome::Done));
-        published
+        (second, cut_from)
     };
-    let granted = fx.granted_to();
-    assert!(!granted.contains(&first), "the revoked grantee is gone");
     assert!(
-        granted.len() + 1 >= published,
+        !cut_from.contains(&second),
+        "no tick published a row while the revoke held the record"
+    );
+    let mut kept = cut_from;
+    assert!(
+        kept.remove(&first),
+        "the cut starts from a set with the person"
+    );
+    assert_eq!(
+        ledger_people(&fx.world, &fx.blocks, fx.folder),
+        kept,
         "the cut keeps every row but the revoked person's"
     );
 }

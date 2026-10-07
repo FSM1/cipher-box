@@ -42,7 +42,7 @@ impl EngineError {
 }
 
 /// How long an owner command waits for [`Running`] before it refuses. A command
-/// that meets a pass longer than this answers the old refusal.
+/// that meets a pass longer than this answers [`CONVERSION_RUNNING`].
 const RUNNING_WAIT_BUDGET: Duration = Duration::from_secs(30);
 
 /// How often a waiting command tries [`Running`] again.
