@@ -9366,13 +9366,13 @@ fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
     navigate_into_the_new_root(&mut fx, folder, doc);
 }
 
-/// Inside a granted folder, another owner device grants a folder inside a
-/// folder after this device read the records, so the handover of this
-/// device's grant of the outer folder loses the race and stalls. A lost race is
-/// evidence of that edit, so the promoted root holds no value, and a
-/// navigation into the inner folder reads nothing and sends no abuse event.
-#[test]
-fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
+/// Inside a granted folder, another owner device grants `inner` inside `outer`
+/// after this device read the records, and the grant surfaces once this device
+/// PUTs at `surfaces_after` (`outer` or `inner`). The handover of this
+/// device's grant of `outer` then stalls on evidence of that edit, so the
+/// promoted root holds no value, and a navigation into `inner` reads nothing
+/// and sends no abuse event.
+fn assert_a_stall_over_a_concurrent_grant_holds_no_value(surfaces_after: &str) {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -9381,6 +9381,10 @@ fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let names = [write_name(folder), write_name(inner)];
+    let trigger = match surfaces_after {
+        "outer" => write_name(outer),
+        _ => write_name(inner),
+    };
     let store = &fx.world.record_store;
     let read_at: Vec<(EndpointId, &IpnsName, Vec<u8>)> = store
         .endpoints()
@@ -9402,13 +9406,11 @@ fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
             (name, record)
         })
         .collect();
-    // This device reads the records as they were. The other device's grant
-    // surfaces once this device re-seals the inner folder.
     for (endpoint, name, record) in read_at {
         store.seed_record(&endpoint, name.as_str(), record);
     }
     for (name, record) in edited {
-        store.seed_record_after_put(names[1].as_str(), name.as_str(), record);
+        store.seed_record_after_put(trigger.as_str(), name.as_str(), record);
     }
     assert_eq!(
         block_on(fx.engine.command(Command::Grant {
@@ -9417,11 +9419,31 @@ fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
             permission: Permission::Read,
             grantee_name: None,
         })),
-        Ok(CommandOutcome::Done)
+        Ok(CommandOutcome::Done),
+        "{surfaces_after}"
     );
-    assert_eq!(fx.owed_scopes(), vec![outer], "the handover stalled");
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![outer],
+        "{surfaces_after}: the handover stalled"
+    );
 
     navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// The other device's grant surfaces after this device re-seals `inner`, so
+/// the handover loses a race.
+#[test]
+fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("inner");
+}
+
+/// The other device's grant surfaces after the promotion and before the
+/// interior read, so the handover finds an interior node that no longer
+/// converges, before any interior PUT.
+#[test]
+fn a_navigation_after_a_grant_handover_whose_interior_did_not_converge_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("outer");
 }
 
 /// Inside a granted folder, another owner device grants a folder inside a

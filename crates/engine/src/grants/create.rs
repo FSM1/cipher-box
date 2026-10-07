@@ -412,10 +412,13 @@ pub enum CreateGrantError {
 
 impl CreateGrantError {
     /// Whether another device changed a root this grant read, after the read.
+    /// An interior node that no longer converges is such a change: another
+    /// device can have made it a scope root before the handover read it.
     pub(crate) fn lost_a_race(&self) -> bool {
         matches!(
             self,
             Self::ParentScopeSuperseded
+                | Self::InteriorNotConverged { .. }
                 | Self::Publish(RotationPublishError::LostRace)
                 | Self::VouchScope(RotationPublishError::LostRace)
                 | Self::ParentPublish(RotationPublishError::LostRace)
