@@ -724,10 +724,7 @@ where
             let root_record = IpnsRecord::unmarshal(&root_bytes)
                 .and_then(|record| record.verify(&name))
                 .ok()
-                .map(|record| HeldRoot {
-                    sequence: record.sequence,
-                    data: record.data,
-                });
+                .map(HeldRoot::from);
             let walked = walk
                 .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
                 .await;

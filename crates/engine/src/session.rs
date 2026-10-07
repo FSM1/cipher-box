@@ -571,6 +571,15 @@ impl HeldRoot {
     }
 }
 
+impl From<VerifiedRecord> for HeldRoot {
+    fn from(record: VerifiedRecord) -> Self {
+        Self {
+            sequence: record.sequence,
+            data: record.data,
+        }
+    }
+}
+
 impl RootSequences {
     /// Replace the walk values with what one walk gated, in the same step as
     /// the scope sets the walk installs. A scope the walk omits holds no walk

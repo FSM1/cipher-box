@@ -21733,12 +21733,12 @@ mod focus_access_tests {
         block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
         assert!(moved(&floored), "a floor at the served sequence is no walk");
 
-        let held = |value: &[u8]| crate::session::HeldRoot {
-            sequence: 2,
-            data: IpnsRecord::create_v2(&signer, value, 2, 2_000_000_000, "2099-01-01T00:00:00Z")
-                .verify(&name)
-                .expect("the record verifies")
-                .data,
+        let held = |value: &[u8]| {
+            crate::session::HeldRoot::from(
+                IpnsRecord::create_v2(&signer, value, 2, 2_000_000_000, "2099-01-01T00:00:00Z")
+                    .verify(&name)
+                    .expect("the record verifies"),
+            )
         };
         engine.state.root_sequences.borrow_mut().note_walk([(
             FOLDER,

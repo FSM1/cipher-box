@@ -9626,20 +9626,17 @@ fn served_root(fx: &GrantScenario, node: NodeId) -> VerifiedRecord {
         .expect("the scope root verifies")
 }
 
-/// The value `node`'s scope root name serves now, signed at the sequence of
-/// `held` with a later EOL, so the total order picks it over `held`: another
-/// owner device's edit as a same-sequence fork.
-fn forked_over(fx: &GrantScenario, node: NodeId, held: &VerifiedRecord) -> Vec<u8> {
+/// The value `node`'s scope root name serves now, signed at the `held`
+/// sequence with a later EOL, so the total order picks it over the held
+/// record: another owner device's edit as a same-sequence fork.
+fn forked_over(fx: &GrantScenario, node: NodeId, held: u64) -> Vec<u8> {
     let edited = served_root(fx, node);
-    assert!(
-        edited.sequence > held.sequence,
-        "the other device published"
-    );
+    assert!(edited.sequence > held, "the other device published");
     let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
     IpnsRecord::create_v2(
         &signer,
         &edited.value,
-        held.sequence,
+        held,
         edited.ttl,
         "2098-01-01T00:00:00Z",
     )
@@ -9668,9 +9665,9 @@ fn a_navigation_after_a_same_sequence_grant_by_another_device_reads_nothing() {
     let folder = fx.folder;
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let held = served_root(&fx, folder);
+    let held = sequence_at(&fx.world, &write_name(folder));
     let doc = grant_inner_on_second_device(&fx, inner);
-    let fork = forked_over(&fx, folder, &held);
+    let fork = forked_over(&fx, folder, held);
     serve_root(&fx, folder, &fork);
 
     navigate_into_the_new_root(&mut fx, inner, doc);
@@ -9688,10 +9685,10 @@ fn a_drain_write_over_a_same_sequence_fork_does_not_hold_the_root() {
     let folder = fx.folder;
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let held = served_root(&fx, folder);
+    let held = sequence_at(&fx.world, &write_name(folder));
     let held_bytes = served_root_bytes(&fx, folder);
     let doc = grant_inner_on_second_device(&fx, inner);
-    let fork = forked_over(&fx, folder, &held);
+    let fork = forked_over(&fx, folder, held);
     serve_root(&fx, folder, &held_bytes);
     // The fork lands once this device's drain has written the vault root,
     // after the walk and before the drain reads the granted scope root.
@@ -9711,7 +9708,7 @@ fn a_drain_write_over_a_same_sequence_fork_does_not_hold_the_root() {
     }
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(
-        served_root(&fx, folder).sequence > held.sequence,
+        sequence_at(&fx.world, &write_name(folder)) > held,
         "the drain wrote the scope root"
     );
 
