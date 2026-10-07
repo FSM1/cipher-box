@@ -55,7 +55,7 @@ function expectBytes(value: unknown, expected: number[], what: string): void {
 async function runEvents(): Promise<void> {
   await init({ module_or_path: wasmUrl });
   const huge = 9_007_199_254_740_993n; // 2^53 + 1 — not representable as a JS number
-  const [dead, upload, download, withheld, stale, snapshot]: Event[] = sampleEvents(huge);
+  const [dead, upload, download, withheld, stale, snapshot, sweep]: Event[] = sampleEvents(huge);
 
   if (dead?.kind !== 'deadLetter') throw new Error(`kind ${dead?.kind}`);
   if (typeof dead.opId !== 'bigint') throw new Error(`opId type ${typeof dead.opId}`);
@@ -89,6 +89,11 @@ async function runEvents(): Promise<void> {
   if (snapshot?.kind !== 'snapshotUpdated' || Object.keys(snapshot).length !== 1) {
     throw new Error(`snapshot ${JSON.stringify(snapshot)}`);
   }
+
+  if (sweep?.kind !== 'sweepConvergence') throw new Error(`kind ${sweep?.kind}`);
+  if (sweep.cutAt !== huge) throw new Error(`cutAt ${String(sweep.cutAt)}`);
+  if (sweep.at !== huge) throw new Error(`at ${String(sweep.at)}`);
+  if (sweep.lastResealAt !== null) throw new Error(`lastResealAt ${String(sweep.lastResealAt)}`);
 }
 
 interface FingerprintVector {

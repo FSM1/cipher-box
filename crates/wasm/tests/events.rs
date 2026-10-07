@@ -6,7 +6,7 @@
 use cipherbox_engine::facade::{
     BlockProgress, DeadLetterReason, DropCause, Event, NodeId, OpPhase, OwedWorkClass, Staleness,
 };
-use cipherbox_engine::seams::OpId;
+use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_wasm::boundary::encode_event;
 use js_sys::{BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -148,6 +148,36 @@ fn the_byte_and_enum_payloads_cross_under_their_names() {
     assert_eq!(field(&unprovisioned, "retryable"), JsValue::TRUE);
 }
 
+/// A rotation time past 2^53 survives as a `bigint`, and a time this session
+/// does not hold crosses as `null`.
+#[wasm_bindgen_test]
+fn a_sweep_convergence_crosses_its_times_as_bigints_or_null() {
+    let report = crossed(Event::SweepConvergence {
+        scope_root: NodeId([6; 16]),
+        read_epoch: 3,
+        old_epoch_nodes: 2,
+        cut_at: Some(UnixMillis(u64::MAX)),
+        last_reseal_at: None,
+        at: UnixMillis(u64::MAX - 1),
+    });
+
+    assert_eq!(bytes(field(&report, "scopeRoot")), vec![6; 16]);
+    assert_eq!(
+        field(&report, "readEpoch"),
+        JsValue::from(BigInt::from(3u64))
+    );
+    assert_eq!(field(&report, "oldEpochNodes"), JsValue::from(2));
+    assert_eq!(
+        field(&report, "cutAt"),
+        JsValue::from(BigInt::from(u64::MAX))
+    );
+    assert_eq!(field(&report, "lastResealAt"), JsValue::NULL);
+    assert_eq!(
+        field(&report, "at"),
+        JsValue::from(BigInt::from(u64::MAX - 1))
+    );
+}
+
 /// Hosts switch on `kind`, so each variant crosses as its stable name, and a
 /// variant with no payload carries nothing else.
 #[wasm_bindgen_test]
@@ -255,6 +285,46 @@ fn each_event_kind_crosses_as_its_stable_name() {
             Event::WriteCutUnfinished { scope_root: node },
             "writeCutUnfinished",
             2,
+        ),
+        (
+            Event::NameWaveStarted {
+                scope_root: node,
+                at: UnixMillis(0),
+            },
+            "nameWaveStarted",
+            3,
+        ),
+        (
+            Event::NameWaveProgress {
+                scope_root: node,
+                moved: 1,
+                total: 2,
+                at: UnixMillis(0),
+            },
+            "nameWaveProgress",
+            5,
+        ),
+        (
+            Event::NameWaveEnded {
+                scope_root: node,
+                interior_nodes: 1,
+                dropped: 0,
+                at: UnixMillis(0),
+            },
+            "nameWaveEnded",
+            5,
+        ),
+        (
+            Event::SweepConvergence {
+                scope_root: node,
+                read_epoch: 2,
+                old_epoch_nodes: 0,
+                cut_at: None,
+                last_reseal_at: None,
+                at: UnixMillis(0),
+            },
+            "sweepConvergence",
+            7,
         ),
         (
             Event::GranteeJoined {

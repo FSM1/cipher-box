@@ -422,6 +422,10 @@ pub trait WriteWavePublisher {
         channel: RepointChannel,
         block: &[u8],
     ) -> Result<(), WritePublishError>;
+
+    /// The wave holds `moved` of the subtree's `total` nodes at their new
+    /// names. Called once per node, a resumed node included, root last.
+    fn node_moved(&self, _moved: usize, _total: usize) {}
 }
 
 /// Why one write-plane op did not durably land. Only [`Self::Rejected`] is a
@@ -876,7 +880,8 @@ where
     // 5) Child-first wave over the descendants (deepest first): republish unless
     //    already done (resume skips it via published state).
     let mut interior_old_names: Vec<IpnsName> = Vec::with_capacity(descendants.len());
-    for node in descendants.iter().rev() {
+    let total = walk.order.len();
+    for (moved, node) in descendants.iter().rev().enumerate() {
         let new_name = derive_write_name(&write_scope_seed, &node.node_id);
         republish_node(
             publisher,
@@ -888,6 +893,7 @@ where
             false,
         )
         .await?;
+        publisher.node_moved(moved + 1, total);
         // Retire only a superseded name, never one a node still lives at
         // (never orphan).
         if node.current_name != new_name && node.retirable {
@@ -919,6 +925,7 @@ where
         true,
     )
     .await?;
+    publisher.node_moved(total, total);
 
     // 7) Seal the owner-signed re-point object and flip every plane this
     //    rotation owes.

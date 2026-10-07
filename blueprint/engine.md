@@ -1185,7 +1185,8 @@ never persist the superseded name that caused it (ADR 0041). Sweeps re-seal
 metadata only; content bytes are never re-encrypted by any rotation path
 (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment
 (FSM1/cipher-box-next#26 handed it to FSM1/cipher-box-next#33, which did not fix
-it): the sweep runs as an idle-cadence Scheduler job; idempotence plus CAS make
+it): the sweep runs as an idle-cadence Scheduler job (each run that returns
+an outcome reports `sweepConvergence`, in "Triggers"); idempotence plus CAS make
 concurrent sweepers safe — a lost race drops that node from the work-list on
 re-resolve.
 
@@ -1386,6 +1387,14 @@ Each drop emits `nodeDropped` with the scope root, the node id and the cause
 lands. A removed second ref emits nothing. The command or the re-drive that
 drops a node returns `Ok`. The event is a best-effort notice: a host that does
 not listen at the time of the wave gets no notice, and the tree shows the drop.
+
+The rotation progress events carry times from `Scheduler::now` only:
+
+- `nameWaveStarted` (scope root, time): a write cut starts its name wave.
+- `nameWaveProgress` (scope root, moved, total, time): sent once for each node, the root last. A node that a resumed wave already moved counts too.
+- `nameWaveEnded` (scope root, interior nodes, dropped nodes, time): the re-point landed and the old names retired. A wave that stops sends no end: `rotationWorkOwed` is its terminal event.
+- `sweepConvergence` (scope root, read epoch, old-epoch nodes, cut time, last re-seal time, time): sent at the end of each sweep run that returns an outcome. A failed run sends none. A count of zero old-epoch nodes means that the scope converged. A count that is not zero is a lower bound.
+- The facade keeps the cut time and the last re-seal time for each scope in session memory only. Each cut, once its epoch floor is durable, sets the cut time of its scope and clears a re-seal time of an older epoch. A run below the cut epoch sets no re-seal time, and a cut below the stored cut epoch does not change the times. A restart clears both.
 
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
