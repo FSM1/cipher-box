@@ -949,7 +949,13 @@ where
         )
         .await
         {
-            Ok(Some(_)) => Ok(()),
+            Ok(Some(outcome)) => {
+                let mut sequences = self.root_sequences.borrow_mut();
+                for published in &outcome.published_roots {
+                    sequences.note_own(published);
+                }
+                Ok(())
+            }
             // A parent-scope writer can publish a record at the folder's name,
             // so a root with no grant section does not prove the promotion
             // never ran.

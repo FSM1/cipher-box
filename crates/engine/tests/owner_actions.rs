@@ -3947,6 +3947,78 @@ fn a_node_a_write_grant_moved_bins_on_a_device_that_holds_its_old_name() {
     assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write, false);
 }
 
+/// A second owner device that loaded the folder's subtree, then read nothing
+/// while the owner's first device ran a write grant's name wave over it.
+fn idle_through_a_write_grant(
+    fx: &mut GrantScenario,
+) -> (NodeId, Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (inner, _) = nested_subtree(fx);
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    for node in [fx.folder, inner] {
+        block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
+        tick(&fx.world, &second, &mut tasks);
+    }
+    block_on(second.command(Command::SetFocus { node: None })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    events_so_far(&mut events);
+    (inner, second, events, tasks)
+}
+
+/// Navigate `engine` to `node`, then run four ticks.
+fn navigate_and_settle(
+    fx: &GrantScenario,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    node: NodeId,
+) {
+    block_on_while_ticking(
+        engine.command(Command::SetFocus { node: Some(node) }),
+        tasks,
+    )
+    .unwrap();
+    for _ in 0..4 {
+        tick(&fx.world, engine, tasks);
+    }
+}
+
+/// A navigation into the granted subtree, before any walk names the granted
+/// root, reads no honest record as abuse.
+#[test]
+fn a_navigation_below_a_root_another_device_granted_reports_no_abuse() {
+    let mut fx = GrantScenario::new();
+    let (inner, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    navigate_and_settle(&fx, &mut second, &mut tasks, inner);
+    assert_eq!(abuse_descriptions(&mut events), Vec::<String>::new());
+}
+
+/// A navigation to the granted root itself reads no honest record as abuse.
+#[test]
+fn a_navigation_to_a_root_another_device_granted_reports_no_abuse() {
+    let mut fx = GrantScenario::new();
+    let (_, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    let folder = fx.folder;
+    navigate_and_settle(&fx, &mut second, &mut tasks, folder);
+    assert_eq!(abuse_descriptions(&mut events), Vec::<String>::new());
+}
+
+/// A granted root whose head fails its content address is still abuse.
+#[test]
+fn a_malformed_root_another_device_granted_is_still_abuse() {
+    let mut fx = GrantScenario::new();
+    let (_, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    corrupt_published_head(&fx, &fx.granted_scope_repoint().current_root);
+    let folder = fx.folder;
+    navigate_and_settle(&fx, &mut second, &mut tasks, folder);
+    assert!(abuse_events(&mut events) > 0, "the rejection is reported");
+}
+
 /// A vault-scope writer unlinks `deep` from `keep`.
 fn unlink_from_keep(fx: &GrantScenario, keep: NodeId, deep: NodeId) {
     concurrent_edit(
@@ -9307,6 +9379,475 @@ fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
         .find(|child| child.id == doc)
         .and_then(|child| child.size);
     assert_eq!(size, Some(200), "the navigation read the file's version");
+}
+
+/// Write 200 bytes to `target` on `engine`, then run three ticks.
+fn commit_doc(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    target: WriteTarget,
+) {
+    let handle = block_on(engine.begin_write(target, 200)).expect("a write opens");
+    block_on(engine.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
+    block_on(engine.commit_write(handle)).expect("the write commits");
+    for _ in 0..3 {
+        tick(world, engine, tasks);
+    }
+}
+
+/// A second owner device writes 200 bytes to `doc`.
+fn write_doc_on_second_device(fx: &GrantScenario, doc: NodeId) {
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the second device opens the folder");
+    tick(&fx.world, &second, &mut second_tasks);
+    commit_doc(
+        &fx.world,
+        &mut second,
+        &mut second_tasks,
+        WriteTarget::Version {
+            node: doc,
+            expected_version: None,
+        },
+    );
+}
+
+fn painted_size(fx: &GrantScenario, doc: NodeId) -> Option<u64> {
+    block_on(fx.engine.snapshot(fx.folder))
+        .expect("the folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == doc)
+        .and_then(|child| child.size)
+}
+
+/// This device's own edit of a scope set moves that scope root past the last
+/// walk. The navigation still reads at once.
+#[test]
+fn a_navigation_right_after_an_own_scope_set_edit_reads_the_scope() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    write_doc_on_second_device(&fx, doc);
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read the file's version"
+    );
+}
+
+/// A second owner device grants `inner` to the second recipient, then writes
+/// `doc.bin` of 200 bytes in it. Answers the file's id.
+fn grant_inner_on_second_device(fx: &GrantScenario, inner: NodeId) -> NodeId {
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the second device opens the folder");
+    block_on(second.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(second.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &second, &mut second_tasks);
+    }
+    write_doc_in(&fx.world, &mut second, &mut second_tasks, inner)
+}
+
+/// The size `engine` paints for `file` in `folder`.
+fn size_in(engine: &Engine<FakeSeamTypes>, folder: NodeId, file: NodeId) -> Option<u64> {
+    block_on(engine.snapshot(folder))
+        .ok()?
+        .children
+        .into_iter()
+        .find(|child| child.id == file)
+        .and_then(|child| child.size)
+}
+
+/// Navigate this device to `inner`, which another owner device granted after
+/// the last walk, and check that the navigation reads nothing there and sends
+/// no abuse event, and that one tick paints the file.
+fn navigate_into_the_new_root(fx: &mut GrantScenario, inner: NodeId, doc: NodeId) {
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&fx.engine, inner, doc),
+        None,
+        "the navigation read nothing"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&fx.engine, inner, doc),
+        Some(200),
+        "the tick read the file"
+    );
+}
+
+/// A grant by another owner device makes a folder inside a descendant scope a
+/// scope root of its own. A navigation into it before the next walk reads
+/// nothing and sends no abuse event; the next tick reads.
+#[test]
+fn a_navigation_after_a_grant_by_another_device_sends_no_abuse_event() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = grant_inner_on_second_device(&fx, inner);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// A write grant moves the scope root to a fresh name, and the walk adopts it
+/// at a low sequence. Sequences this device published at the old name do not
+/// hold the fresh one, so a grant by another owner device there still skips
+/// the navigation's reads.
+#[test]
+fn a_navigation_after_a_name_wave_and_a_grant_by_another_device_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done),
+        "the write grant moves the scope root to a fresh name"
+    );
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let doc = grant_inner_on_second_device(&fx, inner);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// Another owner device grants a folder, then this device grants another one
+/// over that publish before a walk, and repeats that grant. The own publish
+/// does not hold the root, and the repeat raises the floor at the root without
+/// a walk. A navigation into the first folder reads nothing and sends no abuse
+/// event.
+#[test]
+fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let doc = grant_inner_on_second_device(&fx, folder);
+    let grant_other = |fx: &mut GrantScenario| {
+        block_on(fx.engine.command(Command::Grant {
+            node: other,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        }))
+    };
+    assert_eq!(grant_other(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(
+        grant_other(&mut fx),
+        Ok(CommandOutcome::Done),
+        "the repeat lands"
+    );
+
+    navigate_into_the_new_root(&mut fx, folder, doc);
+}
+
+/// Inside a granted folder, another owner device grants `inner` inside `outer`
+/// after this device read the records, and the grant surfaces once this device
+/// PUTs at `surfaces_after` (`outer` or `inner`). The handover of this
+/// device's grant of `outer` then stalls on evidence of that edit, so the
+/// promoted root holds no value, and a navigation into `inner` reads nothing
+/// and sends no abuse event.
+fn assert_a_stall_over_a_concurrent_grant_holds_no_value(surfaces_after: &str) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let names = [write_name(folder), write_name(inner)];
+    let trigger = match surfaces_after {
+        "outer" => write_name(outer),
+        _ => write_name(inner),
+    };
+    let store = &fx.world.record_store;
+    let read_at: Vec<(EndpointId, &IpnsName, Vec<u8>)> = store
+        .endpoints()
+        .into_iter()
+        .flat_map(|endpoint| {
+            names.iter().map(move |name| {
+                let record = store.record_at(&endpoint, name.as_str()).expect("a record");
+                (endpoint.clone(), name, record)
+            })
+        })
+        .collect();
+    let doc = grant_inner_on_second_device(&fx, inner);
+    let edited: Vec<(&IpnsName, Vec<u8>)> = names
+        .iter()
+        .map(|name| {
+            let record = store
+                .record_at(&store.endpoints()[0], name.as_str())
+                .expect("an edited record");
+            (name, record)
+        })
+        .collect();
+    for (endpoint, name, record) in read_at {
+        store.seed_record(&endpoint, name.as_str(), record);
+    }
+    for (name, record) in edited {
+        store.seed_record_after_put(trigger.as_str(), name.as_str(), record);
+    }
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: outer,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "{surfaces_after}"
+    );
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![outer],
+        "{surfaces_after}: the handover stalled"
+    );
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// The other device's grant surfaces after this device re-seals `inner`, so
+/// the handover loses a race.
+#[test]
+fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("inner");
+}
+
+/// The other device's grant surfaces after the promotion and before the
+/// interior read, so the handover finds an interior node that no longer
+/// converges, before any interior PUT.
+#[test]
+fn a_navigation_after_a_grant_handover_whose_interior_did_not_converge_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("outer");
+}
+
+/// Inside a granted folder, another owner device grants a folder inside a
+/// folder, then this device grants the outer folder before a walk. The
+/// promoted root names the inner scope root, which this device's sets do not
+/// hold, so a navigation into the inner folder reads nothing and sends no
+/// abuse event.
+#[test]
+fn a_promoted_root_over_another_devices_grant_does_not_hold_the_root() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = grant_inner_on_second_device(&fx, inner);
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: outer,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// An upload into the vault root republishes the vault root. The navigation
+/// right after it still reads the vault scope.
+#[test]
+fn a_navigation_right_after_an_upload_into_the_vault_root_reads_at_once() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    write_doc_on_second_device(&fx, doc);
+    block_on(fx.engine.command(Command::SetFocus { node: None }))
+        .expect("the root takes the focus");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = write_name(ROOT);
+    let before = sequence_at(&fx.world, &root);
+    let handle = block_on(fx.engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "top.bin".into(),
+        },
+        50,
+    ))
+    .expect("a new file write opens");
+    block_on(fx.engine.push_chunk(handle, &[9u8; 50])).expect("the bytes stage");
+    block_on(fx.engine.commit_write(handle)).expect("the file commits");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        sequence_at(&fx.world, &root) > before,
+        "the upload republished the vault root"
+    );
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read the file"
+    );
+}
+
+/// Write `doc.bin` of 200 bytes into `parent` on `engine` and answer its id.
+fn write_doc_in(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    parent: NodeId,
+) -> NodeId {
+    commit_doc(
+        world,
+        engine,
+        tasks,
+        WriteTarget::NewFile {
+            parent,
+            name: "doc.bin".into(),
+        },
+    );
+    block_on(engine.view())
+        .expect("a rendered view")
+        .children(parent)
+        .into_iter()
+        .find(|row| row.name == "doc.bin")
+        .expect("the file is listed")
+        .id
+}
+
+/// A recipient navigates into a subfolder of a received share. The pass that
+/// grafted the share gated its root, so the navigation reads at once and sends
+/// no abuse event.
+#[test]
+fn a_navigation_into_a_received_share_reads_at_once() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let sub = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "sub");
+    let doc = write_doc_in(&fx.world, &mut fx.engine, &mut fx._tasks, sub);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (mut grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        size_in(&grantee, sub, doc),
+        None,
+        "no leg read the file yet"
+    );
+
+    events_so_far(&mut events);
+    block_on(grantee.command(Command::SetFocus { node: Some(sub) }))
+        .expect("the grantee opens the subfolder");
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&grantee, sub, doc),
+        Some(200),
+        "the navigation read the file"
+    );
+}
+
+/// A navigation to a folder the base does not hold yet lists down to it and
+/// then refreshes the window. It reads the vault root's record once.
+#[test]
+fn a_navigation_to_an_unlisted_folder_probes_the_root_once() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    let (mut second, _second_events, _second_tasks) = fx.second_owner_device();
+    let root = write_name(ROOT);
+    let before = fx.world.record_store.get_count(root.as_str());
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus");
+    assert!(
+        block_on(second.snapshot(inner)).is_ok(),
+        "the navigation listed down to the folder"
+    );
+    assert_eq!(
+        fx.world.record_store.get_count(root.as_str()) - before,
+        fx.world.record_store.endpoints().len(),
+        "one fan-out read of the root"
+    );
+
+    let before = fx.world.record_store.get_count(root.as_str());
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus again");
+    assert_eq!(
+        fx.world.record_store.get_count(root.as_str()),
+        before,
+        "a repeat visit with nothing due reads no root"
+    );
+}
+
+/// A probe of a scope root with no answer reads nothing for that scope and
+/// sends no abuse event. The next tick reads.
+#[test]
+fn a_navigation_whose_root_probe_has_no_answer_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    write_doc_on_second_device(&fx, doc);
+
+    let root = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(root.as_str());
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_ne!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read nothing"
+    );
+
+    fx.world.record_store.heal_get_for(root.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(painted_size(&fx, doc), Some(200), "the tick read the file");
 }
 
 /// A tick whose walk does not answer must not read the record of a scope root

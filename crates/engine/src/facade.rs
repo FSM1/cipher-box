@@ -113,21 +113,21 @@ use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, RootFallback, RootWait, RotationAncestry, SweptScopeState,
 };
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
-    GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishOutcome,
-    RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch, RootAdopter,
-    ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
-    enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
-    run_liveness_loop,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FanoutRecord, FolderRefresh,
+    FolderRefreshReport, GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl,
+    OwnerRotationKeys, OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError,
+    PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch,
+    RootAdopter, ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
+    enrol_owned_scope_pointers, eol_renew_pass, fanout_get_classified, keyless_re_put, observed_at,
+    resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
-    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
-    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    MAX_ROTATION_ATTEMPTS, PublishedRoot, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot,
+    ResolveFailure, Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, cut_from_last_copy, derive_write_name,
@@ -213,6 +213,10 @@ impl NodeId {
     /// also the vault root scope's id.
     pub(crate) const VAULT_ROOT: Self = Self([0; 16]);
 }
+
+/// Per navigation, whether each scope root moved since this device last walked
+/// or published it ([`Engine::scope_root_moved`]), so a scope costs one GET.
+type RootProbes = RefCell<BTreeMap<NodeId, bool>>;
 
 /// A live write handle, minted by [`Engine::begin_write`].
 ///
@@ -993,7 +997,7 @@ async fn publish_edited_set(
     target: &OwnerScope,
     current: &CascadeTarget,
     commitment_sig: &EcdsaSignature,
-) -> Result<(), EngineError> {
+) -> Result<PublishedRoot, EngineError> {
     let section = reseal_at_current_epoch(
         &mut SharedEntropy(entropy),
         current,
@@ -6041,6 +6045,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut roots) = self.state.minted_scope_roots.try_borrow_mut() {
             roots.clear();
         }
+        if let Ok(mut sequences) = self.state.root_sequences.try_borrow_mut() {
+            sequences.clear();
+        }
         if let Ok(mut claims) = self.state.pending_invite_claims.try_borrow_mut() {
             *claims = ClaimCounts::default();
         }
@@ -8612,7 +8619,7 @@ where {
             None => pass.owe(node, owed.clone()).await?,
             Some(standing) => pass.replace_owed(node, standing, owed.clone()).await?,
         }
-        let (pending, granted_read_scope) = match &share {
+        let (pending, granted_read_scope, published_root, published_roots, stall) = match &share {
             ScopeShare::Contact { contact, .. } => {
                 let recipient = GrantRecipient {
                     contact,
@@ -8638,12 +8645,25 @@ where {
                 };
                 // The root landed, so a stalled handover leaves the move owed,
                 // as a link's does below.
-                if let Some(stalled) = granted.handover.err() {
-                    pass.stop_owed(node, owed_steps.clone(), OwedStop::of_grant(&stalled))
-                        .await;
-                    (PendingShare::Owed, granted.read_scope)
-                } else {
-                    (PendingShare::SharePointer(recipient), granted.read_scope)
+                match granted.handover {
+                    Err(stalled) => {
+                        pass.stop_owed(node, owed_steps.clone(), OwedStop::of_grant(&stalled))
+                            .await;
+                        (
+                            PendingShare::Owed,
+                            granted.read_scope,
+                            granted.published_root,
+                            Vec::new(),
+                            Some(stalled.lost_a_race()),
+                        )
+                    }
+                    Ok(outcome) => (
+                        PendingShare::SharePointer(recipient),
+                        granted.read_scope,
+                        granted.published_root,
+                        outcome.published_roots,
+                        None,
+                    ),
                 }
             }
             ScopeShare::InviteLink {
@@ -8701,11 +8721,46 @@ where {
                         let _ = pass.owed().clear(node).await;
                     }
                 }
-                (PendingShare::Fragment(minted.link), minted.read_scope)
+                (
+                    PendingShare::Fragment(minted.link),
+                    minted.read_scope,
+                    minted.published_root,
+                    minted.published_roots,
+                    minted.stalled.as_ref().map(CreateGrantError::lost_a_race),
+                )
             }
         };
 
         self.state.minted_scope_roots.borrow_mut().insert(node);
+        {
+            let named = self.state.named_scope_roots();
+            let mut sequences = self.state.root_sequences.borrow_mut();
+            // The promoted root holds only when no other device edited the
+            // parent and the sets name each root the subtree names. A landed
+            // handover proves the parent by its own publish, which lands last;
+            // a stalled one by the parent read the grant gated, unless the
+            // stall itself is evidence of another device's edit.
+            let mut parent_held = false;
+            for published in &published_roots {
+                parent_held = sequences.note_own(published);
+            }
+            let parent_unedited = match stall {
+                None => parent_held,
+                Some(lost_a_race) => {
+                    !lost_a_race
+                        && current.read_sequence
+                            <= sequences.held(&parent_scope.scope.ipns_name).unwrap_or(0)
+                }
+            };
+            if let Some(promoted) = &published_root
+                && parent_unedited
+                && subtree
+                    .iter()
+                    .all(|child| named.contains(&NodeId(child.scope_id)))
+            {
+                sequences.note_promoted(promoted);
+            }
+        }
         // The grant re-sealed the folder's interior under this seed, so the
         // owner's reads there need it now, not after a boundary walk proves it.
         deposit_seed(
@@ -8895,6 +8950,7 @@ where {
         )?;
         net.publish_scope_root(&resealed)
             .await
+            .map(drop)
             .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 
@@ -9446,7 +9502,7 @@ where {
         current.commitment = edited.commitment;
         current.grant_ledger = edited.ledger;
         current.commitment_sig = edited.commitment_sig.to_compact();
-        publish_edited_set(
+        let published = publish_edited_set(
             &gated.net,
             &self.entropy,
             session.enc_subkey(),
@@ -9454,7 +9510,9 @@ where {
             current,
             &edited.commitment_sig,
         )
-        .await
+        .await?;
+        self.state.root_sequences.borrow_mut().note_own(&published);
+        Ok(())
     }
 
     /// Decode an invite fragment into the pending bookmark and the seams the
@@ -9949,6 +10007,7 @@ where {
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             on_access_misses: &self.state.on_access_misses,
+            root_sequences: &self.state.root_sequences,
             entropy: &self.entropy,
             staging: &self.seams.staging_store,
             identity: session.identity(),
@@ -10265,17 +10324,21 @@ where {
     /// it brings into view. Navigation is the tick model's second trigger source
     /// (#33 D2): the newly focused chain refreshes now rather than a poll cadence
     /// later, and only past the staleness threshold — a repeat visit renders the
-    /// state already held.
+    /// state already held. A scope whose root moved past the sequence the last
+    /// walk gated and past this device's own confirmed publish, or whose root
+    /// probe has no answer, reads nothing here; the next tick reads it. Each
+    /// root is probed once per navigation.
     ///
     /// Shared-borrow, so a host can run its network legs beside the snapshot
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
     pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
         self.live_session()?;
         self.state.focus.borrow_mut().open_folder = node;
+        let probes = RootProbes::default();
         if let Some(folder) = node {
-            self.locate_folder(folder).await;
+            self.locate_folder(folder, &probes).await;
         }
-        self.refresh_focus_on_access(self.seams.scheduler.now(), node)
+        self.refresh_focus_on_access(self.seams.scheduler.now(), node, &probes)
             .await;
         Ok(())
     }
@@ -10300,18 +10363,25 @@ where {
     /// The folder leg runs first, so a row it lists joins the file leg of the
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
-    async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
+    async fn refresh_focus_on_access(
+        &self,
+        now: UnixMillis,
+        folder: Option<NodeId>,
+        probes: &RootProbes,
+    ) {
         let settle = self.settle_leg(now);
-        // The rows wait for the first pass ([`SessionState::boundary_walk_landed`]).
-        if !self.state.boundary_walk_landed.get() {
-            if let Some(folder) = folder {
-                self.queue_focus_file_children(folder);
-            }
-            return;
-        }
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
+        let queue_children = || {
+            if let Some(folder) = folder {
+                self.queue_focus_file_children(folder);
+            }
+        };
+        if !self.state.boundary_walk_landed.get() {
+            queue_children();
+            return;
+        }
         let own = self.leg_scopes().await.own;
         let all_due = focus_folders_due(
             &self.state.snapshot.borrow(),
@@ -10325,8 +10395,22 @@ where {
             .into_iter()
             .filter(|folder| !due.contains(folder))
             .collect();
-        let scope_read_seed = self.scope_read_seed(&root.0).await;
+        if due.is_empty() && below.is_empty() {
+            queue_children();
+            if self.queued_focus_files().is_empty() {
+                return;
+            }
+        }
         let root_name = self.state.current_root_name.borrow().clone();
+        // The rows wait for a pass that walks the root the plane serves.
+        if self
+            .scope_root_moved(probes, root, root_name.as_ref(), &self.seams.floor_store)
+            .await
+        {
+            queue_children();
+            return;
+        }
+        let scope_read_seed = self.scope_read_seed(&root.0).await;
         let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
             transport: &self.record_transport,
             snapshot_cache: &self.seams.snapshot_cache,
@@ -10351,12 +10435,10 @@ where {
             settle(&due, leg.run(&due).await);
         }
         // A folder below a descendant scope root reads on that scope's leg.
-        self.navigation_legs(root, below, NodeKind::Folder, now, &settle)
+        self.navigation_legs(root, below, NodeKind::Folder, now, &settle, probes)
             .await;
-        if let Some(folder) = folder {
-            self.queue_focus_file_children(folder);
-        }
-        self.navigation_file_legs(root, now, &settle).await;
+        queue_children();
+        self.navigation_file_legs(root, now, &settle, probes).await;
     }
 
     /// List the vault a level at a time, from the root down, until the base
@@ -10368,16 +10450,16 @@ where {
     /// navigation that lands before the first walk waits for one
     /// ([`Self::boundary_walk_settled`]). A miss is kept as
     /// [`SessionState::locate_miss`] states.
-    async fn locate_folder(&self, target: NodeId) {
+    async fn locate_folder(&self, target: NodeId, probes: &RootProbes) {
         let _ = crate::record_plane::within(
             &self.seams.scheduler,
             LOCATE_BUDGET,
-            self.list_down_to(target),
+            self.list_down_to(target, probes),
         )
         .await;
     }
 
-    async fn list_down_to(&self, target: NodeId) {
+    async fn list_down_to(&self, target: NodeId, probes: &RootProbes) {
         if self.state.snapshot.borrow().contains(target) || !self.boundary_walk_settled().await {
             return;
         }
@@ -10406,7 +10488,7 @@ where {
                     .collect()
             };
             let (_, missed) = self
-                .navigation_legs(root, next.clone(), NodeKind::Folder, now, &settle)
+                .navigation_legs(root, next.clone(), NodeKind::Folder, now, &settle, probes)
                 .await;
             unread |= missed;
             level = next;
@@ -10436,6 +10518,49 @@ where {
         self.state.boundary_walk_landed.get()
     }
 
+    /// Whether the plane serves `scope`'s root above the sequence held at its
+    /// name ([`crate::session::RootSequences`]): a grant in that record can
+    /// name a scope root the legs would read as a plain child. The name is the
+    /// one the last walk or graft gated, else `name`. A moved root reads nothing until
+    /// the next walk. The sequence floor is no proof of a walk, as a gated
+    /// read outside a walk raises it, so it bars only a replay: a served
+    /// record below it, or a floor store with no answer, also counts as moved.
+    /// An unavailable plane counts as moved; an absent record names no scope.
+    /// The probe adopts nothing and raises no floor.
+    async fn scope_root_moved(
+        &self,
+        probes: &RootProbes,
+        scope: NodeId,
+        name: Option<&IpnsName>,
+        floors: &impl FloorStore,
+    ) -> bool {
+        if let Some(&moved) = probes.borrow().get(&scope) {
+            return moved;
+        }
+        let walked = self.state.root_sequences.borrow().walked_name(scope);
+        let moved = match walked.as_ref().or(name) {
+            None => true,
+            Some(name) => match fanout_get_classified(&self.record_transport, name).await {
+                FanoutRecord::Found(served, _) => {
+                    let name = name.as_str().as_bytes();
+                    self.state.root_sequences.borrow().held(name) < Some(served.sequence)
+                        || floor::check_sequence(
+                            floors,
+                            name,
+                            served.sequence,
+                            floor::Strictness::AtOrAboveFloor,
+                        )
+                        .await
+                        .is_err()
+                }
+                FanoutRecord::Absent => false,
+                FanoutRecord::Unavailable(_) => true,
+            },
+        };
+        probes.borrow_mut().insert(scope, moved);
+        moved
+    }
+
     /// The on-access file leg over the queued rows. A row leaves the queue once
     /// a leg has attempted it, the tick leg's rule.
     async fn navigation_file_legs(
@@ -10443,9 +10568,17 @@ where {
         root: NodeId,
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
+        probes: &RootProbes,
     ) {
         let (attempted, _) = self
-            .navigation_legs(root, self.queued_focus_files(), NodeKind::File, now, settle)
+            .navigation_legs(
+                root,
+                self.queued_focus_files(),
+                NodeKind::File,
+                now,
+                settle,
+                probes,
+            )
             .await;
         self.state
             .focus
@@ -10468,6 +10601,7 @@ where {
         kind: NodeKind,
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
+        probes: &RootProbes,
     ) -> (Vec<NodeId>, bool) {
         let mut attempted = Vec::new();
         let mut unread = false;
@@ -10521,6 +10655,18 @@ where {
                 unread = true;
                 continue;
             };
+            let name = if scope == root {
+                root_name.as_ref()
+            } else {
+                leg_material.material.scope_root_name.as_ref()
+            };
+            if self
+                .scope_root_moved(probes, scope, name, &leg_material.material.floors)
+                .await
+            {
+                unread = true;
+                continue;
+            }
             let leg = FolderRefresh {
                 transport: &self.record_transport,
                 snapshot_cache: &self.seams.snapshot_cache,
@@ -21000,6 +21146,11 @@ mod focus_access_tests {
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
+        // The walk this flag claims ran against the vault root's name, which
+        // an online start holds and an offline one does not.
+        *engine.state.current_root_name.borrow_mut() = Some(IpnsName::from_public_key(
+            &kdf::ipns_keypair(&[5u8; 32]).verifying_key(),
+        ));
         let scope_id = engine.state.snapshot.borrow().root.0;
         deposit_seed(
             &engine.state.scope_read_seeds,
@@ -21409,7 +21560,15 @@ mod focus_access_tests {
         {
             let mut base = engine.state.snapshot.borrow_mut();
             let root = base.root;
-            base.upsert_node(NodeMeta::new(FOLDER, "shared", NodeKind::Folder));
+            // A scope root's own name rides on the child entry that projected it.
+            let mut shared = NodeMeta::new(FOLDER, "shared", NodeKind::Folder);
+            shared.ipns_name = Some(
+                IpnsName::from_public_key(&kdf::ipns_keypair(&[6u8; 32]).verifying_key())
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+            );
+            base.upsert_node(shared);
             base.link(root, FOLDER, 1);
             base.upsert_node(NodeMeta::new(shared_file, "theirs.bin", NodeKind::File));
             base.link(FOLDER, shared_file, 1);
@@ -21426,6 +21585,66 @@ mod focus_access_tests {
         (shared_file, own_file)
     }
 
+    /// A served root above every name-bound sequence counts as moved, even
+    /// when the floor at its name holds it: a gated read outside a walk raises
+    /// that floor. A floor store with no answer counts as moved.
+    #[test]
+    fn a_probe_measures_the_root_against_the_walk_not_the_floor() {
+        use crate::testkit::fakes::InMemoryFloorStore;
+        use cipherbox_core::ipns::IpnsRecord;
+
+        let world = FakeWorld::new();
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        block_on(engine.start(LoginSecret::new(vec![7; 32]), None)).unwrap();
+        let signer = kdf::ipns_keypair(&[6u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/bafkqaaa",
+            2,
+            2_000_000_000,
+            "2099-01-01T00:00:00Z",
+        )
+        .marshal();
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record.clone());
+        }
+        let moved = |floors: &InMemoryFloorStore| {
+            block_on(engine.scope_root_moved(&RootProbes::default(), FOLDER, Some(&name), floors))
+        };
+
+        let floored = InMemoryFloorStore::default();
+        block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
+        assert!(moved(&floored), "a floor at the served sequence is no walk");
+
+        engine
+            .state
+            .root_sequences
+            .borrow_mut()
+            .note_walk([(FOLDER, name.clone(), 2)]);
+        assert!(!moved(&floored), "the walk gated the served sequence");
+        let failing = InMemoryFloorStore::default();
+        failing.fail_floor_reads();
+        assert!(
+            moved(&failing),
+            "a floor store with no answer counts as moved"
+        );
+        let above = InMemoryFloorStore::default();
+        block_on(above.raise_sequence_floor(name.as_str().as_bytes(), 3)).unwrap();
+        assert!(moved(&above), "a served record below the floor is a replay");
+    }
+
     /// A record in a shared scope unseals only under that scope's own read
     /// material, so a scope with no seed held keeps its rows for the tick. The
     /// row beside it in the vault's own scope proves the leg ran.
@@ -21435,7 +21654,7 @@ mod focus_access_tests {
         let (shared_file, own_file) = shared_scope_beside_own_row(&engine);
 
         let now = engine.seams.scheduler.now();
-        block_on(engine.refresh_focus_on_access(now, Some(FOLDER)));
+        block_on(engine.refresh_focus_on_access(now, Some(FOLDER), &RootProbes::default()));
 
         let stamped = engine.state.focus_refreshed.borrow();
         assert!(
@@ -21479,7 +21698,7 @@ mod focus_access_tests {
         engine.note_focus_file(row);
 
         let now = engine.seams.scheduler.now();
-        block_on(engine.refresh_focus_on_access(now, Some(grafted)));
+        block_on(engine.refresh_focus_on_access(now, Some(grafted), &RootProbes::default()));
 
         assert!(
             !engine
@@ -21558,7 +21777,7 @@ mod focus_access_tests {
         );
 
         let now = engine.seams.scheduler.now();
-        block_on(engine.refresh_focus_on_access(now, Some(FOLDER)));
+        block_on(engine.refresh_focus_on_access(now, Some(FOLDER), &RootProbes::default()));
 
         assert!(
             engine
@@ -21603,7 +21822,7 @@ mod focus_access_tests {
         engine.note_focus_file(mine);
 
         let now = engine.seams.scheduler.now();
-        block_on(engine.refresh_focus_on_access(now, Some(unproved_root)));
+        block_on(engine.refresh_focus_on_access(now, Some(unproved_root), &RootProbes::default()));
 
         assert!(
             !engine.state.focus_refreshed.borrow().contains_key(&theirs),

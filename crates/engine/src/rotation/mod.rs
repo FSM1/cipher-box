@@ -75,8 +75,8 @@ pub use reseal::{
 pub(crate) use reseal::{LaggingSeedMiss, lagging_read_seed};
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
 pub use rotate::{
-    ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
-    ScopeRootPublisher, rotate_scope,
+    PublishedRoot, ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome,
+    RotationPublishError, ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{
     DropCause, DroppedNode, NoBound, NodeBound, NodeStop, RecoveredWave, RepointChannel,

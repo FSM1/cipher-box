@@ -16495,7 +16495,7 @@ fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
     // A cold session at the vault root, where the forced pass walks the
     // boundary and lists both folders.
     let bob = world.device(b"alice-second-device");
-    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     command_while_ticking(
         &mut engine_b,
         Command::SetFocus { node: None },
@@ -16534,6 +16534,7 @@ fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
             Some(served.len() as u64),
             "the navigation paints the {name} folder's row, before any poll tick runs"
         );
+        assert!(accused_nobody(&mut events_b), "the {name} folder");
     }
 }
 

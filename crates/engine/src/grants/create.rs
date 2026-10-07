@@ -44,11 +44,11 @@ use crate::mailbox::post_sealed;
 use crate::net::publish::Observed;
 use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope_current};
 use crate::rotation::{
-    AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
-    ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
-    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode,
-    SweptScope, WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch,
-    reseal_scope_root,
+    AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, PublishedRoot, ResealError,
+    ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError,
+    ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweptNode, SweptScope, WriteHistory, converge_subtree, derive_write_name,
+    reseal_at_current_epoch, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
 use crate::sync::model::{Link, link_rank};
@@ -206,6 +206,8 @@ pub struct ParentScopePlan<'a> {
 /// The result of a successful read-grant creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateGrantOutcome {
+    /// Each scope root this grant published.
+    pub published_roots: Vec<PublishedRoot>,
     /// The new grantee scope id.
     pub scope_id: [u8; 16],
     /// The recipient's blinded tag committed at the new scope root.
@@ -409,6 +411,28 @@ pub enum CreateGrantError {
 }
 
 impl CreateGrantError {
+    /// Whether another device changed a root this grant read, after the read.
+    /// An interior node that no longer converges is such a change: another
+    /// device can have made it a scope root before the handover read it.
+    pub(crate) fn lost_a_race(&self) -> bool {
+        matches!(
+            self,
+            Self::ParentScopeSuperseded
+                | Self::InteriorNotConverged { .. }
+                | Self::Publish(RotationPublishError::LostRace)
+                | Self::VouchScope(RotationPublishError::LostRace)
+                | Self::ParentPublish(RotationPublishError::LostRace)
+                | Self::InteriorPublish {
+                    error: RotationPublishError::LostRace,
+                    ..
+                }
+                | Self::DescendantPublish {
+                    error: RotationPublishError::LostRace,
+                    ..
+                }
+        )
+    }
+
     /// Every grant-creation check, in variant declaration order — the surface
     /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
     /// `Entropy` surfaces the seam's own verdict and stays off it.
@@ -556,14 +580,15 @@ pub trait ScopeRootPromoter {
     /// root's, so its children are the interior the fresh scope now owns: taking
     /// them from the publish rather than from a read of the caller's own binds
     /// the re-seal to the record this call made current. The promoted body
-    /// drops its refs to `held_outside` ([`drop_held_refs`]).
+    /// drops its refs to `held_outside` ([`drop_held_refs`]), and the root it
+    /// published.
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError>;
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError>;
 }
 
 /// The two reads a stalled grant's resume runs — the read-side counterpart of
@@ -1138,6 +1163,9 @@ where
 pub struct PromotedGrant {
     /// The promoted scope's read material, known once its root landed.
     pub read_scope: GrantedReadScope,
+    /// The promoted root this call published; `None` when an earlier attempt
+    /// published it.
+    pub published_root: Option<PublishedRoot>,
     /// The interior, descendant and parent publishes after the root.
     pub handover: Result<CreateGrantOutcome, CreateGrantError>,
 }
@@ -1273,7 +1301,7 @@ where
     // reparented descendants before they are removed from the parent
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
-    let promoted_children = net
+    let (promoted_children, published_root) = net
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(|error| match error {
@@ -1310,6 +1338,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
+        published_root: Some(published_root),
         handover,
     })
 }
@@ -1394,6 +1423,7 @@ where
     .await;
     Ok(PromotedGrant {
         read_scope,
+        published_root: None,
         handover,
     })
 }
@@ -1446,6 +1476,7 @@ where
     // blueprint/engine.md "subtree swept in"). Metadata-only, threaded
     // top-down as the eager cascade does (rotation/cascade.rs). Register-first: the grantee root published above
     // already lists these descendants, so each points back at a parent that exists.
+    let mut published_roots = Vec::new();
     for descendant in grantee.subtree_child_index {
         let target = net.resolve(descendant).await.map_err(|reason| {
             CreateGrantError::DescendantResolve {
@@ -1484,12 +1515,13 @@ where
             write_epoch: target.write_epoch,
             section,
         };
-        net.publish_scope_root(&record).await.map_err(|error| {
+        let published = net.publish_scope_root(&record).await.map_err(|error| {
             CreateGrantError::DescendantPublish {
                 scope_id: descendant.scope_id,
                 error,
             }
         })?;
+        published_roots.push(published);
     }
 
     // Parent index update — a metadata-only re-seal at the same epoch.
@@ -1533,11 +1565,14 @@ where
         write_epoch: parent.seeds.write_epoch,
         section: parent_section,
     };
-    net.publish_scope_root(&parent_record)
+    let published = net
+        .publish_scope_root(&parent_record)
         .await
         .map_err(CreateGrantError::ParentPublish)?;
+    published_roots.push(published);
 
     Ok(CreateGrantOutcome {
+        published_roots,
         scope_id: grantee.scope_id,
         tag,
         parent_child_index: parent_index,
@@ -2358,6 +2393,7 @@ mod tests {
                 carried_history_links: Vec::new(),
                 // Every scope this resolver reaches is a descendant.
                 carried_ascent_link: true,
+                read_sequence: 1,
             })
         }
     }
@@ -2448,7 +2484,7 @@ mod tests {
             _node: &NodeRef,
             record: &ResealedScopeRoot,
             _held_outside: &[HeldNode],
-        ) -> Result<Vec<NodeRef>, RotationPublishError> {
+        ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);
             }
@@ -2456,7 +2492,7 @@ mod tests {
             *self.promotion.borrow_mut() = Some(record.clone());
             // The promoted body is the granted folder's, so its children are
             // the nodes inside the folder.
-            Ok(self.promoted_children())
+            Ok((self.promoted_children(), PublishedRoot::fresh(record, 1)))
         }
     }
 
@@ -2464,7 +2500,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), RotationPublishError> {
+        ) -> Result<PublishedRoot, RotationPublishError> {
             let call = {
                 let mut c = self.publish_calls.borrow_mut();
                 let call = *c;
@@ -2478,8 +2514,9 @@ mod tests {
             }
             match &self.publish_result {
                 Ok(()) => {
-                    self.published.borrow_mut().push(record.clone());
-                    Ok(())
+                    let mut published = self.published.borrow_mut();
+                    published.push(record.clone());
+                    Ok(PublishedRoot::fresh(record, published.len() as u64))
                 }
                 Err(e) => Err(e.clone()),
             }

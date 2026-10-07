@@ -143,6 +143,9 @@ pub struct CascadeTarget {
     /// re-sealed without the link its record carried is orphaned from every
     /// later gated descent.
     pub carried_ascent_link: bool,
+    /// The sequence of the record the gate adopted for this target, which
+    /// a publish over a refused record clears without adopting.
+    pub read_sequence: u64,
 }
 
 /// The impure edge that resolves a descendant scope root's current re-seal

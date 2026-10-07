@@ -41,10 +41,10 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use cipherbox_engine::rotation::{
-    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory,
+    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, PublishedRoot,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode,
+    SweptScope, WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
@@ -1740,9 +1740,9 @@ impl CascadeResealResolver for LocalNet {
 impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
-        _record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        Ok(())
+        record: &ResealedScopeRoot,
+    ) -> Result<PublishedRoot, RotationPublishError> {
+        Ok(PublishedRoot::fresh(record, 1))
     }
 }
 
@@ -1751,10 +1751,10 @@ impl ScopeRootPromoter for LocalNet {
         &self,
         _parent: &ChildScopeRef,
         _node: &NodeRef,
-        _record: &ResealedScopeRoot,
+        record: &ResealedScopeRoot,
         _held_outside: &[cipherbox_engine::grants::HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError> {
-        Ok(Vec::new())
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
+        Ok((Vec::new(), PublishedRoot::fresh(record, 1)))
     }
 }
 
