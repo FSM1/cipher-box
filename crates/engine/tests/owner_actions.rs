@@ -2661,6 +2661,78 @@ fn a_deep_kept_delete_leaves_after_a_read_of_its_folder_after_a_restart() {
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// The wave copies /A/B/X. In its window, this device deletes X, and a peer
+/// unlinks B at the name A has before the flip. This device reads A at that
+/// name and sees B unlinked. After the flip, that read shows only the old
+/// tree, so the delete stays, and it applies again in the new tree, which
+/// still holds B and X (ADR 0069 D6).
+#[test]
+fn a_kept_delete_stays_when_its_folder_is_unlinked_only_in_the_old_tree() {
+    let mut fx = GrantScenario::new();
+    let (a, a_name) = write_granted_child(&mut fx);
+    let b = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, a, "b");
+    let x = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, b, "x");
+    let b_name = live_child(&fx, &a_name, a, "b");
+    let x_name = live_child(&fx, &b_name, b, "x");
+    let peer_device = fx.world.device(b"the owner's third device");
+    let (mut peer, _peer_events, mut peer_tasks) = boot_owner(&fx.world, &fx.blocks, &peer_device);
+    tick(&fx.world, &peer, &mut peer_tasks);
+    block_on(peer.command(Command::SetFocus { node: Some(b) })).expect("the peer opens B");
+    tick(&fx.world, &peer, &mut peer_tasks);
+    let endpoints = fx.world.record_store.endpoints();
+    let held = [&a_name, &b_name, &x_name];
+    let walked: Vec<_> = held
+        .iter()
+        .map(|name| {
+            fx.world
+                .record_store
+                .record_at(&endpoints[0], name.as_str())
+        })
+        .collect();
+    block_on(fx.engine.command(Command::SetFocus { node: Some(a) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Delete { node: x })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The peer reads B after this device's unlink of X, so its unlink of B
+    // does not lose to that edit.
+    tick(&fx.world, &peer, &mut peer_tasks);
+    block_on(peer.command(Command::Delete { node: b })).expect("the peer's unlink stages");
+    for _ in 0..4 {
+        tick(&fx.world, &peer, &mut peer_tasks);
+    }
+    // This device reads A at its name before the cut, and sees B unlinked.
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    for (name, record) in held.iter().zip(walked) {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, endpoints.len() * 8, record);
+    }
+    // Another device cuts: the peer's own cache holds the B it unlinked.
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(&fx, &mut phone);
+    for name in held {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, 0, None);
+    }
+    let (root, _) = live_scope(&fx);
+    let moved_a = live_child(&fx, &root, fx.folder, "child");
+    let moved_b = live_child(&fx, &moved_a, a, "b");
+    assert!(
+        live_names(&fx, &moved_b, b).contains(&"x".to_owned()),
+        "the new tree holds B and X"
+    );
+
+    passes_after_the_flip(&mut fx);
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        !live_names(&fx, &moved_b, b).contains(&"x".to_owned()),
+        "the delete stayed and applied again in the new tree"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
 /// After the flip, the folder of a kept delete reads at its live name as a
 /// record the gate refuses. The refusal is a trust violation, never a sign
 /// that the node is gone: the halt is charged to the delete, which

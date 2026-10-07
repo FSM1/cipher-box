@@ -83,7 +83,7 @@ ruling on FSM1/cipher-box#2336, option 3): at a flip, a kept delete whose note n
 waits for one read of that folder at its live name, which the drain makes itself. A live node
 applies the delete again, and a node that is gone ends the op with no notice. A folder that its old
 parent no longer names took the node with it, so the op ends too, at once when a read of this
-session shows the old parent no longer names the folder. A base that does not hold the folder shows
+session at the live parent name shows the old parent no longer names the folder. A base that does not hold the folder shows
 nothing, so with no such read the op waits for a pass that reads the folder, or leaves at T. A kept
 delete under a scope that this device can no longer write takes the keyless charge of D3 and
 dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold

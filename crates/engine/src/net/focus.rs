@@ -190,9 +190,12 @@ where
             // A departure below a grafted root is the sharer's to bin: no pass
             // of this vault adopts it, and holding it starves the bounded set.
             if self.plane.is_none() {
-                report
-                    .departed
-                    .extend(merged.observed_unlinks(scope, *folder, self.observed_at));
+                report.departed.extend(merged.observed_unlinks(
+                    scope,
+                    *folder,
+                    name.as_str().as_bytes(),
+                    self.observed_at,
+                ));
             }
         }
         report

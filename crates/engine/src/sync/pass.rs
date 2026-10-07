@@ -662,7 +662,12 @@ where
             }
             hold_captures(
                 &state.observed_unlinks,
-                merged.observed_unlinks(self.root_id, NodeId(self.root_id), pass.now.0),
+                merged.observed_unlinks(
+                    self.root_id,
+                    NodeId(self.root_id),
+                    pass.root_name.as_str().as_bytes(),
+                    pass.now.0,
+                ),
             );
         }
         let read_seed = cached_stamped_seed(&state.scope_read_seeds, &self.root_id);
@@ -1941,7 +1946,12 @@ fn install_descendant_scopes(
         if merged.changed {
             let _ = events.unbounded_send(Event::SnapshotUpdated);
         }
-        departed.extend(merged.observed_unlinks(scope.scope_id, root, observed_at));
+        departed.extend(merged.observed_unlinks(
+            scope.scope_id,
+            root,
+            scope.name.as_str().as_bytes(),
+            observed_at,
+        ));
     }
     departed
 }
@@ -3141,6 +3151,7 @@ mod report_tests {
                 name: "departed.txt".to_owned(),
                 kind: cipherbox_core::seal::NodeKind::File,
                 ipns_name: Vec::new(),
+                parent_name: Vec::new(),
                 deleted_at: 9,
             });
         *harness.state.capture_proofs.borrow_mut() =

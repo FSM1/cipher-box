@@ -3119,9 +3119,10 @@ where
                     // it published under decides whether the bound runs. A
                     // delete whose anchor the base does not hold under a proved
                     // root leaves at the bound, and at once when a read of this
-                    // session saw the folder its note names unlinked: the node
-                    // went with it (ADR 0069 D6). A base after a cold start
-                    // lacks deep folders, so absence alone shows nothing.
+                    // session at the live parent name saw the folder its note
+                    // names unlinked: the node went with it (ADR 0069 D6). A
+                    // base after a cold start lacks deep folders, so absence
+                    // alone shows nothing.
                     let mut gone = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
@@ -3139,11 +3140,8 @@ where
                             note.parent.filter(|_| reads_kept_parent(&op, note.parent))
                         {
                             gone = self
-                                .cells
-                                .observed_unlinks
-                                .borrow()
-                                .iter()
-                                .any(|unlinked| unlinked.node == folder);
+                                .unlinked_at_its_live_name(scope, root, folder, note.write_epoch)
+                                .await?;
                         }
                     }
                     // A later op of this device on the same node decides what
@@ -3277,6 +3275,37 @@ where
             live_write_epoch: self.write_epoch_of(&end).await?,
             anchor_read_live,
         })
+    }
+
+    /// Whether a read of this session at the live parent name saw `folder`
+    /// unlinked, past a flip of `root` above `note_epoch`. A read of the old
+    /// tree at the parent's old name does not count: the wave can have carried
+    /// the folder.
+    async fn unlinked_at_its_live_name(
+        &self,
+        scope: &DrainScope<'_>,
+        root: NodeId,
+        folder: NodeId,
+        note_epoch: u64,
+    ) -> Result<bool, Halt> {
+        let end = match scope.second_end() {
+            Ok(Some(destination)) if destination.end.root == root => destination.end,
+            _ if scope.source.root == root => scope.source,
+            _ => return Ok(false),
+        };
+        if self.write_epoch_of(&end).await? <= note_epoch {
+            return Ok(false);
+        }
+        let live_parent_name = |parent: NodeId| {
+            if parent == end.root {
+                end.root_name.as_str().as_bytes().to_vec()
+            } else {
+                end.write_name(&parent.0).as_str().as_bytes().to_vec()
+            }
+        };
+        Ok(self.cells.observed_unlinks.borrow().iter().any(|unlinked| {
+            unlinked.node == folder && unlinked.parent_name == live_parent_name(unlinked.parent)
+        }))
     }
 
     /// [`KeptPlace::Unchecked`] at `root`, under its durable write-epoch floor
@@ -4558,6 +4587,7 @@ where
                 name: child.name.clone(),
                 kind: child.kind,
                 ipns_name: child.ipns_name.clone(),
+                parent_name: Vec::new(),
                 deleted_at: applied.op.authored_at.0,
             };
             let deleted_at = self
@@ -12388,24 +12418,55 @@ mod tests {
         assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
     }
 
-    /// A read of this session saw the old parent unlink the folder a kept
-    /// delete's note names, so the node went with it: the delete leaves at
-    /// once, before the bound.
+    /// A read of this session at the live parent name saw the folder a kept
+    /// delete's note names unlinked, past a flip, so the node went with it:
+    /// the delete leaves at once, before the bound. An unlink read at the old
+    /// name keeps the op.
     #[test]
     fn a_kept_delete_whose_parent_this_session_saw_unlinked_leaves_at_once() {
         let parent = NodeId([0x67; 16]);
-        let harness = drain_harness(Some(harness_root_envelope()));
-        *harness.state.observed_unlinks.borrow_mut() = vec![capture_of(&[0; 32], parent)];
+        for (live, leaves) in [(true, true), (false, false)] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let scope = harness.scope();
+            let old_parent = NodeId([0x68; 16]);
+            let mut unlinked = UnlinkedChild {
+                parent: old_parent,
+                ..capture_of(&[0; 32], parent)
+            };
+            unlinked.parent_name = if live {
+                scope.source.write_name(&old_parent.0)
+            } else {
+                derive_write_name(&[0; 32], &old_parent.0)
+            }
+            .as_str()
+            .as_bytes()
+            .to_vec();
+            *harness.state.observed_unlinks.borrow_mut() = vec![unlinked];
+            let op = Op::delete(NodeId([0x65; 16]), 1, UnixMillis(0), 1, true);
+            let op_id = kept_op_after_a_cut(
+                &harness,
+                &op,
+                HARNESS_ROOT,
+                FloorNamespace::Own,
+                Some(parent),
+            );
+            let mut report = DrainReport::default();
 
-        let (op_id, queue, report) =
-            kept_delete_read_elsewhere_at(&harness, HARNESS_ROOT, Some(parent), false);
+            let queue =
+                block_on(harness.drain().queued_ops(&scope, &mut report)).expect("the queue reads");
 
-        assert!(queue.kept.is_empty());
-        assert_eq!(
-            report.dropped,
-            vec![op_id],
-            "the op leaves before the bound"
-        );
+            if leaves {
+                assert!(queue.kept.is_empty());
+                assert_eq!(
+                    report.dropped,
+                    vec![op_id],
+                    "the op leaves before the bound"
+                );
+            } else {
+                assert_eq!(queue.kept, vec![op_id], "an old-name unlink keeps the op");
+                assert!(report.dropped.is_empty());
+            }
+        }
     }
 
     /// A base without the deleted node shows nothing under a root the walk
@@ -12554,6 +12615,7 @@ mod tests {
                 .as_str()
                 .as_bytes()
                 .to_vec(),
+            parent_name: Vec::new(),
             deleted_at: 9,
         }
     }

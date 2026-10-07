@@ -166,12 +166,15 @@ scenario fails the meta-test):
   whose folder a later writer deleted leaves before the bound, and one whose
   folder the gate refuses at the flip is charged and never read as gone
   (ADR 0069, `crates/engine/tests/owner_actions.rs`); a kept delete whose
-  folder the live root dropped leaves at the read, one whose folder this
-  session saw unlinked leaves at once, one whose folder a proved base lacks
+  folder the live root dropped leaves at the read, one whose folder a read
+  of this session at the live parent name saw unlinked leaves at once and
+  one that only a read at an old parent name saw unlinked stays, one whose folder a proved base lacks
   waits and leaves at the bound, and one whose note names no folder leaves
   at the bound (`crates/engine/src/sync/drain.rs`); after a restart, a kept
   delete in /A/B/X does not leave before the bound with no read of B, and
-  leaves at once after a pass that reads B (`owner_actions.rs`), and the one
+  leaves at once after a pass that reads B, and one whose B a peer unlinked
+  only in the old tree in the wave window stays and applies again in the new
+  tree (`owner_actions.rs`), and the one
   of a downgraded grantee dead-letters with a notice
   (`mount_convergence.rs`); the kept-op note reads frozen version 1 bytes
   with no folder and no result, a copy of the version 1 decoder reads a

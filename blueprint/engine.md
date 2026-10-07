@@ -1065,8 +1065,8 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   it. At a flip, a kept delete whose note names its folder waits for one
   read of that folder at its live name, which the drain makes before the
   rebase: a live node applies the delete again, and a node gone ends the op
-  with no notice. A folder that a read of this session shows its old parent
-  no longer names ends the op at once. A base that does not hold the folder
+  with no notice. A folder that a read of this session at the live parent
+  name shows its old parent no longer names ends the op at once. A base that does not hold the folder
   shows nothing, so with no such read the op waits for a pass that reads the
   folder, or leaves at T. A kept delete under a scope this device can no
   longer write takes the keyless charge below, also when the base does not
