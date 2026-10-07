@@ -1128,17 +1128,22 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   a test that decodes the previous release's bytes. The retained rule above does
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
-  Consequence 4). A published create, delete or content edit stays queued as a
-  kept op, with a sealed note of its scope root, write epoch, publish time and
-  the folder it wrote under, until the live root of its write scope shows it
-  (ADR 0069). The note is format version 2; a version 1 note reads with no
-  folder. Every other op
-  kind leaves at its publish. With no flip, a kept op waits at its write epoch
+  Consequence 4). A published create, delete, content edit, rename, move
+  inside one scope or version restore stays queued as a kept op, with a
+  sealed note of its scope root, write epoch, publish time, the folder it
+  wrote under and, for a rename, a move or a version restore, its result,
+  until the live root of its write scope shows it (ADR 0069). The note is
+  format version 2; a version 1 note reads with no folder and no result, and
+  a kind that needs a result leaves with none. Every other op kind, and a
+  move that re-seals into another scope, leaves at its publish. With no flip, a kept op waits at its write epoch
   for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
   decides: a landed op drops, and a lost op applies again under the new seed.
   A content edit reads its file's live record first, and it landed when the
-  history names its version. A second apply that a rebase or a permanent halt
+  history names its version. A rename or a move reads the folders its result
+  names at their live names, and a version restore reads its file's live
+  record: a node that shows the result or another value ends the op with no
+  apply, and one that shows the value before applies it again. A second apply that a rebase or a permanent halt
   refuses leaves with no notice; a charged halt is charged, and the op
   dead-letters with a notice once its attempt budget is spent. A pass that
   cannot check the op, because the walk did not prove its root (a gate-refused
@@ -1535,13 +1540,16 @@ rebases and signs above.
   read-only graft does not read the moved tree, so each kept op of that
   writer dead-letters, also one that the wave carried. Its copy stays
   preserved on the device, and its notice reads as `attemptsExhausted`,
-  though the write can be in the shared folder. A rename, a move or a
-  history edit that lands in the old tree after the walk is lost, because
-  only a create, a delete and a content edit stay kept. A kept op whose device
+  though the write can be in the shared folder. A version delete or a prune
+  that lands in the old tree after the walk is lost, because neither stays
+  kept. A kept op whose device
   sees no flip within T leaves the queue at T, so a flip after T loses the
   write (ADR 0069).
-- Kept ops over a later writer: the op does not record its result, so the
-  check cannot tell a lost op from a later change. A kept create links again
+- Kept ops over a later writer: a later writer who sets the value from
+  before a kept rename, move or version restore looks like a lost op, and the
+  op applies again over that write. A create, a delete and a content edit do
+  not record their result, so the check cannot tell a lost op from a later
+  change. A kept create links again
   a node that a later writer deleted, with its initial content. A kept edit
   publishes its version again when a later writer restored the edit's base and
   deleted the edit's version from the history; a later prune that leaves
@@ -1554,6 +1562,8 @@ rebases and signs above.
   loses leaves a history that names bytes this writer already retired. A kept
   hard delete whose note names no folder and that leaves at T with no read
   of its folder leaves a child ref whose record is retired.
+- Cross-scope move: a move that re-seals into another scope leaves at its
+  publish, so one that lands in the old tree after the walk is lost.
 - Kept delete under a moved ancestor: a later writer that moves an ancestor
   of a kept delete's folder, in the scope or to another scope, makes the
   folder read as gone, and the delete leaves while its node is alive (ADR 0069 D6).

@@ -37,6 +37,12 @@ after the flip. Amended on 2026-10-03: D7 replaces the overlay clause. Amended o
 create, a delete and a content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
 other kind leaves the queue at its publish, as before this ADR: the live tree cannot show if a later
 writer overtook it, so a second apply could undo the later write (FSM1/cipher-box#2285).
+Amended on 2026-10-06 (owner ruling on FSM1/cipher-box#2285, option B): a rename, a move inside one
+scope and a version restore also stay kept ops. The note records the result of each: the name
+before and after, the parent and name before and after, or the head content CID before and the
+restored one. After a flip, a live node that shows the result or another value ends the op with no
+apply, and one that shows the value before applies the op again. A move that re-seals into another
+scope still leaves at its publish.
 
 **D3 — When a pass sees a new write epoch on the op's write scope, the writer reads the new tree
 and, if it holds the new write seed, applies the op again under that seed.** An owner device gets
