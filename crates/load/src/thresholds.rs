@@ -50,7 +50,8 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
     }
 }
 
-/// Evaluate the `all` row. Throttling is reported but never breaches on its
+/// Evaluate the `all` row; a rotation run reads the rows of
+/// [`Thresholds::max_of_rows`] for its latency band instead. Throttling is reported but never breaches on its
 /// own; a run where nothing succeeded does, since it measured nothing.
 pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<String> {
     let Some(total) = summaries
@@ -76,15 +77,18 @@ pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<String> 
             ));
         }
     } else {
-        for row in summaries
-            .iter()
-            .filter(|row| thresholds.max_of_rows.contains(&row.op))
-            .filter(|row| row.max_ms > thresholds.p95_ms)
-        {
-            breaches.push(format!(
-                "{} max {:.0}ms exceeds the {:.0}ms band",
-                row.op, row.max_ms, thresholds.p95_ms
-            ));
+        for name in thresholds.max_of_rows {
+            match summaries.iter().find(|row| row.op == *name) {
+                Some(row) if row.ok > 0 => {
+                    if row.max_ms > thresholds.p95_ms {
+                        breaches.push(format!(
+                            "{name} max {:.0}ms exceeds the {:.0}ms band",
+                            row.max_ms, thresholds.p95_ms
+                        ));
+                    }
+                }
+                _ => breaches.push(format!("the run recorded no successful {name}")),
+            }
         }
     }
     if total.error_rate() > thresholds.max_error_rate {
@@ -128,15 +132,18 @@ mod tests {
     #[test]
     fn one_failed_rotation_sample_turns_the_run_red() {
         let bands = thresholds_for(Scenario::RotationWave, Target::Local);
-        let mut samples = vec![(Outcome::Ok, 40.0); 107];
-        samples.push((Outcome::Failed, 0.0));
-        let breaches = evaluate(bands, &summaries(&samples));
+        let mut run = sixteen_node_samples(734.0);
+        for _ in 0..80 {
+            run.record(Sample::new("name-wave-node", Outcome::Ok, 35.0));
+        }
+        run.record(Sample::new("name-wave-node", Outcome::Failed, 0.0));
+        let breaches = evaluate(bands, &run.summarize(1_000.0));
         assert_eq!(breaches.len(), 1);
         assert!(breaches[0].contains("error rate"), "{}", breaches[0]);
     }
 
-    /// The samples of one 16-node rotation-wave run, as RESULTS.md records it.
-    fn sixteen_node_run(sweep_ms: f64) -> Vec<OpSummary> {
+    /// Shaped as one 16-node run: one sample per phase, 17 wave nodes.
+    fn sixteen_node_samples(sweep_ms: f64) -> Collector {
         let mut collector = Collector::default();
         for (op, ms) in [
             ("engine-start", 209.0),
@@ -153,7 +160,11 @@ mod tests {
         for _ in 0..17 {
             collector.record(Sample::new("name-wave-node", Outcome::Ok, 35.0));
         }
-        collector.summarize(1_000.0)
+        collector
+    }
+
+    fn sixteen_node_run(sweep_ms: f64) -> Vec<OpSummary> {
+        sixteen_node_samples(sweep_ms).summarize(1_000.0)
     }
 
     #[test]
@@ -169,6 +180,30 @@ mod tests {
     fn a_full_run_with_every_sample_fast_breaches_nothing() {
         let bands = thresholds_for(Scenario::RotationWave, Target::Local);
         assert!(evaluate(bands, &sixteen_node_run(734.0)).is_empty());
+    }
+
+    #[test]
+    fn a_rotation_run_with_no_sweep_row_is_red() {
+        let bands = thresholds_for(Scenario::RotationWave, Target::Local);
+        let mut rows = sixteen_node_run(734.0);
+        rows.retain(|row| row.op != "sweep-converge");
+        let breaches = evaluate(bands, &rows);
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("sweep-converge"), "{}", breaches[0]);
+    }
+
+    #[test]
+    fn a_rotation_run_with_an_empty_wave_row_is_red() {
+        let bands = thresholds_for(Scenario::RotationWave, Target::Local);
+        let mut rows = sixteen_node_run(734.0);
+        let wave = rows
+            .iter_mut()
+            .find(|row| row.op == "name-wave")
+            .expect("a name-wave row");
+        (wave.count, wave.ok, wave.max_ms) = (0, 0, 0.0);
+        let breaches = evaluate(bands, &rows);
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("name-wave"), "{}", breaches[0]);
     }
 
     #[test]
