@@ -34,7 +34,8 @@ use super::publish::{
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
 use super::revival::{
-    ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, revive,
+    ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
+    revive_name, write_signer,
 };
 use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
 use crate::api::{ApiClient, ApiError, NameRegistration};
@@ -848,10 +849,7 @@ where
         };
         super::fork::verified(name, bytes)
             .is_some_and(|verified| eol::is_expired(self.scheduler.now(), &verified.validity))
-            && matches!(
-                fanout_get_classified(self.transport, name).await,
-                FanoutRecord::Absent
-            )
+            && reads_absent(self.transport, name).await
     }
 
     /// Revive the lapsed node `node_id` at `name` through the gated child
@@ -901,11 +899,7 @@ where
         {
             return None;
         }
-        let signer = scope
-            .write_seed
-            .as_ref()
-            .filter(|seed| derive_write_name(seed, &scope.scope_id) == scope.name)
-            .map(|seed| SessionIdentity::write_name_signer(seed, &scope.scope_id));
+        let signer = write_signer(scope.write_seed.as_deref(), &scope.scope_id, &scope.name);
         let read = ScopeRootRead {
             gateway: self.gateway,
             http: self.http,
@@ -938,9 +932,7 @@ where
             signer,
             plane,
         };
-        let result = revive(self.api, &self.seams(), self.pace, &[request])
-            .await
-            .remove(0);
+        let result = revive_name(self.api, &self.seams(), self.pace, request).await;
         let routing_key = name.as_str().to_owned();
         let outcome = match result {
             Ok(revived) => {

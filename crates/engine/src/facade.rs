@@ -108,7 +108,7 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::revival::{
-    BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, revive,
+    BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent, revive_name,
 };
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
@@ -123,10 +123,7 @@ use crate::net::{
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
     run_liveness_loop,
 };
-use crate::net::{
-    ChainRevival, FanoutRecord, VaultPointerRead, VaultPointerVoucher, fanout_get_classified,
-    revive_vault_pointer_chain,
-};
+use crate::net::{ChainRevival, VaultPointerRead, VaultPointerVoucher, revive_vault_pointer_chain};
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
@@ -4843,6 +4840,9 @@ type EngineRenewalSeams<'a, T> = RenewalSeams<
     <T as SeamTypes>::Scheduler,
 >;
 
+/// Why a session adopts no root after the vault pointer chain revival.
+const CHAIN_UNREVIVED: &str = "a lapsed index of the vault pointer chain did not revive";
+
 /// What the session-start revival of the bin index found.
 enum BinIndexRevival {
     /// The bin index is not lapsed, or the recovery endpoint holds no record.
@@ -4879,14 +4879,12 @@ async fn owed_scopes_within_bound<St: StagingStore>(
 /// nothing to revive.
 pub(crate) fn emit_revival_failures(
     events: &mpsc::UnboundedSender<Event>,
-    revivals: Vec<(String, Result<Revived, ReviveError>)>,
+    revivals: impl IntoIterator<Item = (String, Result<Revived, ReviveError>)>,
 ) {
     for (routing_key, result) in revivals {
         let outcome = match result {
             Ok(revived) => Ok(Some(revived.outcome)),
             Err(ReviveError::Publish(error)) => Err(error),
-            // No record to revive, or a device that takes the settings
-            // ladder of ADR 0034 rather than a revival (ADR 0062 D4).
             // No record to revive, a device that takes the settings ladder of
             // ADR 0034 rather than a revival (ADR 0062 D4), a 429 that fails
             // nothing (D1 step 1), or a name another write moved on.
@@ -5781,7 +5779,7 @@ impl<T: SeamTypes> Engine<T> {
             Some(retryable) => {
                 let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
                     retryable,
-                    detail: "a lapsed index of the vault pointer chain did not revive".to_owned(),
+                    detail: CHAIN_UNREVIVED.to_owned(),
                 });
                 self.unadopted_cold_start(root).await?
             }
@@ -6661,12 +6659,7 @@ impl<T: SeamTypes> Engine<T> {
             });
             BTreeSet::new()
         });
-        if owed.contains(&root_scope_id)
-            || !matches!(
-                fanout_get_classified(&self.record_transport, name).await,
-                FanoutRecord::Absent
-            )
-        {
+        if owed.contains(&root_scope_id) || !reads_absent(&self.record_transport, name).await {
             return false;
         }
         let identity = session.owner_identity();
@@ -6688,11 +6681,9 @@ impl<T: SeamTypes> Engine<T> {
             signer: None,
             plane: read,
         };
-        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
-            .await
-            .remove(0);
+        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
         let signed = result.is_ok();
-        emit_revival_failures(&self.events, vec![(name.as_str().to_owned(), result)]);
+        emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
         signed
     }
 
@@ -6725,10 +6716,7 @@ impl<T: SeamTypes> Engine<T> {
         };
         let signer = kdf::settings_ipns_keypair(session.login_secret());
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        if !matches!(
-            fanout_get_classified(&self.record_transport, &name).await,
-            FanoutRecord::Absent
-        ) {
+        if !reads_absent(&self.record_transport, &name).await {
             return false;
         }
         let read = SettingsRevivalRead {
@@ -6746,11 +6734,9 @@ impl<T: SeamTypes> Engine<T> {
             signer: Some(&signer),
             plane: read,
         };
-        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
-            .await
-            .remove(0);
+        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
         let signed = result.is_ok();
-        emit_revival_failures(&self.events, vec![(name.as_str().to_owned(), result)]);
+        emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
         signed
     }
 
@@ -6763,10 +6749,7 @@ impl<T: SeamTypes> Engine<T> {
             return BinIndexRevival::Unlapsed;
         };
         let keys = BinIndexKeys::derive(session.login_secret());
-        if !matches!(
-            fanout_get_classified(&self.record_transport, keys.name()).await,
-            FanoutRecord::Absent
-        ) {
+        if !reads_absent(&self.record_transport, keys.name()).await {
             return BinIndexRevival::Unlapsed;
         }
         let read = BinIndexRead {
@@ -6783,9 +6766,7 @@ impl<T: SeamTypes> Engine<T> {
             signer: Some(keys.signer()),
             plane: read,
         };
-        let result = revive(api, &seams, &self.state.recovery_pace, &[request])
-            .await
-            .remove(0);
+        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
         let revival = match &result {
             Ok(_) => BinIndexRevival::Revived,
             Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
@@ -6793,10 +6774,7 @@ impl<T: SeamTypes> Engine<T> {
             }
             Err(_) => BinIndexRevival::Unsettled,
         };
-        emit_revival_failures(
-            &self.events,
-            vec![(keys.name().as_str().to_owned(), result)],
-        );
+        emit_revival_failures(&self.events, [(keys.name().as_str().to_owned(), result)]);
         revival
     }
 
@@ -10562,7 +10540,7 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.state.snapshot.borrow().root;
         if let Some(retryable) = self.revive_vault_pointer_chain(&api, root.0).await {
-            let message = "a lapsed index of the vault pointer chain did not revive".to_owned();
+            let message = CHAIN_UNREVIVED.to_owned();
             return Err(if retryable {
                 EngineError::RefreshFailed { message }
             } else {

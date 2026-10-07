@@ -69,7 +69,7 @@ use super::record_publish::{
 use super::register::register;
 use super::renewal_walk::RenewalSeams;
 use super::retire::{retire, root_retire_ready};
-use super::revival::{RecoveryPace, ReviveRequest, ScopePointerRead, revive};
+use super::revival::{RecoveryPace, ReviveError, ReviveRequest, ScopePointerRead, revive_name};
 use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
 use crate::content::dag::decode_root;
@@ -6454,14 +6454,9 @@ where
         signer: Some(&signer),
         plane: read,
     };
-    let result = revive(pass.api, &seams, pass.pace, &[request])
-        .await
-        .remove(0);
-    let retryable = match &result {
-        Ok(_) => None,
-        Err(error) => Some(error.is_transient()),
-    };
-    emit_revival_failures(pass.events, vec![(name.as_str().to_owned(), result)]);
+    let result = revive_name(pass.api, &seams, pass.pace, request).await;
+    let retryable = result.as_ref().err().map(ReviveError::is_transient);
+    emit_revival_failures(pass.events, [(name.as_str().to_owned(), result)]);
     if let Some(retryable) = retryable {
         return Err(retryable);
     }

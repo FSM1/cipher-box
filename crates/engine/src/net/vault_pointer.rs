@@ -18,7 +18,8 @@ use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
 use super::revival::{
-    Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived, revive,
+    Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived,
+    revive_name,
 };
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::{ApiClient, ApiError};
@@ -368,17 +369,16 @@ where
                     signer: Some(&signer),
                     plane: read,
                 };
-                let result = revive(api, seams, pace, &[request]).await.remove(0);
+                let result = revive_name(api, seams, pace, request).await;
+                let stop = result.is_err();
                 pass.unconfirmed = match &result {
-                    Ok(_) => None,
-                    Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
-                        pass.revivals.push((name.as_str().to_owned(), result));
-                        return pass;
+                    Ok(_) | Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
+                        None
                     }
                     Err(error) => Some(error.is_transient()),
                 };
                 pass.revivals.push((name.as_str().to_owned(), result));
-                if pass.unconfirmed.is_some() {
+                if stop {
                     return pass;
                 }
                 // The next read finds the record the endpoints now serve.

@@ -1751,6 +1751,14 @@ fn lapse_into_the_recovery_cache(world: &FakeWorld, blocks: &Blocks) {
     }
 }
 
+/// Whether the first endpoint serves no record at `name`.
+fn unserved(world: &FakeWorld, name: &IpnsName) -> bool {
+    world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .is_none()
+}
+
 fn recovery_fetches(device: &FakeDevice) -> usize {
     device
         .http
@@ -1909,10 +1917,7 @@ fn the_settings_record_revives_at_session_start_only_at_its_floor() {
     let fresh = world.device(b"a new device");
     let (_fresh, _events, _tasks) = boot(&world, &blocks, &fresh, 2);
     assert!(
-        world
-            .record_store
-            .record_at(&world.record_store.endpoints()[0], name.as_str())
-            .is_none(),
+        unserved(&world, &name),
         "a device with no floor does not revive the settings record",
     );
     drop(world.scheduler.take_spawned_tasks());
@@ -1959,10 +1964,7 @@ fn a_throttled_chain_revival_stays_retryable_and_a_refresh_revives_it() {
         "a throttled revival is a stall, never a refusal",
     );
     assert!(
-        world
-            .record_store
-            .record_at(&world.record_store.endpoints()[0], pointer.as_str())
-            .is_none(),
+        unserved(&world, &pointer),
         "the session mints no vault over the lapsed one",
     );
 
@@ -1998,10 +2000,7 @@ fn a_throttled_bin_index_revival_publishes_no_genesis_and_the_next_start_revives
     let device = world.device(b"a device after 100 days offline");
     let (engine, _events, tasks) = boot(&world, &blocks, &device, 2);
     assert!(
-        world
-            .record_store
-            .record_at(&world.record_store.endpoints()[0], bin.as_str())
-            .is_none(),
+        unserved(&world, &bin),
         "no genesis publish replaces the lapsed bin index",
     );
     drop((tasks, engine));

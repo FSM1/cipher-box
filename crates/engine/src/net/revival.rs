@@ -18,7 +18,9 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
-use super::fanout::{MAX_RECORD_BYTES, fanout_get_tied_classified, signed_data};
+use super::fanout::{
+    FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified, fanout_get_tied_classified, signed_data,
+};
 use super::pointer_fetch::{PointerConsult, PointerConsultError};
 use super::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
@@ -400,6 +402,43 @@ where
     revived
 }
 
+/// [`revive`] for the one lapsed name of `request`.
+pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
+    api: &ApiClient<H, C>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
+    request: ReviveRequest<'_, P>,
+) -> Result<Revived, ReviveError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    P: PlaneRead,
+{
+    revive(api, seams, pace, &[request]).await.remove(0)
+}
+
+/// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
+pub(crate) async fn reads_absent<T: RecordTransport>(transport: &T, name: &IpnsName) -> bool {
+    matches!(
+        fanout_get_classified(transport, name).await,
+        FanoutRecord::Absent
+    )
+}
+
+/// The signer of `name` under the write scope seed `seed` of `scope_id`, when
+/// that seed derives `name`.
+pub(super) fn write_signer(
+    seed: Option<&[u8; 32]>,
+    scope_id: &[u8; 16],
+    name: &IpnsName,
+) -> Option<Ed25519Signer> {
+    seed.filter(|seed| derive_write_name(seed, scope_id) == *name)
+        .map(|seed| SessionIdentity::write_name_signer(seed, scope_id))
+}
+
 /// Steps 1 to 3: fetch the recovered record, corroborate it, and admit it
 /// through the read of its plane.
 async fn admit_lapsed<'a, T, H, C, F, Sch, P>(
@@ -566,13 +605,8 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ScopeRootRead<'_, H
             | ScopeRootAdmission::Gone
             | ScopeRootAdmission::HeadBlockAbsent => PlaneRefusal::Unavailable,
         })?;
-        let signer = admitted
-            .write_scope_seed
-            .as_ref()
-            .filter(|seed| derive_write_name(seed, &self.scope_id) == *name)
-            .map(|seed| SessionIdentity::write_name_signer(seed, &self.scope_id));
         Ok(Admitted {
-            signer,
+            signer: write_signer(admitted.write_scope_seed.as_deref(), &self.scope_id, name),
             ..Admitted::gated(admitted.observed, admitted.bar)?
         })
     }
@@ -709,8 +743,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::net::fanout::{FanoutRecord, fanout_get_classified};
 
     use core::cell::RefCell;
     use core::time::Duration;
