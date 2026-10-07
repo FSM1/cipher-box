@@ -133,10 +133,7 @@ impl SharePointer {
         let display_name = req(map, "displayName")?.as_text()?.to_string();
         let permission = Permission::from_wire(req(map, "permission")?.as_text()?)
             .ok_or(Malformed::InvalidPermission)?;
-        let scope_pointer_name = map
-            .get("scopePointerName")
-            .map(|name| IpnsName::parse(name.as_text()?))
-            .transpose()?;
+        let scope_pointer_name = scope_pointer_name(map)?;
         Ok(Self {
             scope_root_name,
             sharer_identity_pk,
@@ -750,10 +747,7 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             )?),
             scope_id: fixed::<16>(req(share, "scopeId")?, "scopeId")?,
             scope_root_name,
-            scope_pointer_name: share
-                .get("scopePointerName")
-                .map(|name| IpnsName::parse(name.as_text()?))
-                .transpose()?,
+            scope_pointer_name: scope_pointer_name(share)?,
         };
         let key = decoded.key();
         if entries.iter().any(|e| e.key() == key) {
@@ -1316,8 +1310,9 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
                     // nothing: it adds the name before the ack.
                     if let Some(name) = pointer
                         .scope_pointer_name
-                        .clone()
-                        .filter(|name| held.scope_pointer_name.as_ref() != Some(name))
+                        .as_ref()
+                        .filter(|&name| held.scope_pointer_name.as_ref() != Some(name))
+                        .cloned()
                     {
                         let previous = received.set_scope_pointer_name(&bookmark_key, Some(name));
                         if let Err(e) = store.persist(received).await {
@@ -1382,6 +1377,13 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
 pub(super) fn req<'a>(map: &'a Map, field: &'static str) -> Result<&'a Value, CodecError> {
     map.get(field)
         .ok_or_else(|| Malformed::MissingField { field }.into())
+}
+
+/// The optional `scopePointerName` of a share pointer or a stored bookmark.
+fn scope_pointer_name(map: &Map) -> Result<Option<IpnsName>, CodecError> {
+    map.get("scopePointerName")
+        .map(|name| IpnsName::parse(name.as_text()?))
+        .transpose()
 }
 
 /// A fixed-length byte field, or [`Malformed::InvalidFieldLength`].
@@ -2050,26 +2052,19 @@ mod tests {
         let key = list.iter().next().expect("one bookmark").key();
         list.hold_link(key, link_hold());
         let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
-        for dropped in ["linkSecret"] {
-            let mut map = tree.as_map().unwrap().clone();
-            let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
-            let mut entry = shares[0].as_map().unwrap().clone();
-            let kept: Vec<(String, Value)> = entry
-                .entries()
-                .iter()
-                .filter(|(field, _)| field != dropped)
-                .cloned()
-                .collect();
-            entry = Map::new();
-            for (field, value) in kept {
-                entry.insert(&field, value);
+        let mut map = tree.as_map().unwrap().clone();
+        let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
+        let mut entry = Map::new();
+        for (field, value) in shares[0].as_map().unwrap().entries() {
+            if field != "linkSecret" {
+                entry.insert(field, value.clone());
             }
-            map.insert("shares", Value::Array(vec![Value::Map(entry)]));
-            assert!(
-                decode_stored_list(&encode(&Value::Map(map)).unwrap()).is_err(),
-                "a hold without {dropped} is refused"
-            );
         }
+        map.insert("shares", Value::Array(vec![Value::Map(entry)]));
+        assert!(
+            decode_stored_list(&encode(&Value::Map(map)).unwrap()).is_err(),
+            "a hold without linkSecret is refused"
+        );
     }
 
     /// ADR 0074 D1: a personal bookmark holds the name without link keys.

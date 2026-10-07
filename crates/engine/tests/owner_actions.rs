@@ -1129,10 +1129,7 @@ fn a_write_grants_share_pointer_names_the_root_its_wave_moved_to() {
     assert_eq!(pointer.permission, CorePermission::Write);
     assert_eq!(
         pointer.scope_pointer_name,
-        Some(scope_pointer_name(
-            kdf::owner_pointer_seed(&SECRET).as_bytes(),
-            &fx.folder.0
-        )),
+        Some(folder_pointer(&fx)),
         "and holds the scope pointer name it follows after a later cut"
     );
 }
@@ -12778,13 +12775,7 @@ fn an_owed_downgrade_still_posts_the_pointer_name_to_the_writer() {
         .iter()
         .find(|pointer| pointer.permission == CorePermission::Read)
         .expect("the downgrade posts a read pointer");
-    assert_eq!(
-        downgrade.scope_pointer_name,
-        Some(scope_pointer_name(
-            kdf::owner_pointer_seed(&SECRET).as_bytes(),
-            &fx.folder.0
-        ))
-    );
+    assert_eq!(downgrade.scope_pointer_name, Some(folder_pointer(&fx)));
 }
 
 /// ADR 0024 D5: the pointer consult runs ahead of every write. A fragment

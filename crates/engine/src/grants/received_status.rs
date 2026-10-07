@@ -681,8 +681,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
-    /// verdict, and the scope root each vouched-for bookmark must move to. A refused re-point object
-    /// is a trust verdict, reported here.
+    /// verdict, and the scope root each vouched-for bookmark must move to. A
+    /// refused re-point object is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,

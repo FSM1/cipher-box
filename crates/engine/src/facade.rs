@@ -9042,11 +9042,7 @@ where {
                     api.as_ref(),
                     session.identity(),
                     ENVELOPE_V,
-                    &PointerRecipient {
-                        identity_pk: contact.identity_pk(),
-                        enc_pub: contact.enc_subkey(),
-                        display_name,
-                    },
+                    &PointerRecipient::of(contact, display_name),
                     PointerTarget {
                         permission: permission.into(),
                         scope_root_name: &parsed_scope_name(&target.scope.ipns_name)?,
@@ -9546,9 +9542,6 @@ where {
                 check: "invite-names-the-own-vault-root",
             });
         }
-        // The one check of the owner signature over the names. A failed one
-        // leaves the link working (ADR 0027 D5), with no display name and no
-        // scope pointer name in the bookmark (ADR 0074 D1 as amended).
         let names =
             fragment
                 .verified_names(&owner.identity_pk())

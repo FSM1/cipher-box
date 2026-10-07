@@ -1077,11 +1077,7 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &PointerRecipient {
-                identity_pk: contact.identity_pk(),
-                enc_pub: contact.enc_subkey(),
-                display_name,
-            },
+            &PointerRecipient::of(&contact, display_name),
             PointerTarget {
                 permission: if write {
                     CommittedPermission::Write

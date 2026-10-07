@@ -847,13 +847,20 @@ pub struct PointerRecipient {
     pub display_name: String,
 }
 
+impl PointerRecipient {
+    /// The grantee `contact`, at both of its bound keys.
+    pub fn of(contact: &Contact, display_name: String) -> Self {
+        Self {
+            identity_pk: contact.identity_pk(),
+            enc_pub: contact.enc_subkey(),
+            display_name,
+        }
+    }
+}
+
 impl From<&GrantRecipient<'_>> for PointerRecipient {
     fn from(recipient: &GrantRecipient<'_>) -> Self {
-        Self {
-            identity_pk: recipient.identity_pk(),
-            enc_pub: recipient.enc_pub(),
-            display_name: recipient.display_name.clone(),
-        }
+        Self::of(recipient.contact, recipient.display_name.clone())
     }
 }
 

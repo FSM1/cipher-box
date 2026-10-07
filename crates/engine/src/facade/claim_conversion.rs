@@ -1117,11 +1117,7 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &PointerRecipient {
-                identity_pk: claimant.identity_pk(),
-                enc_pub: claimant.enc_subkey(),
-                display_name: folder.to_owned(),
-            },
+            &PointerRecipient::of(claimant, folder.to_owned()),
             PointerTarget {
                 permission: pointer.permission,
                 scope_root_name: &parsed_scope_name(&target.scope.ipns_name)?,
