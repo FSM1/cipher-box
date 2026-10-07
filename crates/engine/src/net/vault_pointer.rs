@@ -300,11 +300,12 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
         }
     }
 
-    /// A device that never walked the chain holds no index floor.
+    /// The pointer admit writes no index floor, so a retry reads as floorless.
     fn admit_writes_floor(&self) -> bool {
         false
     }
 
+    /// A device that never walked the chain holds no index floor.
     async fn floorless<G: FloorStore>(&self, floors: &G, _: &IpnsName) -> SeamResult<bool> {
         Ok(floor::vault_pointer_index_floor(floors, &self.scope_id)
             .await?

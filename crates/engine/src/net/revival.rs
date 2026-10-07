@@ -163,8 +163,10 @@ pub(crate) struct Revival {
     pub(crate) result: Result<PublishOutcome, ReviveError>,
     /// The read of its plane admitted the recovered record on a device that
     /// held no floor for it, so the device shows the server copy (ADR 0062
-    /// D5). It holds when a later step fails, except a trust violation: when
-    /// the admit of the plane writes the floor, a retry is no longer floorless.
+    /// D5). After a later failure other than a trust violation, the flag stays
+    /// set only when the admit of the plane writes the floor
+    /// ([`PlaneRead::admit_writes_floor`]), because a retry is then no longer
+    /// floorless.
     pub(crate) restored: bool,
 }
 
