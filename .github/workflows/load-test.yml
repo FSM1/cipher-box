@@ -2,10 +2,14 @@
 # Never a PR gate: it is a load generator, and the only thing it can be pointed
 # at is a loopback stack this job stands up, or staging behind the `staging`
 # environment's approval. The harness crate's own unit tests block merges in
-# CI's `Rust` area's `Workspace tests (Linux)` job.
+# CI's `Rust` area's `Workspace tests (Linux)` job. The weekly schedule runs
+# `rotation-wave` on the runner-local stack only, so a rotation fault reaches
+# the tracking issue.
 name: Load Tests
 
 on:
+  schedule:
+    - cron: '0 7 * * 1'
   workflow_dispatch:
     inputs:
       environment:
@@ -27,6 +31,7 @@ on:
           - name-wave
           - mixed
           - byo-advisory
+          - rotation-wave
       clients:
         description: 'Concurrent accounts (staging caps at 8)'
         required: false
@@ -47,6 +52,10 @@ on:
         description: 'Per-client start stagger in ms; 0 is a spike'
         required: false
         default: '0'
+      nodes:
+        description: 'Subfolders rotation-wave rotates, max 64; it runs one engine'
+        required: false
+        default: '16'
 
 # Two runs against the same target would measure each other. Queue rather than
 # cancel, so a staging run already loading the 2-vCPU box finishes cleanly. A
@@ -60,10 +69,12 @@ permissions: {}
 
 jobs:
   load-test:
-    name: 'Load Test: ${{ inputs.scenario }} on ${{ inputs.environment }}'
+    name: "Load Test: ${{ inputs.scenario || 'rotation-wave' }} on ${{ inputs.environment || 'local' }}"
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
-    timeout-minutes: 45
+    # rotation-wave can wait out one idle sweep cadence (15 min) for its
+    # sweep to converge.
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -94,13 +105,15 @@ jobs:
           --health-start-period 30s
 
     env:
-      SCENARIO: ${{ inputs.scenario }}
-      CLIENTS: ${{ inputs.clients }}
-      OPS_PER_CLIENT: ${{ inputs.ops_per_client }}
-      BLOCK_BYTES: ${{ inputs.block_bytes }}
-      BATCH_SIZE: ${{ inputs.batch_size }}
-      RAMP_MS: ${{ inputs.ramp_ms }}
-      TARGET: ${{ inputs.environment }}
+      # A scheduled run has no inputs: it is the weekly rotation-wave run.
+      SCENARIO: ${{ inputs.scenario || 'rotation-wave' }}
+      CLIENTS: ${{ inputs.clients || '5' }}
+      OPS_PER_CLIENT: ${{ inputs.ops_per_client || '20' }}
+      BLOCK_BYTES: ${{ inputs.block_bytes || '65536' }}
+      BATCH_SIZE: ${{ inputs.batch_size || '25' }}
+      RAMP_MS: ${{ inputs.ramp_ms || '0' }}
+      NODES: ${{ inputs.nodes || '16' }}
+      TARGET: ${{ inputs.environment || 'local' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,11 +139,14 @@ jobs:
           restore-keys: load-test-cargo-
 
       - name: Install dependencies
-        if: inputs.environment == 'local'
+        if: inputs.environment != 'staging'
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/mock-ipns-routing
+        if: env.TARGET != 'staging' && env.SCENARIO == 'rotation-wave'
+
       - name: Stand up the local API over the CI stack
-        if: inputs.environment == 'local'
+        if: inputs.environment != 'staging'
         env:
           DB_HOST: localhost
           DB_PORT: 5432
@@ -162,8 +178,16 @@ jobs:
           IPFS_GATEWAY_TOKEN: ${{ secrets.IPFS_GATEWAY_TOKEN }}
         run: |
           if [ "$TARGET" = 'staging' ]; then
-            if [ -z "$API_URL" ] || [ -z "$TEST_LOGIN_SECRET" ]; then
-              echo '::error::staging runs need the API_URL variable and TEST_LOGIN_SECRET secret'
+            if [ -z "$API_URL" ]; then
+              echo '::error::staging runs need the API_URL variable'
+              exit 1
+            fi
+            if [ "$SCENARIO" = 'rotation-wave' ]; then
+              echo '::error::rotation-wave runs on the local target only'
+              exit 1
+            fi
+            if [ -z "$TEST_LOGIN_SECRET" ]; then
+              echo '::error::staging runs need the TEST_LOGIN_SECRET secret'
               exit 1
             fi
             if [ "$SCENARIO" = 'gateway-read' ]; then
@@ -190,22 +214,64 @@ jobs:
       # about: `local` only ever reaches loopback and `staging` only ever reaches
       # a non-loopback https URL, so a mis-dispatched run fails before it loads
       # anything. Bounds on clients/ops are enforced per target too.
+      # rotation-wave runs one engine, so its numbers compare with
+      # tools/perf/RESULTS.md; it takes the plan's default client count.
       - name: Run the load harness
         run: |
+          clients=(--clients "$CLIENTS")
+          if [ "$SCENARIO" = 'rotation-wave' ]; then
+            clients=()
+          fi
           cargo run --release -p cipherbox-load -- \
             --scenario "$SCENARIO" \
             --target "$TARGET" \
-            --clients "$CLIENTS" \
+            "${clients[@]}" \
             --ops-per-client "$OPS_PER_CLIENT" \
             --block-bytes "$BLOCK_BYTES" \
             --batch-size "$BATCH_SIZE" \
-            --ramp-ms "$RAMP_MS"
+            --ramp-ms "$RAMP_MS" \
+            --nodes "$NODES"
 
       - name: Upload the metrics report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: load-metrics-${{ inputs.scenario }}-${{ inputs.environment }}
+          name: load-metrics-${{ env.SCENARIO }}-${{ env.TARGET }}
           path: load-reports/*.json
           retention-days: 30
           if-no-files-found: warn
+
+  # A failed weekly run opens or updates one tracking issue, as a failed
+  # nightly does.
+  report:
+    name: Report A Scheduled Load Failure
+    needs: load-test
+    if: ${{ github.event_name == 'schedule' && failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'ci: a scheduled load run failed'
+        run: |
+          set -euo pipefail
+          {
+            echo "Run: ${RUN_URL}"
+            echo
+            echo "| slot | result |"
+            echo "| --- | --- |"
+            echo "| Load Test: rotation-wave on local | failure |"
+          } > "${RUNNER_TEMP}/load-report.md"
+          number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body-file "${RUNNER_TEMP}/load-report.md"
+          else
+            gh issue create --title "${TITLE}" --label comp:ci \
+              --body-file "${RUNNER_TEMP}/load-report.md"
+          fi

@@ -49,7 +49,9 @@ pub struct SyncTimingProfile {
     /// ([`run_sweep_job`](crate::rotation::run_sweep_job)). Deliberately far
     /// coarser than [`poll_cadence`]: the sweep is background hygiene that
     /// ordinary writes advance for free, and it shares the record transport
-    /// with the focus-window tick.
+    /// with the focus-window tick. Measured by the `rotation-wave` load
+    /// scenario (`tools/perf/RESULTS.md`): it bounds only when the sweep
+    /// proves a scope larger than the API content bucket converged.
     ///
     /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
     pub sweep_cadence: Duration,
@@ -99,8 +101,8 @@ pub struct SyncTimingProfile {
 impl SyncTimingProfile {
     /// Shipped policy: TTL 1 minute, 30 s poll (#33 D3).
     ///
-    /// `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
-    /// `sweep_cadence` and `migration_window` are placeholders pending the
+    /// `escalation_window`, `focus_horizon`, `pointer_consult_interval` and
+    /// `migration_window` are placeholders pending the
     /// measurement process fixed in blueprint/testing.md ("The profile is where
     /// measured constants land"). Each is bounded by the cross-client
     /// convergence latency, which the `Perf Benches` `cross-client-latency` job

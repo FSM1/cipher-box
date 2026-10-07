@@ -42,6 +42,11 @@ ranged_profile` prints the ranged-fetch table, and `Perf Benches` with
 **The cross-client convergence latency.** Dispatch `Desktop E2E Tests`, then
 `Perf Benches` with `job: cross-client-latency` and that run's id.
 
+**The name wave and the sweep convergence.** With the local stack and the API
+up, run `cargo run --release -p cipherbox-load -- --scenario rotation-wave
+--target local --nodes <n>`, or dispatch `load-test.yml` with
+`scenario: rotation-wave`.
+
 ## The environments
 
 |        | Local                                        | Staging                                 |
@@ -197,9 +202,42 @@ Two properties the freeze carries, both visible above.
 
 ## Cross-client convergence latency
 
-Not recorded yet. The measurement needs the cross-client harness, which is a
-mounted desktop host beside a browser host on one vault, and `Perf Benches`
-takes it from a `Desktop E2E Tests` run's wait samples rather than by standing
-that stack up again. Until a row lands here, the five `SyncTimingProfile::PRODUCTION`
-placeholders — `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
-`sweep_cadence` and `migration_window` — keep the values they carry.
+The sweep convergence row below is the one device half of this latency: the
+time from a read cut until a sweep run proves that no node of the scope is at
+the old epoch. The cross-client half, a mounted desktop host beside a browser
+host on one vault, is not recorded yet. `Perf Benches` takes it from the wait
+samples of a `Desktop E2E Tests` run.
+
+Taken on 2026-10-07 with `cipherbox-load --scenario rotation-wave --target
+local --nodes <n>`, on the local host of "The environments", against the mock
+`/routing/v1` store and Kubo. One engine ran the `PRODUCTION` sync timing
+profile. The folder holds `n` subfolders under one scope root, so the name wave
+moves `n + 1` nodes. Each phase started on a full content bucket. Times come
+from the engine events, on the engine clock.
+
+| Nodes | Sweep converged | Last sweep re-seal | Name wave     | Per node, p50 / p95 |
+| ----: | --------------: | -----------------: | :------------ | ------------------: |
+|     4 |          165 ms |             165 ms | 335 ms        |      44 ms / 132 ms |
+|    16 |          734 ms |             734 ms | 1021 ms       |      35 ms / 404 ms |
+|    64 |       641867 ms |           31742 ms | stopped, owed |                   — |
+
+The API's per-account content bucket, 60 uploads a minute, sets both limits
+at 64 nodes. Each node that the sweep re-seals and each node that the wave moves
+uploads a block:
+
+- The sweep that the read cut files got `429` answers. Its second pass
+  re-sealed more nodes 31.7 s after the cut, but the passes of the cut's task
+  left nodes at the old epoch. So the proof waits for the idle sweep job, one
+  `sweep_cadence` (900 s) after the engine started. For a scope with more nodes
+  than the bucket, the proof that no node is at the old epoch arrives up to one
+  `sweep_cadence` after the cut.
+- The name wave got `429` answers part way. It sent no end, and the cut became
+  owed rotation work.
+
+Below the bucket, the sweep proves convergence in under one second at 16 nodes.
+Until a cross-client row lands, the `SyncTimingProfile::PRODUCTION`
+placeholders `escalation_window`, `focus_horizon`, `pointer_consult_interval`
+and `migration_window` keep the values they carry.
+
+`sweep_cadence` keeps 900 s on this measurement. The cadence bounds only the
+proof of convergence for a scope with more nodes than the content bucket.
