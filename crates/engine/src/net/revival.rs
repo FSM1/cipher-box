@@ -18,7 +18,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
-use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified, signed_data};
+use super::fanout::{MAX_RECORD_BYTES, fanout_get_tied_classified, signed_data};
 use super::pointer_fetch::{PointerConsult, PointerConsultError};
 use super::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
@@ -290,28 +290,36 @@ impl RecoveryPace {
 }
 
 /// Steps 2 and 5: the fan-out reads `Absent`, or serves a record below `S`,
-/// which the signature at `S + 1` supersedes, or exactly the record at `S`.
+/// which the signature at `S + 1` supersedes, or at `S` only the recovered
+/// record. Every record an endpoint serves at `S` counts, not only the pick,
+/// so a distinct record at `S` behind a tie refuses.
 async fn corroborate<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
     sequence: u64,
     bytes: &[u8],
 ) -> Result<(), ReviveError> {
-    match fanout_get_classified(transport, name).await {
-        FanoutRecord::Absent => Ok(()),
-        FanoutRecord::Found(served, _) if served.sequence < sequence => Ok(()),
-        // ADR 0066 D1: a copy with an unsigned field added is the same record.
-        FanoutRecord::Found(served, _)
-            if served.sequence == sequence
-                && signed_data(name, bytes).as_deref() == Some(&served.data[..]) =>
-        {
+    let fetch = fanout_get_tied_classified(transport, name).await;
+    let Some((served, served_bytes, tied)) = fetch.pick else {
+        return if fetch.absent {
             Ok(())
-        }
-        FanoutRecord::Found(served, _) => Err(ReviveError::Superseded {
-            sequence: served.sequence,
-        }),
-        FanoutRecord::Unavailable(_) => Err(ReviveError::Uncorroborated),
+        } else {
+            Err(ReviveError::Uncorroborated)
+        };
+    };
+    if served.sequence < sequence {
+        return Ok(());
     }
+    // ADR 0066 D1: a copy with an unsigned field added is the same record.
+    let recovered = signed_data(name, bytes);
+    let same = |record: &[u8]| recovered.is_some() && signed_data(name, record) == recovered;
+    if served.sequence == sequence && same(&served_bytes) && tied.iter().all(|record| same(record))
+    {
+        return Ok(());
+    }
+    Err(ReviveError::Superseded {
+        sequence: served.sequence,
+    })
 }
 
 /// A lapsed name that passed steps 1 to 3.
@@ -680,6 +688,8 @@ where
 mod tests {
     use super::*;
 
+    use crate::net::fanout::{FanoutRecord, fanout_get_classified};
+
     use core::cell::RefCell;
     use core::time::Duration;
 
@@ -962,6 +972,43 @@ mod tests {
         );
         assert!(registrations(&device).is_empty());
         assert_eq!(served(&device, &name).unwrap().sequence, 9);
+    }
+
+    /// The recovered record at `S` wins the tie on one endpoint, and another
+    /// endpoint serves a distinct record at `S`: the revival refuses.
+    #[test]
+    fn a_distinct_record_tied_at_s_behind_the_pick_stops_the_revival() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([16; 32]);
+        let name = name_of(&signer);
+        let recovered = minted(&signer, b"/ipfs/bafyrecovered", 5);
+        device.http.enqueue_response(answer(200, recovered.clone()));
+        let (store, key) = (device.record_store.clone(), name.as_str().to_owned());
+        // An earlier EOL, so the recovered record ranks above it at the tie.
+        let other = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/bafyother",
+            5,
+            TTL_NANOS,
+            &renewal_eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        device.http.enqueue_derived(move |_| {
+            let endpoints = store.endpoints();
+            store.seed_record(&endpoints[0], &key, recovered.clone());
+            store.seed_record(&endpoints[1], &key, other.clone());
+            Ok(answer(200, Vec::new()))
+        });
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Superseded { sequence: 5 })
+        );
+        assert_eq!(
+            served(&device, &name).unwrap().sequence,
+            5,
+            "nothing signed over the tie"
+        );
     }
 
     #[test]
