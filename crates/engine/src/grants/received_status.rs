@@ -501,7 +501,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 Some(key)
             })
             .collect();
-        let (pointers, heals) = self
+        let (pointers, heals, pin_reads) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
         let pins = PinPass {
@@ -510,7 +510,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             profile,
             events: render.events,
         };
-        self.observe_pointer_pins(&received, &pointers, render, &pins)
+        self.observe_pointer_pins(&received, &pin_reads, render, &pins)
             .await;
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
@@ -729,8 +729,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
-    /// verdict, and the scope root each vouched-for bookmark must move to. A
-    /// refused re-point object is a trust verdict, reported here.
+    /// verdict, the scope root each vouched-for bookmark must move to, and
+    /// every scheduled read for the pin pass. A refused re-point object is a
+    /// trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
@@ -740,9 +741,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     ) -> (
         BTreeMap<BookmarkKey, PointerVerdict>,
         Vec<(BookmarkKey, Vec<u8>)>,
+        BTreeMap<BookmarkKey, PointerVerdict>,
     ) {
         let mut verdicts = BTreeMap::new();
         let mut heals = Vec::new();
+        let mut pin_reads = BTreeMap::new();
         for share in received.iter() {
             let key = share.key();
             let (Some(name), Some(contact), true) = (
@@ -779,6 +782,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     PointerVerdict::Rejected
                 }
             };
+            pin_reads.insert(key, verdict);
             // Only a link read waits for a vouched root (ADR 0024 D5). A
             // personal read uses the stored root when the pointer gives none.
             let personal = received.link_hold(&key).is_none();
@@ -792,13 +796,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             }
             verdicts.insert(key, verdict);
         }
-        (verdicts, heals)
+        (verdicts, heals, pin_reads)
     }
 
-    /// Fold each held bookmark's pointer read into its hold. A pointer that no
+    /// Fold each named bookmark's pointer read into its hold. A pointer that no
     /// endpoint answers is the pointer-plane suppression the escalation bounds
     /// (blueprint/engine.md "Withheld-update escalation"); any answer ends the
-    /// hold. Rebuilt each pass, so a hold lives while its link hold does.
+    /// hold. Rebuilt each pass, so a hold lives while its bookmark keeps the name.
     ///
     /// A scope pointer exists only after a re-point, and a read that one
     /// endpoint fails and another answers "no record" is also unanswered. So
@@ -807,21 +811,17 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     async fn observe_pointer_pins(
         &self,
         received: &ReceivedSharesList,
-        pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
+        pin_reads: &BTreeMap<BookmarkKey, PointerVerdict>,
         render: &ScopeRender<'_>,
         pass: &PinPass<'_>,
     ) {
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            // Only a link read waits for a vouched root (ADR 0024 D5).
-            if received.link_hold(&key).is_none() {
-                continue;
-            }
             let Some(name) = &share.scope_pointer_name else {
                 continue;
             };
-            let read = match pointers.get(&key) {
+            let read = match pin_reads.get(&key) {
                 Some(PointerVerdict::Unavailable) => {
                     match floor::write_epoch_floor(&self.sharer_floors(share), &share.scope_id)
                         .await
@@ -4638,6 +4638,66 @@ mod tests {
                 fx.forced_pass(at);
             }
             assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// A personal bookmark of the standing root, with `name` as its scope
+        /// pointer name, whose scope root opened.
+        fn granted_personal(name: Option<IpnsName>) -> RenderedScope {
+            let mut fx = RenderedScope::new(Vec::new());
+            let mut list = ReceivedSharesList::new();
+            list.reconcile(ReceivedShare {
+                scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                display_name: "photos-folder".to_owned(),
+                permission: Permission::Read,
+                pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: name,
+            });
+            fx.persist(&list).expect("the bookmark persists");
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![personal_row()], 0, 1);
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+            fx
+        }
+
+        /// ADR 0074 D1: a personal bookmark follows the scope pointer too, so
+        /// a pointer that no endpoint answers escalates past the window, while
+        /// the stored root still renders.
+        #[test]
+        fn a_personal_pointer_no_endpoint_answers_escalates_once_past_the_window() {
+            let fx = granted_personal(Some(pointer_name()));
+            fx.records.fail_get_for(pointer_name().as_str());
+            let reads = fx.records.get_count(scope_root_name().as_str());
+
+            assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+            fx.forced_pass(5_999);
+            assert_eq!(pointer_escalations(&fx), 0, "inside the window");
+            assert_eq!(fx.forced_pass(6_000), ResolutionClass::Granted);
+            assert_eq!(pointer_escalations(&fx), 1);
+            assert!(
+                fx.records.get_count(scope_root_name().as_str()) > reads,
+                "the stored root is read, not the last verdict kept"
+            );
+            assert!(!fx.reported.get(), "the escalation is no trust verdict");
+
+            fx.forced_pass(7_000);
+            fx.forced_pass(60_000);
+            assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
+        }
+
+        /// ADR 0074 D2: a nameless personal bookmark follows no pointer, so it
+        /// opens no hold and accuses nobody.
+        #[test]
+        fn a_nameless_personal_bookmark_never_escalates() {
+            let fx = granted_personal(None);
+            fx.records.fail_get_for(pointer_name().as_str());
+            for at in [1_000, 6_000, 60_000] {
+                assert_eq!(fx.forced_pass(at), ResolutionClass::Granted);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+            assert!(fx.pointer_pins.borrow().is_empty());
+            assert!(!fx.reported.get(), "availability accuses nobody");
         }
 
         /// A first read with no pointer answer keeps the link keys, and a later
