@@ -105,7 +105,35 @@ renewal, and revival, including floor changes before signing, foreign envelope
 versions, and sequence exhaustion. On the virtual clock, the `net::revival` unit tests
 revive a lapsed file record through the gate at `S + 1` with the renewal EOL
 (ADR 0062 consequence 5), refuse each D1 step that fails, and hold the
-recovery pace.
+recovery pace; a record that another endpoint serves at `S` with other bytes
+stops the revival. The virtual-clock tests of ADR 0062 run end to end in
+`tests/renewal_walk.rs`: a device that starts after 100 days offline, with
+every name lapsed, revives the vault pointer, the vault root and the bin
+index before the first tick, lists the vault, and the walk revives a lapsed
+folder before the file below it, each at `S + 1`, on a new device and on the
+device that wrote the vault; a session spends at most 25 recovery fetches in
+its first minute and revives the rest when the pace allows; a 429 at the
+chain revival leaves the session retryable with no root, and a refresh
+revives the chain and provisions; a chain revival that another device
+supersedes is retryable too; a lapsed pointer that only the produce bar
+refuses keeps the session dark with no trust violation, and one that both
+bars refuse is one trust violation; a 429 or an unavailable fan-out at the
+bin index revival publishes no genesis bin index, and the next start
+revives it at `S + 1`, holds it and renews it later; a soft delete waits
+while the bin index revival can still land, and the next liveness pass revives it and publishes the delete, while a raw read that then vanishes lifts no hold and only a gated load that resolves the record does; and an owed rotation record
+that does not read revives no vault root. At session start the settings record revives
+only on the device whose floor equals the recovered sequence, and the
+settings load after it reads the saved settings. In `tests/write_plane.rs` a
+vault that only the API cache serves revives at session start, and a 429
+there leaves a retryable session that converges. `net::vault_pointer`
+revives the chain up to the probe one index past the last and never below
+the index floor, a 429 inside the chain or an unavailable index after a
+found or revived index, in this pass or after an earlier one, leaves its end unconfirmed, and the produce bar alone gives
+no trust violation. `net::rotation` revives a lapsed owned scope pointer
+only in a scope that has no owed rotation entry, spends one recovery fetch
+on a scope that was never re-pointed, revives none while the owed rotation record does not
+read (and reports that once for each pass), and a revival that a later pass can land or read back, or that
+another device supersedes, keeps the enrolment open.
 
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
@@ -159,10 +187,32 @@ scenario fails the meta-test):
   restart, a kept edit under a refused file record dead-letters with a notice
   and frees the queue, a kept create under a refused scope root waits uncharged after a
   restart and leaves at the bound, and one under a moved root the walk cannot
-  prove waits past the bound and applies again once the walk proves it (ADR 0069,
-  `crates/engine/tests/owner_actions.rs`); the kept op of a downgraded write
-  grantee dead-letters on its device with a notice, also a late write that
-  the wave did not carry (ADR 0069 D3,
+  prove waits past the bound and applies again once the walk proves it; a
+  kept delete that the wave carried back waits past the bound for the read
+  of its folder at the live name and applies again, also across a restart,
+  one that the wave carried leaves after that read with no notice, and one
+  whose folder a later writer deleted leaves before the bound, and one whose
+  folder the gate refuses at the flip is charged and never read as gone
+  (ADR 0069, `crates/engine/tests/owner_actions.rs`); a kept delete whose
+  folder the live root dropped leaves at the read, one whose folder a read
+  of this session at the live parent name saw unlinked leaves at once and
+  one that only a read at an old parent name saw unlinked stays, one whose folder a proved base lacks
+  waits and leaves at the bound, and one whose note names no folder leaves
+  at the bound (`crates/engine/src/sync/drain.rs`); after a restart, a kept
+  delete in /A/B/X does not leave before the bound with no read of B, and
+  leaves at once after a pass that reads B, and one whose B a peer unlinked
+  only in the old tree in the wave window stays and applies again in the new
+  tree (`owner_actions.rs`), and the one
+  of a downgraded grantee dead-letters with a notice
+  (`mount_convergence.rs`); the kept-op note reads frozen version 1 bytes
+  with no folder and no result, a copy of the version 1 decoder reads a
+  version 2 body as no notes, and each name and CID bound the decoder holds
+  is refused at insert and at encode, while a compile-time assertion keeps
+  the longest entry within its two-byte length (ADR 0069 D4, ADR 0020,
+  `crates/engine/src/sync/kept_op.rs`,
+  `crates/engine/tests/encode_refusals.rs`); the kept op of a downgraded write
+  grantee dead-letters on its device with a notice, a kept delete included,
+  also a late write that the wave did not carry (ADR 0069 D3,
   `crates/engine/tests/mount_convergence.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own

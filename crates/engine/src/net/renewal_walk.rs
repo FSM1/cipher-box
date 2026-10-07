@@ -33,6 +33,10 @@ use super::publish::{
 };
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
+use super::revival::{
+    ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
+    revive_name, write_signer,
+};
 use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::BinIndexKeys;
@@ -82,9 +86,14 @@ const FORK_HELD: &str =
     "the endpoints serve a same-sequence fork of the name, so the renewal waits for it to heal";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
 const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
+/// Why the walk does not revive a lapsed name.
+const REVIVAL_REFUSED: &str = "the revival refused the record the recovery endpoint served";
 /// Why the walk renews every name as if no scope had owed work this pass.
-const OWED_UNREAD: &str =
+pub(crate) const OWED_UNREAD: &str =
     "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
+/// Why a revival outside the walk refused: unknown rotation debt.
+pub(crate) const OWED_UNREAD_NO_REVIVAL: &str =
+    "the owed rotation record did not read, so the lapsed name did not revive";
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
@@ -147,6 +156,8 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     pub(crate) unfinished_write_cuts: &'a BTreeSet<[u8; 16]>,
     /// The session's owed rotation record, the one the re-drive reads.
     pub(crate) owed: &'a OwedCell,
+    /// The session's recovery pace, which each revival waits for.
+    pub(crate) pace: &'a RecoveryPace,
 }
 
 /// What one pass did.
@@ -282,6 +293,11 @@ struct Pass<'s> {
     /// The scopes with an owed rotation entry within its bound, whose names
     /// the walk does not renew (ADR 0063 D4, ADR 0065 D4).
     owed: BTreeSet<[u8; 16]>,
+    /// The owed rotation record does not read: the walk renews, but revives
+    /// nothing, as unknown rotation debt can owe any scope.
+    owed_unread: bool,
+    /// The pass reported a revival that the unread record refused.
+    no_revival_reported: bool,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -423,6 +439,8 @@ where
             doomed,
             kept_back: false,
             owed,
+            owed_unread,
+            no_revival_reported: false,
             owner_tag,
             scopes,
             bins,
@@ -496,25 +514,20 @@ where
         scope_id: [u8; 16],
     ) -> Option<&'p ScopeMaterial> {
         if !pass.materials.contains_key(&scope_id) {
-            let material = match pass.scopes.iter().find(|scope| scope.scope_id == scope_id) {
+            let scopes = pass.scopes;
+            let material = match scopes.iter().find(|scope| scope.scope_id == scope_id) {
                 Some(_) if pass.owed.contains(&scope_id) => None,
                 Some(scope) => {
                     pass.visits += 1;
-                    match admit_owned_scope_root(
-                        self.transport,
-                        self.gateway,
-                        self.http,
-                        self.floors,
-                        self.snapshot_cache,
-                        self.owner_seed_cache.clone(),
-                        self.enc_secret,
-                        self.identity,
-                        scope_id,
-                        scope.ascent.as_ref(),
-                        &scope.name,
-                    )
-                    .await
-                    {
+                    let mut admission = self.admit_root(scope).await;
+                    let mut revival = None;
+                    if matches!(admission, Err(ScopeRootAdmission::Gone)) {
+                        revival = self.revive_root(pass, scope).await;
+                        if revival == Some(true) {
+                            admission = self.admit_root(scope).await;
+                        }
+                    }
+                    match admission {
                         Ok(mut admitted) => {
                             if let Some(fork) = admitted.fork {
                                 pass.report
@@ -540,6 +553,8 @@ where
                             pass.kept_back = true;
                             None
                         }
+                        // The revival reported why it did not sign.
+                        Err(ScopeRootAdmission::Gone) if revival == Some(false) => None,
                         Err(ScopeRootAdmission::Gone) => {
                             pass.report
                                 .failed
@@ -553,6 +568,24 @@ where
             pass.materials.insert(scope_id, material);
         }
         pass.materials.get(&scope_id).and_then(Option::as_ref)
+    }
+
+    /// The root adopt of the owned scope root of `scope`.
+    async fn admit_root(&self, scope: &WalkScope) -> Result<AdmittedScopeRoot, ScopeRootAdmission> {
+        admit_owned_scope_root(
+            self.transport,
+            self.gateway,
+            self.http,
+            self.floors,
+            self.snapshot_cache,
+            self.owner_seed_cache.clone(),
+            self.enc_secret,
+            self.identity,
+            scope.scope_id,
+            scope.ascent.as_ref(),
+            &scope.name,
+        )
+        .await
     }
 
     /// Walk one root from the cursor's path, until the root is done or the
@@ -749,16 +782,33 @@ where
             node_id,
         )
         .with_seed_stamp(plane.seed_stamp);
-        match resolve_child_record(
-            self.transport,
-            self.snapshot_cache,
-            &adopter,
-            name,
-            scope_root.as_ref(),
-            ResolveMode::CacheFirst,
-        )
-        .await
-        {
+        let resolve = async |mode| {
+            resolve_child_record(
+                self.transport,
+                self.snapshot_cache,
+                &adopter,
+                name,
+                scope_root.as_ref(),
+                mode,
+            )
+            .await
+        };
+        let mut resolved = resolve(ResolveMode::CacheFirst).await;
+        // A cached copy of a lapsed record admits too, so the walk asks the
+        // endpoints before it reads the body.
+        let lapsed = match &resolved {
+            Ok(ChildRecord::Absent) => true,
+            Ok(ChildRecord::Admitted(read)) => self.lapsed_copy(name, &read.observed).await,
+            Ok(ChildRecord::Withheld) | Err(_) => false,
+        };
+        let mut revival = None;
+        if lapsed {
+            revival = self.revive_child(pass, plane, node_id, name).await;
+            if revival == Some(true) {
+                resolved = resolve(ResolveMode::NoCache).await;
+            }
+        }
+        match resolved {
             Ok(ChildRecord::Admitted(read)) => {
                 let AdmittedChild {
                     adopted,
@@ -775,6 +825,8 @@ where
                     .await;
                 Some(adopted.read_body)
             }
+            // The revival reported why it did not sign.
+            Ok(ChildRecord::Absent) if revival == Some(false) => None,
             Ok(ChildRecord::Absent) => {
                 pass.report
                     .failed
@@ -796,6 +848,210 @@ where
             ) => {
                 pass.kept_back = true;
                 None
+            }
+        }
+    }
+
+    /// Whether `observed` is a copy of a record past its EOL that no endpoint
+    /// serves.
+    async fn lapsed_copy(&self, name: &IpnsName, observed: &Result<Observed, RefusedRead>) -> bool {
+        let bytes = match observed {
+            Ok(observed) => observed.bytes(),
+            Err(refused) => refused.bytes.as_slice(),
+        };
+        super::fork::verified(name, bytes)
+            .is_some_and(|verified| eol::is_expired(self.scheduler.now(), &verified.validity))
+            && reads_absent(self.transport, name).await
+    }
+
+    /// Revive the lapsed node `node_id` at `name` through the gated child
+    /// resolve (ADR 0062 D3). `None` when the walk may not sign the name, so
+    /// no revival ran; `Some(true)` when the revival signed.
+    async fn revive_child(
+        &self,
+        pass: &mut Pass<'_>,
+        plane: &Plane,
+        node_id: [u8; 16],
+        name: &IpnsName,
+    ) -> Option<bool> {
+        let material = pass.materials.get(&plane.scope_id)?.as_ref()?;
+        let signer = material.signer_for(&node_id, name)?;
+        let (scope_root, bar) = (material.name.clone(), material.admitted.bar);
+        if !self
+            .may_sign(pass, plane.scope_id, node_id, name, None)
+            .await
+        {
+            return None;
+        }
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            plane.scope_id,
+            plane.read_seed.clone(),
+            node_id,
+        )
+        .with_seed_stamp(plane.seed_stamp);
+        let read = ChildRead {
+            adopter,
+            snapshot_cache: self.snapshot_cache,
+            scope_root: Some(&scope_root),
+            bar,
+        };
+        Some(self.revive_one(pass, name, Some(&signer), read).await)
+    }
+
+    /// Revive the lapsed owned scope root of `scope` through the root adopt
+    /// (ADR 0062 D3), with the signer of the write seed the admitted owner
+    /// blob carries. `None` when the walk may not sign the name.
+    async fn revive_root(&self, pass: &mut Pass<'_>, scope: &WalkScope) -> Option<bool> {
+        if !self
+            .may_sign(pass, scope.scope_id, scope.scope_id, &scope.name, None)
+            .await
+        {
+            return None;
+        }
+        let signer = write_signer(scope.write_seed.as_deref(), &scope.scope_id, &scope.name);
+        let read = ScopeRootRead {
+            gateway: self.gateway,
+            http: self.http,
+            floors: self.floors,
+            snapshot_cache: self.snapshot_cache,
+            owner_seed_cache: self.owner_seed_cache.clone(),
+            enc_secret: self.enc_secret,
+            identity: self.identity,
+            scope_id: scope.scope_id,
+            ascent: scope.ascent.as_ref(),
+        };
+        Some(
+            self.revive_one(pass, &scope.name, signer.as_ref(), read)
+                .await,
+        )
+    }
+
+    /// Revive one name at the recovery pace, and report the result. A visit
+    /// that revives does not count toward [`WALK_BUDGET`]: the pace bounds a
+    /// revival cycle (ADR 0062 consequence 2).
+    async fn revive_one<P: PlaneRead>(
+        &self,
+        pass: &mut Pass<'_>,
+        name: &IpnsName,
+        signer: Option<&Ed25519Signer>,
+        plane: P,
+    ) -> bool {
+        if pass.owed_unread {
+            if !core::mem::replace(&mut pass.no_revival_reported, true) {
+                pass.report
+                    .failed
+                    .push((name.as_str().to_owned(), OWED_UNREAD_NO_REVIVAL));
+            }
+            pass.kept_back = true;
+            return false;
+        }
+        let request = ReviveRequest {
+            name,
+            signer,
+            plane,
+        };
+        let result = revive_name(self.api, &self.seams(), self.pace, request).await;
+        let routing_key = name.as_str().to_owned();
+        let outcome = match result {
+            Ok(revived) => {
+                pass.visits = pass.visits.saturating_sub(1);
+                Ok(Some(revived.outcome))
+            }
+            Err(ReviveError::Publish(error)) => Err(error),
+            Err(ReviveError::TrustViolation) => {
+                pass.report.rejected.push(routing_key);
+                return false;
+            }
+            Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
+                pass.report.failed.push((routing_key, NO_RECORD));
+                return false;
+            }
+            Err(ReviveError::Recovery(error)) => {
+                pass.kept_back |= transient_registration(&error);
+                pass.report.failed.push((routing_key, REVIVAL_REFUSED));
+                return false;
+            }
+            Err(
+                ReviveError::Throttled
+                | ReviveError::Uncorroborated
+                | ReviveError::Unavailable
+                | ReviveError::FloorRead(_),
+            ) => {
+                pass.kept_back = true;
+                return false;
+            }
+            // Another write moved the name on.
+            Err(ReviveError::Superseded { .. } | ReviveError::Moved) => return false,
+            Err(
+                ReviveError::WrongSigner
+                | ReviveError::Unrecoverable
+                | ReviveError::StaleSource { .. }
+                | ReviveError::PlaneMismatch
+                | ReviveError::NotAtFloor,
+            ) => {
+                pass.report.failed.push((routing_key, REVIVAL_REFUSED));
+                return false;
+            }
+        };
+        pass.kept_back |= transient_renewal(&outcome);
+        let signed = outcome.is_ok();
+        pass.report.renewals.push(EolRenewResult {
+            routing_key,
+            outcome,
+        });
+        signed
+    }
+
+    /// Whether the walk may sign `name` for `node_id` (ADR 0061 D3 step 2): no
+    /// delete doomed it, no retire is pending, the drain is not publishing it,
+    /// and no retire is acknowledged above `sequence`. A revival passes `None`,
+    /// as it reads its sequence later, so any acknowledged retire refuses it.
+    async fn may_sign(
+        &self,
+        pass: &mut Pass<'_>,
+        material_scope: [u8; 16],
+        node_id: [u8; 16],
+        name: &IpnsName,
+        sequence: Option<u64>,
+    ) -> bool {
+        if pass.doomed.unreadable.contains(&material_scope) {
+            pass.kept_back = true;
+            return false;
+        }
+        let key = name.as_str();
+        if pass.doomed.names.contains(key)
+            || self
+                .guards
+                .orphan_heads
+                .pending()
+                .iter()
+                .any(|held| held == key)
+            || self.guards.publishing.borrow().contains(key)
+        {
+            return false;
+        }
+        let ledger = StagingRetireLedger::new(self.staging, self.seal);
+        match ledger.tombstoned(&pass.owner_tag, node_id).await {
+            Ok(true) if linked_nowhere(&self.guards.base.borrow(), node_id) => return false,
+            Ok(_) => {}
+            Err(_) => {
+                pass.kept_back = true;
+                return false;
+            }
+        }
+        match ledger.acknowledged(&pass.owner_tag, node_id, key).await {
+            Ok(Acknowledged::Nothing) => true,
+            Ok(Acknowledged::At(acked)) => sequence.is_some_and(|sequence| acked <= sequence),
+            Ok(Acknowledged::Unreadable) => {
+                pass.report.failed.push((key.to_owned(), ACK_UNREADABLE));
+                false
+            }
+            Err(_) => {
+                pass.kept_back = true;
+                false
             }
         }
     }
@@ -846,44 +1102,13 @@ where
             return;
         };
         let bar = material.admitted.bar;
-        if pass.doomed.unreadable.contains(&material_scope) {
-            pass.kept_back = true;
-            return;
-        }
-        let key = name.as_str();
-        if pass.doomed.names.contains(key)
-            || self
-                .guards
-                .orphan_heads
-                .pending()
-                .iter()
-                .any(|held| held == key)
-            || self.guards.publishing.borrow().contains(key)
+        if !self
+            .may_sign(pass, material_scope, node_id, name, Some(sequence))
+            .await
         {
             return;
         }
-        let ledger = StagingRetireLedger::new(self.staging, self.seal);
-        match ledger.tombstoned(&pass.owner_tag, node_id).await {
-            Ok(true) if linked_nowhere(&self.guards.base.borrow(), node_id) => return,
-            Ok(_) => {}
-            Err(_) => {
-                pass.kept_back = true;
-                return;
-            }
-        }
-        match ledger.acknowledged(&pass.owner_tag, node_id, key).await {
-            Ok(Acknowledged::Nothing) => {}
-            Ok(Acknowledged::At(acked)) if acked <= sequence => {}
-            Ok(Acknowledged::At(_)) => return,
-            Ok(Acknowledged::Unreadable) => {
-                pass.report.failed.push((key.to_owned(), ACK_UNREADABLE));
-                return;
-            }
-            Err(_) => {
-                pass.kept_back = true;
-                return;
-            }
-        }
+        let key = name.as_str();
         let observed = match observed {
             Ok(observed) => observed,
             Err(refused) => {
@@ -943,15 +1168,8 @@ where
     /// Renew `due` (ADR 0061 D3 steps 4 to 6), and point the renewal set at
     /// the renewal.
     async fn renew(&self, due: &Due) -> Option<Result<Option<PublishOutcome>, PublishError>> {
-        let seams = RenewalSeams {
-            transport: self.transport,
-            floors: self.floors,
-            scheduler: self.scheduler,
-            profile: self.profile,
-            publishing: self.guards.publishing,
-        };
         let receipt = match renew_admitted(
-            &seams,
+            &self.seams(),
             &due.observed,
             Some(due.bar),
             FloorRule::Exact,
@@ -967,6 +1185,16 @@ where
             self.follow_held(due, &receipt.record_bytes);
         }
         Some(Ok(Some(receipt.outcome)))
+    }
+
+    fn seams(&self) -> RenewalSeams<'_, T, F, Sch> {
+        RenewalSeams {
+            transport: self.transport,
+            floors: self.floors,
+            scheduler: self.scheduler,
+            profile: self.profile,
+            publishing: self.guards.publishing,
+        }
     }
 
     /// Point the renewal set's entry for a renewed name at the renewal, while
@@ -1124,7 +1352,7 @@ fn cursor_to_store(
 
 /// Whether a refused registration can pass: the API was not reached, it
 /// answered 429 or 5xx, or the session's refresh failed.
-fn transient_registration(error: &ApiError) -> bool {
+pub(crate) fn transient_registration(error: &ApiError) -> bool {
     match error {
         ApiError::Transport(_) | ApiError::Unauthorized => true,
         ApiError::Status { status, .. } => *status == 429 || *status >= 500,
@@ -1133,7 +1361,7 @@ fn transient_registration(error: &ApiError) -> bool {
 }
 
 /// Whether a renewal's outcome can pass on a later pass.
-fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> bool {
+pub(crate) fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> bool {
     match outcome {
         Ok(Some(PublishOutcome::Unconfirmed { .. })) => true,
         Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {

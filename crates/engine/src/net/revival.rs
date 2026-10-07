@@ -18,13 +18,17 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
-use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified, signed_data};
+use super::fanout::{
+    FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified, fanout_get_tied_classified, signed_data,
+};
 use super::pointer_fetch::{PointerConsult, PointerConsultError};
 use super::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
 };
 use super::register::register;
-use super::renewal_walk::{FloorRule, RenewalSeams, sign_admitted};
+use super::renewal_walk::{
+    FloorRule, RenewalSeams, sign_admitted, transient_registration, transient_renewal,
+};
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, load_bin_index};
@@ -33,10 +37,12 @@ use crate::gate::{GateError, floor};
 use crate::grants::owner_entry::OwnerSeedCache;
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{DefaultsReason, Unopened};
+use crate::rotation::derive_write_name;
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
     SeamResult, SnapshotCache, UnixMillis,
 };
+use crate::session::SessionIdentity;
 use crate::sync::tick::ResolveMode;
 
 /// A record the read of its plane admitted, and the floors its signature
@@ -44,6 +50,9 @@ use crate::sync::tick::ResolveMode;
 pub(crate) struct Admitted {
     pub(crate) observed: Observed,
     pub(crate) bar: Option<PublishBar>,
+    /// The signer the read recovered with the record, for a name whose seed
+    /// only the admitted body carries.
+    pub(crate) signer: Option<Ed25519Signer>,
 }
 
 impl Admitted {
@@ -52,6 +61,7 @@ impl Admitted {
         Self {
             observed: Observed::admitted(name, sequence, bytes),
             bar: None,
+            signer: None,
         }
     }
 
@@ -63,6 +73,7 @@ impl Admitted {
         Ok(Self {
             observed: observed.map_err(|refused| PlaneRefusal::Unsignable(refused.error))?,
             bar: Some(bar),
+            signer: None,
         })
     }
 }
@@ -134,7 +145,9 @@ pub(crate) trait PlaneRead {
 /// One lapsed name to revive: the name, its signer, and the read of its plane.
 pub(crate) struct ReviveRequest<'a, P> {
     pub(crate) name: &'a IpnsName,
-    pub(crate) signer: &'a Ed25519Signer,
+    /// `None` when only the admitted record carries the seed of the name,
+    /// as for a scope root after a write rotation.
+    pub(crate) signer: Option<&'a Ed25519Signer>,
     pub(crate) plane: P,
 }
 
@@ -191,6 +204,32 @@ pub(crate) enum ReviveError {
     Moved,
     /// The registration, the signature or the PUT failed.
     Publish(PublishError),
+}
+
+impl ReviveError {
+    /// Whether a later pass can pass where this one failed: a 429, an API or
+    /// fan-out that did not answer, a store error, or a PUT that did not land.
+    pub(crate) fn is_transient(&self) -> bool {
+        match self {
+            Self::Throttled | Self::Uncorroborated | Self::Unavailable | Self::FloorRead(_) => true,
+            Self::Recovery(error) => transient_registration(error),
+            Self::Publish(error) => transient_renewal(&Err(error.clone())),
+            Self::WrongSigner
+            | Self::Unrecoverable
+            | Self::Superseded { .. }
+            | Self::StaleSource { .. }
+            | Self::TrustViolation
+            | Self::PlaneMismatch
+            | Self::NotAtFloor
+            | Self::Moved => false,
+        }
+    }
+
+    /// Whether a later pass can read or revive the name: a transient failure,
+    /// or another write that the next read finds.
+    pub(crate) fn is_retryable(&self) -> bool {
+        self.is_transient() || matches!(self, Self::Superseded { .. } | Self::Moved)
+    }
 }
 
 /// The transport a plane read runs over in a revival: every endpoint serves
@@ -281,34 +320,42 @@ impl RecoveryPace {
 }
 
 /// Steps 2 and 5: the fan-out reads `Absent`, or serves a record below `S`,
-/// which the signature at `S + 1` supersedes, or exactly the record at `S`.
+/// which the signature at `S + 1` supersedes, or at `S` only the recovered
+/// record. Every record an endpoint serves at `S` counts, not only the pick,
+/// so a distinct record at `S` behind a tie refuses.
 async fn corroborate<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
     sequence: u64,
     bytes: &[u8],
 ) -> Result<(), ReviveError> {
-    match fanout_get_classified(transport, name).await {
-        FanoutRecord::Absent => Ok(()),
-        FanoutRecord::Found(served, _) if served.sequence < sequence => Ok(()),
-        // ADR 0066 D1: a copy with an unsigned field added is the same record.
-        FanoutRecord::Found(served, _)
-            if served.sequence == sequence
-                && signed_data(name, bytes).as_deref() == Some(&served.data[..]) =>
-        {
+    let fetch = fanout_get_tied_classified(transport, name).await;
+    let Some((served, served_bytes, tied)) = fetch.pick else {
+        return if fetch.absent {
             Ok(())
-        }
-        FanoutRecord::Found(served, _) => Err(ReviveError::Superseded {
-            sequence: served.sequence,
-        }),
-        FanoutRecord::Unavailable(_) => Err(ReviveError::Uncorroborated),
+        } else {
+            Err(ReviveError::Uncorroborated)
+        };
+    };
+    if served.sequence < sequence {
+        return Ok(());
     }
+    // ADR 0066 D1: a copy with an unsigned field added is the same record.
+    let recovered = signed_data(name, bytes);
+    let same = |record: &[u8]| recovered.is_some() && signed_data(name, record) == recovered;
+    if served.sequence == sequence && same(&served_bytes) && tied.iter().all(|record| same(record))
+    {
+        return Ok(());
+    }
+    Err(ReviveError::Superseded {
+        sequence: served.sequence,
+    })
 }
 
 /// A lapsed name that passed steps 1 to 3.
 struct Lapsed<'a> {
     name: &'a IpnsName,
-    signer: &'a Ed25519Signer,
+    signer: Ed25519Signer,
     admitted: Admitted,
     value: Vec<u8>,
     restored: bool,
@@ -361,6 +408,43 @@ where
     revived
 }
 
+/// [`revive`] for the one lapsed name of `request`.
+pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
+    api: &ApiClient<H, C>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
+    request: ReviveRequest<'_, P>,
+) -> Result<Revived, ReviveError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    P: PlaneRead,
+{
+    revive(api, seams, pace, &[request]).await.remove(0)
+}
+
+/// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
+pub(crate) async fn reads_absent<T: RecordTransport>(transport: &T, name: &IpnsName) -> bool {
+    matches!(
+        fanout_get_classified(transport, name).await,
+        FanoutRecord::Absent
+    )
+}
+
+/// The signer of `name` under the write scope seed `seed` of `scope_id`, when
+/// that seed derives `name`.
+pub(super) fn write_signer(
+    seed: Option<&[u8; 32]>,
+    scope_id: &[u8; 16],
+    name: &IpnsName,
+) -> Option<Ed25519Signer> {
+    seed.filter(|seed| derive_write_name(seed, scope_id) == *name)
+        .map(|seed| SessionIdentity::write_name_signer(seed, scope_id))
+}
+
 /// Steps 1 to 3: fetch the recovered record, corroborate it, and admit it
 /// through the read of its plane.
 async fn admit_lapsed<'a, T, H, C, F, Sch, P>(
@@ -378,7 +462,9 @@ where
     P: PlaneRead,
 {
     let name = request.name;
-    if IpnsName::from_public_key(&request.signer.verifying_key()) != *name {
+    let signs_for =
+        |signer: &Ed25519Signer| IpnsName::from_public_key(&signer.verifying_key()) == *name;
+    if request.signer.is_some_and(|signer| !signs_for(signer)) {
         return Err(ReviveError::WrongSigner);
     }
     pace.slot(seams.scheduler).await;
@@ -417,7 +503,7 @@ where
         key: name.as_str(),
         record: &bytes,
     };
-    let admitted = request
+    let mut admitted = request
         .plane
         .admit(&served, name, &recovered, &bytes)
         .await
@@ -428,13 +514,19 @@ where
             PlaneRefusal::Mismatch => ReviveError::PlaneMismatch,
             PlaneRefusal::NotAtFloor => ReviveError::NotAtFloor,
         })?;
+    let signer = request
+        .signer
+        .cloned()
+        .or_else(|| admitted.signer.take())
+        .filter(signs_for)
+        .ok_or(ReviveError::WrongSigner)?;
     // D2: the value the plane admitted, unchanged.
     let value = super::fork::verified(name, admitted.observed.bytes())
         .ok_or(ReviveError::TrustViolation)?
         .value;
     Ok(Lapsed {
         name,
-        signer: request.signer,
+        signer,
         admitted,
         value,
         restored,
@@ -465,7 +557,7 @@ where
         observed,
         lapsed.admitted.bar,
         FloorRule::AtMost,
-        lapsed.signer,
+        &lapsed.signer,
         &lapsed.value,
     )
     .await
@@ -519,7 +611,10 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ScopeRootRead<'_, H
             | ScopeRootAdmission::Gone
             | ScopeRootAdmission::HeadBlockAbsent => PlaneRefusal::Unavailable,
         })?;
-        Admitted::gated(admitted.observed, admitted.bar)
+        Ok(Admitted {
+            signer: write_signer(admitted.write_scope_seed.as_deref(), &self.scope_id, name),
+            ..Admitted::gated(admitted.observed, admitted.bar)?
+        })
     }
 }
 
@@ -784,7 +879,7 @@ mod tests {
             device,
             &[ReviveRequest {
                 name: &name,
-                signer,
+                signer: Some(signer),
                 plane,
             }],
         )
@@ -937,6 +1032,43 @@ mod tests {
         );
         assert!(registrations(&device).is_empty());
         assert_eq!(served(&device, &name).unwrap().sequence, 9);
+    }
+
+    /// The recovered record at `S` wins the tie on one endpoint, and another
+    /// endpoint serves a distinct record at `S`: the revival refuses.
+    #[test]
+    fn a_distinct_record_tied_at_s_behind_the_pick_stops_the_revival() {
+        let (world, device) = after_100_days();
+        let signer = Ed25519Signer::from_seed([16; 32]);
+        let name = name_of(&signer);
+        let recovered = minted(&signer, b"/ipfs/bafyrecovered", 5);
+        device.http.enqueue_response(answer(200, recovered.clone()));
+        let (store, key) = (device.record_store.clone(), name.as_str().to_owned());
+        // An earlier EOL, so the recovered record ranks above it at the tie.
+        let other = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/bafyother",
+            5,
+            TTL_NANOS,
+            &renewal_eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        device.http.enqueue_derived(move |_| {
+            let endpoints = store.endpoints();
+            store.seed_record(&endpoints[0], &key, recovered.clone());
+            store.seed_record(&endpoints[1], &key, other.clone());
+            Ok(answer(200, Vec::new()))
+        });
+
+        assert_eq!(
+            revive_one(&world, &device, &signer, Admits),
+            Err(ReviveError::Superseded { sequence: 5 })
+        );
+        assert_eq!(
+            served(&device, &name).unwrap().sequence,
+            5,
+            "nothing signed over the tie"
+        );
     }
 
     #[test]
@@ -1159,7 +1291,7 @@ mod tests {
             .zip(&names)
             .map(|(signer, name)| ReviveRequest {
                 name,
-                signer,
+                signer: Some(signer),
                 plane: Admits,
             })
             .collect();
@@ -1191,7 +1323,7 @@ mod tests {
             &device,
             &[ReviveRequest {
                 name: &name,
-                signer: &signer,
+                signer: Some(&signer),
                 plane: Admits,
             }],
         );
@@ -1703,7 +1835,7 @@ mod tests {
             &pace,
             &[ReviveRequest {
                 name: &name,
-                signer: &signer,
+                signer: Some(&signer),
                 plane: Admits,
             }],
         )

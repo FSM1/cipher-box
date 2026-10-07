@@ -162,6 +162,64 @@ bytes (FSM1/cipher-box-next#28 D2).
   and sends `renewalFailed` for it, as the renewal walk does. The same pass
   then runs a bounded part of the **renewal walk** (ADR 0061 D1 to D4), which
   reaches every other name of the vault.
+  A name that no parent body names revives at session start, before the first
+  tick, when the fan-out reads it `Absent` (ADR 0062 D3), in this order: the
+  vault pointer chain from its index floor up to the probe one index past the
+  last, before `resolve_vault_pointer` runs; the vault root after the cold
+  seed, whose write floor opens the owner write blob that carries the root's
+  signer, and then the cold start runs again; the settings record, only at
+  its floor (D4), and then the settings load runs again and reports one
+  verdict; the bin index before its load; then each owned scope pointer, when
+  the hourly enrolment proves its scope, on a device with no floor for the
+  scope too (D5).
+  When the chain revival does not confirm the end of the chain (a 429, a 5xx,
+  a revived index that still reads `Absent`, or a fan-out that does not
+  answer after a revived index), the session adopts no root,
+  mints nothing and reports `VaultUnprovisioned { retryable: true }`; the next
+  provision in the session runs the chain revival and the vault root revival
+  again. A bin index revival that can still land (a fan-out that does not
+  answer, or any result other than a signature or a 404 at the recovery
+  endpoint) skips the genesis publish for
+  that start. While it can still land, the drain holds each bin index write
+  that a load with no record would build on an empty index, and each hourly
+  liveness pass runs the bin index revival again under the shared pace. These
+  lift the hold: a revival that lands, whose gated load resolves the record; a
+  gated load, in the liveness pass or in the drain, that resolves a served
+  record; each of these only when the load writes a sequence floor at the
+  revived sequence or above, so no drain write signs a second value there
+  (ADR 0066); and a 404 at the recovery endpoint after every endpoint reads
+  `Absent`. A raw read lifts nothing unless the durable floor already reaches
+  the sequence it served, and a served record past its EOL counts as lapsed. A chain or scope pointer revival that another
+  device supersedes is retryable, and a scope pointer revival that a later
+  pass can land or read back keeps the enrolment open. A lapsed vault pointer
+  that only the produce bar refuses (ADR 0067 D4) is no trust violation: the
+  device stays dark until a device without that floor revives it.
+  The session-start revival and the walk share one recovery pace of 25
+  fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
+  the first minute. The vacancy probe and the first-save fetch are outside
+  the pace. Each session spends one paced recovery fetch for each owned scope
+  that has no pointer record, which answers 404. The first hourly pass waits
+  for these fetches before the walk, so N such scopes add about N / 25
+  minutes. A revival holds nothing in `HeldRecords`. A revival raises no
+  floor above `S`; the read that follows raises it to `S + 1`. A raise after
+  the publish would lock the plane: a confirmed `S + 1` that is lost before
+  storage leaves the recovery record below the floor. The restart fork this
+  leaves on the vault root, the bin index and the settings record (a
+  confirmed `S + 1` lost before storage, an expired `S` served again, a drain
+  write or a save of another `S + 1`) is an accepted residual. On the vault
+  root, ADR 0066 reports it and the later EOL wins. The bin index and the
+  settings record resolve through `record_plane::resolve_record`, which ADR
+  0066 D1 excludes. At equal sequence, the read selects the later EOL, then
+  the lexicographically higher signed data; it emits no fork event. After the
+  drain loads the old `S`, its record carries that index with the requested
+  change; the revival keeps the body of `S`, so this restart race loses no
+  other entry. A save signs at max(floor, observed, recovered) + 1, and fetches
+  the recovered sequence only when no durable floor exists. After a bin index revival the session loads the bin
+  index through the gate and holds it. No revival signs a name in a scope that
+  has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
+  not read, the session sends `renewalFailed` for it and revives no vault root
+  and no scope pointer, and the renewal walk revives no lapsed name and keeps
+  its cursor back, though it still renews the live records.
   A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve
@@ -192,6 +250,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
   The walk enters each folder once for each pass, so a link cycle ends.
+  A visit that finds a name lapsed revives it through the read of its plane
+  (see Revival), and then reads it again: a lapsed folder revives before the
+  walk descends into it, so its subtree renews in the same cycle. A name is
+  lapsed when the fan-out reads it `Absent`, or when the cached copy the read
+  admitted is past its EOL and the fan-out reads `Absent`. A visit that
+  revives does not count toward the 500 visits; the recovery pace bounds it.
   A pass that meets a transient failure (a transport error, a 401 after the
   refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
   failed PUT or a store error) keeps the stored cursor, so the next pass
@@ -1065,8 +1129,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
   Consequence 4). A published create, delete or content edit stays queued as a
-  kept op, with a sealed note of its scope root, write epoch and publish time,
-  until the live root of its write scope shows it (ADR 0069). Every other op
+  kept op, with a sealed note of its scope root, write epoch, publish time and
+  the folder it wrote under, until the live root of its write scope shows it
+  (ADR 0069). The note is format version 2; a version 1 note reads with no
+  folder. Every other op
   kind leaves at its publish. With no flip, a kept op waits at its write epoch
   for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
@@ -1079,7 +1145,15 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. A delete whose node the base does not hold still leaves at T. A
+  it. At a flip, a kept delete whose note names its folder waits for one
+  read of that folder at its live name, which the drain makes before the
+  rebase: a live node applies the delete again, and a node gone ends the op
+  with no notice. A folder that a read of this session at the live parent
+  name shows its old parent no longer names ends the op at once. A base that does not hold the folder
+  shows nothing, so with no such read the op waits for a pass that reads the
+  folder, or leaves at T. A kept delete under a scope this device can no
+  longer write takes the keyless charge below, also when the base does not
+  hold its folder. A
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
@@ -1478,8 +1552,11 @@ rebases and signs above.
   deleted.
 - Reclaimed bytes after a flip: a version delete or a prune that the flip
   loses leaves a history that names bytes this writer already retired. A kept
-  hard delete that leaves at T with no read of its folder leaves a child ref
-  whose record is retired.
+  hard delete whose note names no folder and that leaves at T with no read
+  of its folder leaves a child ref whose record is retired.
+- Kept delete under a moved ancestor: a later writer that moves an ancestor
+  of a kept delete's folder, in the scope or to another scope, makes the
+  folder read as gone, and the delete leaves while its node is alive (ADR 0069 D6).
 
 ## Pointer planes
 

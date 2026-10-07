@@ -256,6 +256,9 @@ pub fn hold_if_unchanged(
 /// - the **vault settings record** and the **bin index**, from their loads and
 ///   their confirmed publishes.
 ///
+/// A revival (`net::revival`) holds nothing here: a revived name enters only
+/// through one of these paths, whose read raises the floor to the revival.
+///
 /// The set is session memory: it starts empty, is never persisted, and is
 /// cleared at teardown, so a session keeps alive only what it proved current
 /// itself. Every other name of the vault renews through the renewal walk

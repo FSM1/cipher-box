@@ -23,6 +23,10 @@ type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>, Option<EndpointId>)
 /// to answer with the record (`None` for no record), and the record.
 type SwappedRecords = HashMap<String, (usize, usize, Option<Vec<u8>>)>;
 
+/// For each routing key: the GETs to answer from the store after its PUT, and
+/// the record every GET then answers with (`None` for no record).
+type ServedAfterPut = HashMap<String, (usize, Option<Vec<u8>>)>;
+
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
 /// record bytes per configured endpoint, holding the **highest sequence** at
 /// each routing key as a real endpoint does ([`supersedes`]).
@@ -70,6 +74,12 @@ pub struct InMemoryRecordStore {
     /// Records held back until a PUT lands
     /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
     deferred: Arc<Mutex<DeferredRecords>>,
+    /// Routing keys whose GET fails once a PUT under them lands
+    /// ([`fail_gets_after_put`](InMemoryRecordStore::fail_gets_after_put)).
+    failing_after_put: Arc<Mutex<HashSet<String>>>,
+    /// Records every GET under a routing key serves once a PUT under it lands
+    /// ([`serve_after_put`](InMemoryRecordStore::serve_after_put)).
+    served_after_put: Arc<Mutex<ServedAfterPut>>,
     /// Whether every PUT is acked and discarded
     /// ([`drop_puts`](InMemoryRecordStore::drop_puts)).
     dropping_puts: Arc<AtomicBool>,
@@ -108,6 +118,8 @@ impl InMemoryRecordStore {
             gets: Arc::new(Mutex::new(HashMap::new())),
             puts: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
+            failing_after_put: Arc::default(),
+            served_after_put: Arc::default(),
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
             stalling_keys: Arc::default(),
@@ -159,9 +171,46 @@ impl InMemoryRecordStore {
             .push((routing_key.to_owned(), record, endpoint));
     }
 
+    /// Refuse every GET under `routing_key` once a PUT under it lands: the
+    /// read after a publish fails.
+    pub fn fail_gets_after_put(&self, routing_key: &str) {
+        self.failing_after_put
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
+    }
+
+    /// Once a PUT under `routing_key` lands and `answered` more GETs under it
+    /// answer, answer every GET under it with `record` (`None` serves no
+    /// record), until [`serve_gets_for_after`](Self::serve_gets_for_after)
+    /// replaces it: the endpoints lose a publish after its confirm read, or
+    /// serve an older record again.
+    pub fn serve_after_put(&self, routing_key: &str, answered: usize, record: Option<Vec<u8>>) {
+        self.served_after_put
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), (answered, record));
+    }
+
     /// Install whatever [`seed_record_after_put`](Self::seed_record_after_put)
     /// filed under `routing_key`.
     fn release_deferred(&self, routing_key: &str) {
+        let served = self
+            .served_after_put
+            .lock()
+            .expect("lock")
+            .remove(routing_key);
+        if let Some((answered, record)) = served {
+            self.serve_gets_for_after(routing_key, answered, usize::MAX, record);
+        }
+        if self
+            .failing_after_put
+            .lock()
+            .expect("lock")
+            .remove(routing_key)
+        {
+            self.fail_get_for(routing_key);
+        }
         let released = self.deferred.lock().expect("lock").remove(routing_key);
         for (key, record, only) in released.unwrap_or_default() {
             for endpoint in &self.endpoints {
@@ -170,6 +219,19 @@ impl InMemoryRecordStore {
                 }
             }
         }
+    }
+
+    /// Drop the record at `routing_key` from every endpoint, as a lapse past
+    /// the EOL does, and return the one the first endpoint held.
+    pub fn lapse(&self, routing_key: &str) -> Option<Vec<u8>> {
+        let mut inner = self.inner.lock().expect("lock");
+        let lapsed = inner
+            .get(&self.endpoints[0])
+            .and_then(|records| records.get(routing_key).cloned());
+        for records in inner.values_mut() {
+            records.remove(routing_key);
+        }
+        lapsed
     }
 
     /// Test-side read, bypassing the seam (publish observation).
@@ -311,12 +373,16 @@ impl InMemoryRecordStore {
             .insert((endpoint.clone(), routing_key.to_owned()));
     }
 
-    /// Restore `routing_key`'s GET path.
+    /// Restore `routing_key`'s GET path at every endpoint.
     pub fn heal_get_for(&self, routing_key: &str) {
         self.get_failing_keys
             .lock()
             .expect("lock")
             .remove(routing_key);
+        self.get_failing_at
+            .lock()
+            .expect("lock")
+            .retain(|(_, key)| key != routing_key);
     }
 
     /// How many GETs this store has been asked for at `routing_key`, across

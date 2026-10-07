@@ -555,6 +555,23 @@ pub async fn repoint_regression<F: FloorStore>(
     .await
 }
 
+/// The durable floor a vault-pointer re-point would roll back at the cold
+/// start's bar ([`ReadBar::Vouched`]), with no write.
+pub async fn vouched_regression<F: FloorStore>(
+    floors: &F,
+    repoint: &RepointObject,
+    session_root_scope_id: &[u8; 16],
+) -> SeamResult<Option<FloorRegression>> {
+    regression_below(
+        floors,
+        repoint,
+        session_root_scope_id,
+        PointerPlane::VaultPointer,
+        ReadBar::Vouched,
+    )
+    .await
+}
+
 /// Which durable value the read-epoch stage of a regression check compares a
 /// vouched `minReadEpoch` with.
 #[derive(Clone, Copy)]

@@ -67,7 +67,9 @@ use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use super::register::register;
+use super::renewal_walk::{OWED_UNREAD_NO_REVIVAL, RenewalSeams};
 use super::retire::{retire, root_retire_ready};
+use super::revival::{RecoveryPace, ReviveError, ReviveRequest, ScopePointerRead, revive_name};
 use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
 use crate::content::dag::decode_root;
@@ -75,7 +77,10 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row, saturating_count};
+use crate::facade::{
+    Event, NodeId, emit_revival_failures, emit_trust_violation, report_unattested_row,
+    saturating_count,
+};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, PendingAdoption, RejectionReason, floor,
@@ -6274,6 +6279,14 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub payload_version: u64,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub on_access_misses: &'a OnAccessMisses,
+    /// The names the drain is publishing right now, which no revival signs.
+    pub publishing: &'a RefCell<BTreeSet<String>>,
+    /// The session's recovery pace, which each revival waits for.
+    pub pace: &'a RecoveryPace,
+    /// The scopes whose owed rotation entry is within its bound, whose
+    /// pointer no revival signs (ADR 0063 D4). `None` when the owed rotation
+    /// record does not read, so no pointer revives.
+    pub owed: Option<&'a BTreeSet<[u8; 16]>>,
 }
 
 /// Hold every scope pointer this owner session owns for renewal.
@@ -6300,6 +6313,9 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
 /// nothing after it. A retryable failure leaves the latch open, and the next
 /// tick walks again.
 ///
+/// A scope the walk proves whose pointer reads `Absent` revives from the
+/// recovery endpoint before it is held (ADR 0062 D3).
+///
 /// Returns the scopes this pass consulted. A consult can raise a scope's durable
 /// write-epoch floor, which retires a seed a cache cell still holds, so the
 /// caller pairs the pass with the same floor refresh the focus tick pairs its
@@ -6309,11 +6325,11 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
 ) -> Vec<[u8; 16]>
 where
     K: OwnerScopeKeys + OwnerPointerSign,
-    T: RecordTransport,
+    T: RecordTransport + Clone + 'static,
     H: Http,
     C: CredentialStore,
     F: FloorStore,
-    Sch: Scheduler,
+    Sch: Scheduler + Clone + 'static,
     E: Entropy,
     S: SnapshotCache,
 {
@@ -6394,6 +6410,7 @@ where
         frontier = next;
     }
     let mut consulted_scopes = Vec::new();
+    let owed_unread_reported = Cell::new(false);
     for scope_id in scopes {
         // The flip's own entry is the fresher one, and the liveness pass drops a
         // superseded entry before this runs rather than replaces it here.
@@ -6407,6 +6424,21 @@ where
         match consult.run(pass.transport, pass.floors, &scope_id).await {
             Ok(consulted) => {
                 consulted_scopes.push(scope_id);
+                let consulted = match consulted {
+                    None => {
+                        match revive_scope_pointer(&pass, &consult, scope_id, &owed_unread_reported)
+                            .await
+                        {
+                            Ok(revived) => revived,
+                            // A later pass can revive it: the latch stays open.
+                            Err(retryable) => {
+                                complete &= !retryable;
+                                None
+                            }
+                        }
+                    }
+                    consulted => consulted,
+                };
                 if let Some(consulted) = consulted {
                     enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
                 }
@@ -6417,6 +6449,76 @@ where
     }
     pass.walked.set(complete);
     consulted_scopes
+}
+
+/// Revive the lapsed pointer of the owned scope `scope_id` through
+/// `open_repoint` and the pointer bar, then consult it again. A device with
+/// no floor for the scope revives it too (ADR 0062 D5). `Ok(None)` when there
+/// is nothing to revive; `Err` with whether a later pass can revive the
+/// pointer or read it back. An owed rotation record that does not read is
+/// reported once for each pass, through `owed_unread_reported`.
+async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
+    pass: &ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
+    consult: &PointerConsult<'_>,
+    scope_id: [u8; 16],
+    owed_unread_reported: &Cell<bool>,
+) -> Result<Option<ConsultedPointer>, bool>
+where
+    K: OwnerScopeKeys + OwnerPointerSign,
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let name = pass.keys.pointer_name(&scope_id);
+    // The owed rotation work ends, or its record reads, on a later pass.
+    let Some(owed) = pass.owed else {
+        if !owed_unread_reported.replace(true) {
+            let _ = pass.events.unbounded_send(Event::RenewalFailed {
+                routing_key: name.as_str().to_owned(),
+                detail: OWED_UNREAD_NO_REVIVAL.to_owned(),
+            });
+        }
+        return Err(true);
+    };
+    if owed.contains(&scope_id) {
+        return Err(true);
+    }
+    let signer = pass.keys.pointer_signer(&scope_id);
+    let read = ScopePointerRead {
+        consult: PointerConsult {
+            scope_keys: consult.scope_keys,
+            owner_identity: consult.owner_identity,
+            payload_version: consult.payload_version,
+        },
+        floors: pass.floors,
+        scope_id,
+    };
+    let seams = RenewalSeams {
+        transport: pass.transport,
+        floors: pass.floors,
+        scheduler: pass.scheduler,
+        profile: pass.profile,
+        publishing: pass.publishing,
+    };
+    let request = ReviveRequest {
+        name: &name,
+        signer: Some(&signer),
+        plane: read,
+    };
+    let result = revive_name(pass.api, &seams, pass.pace, request).await;
+    let retryable = result.as_ref().err().map(ReviveError::is_retryable);
+    emit_revival_failures(pass.events, [(name.as_str().to_owned(), result)]);
+    if let Some(retryable) = retryable {
+        return Err(retryable);
+    }
+    match consult.run(pass.transport, pass.floors, &scope_id).await {
+        Ok(Some(consulted)) => Ok(Some(consulted)),
+        // The revival signed: a later pass reads it back.
+        Ok(None) | Err(PointerConsultError::Unavailable) => Err(true),
+        Err(PointerConsultError::Rejected) => Err(false),
+    }
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -17118,6 +17220,26 @@ mod tests {
         keys: &K,
         walked: &Cell<bool>,
     ) -> Vec<[u8; 16]> {
+        run_enrolment_owing(harness, keys, walked, &BTreeSet::new())
+    }
+
+    /// [`run_enrolment_walking`] while each scope in `owed` owes rotation work.
+    fn run_enrolment_owing<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+        owed: &BTreeSet<[u8; 16]>,
+    ) -> Vec<[u8; 16]> {
+        run_enrolment_with_owed(harness, keys, walked, Some(owed))
+    }
+
+    /// `owed` is `None` when the owed rotation record does not read.
+    fn run_enrolment_with_owed<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+        owed: Option<&BTreeSet<[u8; 16]>>,
+    ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
             owner_seed_cache: None,
             api: &harness.api,
@@ -17138,6 +17260,9 @@ mod tests {
             payload_version: PAYLOAD_VERSION,
             walked,
             on_access_misses: &harness.on_access_misses,
+            publishing: &RefCell::default(),
+            pace: &RecoveryPace::default(),
+            owed,
         }))
     }
 
@@ -17152,6 +17277,238 @@ mod tests {
             stage_pointer_at(&harness, scope_id, &repoint_at(scope_id, OWNER_ROOT_EPOCH));
         }
         (harness, child)
+    }
+
+    /// A scope the enrolment proves whose pointer lapsed revives from the
+    /// recovery endpoint before it is held, at `S + 1` with the same value
+    /// (ADR 0062 D3), and not while the scope owes rotation work (ADR 0063 D4).
+    #[test]
+    fn a_lapsed_scope_pointer_revives_unless_its_scope_owes_rotation_work() {
+        for owed in [BTreeSet::from([CHILD_SCOPE]), BTreeSet::new()] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(pointer.as_str().to_owned(), lapsed.clone());
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &Cell::new(false), &owed);
+
+            let served = harness
+                .store
+                .record_at(&harness.store.endpoints()[0], pointer.as_str());
+            let held = harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE));
+            if owed.is_empty() {
+                let lapsed = IpnsRecord::unmarshal(&lapsed)
+                    .unwrap()
+                    .verify(&pointer)
+                    .unwrap();
+                let served = IpnsRecord::unmarshal(&served.expect("the pointer revived"))
+                    .unwrap()
+                    .verify(&pointer)
+                    .unwrap();
+                assert_eq!(served.sequence, lapsed.sequence + 1);
+                assert_eq!(served.value, lapsed.value, "the sealed block unchanged");
+                assert!(held, "the consult after the revival holds the pointer");
+            } else {
+                assert_eq!(served, None, "an owed scope revives nothing");
+                assert!(!held);
+            }
+        }
+    }
+
+    /// Rotation debt that does not read is unknown debt: no scope pointer
+    /// revives, the pass reports it once, and the latch stays open. The pass
+    /// after the record reads revives the pointer.
+    #[test]
+    fn an_unread_owed_record_revives_no_scope_pointer() {
+        let (harness, _) = owner_session_over_a_clean_tree();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        for scope_id in [CHILD_SCOPE, GRANDCHILD_SCOPE] {
+            let name = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
+            let lapsed = harness.store.lapse(name.as_str()).expect("staged");
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(name.as_str().to_owned(), lapsed);
+        }
+        let walked = Cell::new(false);
+
+        run_enrolment_with_owed(&harness, &OwnerSeeds, &walked, None);
+        let reports = harness
+            .events()
+            .into_iter()
+            .filter(|event| {
+                matches!(event, Event::RenewalFailed { detail, .. }
+                    if detail == OWED_UNREAD_NO_REVIVAL)
+            })
+            .count();
+        assert_eq!(reports, 1, "one report for each pass, not for each scope");
+        let served = || {
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], pointer.as_str())
+        };
+        assert_eq!(served(), None, "no revival signs");
+        assert!(!walked.get(), "the latch stays open");
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(
+            served().is_some(),
+            "the pointer revives once the record reads"
+        );
+        assert!(walked.get());
+    }
+
+    /// A revival that signs but that the consult does not read back keeps the
+    /// enrolment latch open: an unconfirmed PUT, and a read that fails after
+    /// the PUT. After the unconfirmed PUT the next pass holds the pointer.
+    #[test]
+    fn a_revived_pointer_the_consult_does_not_read_back_keeps_the_enrolment_open() {
+        for unconfirmed_put in [true, false] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            let recoverable = || {
+                harness
+                    .blocks
+                    .lock()
+                    .expect("lock")
+                    .insert(pointer.as_str().to_owned(), lapsed.clone());
+            };
+            let held = || {
+                harness
+                    .held
+                    .borrow()
+                    .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE))
+            };
+            recoverable();
+            if unconfirmed_put {
+                harness.store.drop_puts();
+            } else {
+                harness.store.fail_gets_after_put(pointer.as_str());
+            }
+            let walked = Cell::new(false);
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+            assert!(!walked.get(), "the latch stays open");
+            assert!(!held());
+
+            if unconfirmed_put {
+                harness.store.keep_puts();
+                recoverable();
+                run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+                assert!(held(), "the next pass holds the pointer");
+                assert!(walked.get());
+            }
+        }
+    }
+
+    /// Another device revives the pointer while this pass revives it: the
+    /// revival stops as superseded, the latch stays open, and the next pass
+    /// holds the pointer the other device revived.
+    #[test]
+    fn a_superseded_pointer_revival_keeps_the_enrolment_open() {
+        let (harness, _) = owner_session_over_a_clean_tree();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(pointer.as_str().to_owned(), lapsed.clone());
+        let recovered = IpnsRecord::unmarshal(&lapsed)
+            .unwrap()
+            .verify(&pointer)
+            .unwrap();
+        let newer = IpnsRecord::create_v2(
+            &OwnerSeeds.pointer_signer(&CHILD_SCOPE),
+            &recovered.value,
+            recovered.sequence + 1,
+            2_000_000_000,
+            &crate::net::eol::eol_from(harness.world.scheduler.now()),
+        )
+        .marshal();
+        let endpoints = harness.store.endpoints();
+        for endpoint in &endpoints {
+            harness
+                .store
+                .seed_record(endpoint, pointer.as_str(), newer.clone());
+        }
+        // The consult reads the pointer `Absent`; the corroboration reads the
+        // other device's revival.
+        harness
+            .store
+            .serve_gets_for_after(pointer.as_str(), 0, endpoints.len(), None);
+        let walked = Cell::new(false);
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(!walked.get(), "the latch stays open");
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(
+            harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
+            "the next pass holds the other device's pointer"
+        );
+        assert!(walked.get());
+        assert_eq!(
+            harness
+                .store
+                .record_at(&endpoints[0], pointer.as_str())
+                .as_deref(),
+            Some(newer.as_slice()),
+            "this device signed nothing over it"
+        );
+    }
+
+    /// A pointer revival that a later pass can still land keeps the session's
+    /// enrolment latch open: a recovery endpoint that does not answer, and
+    /// owed rotation work that ends. The next pass revives the pointer.
+    #[test]
+    fn a_pointer_revival_that_can_still_land_keeps_the_enrolment_open() {
+        for first_pass_owes in [false, true] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            let walked = Cell::new(false);
+            let owed = if first_pass_owes {
+                harness
+                    .blocks
+                    .lock()
+                    .expect("lock")
+                    .insert(pointer.as_str().to_owned(), lapsed.clone());
+                BTreeSet::from([CHILD_SCOPE])
+            } else {
+                BTreeSet::new()
+            };
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &owed);
+            assert!(!walked.get(), "the first pass leaves the latch open");
+
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(pointer.as_str().to_owned(), lapsed.clone());
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+            assert!(
+                harness
+                    .held
+                    .borrow()
+                    .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
+                "the second pass revives and holds the pointer"
+            );
+            assert!(walked.get(), "and then closes the latch");
+        }
     }
 
     /// The walk exists to find the pointers earlier sessions flipped, and a flip
@@ -17370,13 +17727,34 @@ mod tests {
     }
 
     /// A scope the owner never re-pointed has no pointer record to hold, so the
-    /// enumeration costs a fetch and nothing else.
+    /// enumeration costs one paced recovery fetch and nothing else (ADR 0062
+    /// D5).
     #[test]
     fn a_scope_that_was_never_re_pointed_enrols_no_pointer() {
         let child = vault_root(CHILD_SCOPE, Vec::new());
         let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &child)]);
 
         run_enrolment(&harness, &OwnerSeeds);
+        let recovered: Vec<String> = harness
+            .http
+            .requests()
+            .into_iter()
+            .filter_map(|request| {
+                request
+                    .url
+                    .split_once("/recovery/")
+                    .map(|(_, name)| name.to_owned())
+            })
+            .collect();
+        let child_pointer = OwnerSeeds.pointer_name(&CHILD_SCOPE);
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|name| *name == child_pointer.as_str())
+                .count(),
+            1,
+            "one recovery fetch for the child scope's pointer"
+        );
         assert!(
             harness
                 .held

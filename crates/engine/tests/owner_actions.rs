@@ -2509,9 +2509,364 @@ fn a_delete_the_name_wave_did_not_carry_applies_again_after_the_flip() {
     );
 }
 
+/// A delete that this device publishes in the old tree after the walk, and
+/// that the wave carries back, with no read of its folder at the folder's
+/// live name before the bound. The base no longer holds the node, so the
+/// delete waits past the bound for the drain's own read of that folder, and
+/// then applies again (ADR 0069 D6).
+fn carried_back_delete(fx: &mut GrantScenario) -> (NodeId, NodeId, IpnsName) {
+    let (child, child_name) = write_granted_child(fx);
+    let gone = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "gone");
+    let gone_name = live_child(fx, &child_name, child, "gone");
+    cut_after_a_write_the_walk_misses(fx, &[&child_name, &gone_name], |fx| {
+        block_on(fx.engine.command(Command::Delete { node: gone })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(fx);
+    let moved_child = live_child(fx, &root, fx.folder, "child");
+    assert!(
+        live_names(fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the moved tree carries the node back"
+    );
+    (child, gone, moved_child)
+}
+
+#[test]
+fn a_kept_delete_the_wave_carried_back_waits_past_the_bound_for_its_parent() {
+    let mut fx = GrantScenario::new();
+    let (child, gone, moved_child) = carried_back_delete(&mut fx);
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
+
+    passes_after_the_flip(&mut fx);
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_ops_on(&fx.owner_device, gone)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete waits past the bound for the read of its folder"
+    );
+
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 0, None);
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        !live_names(&fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the read showed the node alive, and the delete applied again"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A kept delete that waits for the read of its folder keeps the folder in
+/// its note across a restart, so the restarted session reaches the same
+/// verdict: the read shows the node alive, and the delete applies again.
+#[test]
+fn a_kept_delete_that_waits_for_its_parent_keeps_its_note_across_a_restart() {
+    let mut fx = GrantScenario::new();
+    let (child, gone, moved_child) = carried_back_delete(&mut fx);
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 10_000, None);
+    passes_after_the_flip(&mut fx);
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+
+    restart_owner(&mut fx);
+    passes_after_the_flip(&mut fx);
+    assert!(
+        queued_ops_on(&fx.owner_device, gone)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the restarted session holds the delete past the bound"
+    );
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_child.as_str(), 0, 0, None);
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        !live_names(&fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the delete applied again"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A kept delete of X in /A/B/X under the granted root, published before a
+/// cut, and a restart. No read of B at its live name answers until the
+/// returned name is served again, so nothing shows that B is gone. Returns
+/// B, X and B's live name.
+fn deep_kept_delete_after_a_cut_and_a_restart(
+    fx: &mut GrantScenario,
+) -> (NodeId, NodeId, IpnsName) {
+    let (a, _) = write_granted_child(fx);
+    let b = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, a, "b");
+    let x = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, b, "x");
+    block_on(fx.engine.command(Command::Delete { node: x })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_ops_on(&fx.owner_device, x)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete is kept"
+    );
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(fx, &mut phone);
+    let (root, _) = live_scope(fx);
+    let a_name = live_child(fx, &root, fx.folder, "child");
+    let b_name = live_child(fx, &a_name, a, "b");
+    fx.world
+        .record_store
+        .serve_gets_for_after(b_name.as_str(), 0, 10_000, None);
+    restart_owner(fx);
+    (b, x, b_name)
+}
+
+/// With no read of B after the restart, nothing shows that B is gone, so
+/// the delete does not leave before the bound.
+#[test]
+fn a_deep_kept_delete_does_not_leave_before_the_bound_with_no_read_of_its_folder() {
+    let mut fx = GrantScenario::new();
+    let (_, x, _) = deep_kept_delete_after_a_cut_and_a_restart(&mut fx);
+
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        queued_ops_on(&fx.owner_device, x)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete waits"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A pass that reads B at its live name after the restart shows X unlinked,
+/// so the delete leaves at once, before the bound, with no notice.
+#[test]
+fn a_deep_kept_delete_leaves_after_a_read_of_its_folder_after_a_restart() {
+    let mut fx = GrantScenario::new();
+    let (b, x, b_name) = deep_kept_delete_after_a_cut_and_a_restart(&mut fx);
+    passes_after_the_flip(&mut fx);
+    assert!(
+        !queued_ops_on(&fx.owner_device, x).is_empty(),
+        "the delete waits for a read of its folder"
+    );
+
+    fx.world
+        .record_store
+        .serve_gets_for_after(b_name.as_str(), 0, 0, None);
+    block_on(fx.engine.command(Command::SetFocus { node: Some(b) })).expect("the focus moves");
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        queued_ops_on(&fx.owner_device, x).is_empty(),
+        "the delete left before the bound"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// The wave copies /A/B/X. In its window, this device deletes X, and a peer
+/// unlinks B at the name A has before the flip. This device reads A at that
+/// name and sees B unlinked. After the flip, that read shows only the old
+/// tree, so the delete stays, and it applies again in the new tree, which
+/// still holds B and X (ADR 0069 D6).
+#[test]
+fn a_kept_delete_stays_when_its_folder_is_unlinked_only_in_the_old_tree() {
+    let mut fx = GrantScenario::new();
+    let (a, a_name) = write_granted_child(&mut fx);
+    let b = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, a, "b");
+    let x = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, b, "x");
+    let b_name = live_child(&fx, &a_name, a, "b");
+    let x_name = live_child(&fx, &b_name, b, "x");
+    let peer_device = fx.world.device(b"the owner's third device");
+    let (mut peer, _peer_events, mut peer_tasks) = boot_owner(&fx.world, &fx.blocks, &peer_device);
+    tick(&fx.world, &peer, &mut peer_tasks);
+    block_on(peer.command(Command::SetFocus { node: Some(b) })).expect("the peer opens B");
+    tick(&fx.world, &peer, &mut peer_tasks);
+    let endpoints = fx.world.record_store.endpoints();
+    let held = [&a_name, &b_name, &x_name];
+    let walked: Vec<_> = held
+        .iter()
+        .map(|name| {
+            fx.world
+                .record_store
+                .record_at(&endpoints[0], name.as_str())
+        })
+        .collect();
+    block_on(fx.engine.command(Command::SetFocus { node: Some(a) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Delete { node: x })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The peer reads B after this device's unlink of X, so its unlink of B
+    // does not lose to that edit.
+    tick(&fx.world, &peer, &mut peer_tasks);
+    block_on(peer.command(Command::Delete { node: b })).expect("the peer's unlink stages");
+    for _ in 0..4 {
+        tick(&fx.world, &peer, &mut peer_tasks);
+    }
+    // This device reads A at its name before the cut, and sees B unlinked.
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    for (name, record) in held.iter().zip(walked) {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, endpoints.len() * 8, record);
+    }
+    // Another device cuts: the peer's own cache holds the B it unlinked.
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(&fx, &mut phone);
+    for name in held {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, 0, None);
+    }
+    let (root, _) = live_scope(&fx);
+    let moved_a = live_child(&fx, &root, fx.folder, "child");
+    let moved_b = live_child(&fx, &moved_a, a, "b");
+    assert!(
+        live_names(&fx, &moved_b, b).contains(&"x".to_owned()),
+        "the new tree holds B and X"
+    );
+
+    passes_after_the_flip(&mut fx);
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        !live_names(&fx, &moved_b, b).contains(&"x".to_owned()),
+        "the delete stayed and applied again in the new tree"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// After the flip, the folder of a kept delete reads at its live name as a
+/// record the gate refuses. The refusal is a trust violation, never a sign
+/// that the node is gone: the halt is charged to the delete, which
+/// dead-letters with a notice at the budget.
+#[test]
+fn a_kept_delete_whose_parent_the_gate_refuses_is_charged_and_never_read_as_gone() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let gone = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "gone");
+    let (root, _) = live_scope(&fx);
+    let child_name = live_child(&fx, &root, fx.folder, "child");
+    let gone_name = live_child(&fx, &child_name, child, "gone");
+    cut_by_demoting_after_a_write_the_walk_misses(
+        &mut fx,
+        &[&child_name, &gone_name],
+        |fx| {
+            block_on(fx.engine.command(Command::Delete { node: gone })).expect("the delete stages");
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        },
+        bystander_identity(),
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+    let moved_child = live_child(&fx, &moved, fx.folder, "child");
+    assert!(
+        live_names(&fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the moved tree carries the node back"
+    );
+    let epoch = decode_envelope(
+        &published_head(&fx.world, &fx.blocks, &moved_child).expect("the moved parent"),
+    )
+    .expect("the head decodes")
+    .epoch;
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: [0xee; 16],
+        scope_id: fx.folder.0,
+        epoch,
+        read_key: &[0x13; 32],
+        nonce: &[0x5e; 24],
+        body: &folder_body(Vec::new()),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted record seals");
+    fx.blocks.put(planted.block.clone());
+    let survivor_seed = survivor_write_seed(&fx);
+    let refused = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&survivor_seed, &child.0).as_bytes()),
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence_at(&fx.world, &moved_child) + 2,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, moved_child.as_str(), refused.clone());
+    }
+    let _ = events_so_far(&mut fx._events);
+
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        !abuse_descriptions(&mut fx._events).is_empty(),
+        "the read is a trust violation"
+    );
+    assert!(
+        queued_ops_on(&fx.owner_device, gone)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete is not read as gone"
+    );
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        queued_ops_on(&fx.owner_device, gone).is_empty(),
+        "the op left the queue"
+    );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert_eq!(
+        status
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "with a notice the member can name"
+    );
+}
+
+/// The folder of a kept delete is gone from the live tree: a later writer
+/// deleted it after the cut. The node went with it, so after the flip the
+/// delete leaves before the bound, with no second apply and no notice.
+#[test]
+fn a_kept_delete_whose_parent_a_later_writer_deleted_leaves_with_no_notice() {
+    let mut fx = GrantScenario::new();
+    let (child, gone, _) = carried_back_delete(&mut fx);
+    let (mut phone, _phone_events, mut phone_tasks) = phone_on(&fx, fx.folder);
+    block_on(phone.command(Command::Delete { node: child })).expect("the phone deletes");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    let (root, _) = live_scope(&fx);
+    assert!(
+        !live_names(&fx, &root, fx.folder).contains(&"child".to_owned()),
+        "the later writer's delete landed"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        queued_ops_on(&fx.owner_device, gone).is_empty(),
+        "the delete left before the bound"
+    );
+    assert!(
+        !live_names(&fx, &root, fx.folder).contains(&"child".to_owned()),
+        "and brought nothing back"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
 /// A delete that the wave carried shows in the moved tree, so it gets no
-/// second apply. The base no longer holds the node, so no check reads it, and
-/// the op leaves at the bound.
+/// second apply. The drain reads the folder at its live name, sees the node
+/// gone, and the op leaves with no notice before the bound (ADR 0069 D6).
 #[test]
 fn a_delete_the_name_wave_carried_gets_no_second_apply() {
     let mut fx = GrantScenario::new();
@@ -2544,14 +2899,12 @@ fn a_delete_the_name_wave_carried_gets_no_second_apply() {
         carried,
         "no second publish"
     );
-    let status = block_on(fx.engine.status()).expect("the session status reads");
-    assert!(status.dead_letters.is_empty(), "and no notice");
-    fx.world.scheduler.advance(KEPT_OP_BOUND);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(
         queued_ops_on(&fx.owner_device, gone).is_empty(),
-        "the delete leaves at the bound"
+        "the delete left after the read, before the bound"
     );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert!(status.dead_letters.is_empty(), "and no notice");
 }
 
 /// A content edit that lands in the old tree after the walk is not in the

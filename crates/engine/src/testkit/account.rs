@@ -243,6 +243,10 @@ pub struct Blocks {
     retire_down: Arc<AtomicBool>,
     /// The blocks whose fetch fails at the transport, as a gateway timeout does.
     failing: Arc<Mutex<BTreeSet<String>>>,
+    /// The record the API's recovery cache holds for each name.
+    recovery: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    /// How many more recovery fetches answer 429, for each name.
+    recovery_throttled: Arc<Mutex<BTreeMap<String, usize>>>,
 }
 
 impl Blocks {
@@ -293,6 +297,25 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(cid.to_owned(), block);
+    }
+
+    /// Hold `record` in the recovery cache for `routing_key`, which the
+    /// recovery endpoint then serves.
+    pub fn cache_for_recovery(&self, routing_key: &str, record: Vec<u8>) {
+        self.recovery
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), record);
+    }
+
+    /// Answer one more recovery fetch for `routing_key` with 429.
+    pub fn throttle_recovery_once(&self, routing_key: &str) {
+        *self
+            .recovery_throttled
+            .lock()
+            .expect("lock")
+            .entry(routing_key.to_owned())
+            .or_default() += 1;
     }
 
     /// Make each fetch of `cid` fail at the transport, as a gateway timeout does.
@@ -501,9 +524,29 @@ impl Blocks {
             let cid = other.unwrap_or(declared);
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
         }
-        // The recovery cache has seen nothing: the vacancy probe first-run
-        // provisioning runs before it mints anything.
-        if url.contains("/recovery/") {
+        // A name the recovery cache has not seen answers 404, as the vacancy
+        // probe first-run provisioning runs before it mints anything expects.
+        if let Some((_, name)) = url.split_once("/recovery/") {
+            let throttled = self
+                .recovery_throttled
+                .lock()
+                .expect("lock")
+                .get_mut(name)
+                .and_then(|left| {
+                    *left = left.checked_sub(1)?;
+                    Some(())
+                })
+                .is_some();
+            if throttled {
+                return Ok(HttpResponse {
+                    status: 429,
+                    headers: Vec::new(),
+                    body: br#"{"statusCode":429}"#.to_vec().into(),
+                });
+            }
+            if let Some(record) = self.recovery.lock().expect("lock").get(name) {
+                return ok(record.clone());
+            }
             return Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),

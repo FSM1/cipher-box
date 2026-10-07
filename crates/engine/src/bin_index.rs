@@ -67,6 +67,21 @@ pub enum BinIndexLoad {
     Empty(DefaultsReason),
 }
 
+/// Whether the durable sequence floor of the bin index reached `min`: the
+/// gated load that resolved it wrote that floor. A load can resolve an older,
+/// expired record that a revival above it superseded, and a write over that
+/// floor would sign a second value at the revived sequence (ADR 0066).
+pub(crate) async fn bin_floor_reaches<F: FloorStore>(
+    floors: &F,
+    keys: &BinIndexKeys,
+    min: u64,
+) -> bool {
+    floors
+        .sequence_floor(keys.name().as_str().as_bytes())
+        .await
+        .is_ok_and(|floor| floor.is_some_and(|floor| floor >= min))
+}
+
 impl BinIndexLoad {
     /// The index a publish may build on, or the reason it may not.
     ///
@@ -198,6 +213,11 @@ impl BinIndexKeys {
     #[must_use]
     pub fn name(&self) -> &IpnsName {
         &self.name
+    }
+
+    /// The signer of the bin index record.
+    pub(crate) fn signer(&self) -> &Ed25519Signer {
+        &self.signer
     }
 
     /// The seed the doomed subtree rooted at `node_id` re-seals under, which is
