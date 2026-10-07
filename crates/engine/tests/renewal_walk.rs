@@ -2208,7 +2208,7 @@ fn a_scope_root_the_gate_rejects_drops_its_queued_folders() {
 fn a_scope_root_whose_recovery_copy_the_gate_rejects_drops_its_queued_folders() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let (name, _folder, engine, mut events, mut tasks) =
+    let (name, folder, engine, mut events, mut tasks) =
         a_queued_folder_in_a_held_cycle(&world, &blocks);
     let root = write_name(ROOT);
     let current = record_at(&world, &root);
@@ -2247,6 +2247,15 @@ fn a_scope_root_whose_recovery_copy_the_gate_rejects_drops_its_queued_folders() 
     tick(&world, &engine, &mut tasks);
     tick(&world, &engine, &mut tasks);
     assert!(unserved(&world, &name), "the rejection dropped the entry");
+
+    block_on(engine.set_focus(Some(folder))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "a read queues the folder again, and the pass revives it",
+    );
 }
 
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a

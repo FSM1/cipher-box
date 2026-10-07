@@ -823,7 +823,8 @@ where
     /// queue can drop it: the base no longer names it, the walk renews no name
     /// in its scope, the gate rejected its scope root, or the visit ended with
     /// no transient failure. The folder's own visit keeps no cursor back; a
-    /// scope root that keeps the entry keeps the cursor as `material` does.
+    /// scope root that keeps the entry keeps the cursor back only where
+    /// `material` does.
     async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) -> bool {
         let named = self
             .guards

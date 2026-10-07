@@ -269,10 +269,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   that no endpoint and no recovery record serves keeps the entry and keeps no
   cursor back. A scope root that is unavailable, or whose revival meets a
   transient failure, keeps the entry and keeps the cursor back, as a cursor
-  visit does. A queued folder whose
-  name the scope root's write seed does not derive waits for its cursor visit.
-  A held pass reports only its queued visits, and the
-  doomed-name journal of a scope that holds a queued folder.
+  visit does. A queued folder whose name the scope root's write seed does not
+  derive waits for its cursor visit. A held pass reports only its queued
+  visits, and the doomed-name journal of a scope that holds a queued folder.
   A pass that meets a transient failure (a transport error, a 401 after the
   refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
   failed PUT or a store error) keeps the stored cursor, so the next pass
