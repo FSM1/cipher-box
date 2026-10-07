@@ -450,7 +450,7 @@ pub(crate) struct SessionState {
     /// the only writer; read by
     /// [`SessionState::named_scope_roots`].
     pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// The root sequences a navigation measures a served scope root against
+    /// The root records a navigation measures a served scope root against
     /// ([`RootSequences`]).
     pub(crate) root_sequences: Rc<RefCell<RootSequences>>,
     /// The conversion entries the last conversion pass counted.

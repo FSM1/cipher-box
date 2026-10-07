@@ -1769,19 +1769,24 @@ where
             Some(child.scope_id),
         )
         .await;
-        let (gated, fork, recovered_after_rejection) = match read {
-            Ok((root, fork)) => (root, fork, false),
+        // The signed `data` comes off the gated bytes: `observed` is `Err` for
+        // an envelope version this build reads but does not author.
+        let (gated, record_data, fork, recovered_after_rejection) = match read {
+            Ok((root, fork)) => (root, pick.data, fork, false),
             Err(RootGateVerdict::OwnerSeedRefused) => {
-                let root = adopter
+                let (root, record_data) = adopter
                     .recover_cached_owner_root(&name)
                     .await
                     .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
-                    .map(|root| GatedScopeRoot::recovered(&name, root))
-                    .filter(|root| root.names_child(Some(child.scope_id)))
+                    .map(|root| {
+                        let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
+                        (GatedScopeRoot::recovered(&name, root), data)
+                    })
+                    .filter(|(root, _)| root.names_child(Some(child.scope_id)))
                     .ok_or(WalkFailure::Rejected {
                         scope_id: child.scope_id,
                     })?;
-                (root, None, true)
+                (root, record_data, None, true)
             }
             Err(verdict) => {
                 return Err(walk_verdict(
@@ -1808,12 +1813,6 @@ where
         } else {
             write
         };
-        let record_data = gated
-            .observed
-            .as_ref()
-            .ok()
-            .and_then(|observed| signed_data(&name, observed.bytes()))
-            .unwrap_or_default();
         Ok((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
@@ -7152,6 +7151,43 @@ mod tests {
             block_on(cache.get(child.name.as_str().as_bytes())).expect("cache read"),
             Some(record_for(&CHILD_SCOPE, &child.head_cid_str, 1)),
             "only a gate pass writes the record cache"
+        );
+    }
+
+    /// A child root at an envelope version this build reads but does not
+    /// author still holds the signed `data` of the record the walk gated.
+    #[test]
+    fn the_walk_holds_the_record_of_a_root_at_another_envelope_version() {
+        let parent_node_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let child = owner_scope_root_at(
+            ENVELOPE_V + 1,
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            OWNER_ROOT_EPOCH,
+            Some(&parent_node_seed),
+            &[],
+            Vec::new(),
+            None,
+        );
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+
+        let proved = harness.walk(&InMemorySnapshotCache::default(), &root);
+
+        let proved = proved.expect("the vault root gates");
+        let descendant = proved
+            .iter()
+            .find(|scope| scope.scope_id == CHILD_SCOPE)
+            .expect("the walk proves the child root");
+        assert_eq!(
+            Some(&descendant.record_data),
+            signed_data(
+                &child.name,
+                &record_for(&CHILD_SCOPE, &child.head_cid_str, 1)
+            )
+            .as_ref(),
         );
     }
 
