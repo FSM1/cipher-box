@@ -6027,6 +6027,12 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut verdicts) = self.state.received_verdicts.try_borrow_mut() {
             verdicts.clear();
         }
+        if let Ok(mut pins) = self.state.withheld_pins.try_borrow_mut() {
+            pins.clear();
+        }
+        if let Ok(mut pins) = self.state.pointer_pins.try_borrow_mut() {
+            pins.clear();
+        }
         if let Ok(mut sharers) = self.state.grafted_sharers.try_borrow_mut() {
             sharers.clear();
         }

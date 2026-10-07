@@ -9835,6 +9835,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            withheld: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -9867,6 +9868,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            withheld: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -9904,6 +9906,7 @@ mod tests {
                 absent: false,
                 observed: None,
                 envelope: None,
+                withheld: false,
                 committed_floor: None,
             },
             &refused_name(),

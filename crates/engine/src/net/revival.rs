@@ -555,7 +555,7 @@ impl<H: Http, F: FloorStore, S: SnapshotCache> PlaneRead for ChildRead<'_, H, F,
         .await
         {
             Ok(ChildRecord::Admitted(read)) => Admitted::gated(read.observed, self.bar),
-            Ok(ChildRecord::Absent)
+            Ok(ChildRecord::Absent | ChildRecord::Withheld)
             | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => Err(PlaneRefusal::Unavailable),

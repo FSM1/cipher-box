@@ -39,9 +39,9 @@ use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
 use crate::net::rotation::ScopeWritePlane;
 use crate::net::{
-    DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
-    OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter,
-    ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
+    DescendantScopeRoot, FolderRefresh, FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial,
+    HeldRecords, OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved,
+    RootAdopter, ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
     resolve_and_hold,
 };
 use crate::rotation::scope_material::ScopeMaterial;
@@ -79,6 +79,7 @@ use crate::sync::rebase::{DropReason, QueueScanMemo, enclosing_scope_root, repla
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::render::BaseSnapshot;
+use crate::sync::staleness::PinPass;
 use crate::sync::tick::{
     ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, focus_scope_roots, nodes_in_scope,
@@ -132,6 +133,8 @@ struct Pass {
     contact_label_seed: SecretBytes,
     bin_keys: Rc<BinIndexKeys>,
     settings_signer: Rc<Ed25519Signer>,
+    /// The root adopt reconciled ([`PinPass::root_reconciled`]).
+    root_reconciled: bool,
 }
 
 /// The passes one tick drains, owned for the drain that borrows them.
@@ -375,6 +378,12 @@ where
         self.consult_scope_pointers(state, &mut pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
+        pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
+            matches!(
+                resolved.outcome,
+                ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
+            )
+        });
         let recovered_root = resolved
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
@@ -423,6 +432,7 @@ where
             contact_label_seed,
             bin_keys,
             settings_signer,
+            root_reconciled: false,
         })
     }
 
@@ -807,6 +817,12 @@ where
         // files stay queued for the pass that can.
         let mut folder_verdict = RefreshVerdict::Reconciled;
         let mut attempted_files: Vec<NodeId> = Vec::new();
+        let pins = PinPass {
+            now: pass.now,
+            root_reconciled: pass.root_reconciled,
+            profile: &self.seams.profile,
+            events: &self.seams.events,
+        };
         let scopes = ScopeSets {
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
@@ -846,6 +862,11 @@ where
                 .or_default();
         }
         let scope_roots = state.bookmarked_scope_roots.borrow().clone();
+        let focus_targets: Vec<NodeId> = by_scope
+            .values()
+            .flat_map(|targets| targets.folders.iter().chain(&targets.files).copied())
+            .collect();
+        let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
         let legs = ScopeLegContext {
             floors: &self.seams.floors,
             sharers: grafted,
@@ -890,7 +911,11 @@ where
                 mode: pass.mode,
                 observed_at: pass.now.0,
             };
-            let mut settle = |nodes: &[NodeId], report| {
+            let mut settle = |nodes: &[NodeId], report: FolderRefreshReport| {
+                for (name, read) in &report.pins {
+                    pins.observe_in(&mut state.withheld_pins.borrow_mut(), name, *read, true);
+                    read_pins.insert(name.clone());
+                }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(
                     &state.observed_unlinks,
                     &state.focus_refreshed,
@@ -952,6 +977,17 @@ where
             .borrow_mut()
             .open_files
             .retain(|row| !attempted_files.contains(&row.node));
+        // A hold lives while this pass read its name or the name stays in
+        // the focus window.
+        let mut in_focus = focus_names(
+            &state.snapshot.borrow(),
+            focus_targets.into_iter(),
+            state.focus.borrow().folders_in_view(),
+        );
+        in_focus.append(&mut read_pins);
+        pins.retain_in(&mut state.withheld_pins.borrow_mut(), |name| {
+            in_focus.contains(name)
+        });
         (folder_verdict, scopes)
     }
 
@@ -1484,6 +1520,7 @@ where
             contact_label_seed: &pass.contact_label_seed,
             list_lock: &state.received_shares_lock,
             mode: pass.mode,
+            root_reconciled: pass.root_reconciled,
         }
         .refresh(
             &self.seams.staging,
@@ -1499,6 +1536,7 @@ where
                 scope_roots: &state.bookmarked_scope_roots,
                 permissions: &state.bookmarked_permissions,
                 claims: &state.grafted_claims,
+                pointer_pins: &state.pointer_pins,
                 root_sequences: &state.root_sequences,
                 events: &self.seams.events,
             },
@@ -1507,6 +1545,22 @@ where
         )
         .await;
     }
+}
+
+/// The record names of the focus window: each node a leg targets, and each
+/// node a folder in view lists.
+fn focus_names(
+    base: &Snapshot,
+    targets: impl Iterator<Item = NodeId>,
+    in_view: impl Iterator<Item = NodeId>,
+) -> BTreeSet<Vec<u8>> {
+    let listed: Vec<NodeId> = in_view
+        .flat_map(|folder| base.children(folder).into_iter().map(|child| child.id))
+        .collect();
+    targets
+        .chain(listed)
+        .filter_map(|node| base.node(node)?.ipns_name.clone())
+        .collect()
 }
 
 /// The interior scope the **first** queued op that names one needs
