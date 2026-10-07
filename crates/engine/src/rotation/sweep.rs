@@ -217,7 +217,9 @@ impl core::fmt::Display for SweepResolveFailure {
         match self {
             Self::Rejected => f.write_str("record rejected by adoption gate"),
             Self::Unavailable => f.write_str("record unavailable"),
-            Self::Superseded => f.write_str("scope root superseded: record below its own floor"),
+            Self::Superseded => f.write_str(
+                "scope root superseded: a record below its own floor, or a root the pointer moved",
+            ),
             Self::ConflictingChildLabel => {
                 f.write_str("node id reached with conflicting ipnsName labels")
             }
