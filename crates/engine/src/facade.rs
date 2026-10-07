@@ -9296,7 +9296,9 @@ where {
                 Some(lost_a_race) => {
                     !lost_a_race
                         && current.read_sequence
-                            <= sequences.held(&parent_scope.scope.ipns_name).unwrap_or(0)
+                            <= sequences
+                                .held(&parent_scope.scope.ipns_name)
+                                .map_or(0, |held| held.sequence)
                 }
             };
             if let Some(promoted) = &published_root
@@ -10957,8 +10959,8 @@ where {
     /// it brings into view. Navigation is the tick model's second trigger source
     /// (#33 D2): the newly focused chain refreshes now rather than a poll cadence
     /// later, and only past the staleness threshold — a repeat visit renders the
-    /// state already held. A scope whose root moved past the sequence the last
-    /// walk gated and past this device's own confirmed publish, or whose root
+    /// state already held. A scope whose served root is not the held root
+    /// record or one below it ([`Self::scope_root_moved`]), or whose root
     /// probe has no answer, reads nothing here; the next tick reads it. Each
     /// root is probed once per navigation.
     ///
@@ -11151,11 +11153,12 @@ where {
         self.state.boundary_walk_landed.get()
     }
 
-    /// Whether the plane serves `scope`'s root above the sequence held at its
-    /// name ([`crate::session::RootSequences`]): a grant in that record can
-    /// name a scope root the legs would read as a plain child. The name is the
-    /// one the last walk or graft gated, else `name`. A moved root reads nothing until
-    /// the next walk. The sequence floor is no proof of a walk, as a gated
+    /// Whether the plane serves `scope`'s root above the record held at its
+    /// name, or another record at its sequence
+    /// ([`crate::session::RootSequences`]): a grant in that record can name a
+    /// scope root the legs would read as a plain child. The name is the one
+    /// the last walk or graft gated, else `name`. A moved root reads nothing
+    /// until the next walk. The sequence floor is no proof of a walk, as a gated
     /// read outside a walk raises it, so it bars only a replay: a served
     /// record below it, or a floor store with no answer, also counts as moved.
     /// An unavailable plane counts as moved; an absent record names no scope.
@@ -11176,7 +11179,12 @@ where {
             Some(name) => match fanout_get_classified(&self.record_transport, name).await {
                 FanoutRecord::Found(served, _) => {
                     let name = name.as_str().as_bytes();
-                    self.state.root_sequences.borrow().held(name) < Some(served.sequence)
+                    !self
+                        .state
+                        .root_sequences
+                        .borrow()
+                        .held(name)
+                        .is_some_and(|held| held.holds(&served))
                         || floor::check_sequence(
                             floors,
                             name,
@@ -22277,12 +22285,28 @@ mod focus_access_tests {
         block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
         assert!(moved(&floored), "a floor at the served sequence is no walk");
 
-        engine
-            .state
-            .root_sequences
-            .borrow_mut()
-            .note_walk([(FOLDER, name.clone(), 2)]);
-        assert!(!moved(&floored), "the walk gated the served sequence");
+        let held = |value: &[u8]| {
+            crate::session::HeldRoot::from(
+                IpnsRecord::create_v2(&signer, value, 2, 2_000_000_000, "2099-01-01T00:00:00Z")
+                    .verify(&name)
+                    .expect("the record verifies"),
+            )
+        };
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            held(b"/ipfs/bafkqaab"),
+        )]);
+        assert!(
+            moved(&floored),
+            "another record at the walked sequence is a fork"
+        );
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            held(b"/ipfs/bafkqaaa"),
+        )]);
+        assert!(!moved(&floored), "the walk gated the served record");
         let failing = InMemoryFloorStore::default();
         failing.fail_floor_reads();
         assert!(
