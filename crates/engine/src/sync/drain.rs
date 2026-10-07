@@ -3114,19 +3114,7 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
-        // A rename, a move or a restore does not make its node again or carry
-        // its content, so it never expires an earlier op on that node.
-        let last_on: BTreeMap<NodeId, OpId> = scan
-            .mine
-            .iter()
-            .filter(|(_, op)| {
-                matches!(
-                    op.kind,
-                    OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
-                )
-            })
-            .map(|(op_id, op)| (op.target, *op_id))
-            .collect();
+        let overtaken = overtaken_by_a_later_op(&scan.mine);
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.dequeue_op(op_id).await?;
@@ -3167,13 +3155,9 @@ where
                                 .await?;
                         }
                     }
-                    // A later op of this device on the same node decides what
-                    // that node shows, so a check of this one would undo it.
                     // With no result, a check cannot tell a later write.
                     if gone
-                        || last_on
-                            .get(&op.target)
-                            .is_some_and(|last| *last != op_id && !needs_result(&op.kind))
+                        || overtaken.contains(&op_id)
                         || (needs_result(&op.kind) && note.result.is_none())
                     {
                         KeptVerdict::Expired
@@ -9905,6 +9889,28 @@ fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
         ) => parent,
         _ => op.target,
     }
+}
+
+/// The ops of `queue` that a later op of this device on the same node
+/// decides, so a check of them would undo it: each op under a later create,
+/// delete or bin restore, which makes or removes the node, and a content edit
+/// under a later content edit (ADR 0069 D6).
+fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeSet<OpId> {
+    let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
+    let mut overtaken = BTreeSet::new();
+    for (op_id, op) in queue.iter().rev() {
+        let edit = matches!(op.kind, OpKind::UpdateContent { .. });
+        let (made, edited) = later.entry(op.target).or_default();
+        if *made || (edit && *edited) {
+            overtaken.insert(*op_id);
+        }
+        *made |= matches!(
+            op.kind,
+            OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::Restore { .. }
+        );
+        *edited |= edit;
+    }
+    overtaken
 }
 
 /// Whether the drain reads the anchor of a kept op itself: the folder its

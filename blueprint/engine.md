@@ -1145,7 +1145,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   history names its version. A rename or a move reads the folders its result
   names at their live names, and a version restore reads its file's live
   record: a node that shows the result or another value ends the op with no
-  apply, and one that shows the value before applies it again. A second apply that a rebase or a permanent halt
+  apply, and one that shows the value before applies it again. The check of
+  a later op compares with the value that an earlier op of this device in
+  the queue sets. A second apply that a rebase or a permanent halt
   refuses leaves with no notice; a charged halt is charged, and the op
   dead-letters with a notice once its attempt budget is spent. A pass that
   cannot check the op, because the walk did not prove its root (a gate-refused
@@ -1549,7 +1551,9 @@ rebases and signs above.
   write (ADR 0069).
 - Kept ops over a later writer: a later writer who sets the value from
   before a kept rename, move or version restore looks like a lost op, and the
-  op applies again over that write. A create, a delete and a content edit do
+  op applies again over that write. Over a chain of such ops, the whole
+  chain applies again when the later writer sets the value from before the
+  first op. A create, a delete and a content edit do
   not record their result, so the check cannot tell a lost op from a later
   change. A kept create links again
   a node that a later writer deleted, with its initial content. A kept edit
