@@ -1009,7 +1009,7 @@ where
         );
         Ok(match recent {
             Some(OnAccessMiss::Absent) => None,
-            Some(OnAccessMiss::Vouched(root)) => Some(*root),
+            Some(OnAccessMiss::Vouched { root, .. }) => Some(*root),
             Some(OnAccessMiss::Rejected) => return Err(rejected()),
             None => PointerConsult {
                 scope_keys: self.scope_keys,

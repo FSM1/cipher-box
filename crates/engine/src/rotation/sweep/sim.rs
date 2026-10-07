@@ -107,6 +107,9 @@ pub(crate) struct NetState {
     /// resolved `after` times — a node an early pass reached and a later one
     /// cannot.
     pub(crate) delayed_node_faults: HashMap<[u8; 16], (SweepResolveFailure, u32)>,
+    /// Per-node resolve faults for the first `until` resolves only — a node
+    /// that other work re-seals between passes.
+    pub(crate) clearing_node_faults: HashMap<[u8; 16], (SweepResolveFailure, u32)>,
     /// Nodes a concurrent mint turns into a descendant scope root once they have
     /// already been resolved `after` times — interior to an early pass, a
     /// boundary to a later one.
@@ -191,6 +194,20 @@ impl FakeNet {
 
     pub(crate) fn node_fault(self, byte: u8, reason: SweepResolveFailure) -> Self {
         self.state.borrow_mut().node_faults.insert(id(byte), reason);
+        self
+    }
+
+    /// Refuse `byte` for its first `until` resolves, then serve it.
+    pub(crate) fn node_fault_until(
+        self,
+        byte: u8,
+        until: u32,
+        reason: SweepResolveFailure,
+    ) -> Self {
+        self.state
+            .borrow_mut()
+            .clearing_node_faults
+            .insert(id(byte), (reason, until));
         self
     }
 
@@ -335,6 +352,11 @@ impl SweepResolver for FakeNet {
         }
         if let Some((reason, after)) = state.delayed_node_faults.get(&child.node_id)
             && served > *after
+        {
+            return Err(*reason);
+        }
+        if let Some((reason, until)) = state.clearing_node_faults.get(&child.node_id)
+            && served <= *until
         {
             return Err(*reason);
         }

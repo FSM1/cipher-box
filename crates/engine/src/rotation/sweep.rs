@@ -217,7 +217,9 @@ impl core::fmt::Display for SweepResolveFailure {
         match self {
             Self::Rejected => f.write_str("record rejected by adoption gate"),
             Self::Unavailable => f.write_str("record unavailable"),
-            Self::Superseded => f.write_str("scope root superseded: record below its own floor"),
+            Self::Superseded => f.write_str(
+                "scope root superseded: a record below its own floor, or a root the pointer moved",
+            ),
             Self::ConflictingChildLabel => {
                 f.write_str("node id reached with conflicting ipnsName labels")
             }
@@ -233,7 +235,8 @@ impl SweepResolveFailure {
     /// Whether re-running the pass could clear this: an availability stall, or a
     /// C2 conflict the write-rotation re-point wave repairs. A rejection is a
     /// trust violation, and a `Superseded` that survives the consult means the
-    /// re-pointed record is below the floor too.
+    /// re-pointed record is below the floor too, or the pointer moved the root
+    /// again inside the consult interval.
     fn is_retryable(self) -> bool {
         matches!(self, Self::Unavailable | Self::ConflictingChildLabel)
     }
@@ -360,8 +363,8 @@ pub struct SweepOutcome {
     /// into, so a caller that needs the subtree proven converged (grant
     /// creation) refuses on a non-empty list rather than reading an `Ok` outcome
     /// as complete. The reason rides along because a trust rejection and an
-    /// availability stall are not the same answer: only the latter is worth
-    /// another pass.
+    /// availability stall are not the same answer
+    /// ([`worth_another_pass`](Self::worth_another_pass)).
     pub unreachable: Vec<([u8; 16], SweepResolveFailure)>,
     /// Scope roots the walk encountered that were missing from the scope's
     /// direct-child-scope index, repaired into it and **durably published** —
@@ -374,10 +377,10 @@ pub struct SweepOutcome {
 
 impl SweepOutcome {
     /// Whether re-running the idempotent pass could still convert something: a
-    /// lost race whose winner may not have advanced the epoch or repaired the
-    /// index, or a node the pass could not read for a reason a retry clears. A
-    /// node no seed opens and a record the gate refused are settled — another
-    /// pass answers identically.
+    /// lost race, a node the pass could not read for a reason a retry clears,
+    /// or a settled residual beside a node this pass moved, since owed rotation
+    /// work can re-seal that residual between passes. A pass that moves nothing
+    /// and leaves only a settled residual settles the scope.
     pub(crate) fn worth_another_pass(&self) -> bool {
         self.index_repair_lost_race
             || !self.dropped_lost_race.is_empty()
@@ -385,6 +388,13 @@ impl SweepOutcome {
                 .unreachable
                 .iter()
                 .any(|(_, reason)| reason.is_retryable())
+            || (!self.converged.is_empty() && !self.unreachable.is_empty())
+    }
+
+    /// The read epoch a one-pass outcome settles its scope at, or `None` while
+    /// another round is worth running.
+    pub(crate) fn settled_epoch(&self) -> Option<u64> {
+        (!self.worth_another_pass()).then_some(self.scope_read_epoch)
     }
 
     /// The interior nodes this outcome does not prove at
