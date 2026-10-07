@@ -12,13 +12,14 @@ use core::cell::RefCell;
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use cipherbox_core::ipns::IpnsName;
 use futures_channel::mpsc;
 
 use crate::facade::{Event, MAX_FOCUS_FILES, NodeId, NodeKind};
 use crate::net::FolderRefreshReport;
+use crate::net::renewal_walk::{LapsedFolder, queue_lapsed_folder};
 use crate::net::rotation::scope_name;
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::within;
@@ -641,6 +642,7 @@ pub(crate) fn queue_focus_file(
 /// depart, stamp what it attempted, and announce a base it moved.
 pub(crate) fn settle_focus_leg(
     observed_unlinks: &RefCell<Vec<UnlinkedChild>>,
+    lapsed_folders: &RefCell<VecDeque<LapsedFolder>>,
     focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
     events: &mpsc::UnboundedSender<Event>,
     nodes: &[NodeId],
@@ -648,6 +650,9 @@ pub(crate) fn settle_focus_leg(
     now: UnixMillis,
 ) -> RefreshVerdict {
     hold_captures(observed_unlinks, report.departed);
+    for folder in report.lapsed {
+        queue_lapsed_folder(lapsed_folders, folder);
+    }
     stamp_focus_refreshed(focus_refreshed, nodes, now);
     if report.changed {
         let _ = events.unbounded_send(Event::SnapshotUpdated);
