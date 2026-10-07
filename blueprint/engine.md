@@ -246,9 +246,14 @@ bytes (FSM1/cipher-box-next#28 D2).
   revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
-  and reports that it restored the server copy (D5). A session makes at most
-  25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
-  for each account; a fetch over the pace waits for the next slot. The adoption gate
+  and reports that it restored the server copy (D5). The settings record
+  carries a bearer credential, so a device revives it only when it holds a
+  floor equal to the recovered sequence; that read alone sets the EOL rule
+  aside, and any other device takes the ADR 0034 ladder (D4). A session
+  makes at most 25 recovery fetches a minute, below the `recovery` throttle
+  of 30 a minute for each account; a fetch over the pace waits for the next
+  slot. The recovery fetch of a floorless settings save (see "Vault settings
+  load") is one fetch for each user save, outside that pace. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
@@ -400,7 +405,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
-  (`publish_bin_index`, `publish_settings_above`), the name sequence of a
+  (`publish_bin_index`, `publish_settings`), the name sequence of a
   value this device signed in a liveness renewal, after `Published`
   (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more
@@ -511,10 +516,17 @@ its degraded outcome applies a different policy rather than showing stale data.
   record the network serves, including one captured before the member rotated
   a BYO `access_token` the engine would then present as a bearer credential.
   The lapse degrades through the last-known-good path like every other
-  reason. The encode side needs no matching guard: the EOL is `now + 90 days`
-  off the injected clock, so a publish structurally cannot mint an
+  reason. The one exception is the revival read on a device whose floor
+  equals the recovered sequence (ADR 0062 D4, "Revival" above). The encode
+  side needs no matching guard: the EOL is `now + 90 days` off the injected
+  clock, so a publish structurally cannot mint an
   already-expired record.
-- **A save signs above a lapsed or unreadable record.** When the load reports
+- **A save signs above a lapsed or unreadable record.** A save on a device
+  with no floor also signs above the recovery endpoint's record, verified
+  under the settings name, so it does not publish at sequence 1 and an older
+  device does not report `RolledBack`. It signs above the higher of that
+  record and the record the load verified. A 404 answer means no record; a
+  429, another failure, or bytes that do not verify refuse the save. When the load reports
   `Expired` or `Unreadable` for a record that verified under the account's own
   settings key, a save signs above that record's sequence, and the floor rises
   only on a confirm. A body that a newer release wrote refuses the save
@@ -979,7 +991,14 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   brings the next pass forward immediately and resolves it nocache, and reports
   back what that pass reconciled (ADR 0044). Any other cached folder refreshes
   on access past the staleness threshold — no background churn over the whole
-  tree; cached shared scopes consult their scope pointer on access.
+  tree; cached shared scopes consult their scope pointer on access. The
+  navigation probes the root of each scope it reads under first, at the name
+  the last walk or graft gated, else at the name the leg holds. When that root
+  moved past the sequence the walk or graft gated and past this device's own
+  confirmed publish at that name, or sits below the sequence floor (a replay),
+  or the probe or the floor store has no answer, it reads nothing for that
+  scope and the next tick reads. The floor bars a replay only: a gated read
+  outside a walk raises it.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is
@@ -1175,7 +1194,8 @@ never persist the superseded name that caused it (ADR 0041). Sweeps re-seal
 metadata only; content bytes are never re-encrypted by any rotation path
 (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment
 (FSM1/cipher-box-next#26 handed it to FSM1/cipher-box-next#33, which did not fix
-it): the sweep runs as an idle-cadence Scheduler job; idempotence plus CAS make
+it): the sweep runs as an idle-cadence Scheduler job (each run that returns
+an outcome reports `sweepConvergence`, in "Triggers"); idempotence plus CAS make
 concurrent sweepers safe — a lost race drops that node from the work-list on
 re-resolve.
 
@@ -1376,6 +1396,14 @@ Each drop emits `nodeDropped` with the scope root, the node id and the cause
 lands. A removed second ref emits nothing. The command or the re-drive that
 drops a node returns `Ok`. The event is a best-effort notice: a host that does
 not listen at the time of the wave gets no notice, and the tree shows the drop.
+
+The rotation progress events carry times from `Scheduler::now` only:
+
+- `nameWaveStarted` (scope root, time): a write cut starts its name wave.
+- `nameWaveProgress` (scope root, moved, total, time): sent once for each node, the root last. A node that a resumed wave already moved counts too.
+- `nameWaveEnded` (scope root, interior nodes, dropped nodes, time): the re-point landed and the old names retired. A wave that stops sends no end: `rotationWorkOwed` is its terminal event.
+- `sweepConvergence` (scope root, read epoch, old-epoch nodes, cut time, last re-seal time, time): sent at the end of each sweep run that returns an outcome. A failed run sends none. A count of zero old-epoch nodes means that the scope converged. A count that is not zero is a lower bound.
+- The facade keeps the cut time and the last re-seal time for each scope in session memory only. Each cut, once its epoch floor is durable, sets the cut time of its scope and clears a re-seal time of an older epoch. A run below the cut epoch sets no re-seal time, and a cut below the stored cut epoch does not change the times. A restart clears both.
 
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)

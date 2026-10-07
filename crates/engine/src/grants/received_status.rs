@@ -42,6 +42,7 @@ use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
 };
+use crate::session::RootSequences;
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
@@ -140,6 +141,9 @@ pub(crate) struct ScopeRender<'a> {
     /// The withheld-update hold on each held bookmark's scope pointer, by
     /// pointer name.
     pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
+    /// The sequence this pass gated at each grafted root, which a navigation
+    /// measures that root against.
+    pub root_sequences: &'a RefCell<RootSequences>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -239,6 +243,12 @@ fn report_refusal(
 fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRender<'_>) {
     let share = open.share;
     let root = NodeId(share.scope_id);
+    if let Ok(name) = scope_name(&share.scope_root_name) {
+        render
+            .root_sequences
+            .borrow_mut()
+            .note_grafted(root, &name, open.sequence);
+    }
     let scope_roots = render.scope_roots.borrow();
     let mut base = render.base.borrow_mut();
     let split = GraftedPlane {
@@ -2532,6 +2542,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
+                        root_sequences: &RefCell::default(),
                         events,
                     },
                     UnixMillis(at_millis),
@@ -3514,6 +3525,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
+                        root_sequences: &RefCell::default(),
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -3892,6 +3904,7 @@ mod tests {
                 permissions: &permissions,
                 claims: &claims,
                 pointer_pins: &pointer_pins,
+                root_sequences: &RefCell::default(),
                 events: &events,
             },
         );

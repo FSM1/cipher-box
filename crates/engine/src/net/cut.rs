@@ -20,7 +20,7 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
-use crate::facade::{Event, NodeId};
+use crate::facade::{Event, NodeId, saturating_count};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
@@ -94,6 +94,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// Builds the lazy-wave sweep task the read cascade enqueues once its cut is
     /// durable, over the scope reference the cascade read the root at.
     pub sweep: &'a dyn Fn(ChildScopeRef) -> BoxedTask,
+    /// Notes each scope whose read cut the cascade made durable.
+    pub cut_durable: &'a dyn Fn([u8; 16], u64),
     /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
     pub bound: &'a dyn NodeBound,
     /// When the root fallback falls back ([`RootWait`]).
@@ -323,6 +325,7 @@ where
                 section,
             })
             .await
+            .map(drop)
             .map_err(|error| CascadeError::Publish {
                 scope_id: scope_root.0,
                 error,
@@ -406,6 +409,7 @@ where
                     carried_history_links: &current.carried_history_links,
                 },
                 || (self.sweep)(scope.clone()),
+                self.cut_durable,
             )
             .await
         })
@@ -426,6 +430,10 @@ where
             reason,
         };
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
+        let _ = self.events.unbounded_send(Event::NameWaveStarted {
+            scope_root,
+            at: self.scheduler.now(),
+        });
         let outcome = self
             .bounded(async || {
                 // Re-read after the read arm: a full revoke re-keyed the scope, and
@@ -524,6 +532,12 @@ where
                 cause: dropped.cause,
             });
         }
+        let _ = self.events.unbounded_send(Event::NameWaveEnded {
+            scope_root,
+            interior_nodes: saturating_count(outcome.interior_node_count),
+            dropped: saturating_count(outcome.dropped.len()),
+            at: self.scheduler.now(),
+        });
         Ok(outcome)
     }
 }

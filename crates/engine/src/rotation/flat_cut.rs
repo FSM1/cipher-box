@@ -128,16 +128,18 @@ where
     // walk down before the cut rather than after keeps a failed one from leaving
     // material a later pass would seal under.
     arm.walked_epochs.borrow_mut().remove(&scope_root);
-    flat_root_cut(
+    let outcome = flat_root_cut(
         &net,
         None,
         FlatCut {
             scope: &scope,
             ascent: ascent.as_deref(),
-            make_sweep: || sweep(scope.clone(), ascent.clone()),
+            make_sweep: || (sweep.task)(scope.clone(), ascent.clone()),
         },
     )
-    .await
+    .await?;
+    (sweep.cut)(scope.scope_id, outcome.new_read_epoch);
+    Ok(outcome)
 }
 
 /// The flat read-plane root cut, over one already-assembled owner net: gate the

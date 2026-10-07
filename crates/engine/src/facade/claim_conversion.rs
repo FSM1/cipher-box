@@ -22,6 +22,7 @@ use crate::grants::{
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
 use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
+use crate::session::RootSequences;
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -187,6 +188,7 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(crate) profile: &'a SyncTimingProfile,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
+    pub(crate) root_sequences: &'a RefCell<RootSequences>,
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     pub(crate) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
@@ -495,7 +497,8 @@ where
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
-            sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
+            sweep: &|scope| (sweep.task)(scope, target.parent_node_seed.clone()),
+            cut_durable: &*sweep.cut,
             bound,
             root_wait: if command {
                 RootWait::Command
@@ -878,7 +881,7 @@ where
             .iter()
             .any(|delivery| delivery.outcome == ClaimOutcome::Granted)
         {
-            publish_edited_set(
+            let published = publish_edited_set(
                 &net,
                 self.entropy,
                 self.enc_secret,
@@ -887,6 +890,7 @@ where
                 &commitment_sig,
             )
             .await?;
+            self.root_sequences.borrow_mut().note_own(&published);
         }
         // The record carries every row now. An entry settles once its
         // pointer lands, and until then the pointer alone is posted again.
@@ -1047,6 +1051,7 @@ where
         parent_net
             .publish_scope_root(&resealed)
             .await
+            .map(drop)
             .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 

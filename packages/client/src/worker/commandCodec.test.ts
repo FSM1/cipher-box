@@ -68,6 +68,25 @@ describe('readEvent', () => {
     expect(readEvent(known)).toBe(known);
   });
 
+  it('passes the name wave and the sweep convergence events through', () => {
+    const scopeRoot = new Uint8Array(16).fill(5);
+    const events: EventDescriptor[] = [
+      { kind: 'nameWaveStarted', scopeRoot, at: 1n },
+      { kind: 'nameWaveProgress', scopeRoot, moved: 1, total: 3, at: 2n },
+      { kind: 'nameWaveEnded', scopeRoot, interiorNodes: 2, dropped: 0, at: 3n },
+      {
+        kind: 'sweepConvergence',
+        scopeRoot,
+        readEpoch: 2n,
+        oldEpochNodes: 0,
+        cutAt: 1n,
+        lastResealAt: null,
+        at: 4n,
+      },
+    ];
+    for (const event of events) expect(readEvent(event)).toBe(event);
+  });
+
   it('fails closed on a staleness level this build does not know', () => {
     expect(() => readEvent(skewed({ kind: 'stalenessChanged', staleness: 'frozen' }))).toThrow(
       'unknown WASM staleness: frozen'

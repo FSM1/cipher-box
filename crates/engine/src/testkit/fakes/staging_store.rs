@@ -15,6 +15,7 @@ struct Inner {
     fail_staged_keys: bool,
     fail_staged_reads_under: Option<Vec<u8>>,
     fail_staged_removals_under: Option<Vec<u8>>,
+    fail_staged_writes_at: Option<Vec<u8>>,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
@@ -39,6 +40,7 @@ impl Default for Inner {
             fail_staged_keys: false,
             fail_staged_reads_under: None,
             fail_staged_removals_under: None,
+            fail_staged_writes_at: None,
             fail_remove_op: false,
             enqueue_budget: None,
             staged_write_budget: None,
@@ -107,6 +109,18 @@ impl InMemoryStagingStore {
     /// `prefix`, and keep the bytes.
     pub fn fail_staged_removals_under(&self, prefix: &[u8]) {
         self.inner.lock().expect("lock").fail_staged_removals_under = Some(prefix.to_vec());
+    }
+
+    /// Makes every `put_staged_bytes` at `staging_key` return a seam error, and
+    /// keep the bytes there, until [`heal_staged_writes`](Self::heal_staged_writes).
+    pub fn fail_staged_writes_at(&self, staging_key: &[u8]) {
+        self.inner.lock().expect("lock").fail_staged_writes_at = Some(staging_key.to_vec());
+    }
+
+    /// Writes every staged key again after
+    /// [`fail_staged_writes_at`](Self::fail_staged_writes_at).
+    pub fn heal_staged_writes(&self) {
+        self.inner.lock().expect("lock").fail_staged_writes_at = None;
     }
 
     /// Makes `remove_op` return a seam error without dropping the record, so
@@ -319,7 +333,9 @@ impl StagingStore for InMemoryStagingStore {
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
         let parks = {
             let mut inner = self.inner.lock().expect("lock");
-            if interrupts(&mut inner.staged_write_budget, staging_key) {
+            if inner.fail_staged_writes_at.as_deref() == Some(staging_key)
+                || interrupts(&mut inner.staged_write_budget, staging_key)
+            {
                 return Err(SeamError::new("put_staged_bytes unavailable"));
             }
             if interrupts(&mut inner.destructive_write_budget, staging_key) {

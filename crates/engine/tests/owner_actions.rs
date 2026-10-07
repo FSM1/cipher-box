@@ -69,7 +69,8 @@ use cipherbox_engine::sync::owed_rotation::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
-    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_scoped_key, owner_tag,
+    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, doomed_journal_key,
+    owner_scoped_key, owner_tag, scope_exit_debt_key, seal_owed_cuts,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
@@ -3946,6 +3947,78 @@ fn a_node_a_write_grant_moved_bins_on_a_device_that_holds_its_old_name() {
     assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write, false);
 }
 
+/// A second owner device that loaded the folder's subtree, then read nothing
+/// while the owner's first device ran a write grant's name wave over it.
+fn idle_through_a_write_grant(
+    fx: &mut GrantScenario,
+) -> (NodeId, Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (inner, _) = nested_subtree(fx);
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    for node in [fx.folder, inner] {
+        block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
+        tick(&fx.world, &second, &mut tasks);
+    }
+    block_on(second.command(Command::SetFocus { node: None })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    events_so_far(&mut events);
+    (inner, second, events, tasks)
+}
+
+/// Navigate `engine` to `node`, then run four ticks.
+fn navigate_and_settle(
+    fx: &GrantScenario,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    node: NodeId,
+) {
+    block_on_while_ticking(
+        engine.command(Command::SetFocus { node: Some(node) }),
+        tasks,
+    )
+    .unwrap();
+    for _ in 0..4 {
+        tick(&fx.world, engine, tasks);
+    }
+}
+
+/// A navigation into the granted subtree, before any walk names the granted
+/// root, reads no honest record as abuse.
+#[test]
+fn a_navigation_below_a_root_another_device_granted_reports_no_abuse() {
+    let mut fx = GrantScenario::new();
+    let (inner, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    navigate_and_settle(&fx, &mut second, &mut tasks, inner);
+    assert_eq!(abuse_descriptions(&mut events), Vec::<String>::new());
+}
+
+/// A navigation to the granted root itself reads no honest record as abuse.
+#[test]
+fn a_navigation_to_a_root_another_device_granted_reports_no_abuse() {
+    let mut fx = GrantScenario::new();
+    let (_, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    let folder = fx.folder;
+    navigate_and_settle(&fx, &mut second, &mut tasks, folder);
+    assert_eq!(abuse_descriptions(&mut events), Vec::<String>::new());
+}
+
+/// A granted root whose head fails its content address is still abuse.
+#[test]
+fn a_malformed_root_another_device_granted_is_still_abuse() {
+    let mut fx = GrantScenario::new();
+    let (_, mut second, mut events, mut tasks) = idle_through_a_write_grant(&mut fx);
+    corrupt_published_head(&fx, &fx.granted_scope_repoint().current_root);
+    let folder = fx.folder;
+    navigate_and_settle(&fx, &mut second, &mut tasks, folder);
+    assert!(abuse_events(&mut events) > 0, "the rejection is reported");
+}
+
 /// A vault-scope writer unlinks `deep` from `keep`.
 fn unlink_from_keep(fx: &GrantScenario, keep: NodeId, deep: NodeId) {
     concurrent_edit(
@@ -7603,6 +7676,223 @@ fn a_relink_the_grant_overtook_still_re_seals_and_cuts() {
     );
 }
 
+/// The overtaken relink of [`a_relink_the_grant_overtook_still_re_seals_and_cuts`],
+/// with the device stopped after the source-remove confirms and before the
+/// crossing commits. Answers the granted scope's read epoch before the stop.
+/// The caller boots the device again with [`resume`].
+fn stop_an_overtaken_relink_before_its_commit() -> (GrantScenario, u64) {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("an intra-scope relink queues");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "the grant leaves the relink queued as it was journaled"
+    );
+    converge_into_granted_scope(&fx, holiday);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    let mark = owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET));
+    let staging = fx.owner_device.staging_store.inner();
+    staging.park_after_staged_write(&mark);
+    for _ in 0..2 {
+        if !staging.holds_parked_write() {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+    }
+    assert!(
+        staging.holds_parked_write(),
+        "the source-remove confirmed and the pass stopped at its mark"
+    );
+    // The stop: the pass and its session go.
+    fx._tasks.clear();
+    staging.release_parked_write();
+    (fx, before)
+}
+
+/// Boot the stopped device again.
+fn resume(fx: &mut GrantScenario) -> EventStream {
+    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.engine = engine;
+    fx._tasks = tasks;
+    events
+}
+
+/// Whether the device's raw queue still holds a relocation. The published-op
+/// mark hides a published op from [`FakeDevice::pending_ops`], so this reads
+/// the queue itself.
+fn relink_queued(device: &FakeDevice) -> bool {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .iter()
+        .any(|(_, op)| op.relocation().is_some())
+}
+
+/// Whether `events` told the member that `scope_root` still owes a cut.
+fn tells_cut_owed(events: &mut EventStream, scope_root: NodeId) -> bool {
+    events_so_far(events).iter().any(|event| {
+        matches!(event, Event::ScopeExitCutOwed { scope_root: owed, .. } if *owed == scope_root)
+    })
+}
+
+/// On resume the op leaves the queue with no publish left to prove the planes
+/// from, so the crossing is derived again from the scope roots the resumed
+/// session lists.
+#[test]
+fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
+    resume(&mut fx);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "the stop came before the cut"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    assert!(
+        !relink_queued(&fx.owner_device),
+        "the resumed session dropped the published relink"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and still cut the scope it left"
+    );
+}
+
+/// A cut an earlier session owed and could not land stands in the durable
+/// record. The resumed session owes the relink's cut before any settle reads
+/// that record, and the earlier debt must survive the write.
+#[test]
+fn an_earlier_sessions_owed_cut_survives_a_resumed_relinks_cut() {
+    const EARLIER: NodeId = NodeId([0x9d; 16]);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let enc_secret = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(77));
+    let sealed = seal_owed_cuts(
+        BookkeepingSeal::new(&enc_secret, &entropy),
+        &BTreeSet::from([EARLIER]),
+    )
+    .expect("the debt seals");
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&scope_exit_debt_key(&enc_secret), &sealed),
+    )
+    .expect("the debt persists");
+
+    let mut events = resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "the relink's cut landed"
+    );
+    assert!(
+        tells_cut_owed(&mut events, EARLIER),
+        "and the earlier debt is still owed"
+    );
+}
+
+/// The op is the only thing that names the cut until the debt is durable, so a
+/// refused debt write keeps it queued for the next pass, and an op that drains
+/// past it in the meantime must not carry the drained mark over it.
+#[test]
+fn a_refused_debt_write_keeps_the_resumed_relink_queued() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let debt = scope_exit_debt_key(&kdf::enc_subkey(&SECRET));
+    let staging = fx.owner_device.staging_store.inner().clone();
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
+    staging.fail_staged_writes_at(&debt);
+
+    resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the refused write kept the relink queued"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "and owed no cut that is not durable"
+    );
+    // The kept ops around the relink expire, and a later rename publishes and
+    // leaves while the write is still refused, so the drained mark reaches as
+    // far as the relink lets it.
+    let later = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Rename {
+        node: later,
+        new_name: "renamed".into(),
+    }))
+    .expect("the rename queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the relink outlived the ops around it"
+    );
+
+    staging.heal_staged_writes();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !relink_queued(&fx.owner_device),
+        "the next pass owed the cut and dropped it"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and the cut landed"
+    );
+}
+
+/// A boundary the resumed session knows but has not proved still owes its cut:
+/// owing one needs only the boundary, and the cut waits for the material.
+#[test]
+fn a_resumed_relink_out_of_an_unproved_scope_still_owes_its_cut() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let source = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(source.as_str());
+
+    let mut events = resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        tells_cut_owed(&mut events, fx.folder),
+        "the cut is owed while the scope is unproved"
+    );
+
+    fx.world.record_store.heal_get_for(source.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and lands once the scope is proved"
+    );
+}
+
 /// The crossing every relocation on this device's durable queue carries, in
 /// queue order.
 fn queued_crossings(device: &FakeDevice) -> Vec<ScopeCrossing> {
@@ -9089,6 +9379,475 @@ fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
         .find(|child| child.id == doc)
         .and_then(|child| child.size);
     assert_eq!(size, Some(200), "the navigation read the file's version");
+}
+
+/// Write 200 bytes to `target` on `engine`, then run three ticks.
+fn commit_doc(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    target: WriteTarget,
+) {
+    let handle = block_on(engine.begin_write(target, 200)).expect("a write opens");
+    block_on(engine.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
+    block_on(engine.commit_write(handle)).expect("the write commits");
+    for _ in 0..3 {
+        tick(world, engine, tasks);
+    }
+}
+
+/// A second owner device writes 200 bytes to `doc`.
+fn write_doc_on_second_device(fx: &GrantScenario, doc: NodeId) {
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the second device opens the folder");
+    tick(&fx.world, &second, &mut second_tasks);
+    commit_doc(
+        &fx.world,
+        &mut second,
+        &mut second_tasks,
+        WriteTarget::Version {
+            node: doc,
+            expected_version: None,
+        },
+    );
+}
+
+fn painted_size(fx: &GrantScenario, doc: NodeId) -> Option<u64> {
+    block_on(fx.engine.snapshot(fx.folder))
+        .expect("the folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == doc)
+        .and_then(|child| child.size)
+}
+
+/// This device's own edit of a scope set moves that scope root past the last
+/// walk. The navigation still reads at once.
+#[test]
+fn a_navigation_right_after_an_own_scope_set_edit_reads_the_scope() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    write_doc_on_second_device(&fx, doc);
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read the file's version"
+    );
+}
+
+/// A second owner device grants `inner` to the second recipient, then writes
+/// `doc.bin` of 200 bytes in it. Answers the file's id.
+fn grant_inner_on_second_device(fx: &GrantScenario, inner: NodeId) -> NodeId {
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the second device opens the folder");
+    block_on(second.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(second.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &second, &mut second_tasks);
+    }
+    write_doc_in(&fx.world, &mut second, &mut second_tasks, inner)
+}
+
+/// The size `engine` paints for `file` in `folder`.
+fn size_in(engine: &Engine<FakeSeamTypes>, folder: NodeId, file: NodeId) -> Option<u64> {
+    block_on(engine.snapshot(folder))
+        .ok()?
+        .children
+        .into_iter()
+        .find(|child| child.id == file)
+        .and_then(|child| child.size)
+}
+
+/// Navigate this device to `inner`, which another owner device granted after
+/// the last walk, and check that the navigation reads nothing there and sends
+/// no abuse event, and that one tick paints the file.
+fn navigate_into_the_new_root(fx: &mut GrantScenario, inner: NodeId, doc: NodeId) {
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&fx.engine, inner, doc),
+        None,
+        "the navigation read nothing"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&fx.engine, inner, doc),
+        Some(200),
+        "the tick read the file"
+    );
+}
+
+/// A grant by another owner device makes a folder inside a descendant scope a
+/// scope root of its own. A navigation into it before the next walk reads
+/// nothing and sends no abuse event; the next tick reads.
+#[test]
+fn a_navigation_after_a_grant_by_another_device_sends_no_abuse_event() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = grant_inner_on_second_device(&fx, inner);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// A write grant moves the scope root to a fresh name, and the walk adopts it
+/// at a low sequence. Sequences this device published at the old name do not
+/// hold the fresh one, so a grant by another owner device there still skips
+/// the navigation's reads.
+#[test]
+fn a_navigation_after_a_name_wave_and_a_grant_by_another_device_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done),
+        "the write grant moves the scope root to a fresh name"
+    );
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let doc = grant_inner_on_second_device(&fx, inner);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// Another owner device grants a folder, then this device grants another one
+/// over that publish before a walk, and repeats that grant. The own publish
+/// does not hold the root, and the repeat raises the floor at the root without
+/// a walk. A navigation into the first folder reads nothing and sends no abuse
+/// event.
+#[test]
+fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let doc = grant_inner_on_second_device(&fx, folder);
+    let grant_other = |fx: &mut GrantScenario| {
+        block_on(fx.engine.command(Command::Grant {
+            node: other,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        }))
+    };
+    assert_eq!(grant_other(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(
+        grant_other(&mut fx),
+        Ok(CommandOutcome::Done),
+        "the repeat lands"
+    );
+
+    navigate_into_the_new_root(&mut fx, folder, doc);
+}
+
+/// Inside a granted folder, another owner device grants `inner` inside `outer`
+/// after this device read the records, and the grant surfaces once this device
+/// PUTs at `surfaces_after` (`outer` or `inner`). The handover of this
+/// device's grant of `outer` then stalls on evidence of that edit, so the
+/// promoted root holds no value, and a navigation into `inner` reads nothing
+/// and sends no abuse event.
+fn assert_a_stall_over_a_concurrent_grant_holds_no_value(surfaces_after: &str) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let names = [write_name(folder), write_name(inner)];
+    let trigger = match surfaces_after {
+        "outer" => write_name(outer),
+        _ => write_name(inner),
+    };
+    let store = &fx.world.record_store;
+    let read_at: Vec<(EndpointId, &IpnsName, Vec<u8>)> = store
+        .endpoints()
+        .into_iter()
+        .flat_map(|endpoint| {
+            names.iter().map(move |name| {
+                let record = store.record_at(&endpoint, name.as_str()).expect("a record");
+                (endpoint.clone(), name, record)
+            })
+        })
+        .collect();
+    let doc = grant_inner_on_second_device(&fx, inner);
+    let edited: Vec<(&IpnsName, Vec<u8>)> = names
+        .iter()
+        .map(|name| {
+            let record = store
+                .record_at(&store.endpoints()[0], name.as_str())
+                .expect("an edited record");
+            (name, record)
+        })
+        .collect();
+    for (endpoint, name, record) in read_at {
+        store.seed_record(&endpoint, name.as_str(), record);
+    }
+    for (name, record) in edited {
+        store.seed_record_after_put(trigger.as_str(), name.as_str(), record);
+    }
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: outer,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "{surfaces_after}"
+    );
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![outer],
+        "{surfaces_after}: the handover stalled"
+    );
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// The other device's grant surfaces after this device re-seals `inner`, so
+/// the handover loses a race.
+#[test]
+fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("inner");
+}
+
+/// The other device's grant surfaces after the promotion and before the
+/// interior read, so the handover finds an interior node that no longer
+/// converges, before any interior PUT.
+#[test]
+fn a_navigation_after_a_grant_handover_whose_interior_did_not_converge_reads_nothing() {
+    assert_a_stall_over_a_concurrent_grant_holds_no_value("outer");
+}
+
+/// Inside a granted folder, another owner device grants a folder inside a
+/// folder, then this device grants the outer folder before a walk. The
+/// promoted root names the inner scope root, which this device's sets do not
+/// hold, so a navigation into the inner folder reads nothing and sends no
+/// abuse event.
+#[test]
+fn a_promoted_root_over_another_devices_grant_does_not_hold_the_root() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = grant_inner_on_second_device(&fx, inner);
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: outer,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// An upload into the vault root republishes the vault root. The navigation
+/// right after it still reads the vault scope.
+#[test]
+fn a_navigation_right_after_an_upload_into_the_vault_root_reads_at_once() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    write_doc_on_second_device(&fx, doc);
+    block_on(fx.engine.command(Command::SetFocus { node: None }))
+        .expect("the root takes the focus");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = write_name(ROOT);
+    let before = sequence_at(&fx.world, &root);
+    let handle = block_on(fx.engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "top.bin".into(),
+        },
+        50,
+    ))
+    .expect("a new file write opens");
+    block_on(fx.engine.push_chunk(handle, &[9u8; 50])).expect("the bytes stage");
+    block_on(fx.engine.commit_write(handle)).expect("the file commits");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        sequence_at(&fx.world, &root) > before,
+        "the upload republished the vault root"
+    );
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read the file"
+    );
+}
+
+/// Write `doc.bin` of 200 bytes into `parent` on `engine` and answer its id.
+fn write_doc_in(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    parent: NodeId,
+) -> NodeId {
+    commit_doc(
+        world,
+        engine,
+        tasks,
+        WriteTarget::NewFile {
+            parent,
+            name: "doc.bin".into(),
+        },
+    );
+    block_on(engine.view())
+        .expect("a rendered view")
+        .children(parent)
+        .into_iter()
+        .find(|row| row.name == "doc.bin")
+        .expect("the file is listed")
+        .id
+}
+
+/// A recipient navigates into a subfolder of a received share. The pass that
+/// grafted the share gated its root, so the navigation reads at once and sends
+/// no abuse event.
+#[test]
+fn a_navigation_into_a_received_share_reads_at_once() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let sub = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "sub");
+    let doc = write_doc_in(&fx.world, &mut fx.engine, &mut fx._tasks, sub);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (mut grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        size_in(&grantee, sub, doc),
+        None,
+        "no leg read the file yet"
+    );
+
+    events_so_far(&mut events);
+    block_on(grantee.command(Command::SetFocus { node: Some(sub) }))
+        .expect("the grantee opens the subfolder");
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        size_in(&grantee, sub, doc),
+        Some(200),
+        "the navigation read the file"
+    );
+}
+
+/// A navigation to a folder the base does not hold yet lists down to it and
+/// then refreshes the window. It reads the vault root's record once.
+#[test]
+fn a_navigation_to_an_unlisted_folder_probes_the_root_once() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    let (mut second, _second_events, _second_tasks) = fx.second_owner_device();
+    let root = write_name(ROOT);
+    let before = fx.world.record_store.get_count(root.as_str());
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus");
+    assert!(
+        block_on(second.snapshot(inner)).is_ok(),
+        "the navigation listed down to the folder"
+    );
+    assert_eq!(
+        fx.world.record_store.get_count(root.as_str()) - before,
+        fx.world.record_store.endpoints().len(),
+        "one fan-out read of the root"
+    );
+
+    let before = fx.world.record_store.get_count(root.as_str());
+    block_on(second.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the folder takes the focus again");
+    assert_eq!(
+        fx.world.record_store.get_count(root.as_str()),
+        before,
+        "a repeat visit with nothing due reads no root"
+    );
+}
+
+/// A probe of a scope root with no answer reads nothing for that scope and
+/// sends no abuse event. The next tick reads.
+#[test]
+fn a_navigation_whose_root_probe_has_no_answer_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    write_doc_on_second_device(&fx, doc);
+
+    let root = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(root.as_str());
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_ne!(
+        painted_size(&fx, doc),
+        Some(200),
+        "the navigation read nothing"
+    );
+
+    fx.world.record_store.heal_get_for(root.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert_eq!(painted_size(&fx, doc), Some(200), "the tick read the file");
 }
 
 /// A tick whose walk does not answer must not read the record of a scope root
@@ -21093,4 +21852,213 @@ fn command_on(
             None
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Rotation progress: the name wave and the sweep report on the engine clock
+// ---------------------------------------------------------------------------
+
+/// A write revoke reports its name wave: one start, one progress event per
+/// node with the root last, and one end, each at the virtual clock's time.
+#[test]
+fn a_write_revoke_reports_each_node_of_its_name_wave_and_the_end() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    fx.world.scheduler.advance(Duration::from_secs(5));
+    let at = fx.world.scheduler.now();
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    let wave: Vec<Event> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::NameWaveStarted { .. }
+                    | Event::NameWaveProgress { .. }
+                    | Event::NameWaveEnded { .. }
+            )
+        })
+        .collect();
+    let scope_root = fx.folder;
+    let progress = |moved| Event::NameWaveProgress {
+        scope_root,
+        moved,
+        total: 3,
+        at,
+    };
+    assert_eq!(
+        wave,
+        vec![
+            Event::NameWaveStarted { scope_root, at },
+            progress(1),
+            progress(2),
+            progress(3),
+            Event::NameWaveEnded {
+                scope_root,
+                interior_nodes: 2,
+                dropped: 0,
+                at,
+            },
+        ]
+    );
+}
+
+/// A read revoke cuts the scope's read epoch, and the sweep it enqueues
+/// re-seals the interior nodes: the run reports no node left at the old
+/// epoch, with the cut time and the re-seal time on the virtual clock.
+#[test]
+fn the_sweep_a_read_revoke_enqueues_reports_no_node_left_at_the_old_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<Event> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SweepConvergence { .. }))
+        .collect();
+    let [
+        Event::SweepConvergence {
+            scope_root,
+            read_epoch,
+            old_epoch_nodes,
+            cut_at: reported_cut,
+            last_reseal_at,
+            at,
+        },
+    ] = reports.as_slice()
+    else {
+        panic!("one sweep run reports, not {reports:?}");
+    };
+    assert_eq!(*scope_root, fx.folder);
+    assert_eq!(*read_epoch, 2, "the run gated the root at the cut epoch");
+    assert_eq!(*old_epoch_nodes, 0, "no interior node is left behind");
+    assert_eq!(*reported_cut, Some(cut_at));
+    assert_eq!(*last_reseal_at, Some(*at), "this run re-sealed the nodes");
+    assert!(*at >= cut_at);
+}
+
+/// A write wave that stops sends its start and no end: the owed work is its
+/// terminal event.
+#[test]
+fn a_write_wave_that_stops_sends_no_end_and_reports_the_work_owed() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    let terminal: Vec<&str> = events_so_far(&mut fx._events)
+        .iter()
+        .filter_map(|event| match event {
+            Event::NameWaveStarted { scope_root, .. } if *scope_root == folder => Some("started"),
+            Event::NameWaveEnded { .. } => Some("ended"),
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == folder => Some("owed"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(terminal, vec!["started", "owed"]);
+}
+
+/// The sweep runs this pass reports, with the cut time and the last re-seal
+/// time of each.
+fn sweep_reports(
+    events: &mut EventStream,
+) -> Vec<(NodeId, Option<UnixMillis>, Option<UnixMillis>)> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                cut_at,
+                last_reseal_at,
+                ..
+            } => Some((scope_root, cut_at, last_reseal_at)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A stalled link mint spawns the sweep of the parent, which no cut moved: the
+/// parent's run reports no cut time.
+#[test]
+fn the_sweep_a_stalled_mint_spawns_reports_no_cut_of_the_parent() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    settle_filed_sweeps(&fx);
+
+    let parent: Vec<_> = sweep_reports(&mut fx._events)
+        .into_iter()
+        .filter(|(scope, _, _)| *scope == ROOT)
+        .collect();
+    assert!(!parent.is_empty(), "the parent's sweep reports");
+    assert!(
+        parent.iter().all(|(_, cut_at, _)| cut_at.is_none()),
+        "no cut of the parent occurred"
+    );
+}
+
+/// A manual rotation cuts the scope's read epoch: the sweep it enqueues
+/// reports the cut time and the new epoch.
+#[test]
+fn the_sweep_a_rotate_now_enqueues_reports_its_cut_time_and_new_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<(u64, Option<UnixMillis>)> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                read_epoch,
+                cut_at,
+                ..
+            } if scope_root == fx.folder => Some((read_epoch, cut_at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, vec![(2, Some(cut_at))]);
 }

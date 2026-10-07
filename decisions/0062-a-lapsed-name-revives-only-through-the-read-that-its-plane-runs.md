@@ -63,9 +63,10 @@ The renewal walk of ADR 0061 revives each lapsed name that a parent body names, 
 lapsed folder before it descends into it.
 
 **D4 — The settings record revives only at exactly the floor.** The settings record carries a
-bearer credential. A device revives it only when its floor equals the recovered sequence
-(`Strictness::AtFloor`), and the load then sets the EOL rule aside for that one record. Any other
-device takes the ADR 0034 ladder. Its first settings save with no floor takes the sequence of the
+bearer credential. A device revives it only when it holds a floor equal to the recovered
+sequence, and the load then sets the EOL rule aside for that one record. Any other device takes
+the ADR 0034 ladder. Amended on 2026-10-07 by FSM1/cipher-box#2355: the rule needs a floor that
+the device holds, because `Strictness::AtFloor` reads an absent floor as 0. Its first settings save with no floor takes the sequence of the
 verified recovery record as its `Observed` sequence, so the save does not publish at sequence 1 and
 an older device does not report `RolledBack` for good. The same rule holds when the load reports
 `Expired` or `Unreadable` for a served record that verified under the account's own settings key:
