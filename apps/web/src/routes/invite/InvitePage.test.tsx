@@ -190,16 +190,16 @@ describe('the invite preview', () => {
     expect(screen.getByTestId('invite-account').textContent).toContain('acct01');
   });
 
-  it('shows no owner name and no folder name when the signature does not verify', async () => {
-    await openAt(
-      `#${FRAGMENT}`,
-      inviteEngine({ preview: async () => livePreview({ names: null }) })
+  it('shows a link whose names signature fails as a changed link, with no join', async () => {
+    const refusal = new EngineRequestError(
+      'trust violation: invite-names-do-not-verify',
+      'trustViolation'
     );
+    await openAt(`#${FRAGMENT}`, inviteEngine({ preview: () => Promise.reject(refusal) }));
 
-    expect(screen.getByTestId('invite-headline').textContent).toBe('a folder was shared with you');
-    expect(screen.getAllByTestId('invite-entry')).toHaveLength(2);
-    expect(document.body.textContent).not.toContain('Ada');
-    expect(document.body.textContent).not.toContain('trips');
+    expect(pageState()).toBe('changed');
+    expect(screen.getByTestId('invite-status').textContent).toContain('this link was changed');
+    expect(screen.queryByTestId('invite-join')).toBeNull();
   });
 
   it('lists the direct children by name and kind', async () => {

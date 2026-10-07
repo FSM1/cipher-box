@@ -198,6 +198,7 @@ const MESSAGES: Record<InviteState, string | null> = {
   unresolvable: 'the shared folder could not be reached. open the link again later.',
   untrusted:
     'this link failed a trust check. the folder it names does not verify, so nothing was read.',
+  changed: 'this link was changed. ask the owner for a new link.',
   unreadable: 'this link could not be read. open the link again to retry.',
   refused: 'the join did not complete. open the link again to retry.',
 };

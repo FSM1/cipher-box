@@ -27,7 +27,7 @@ use crate::entropy::Entropy;
 use crate::gate::GateError;
 use crate::gate::floor::{self, FloorRegression, PointerPlane, Strictness};
 use crate::profile::SyncTimingProfile;
-use crate::rotation::{ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
+use crate::rotation::{PublishedRoot, ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamResult};
 use crate::sync::pointer::{
     MAX_VAULT_POINTER_PROBE, PointerError, SessionRole, open_repoint, seal_repoint,
@@ -228,16 +228,17 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        self.root.publish_scope_root(record).await?;
+    ) -> Result<PublishedRoot, RotationPublishError> {
+        let published = self.root.publish_scope_root(record).await?;
         let Some(anchor) = self.anchor else {
-            return Ok(());
+            return Ok(published);
         };
         // A fresh read, not the cut's refusal check: the CAS bar must follow
         // the root publish, or another device's re-point in between is lost.
         anchor
             .vouch_read_epoch(&record.ipns_name, record.read_epoch)
-            .await
+            .await?;
+        Ok(published)
     }
 }
 

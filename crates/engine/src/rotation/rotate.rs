@@ -179,7 +179,30 @@ pub trait ScopeRootPublisher {
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError>;
+    ) -> Result<PublishedRoot, RotationPublishError>;
+}
+
+/// A scope root record that landed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishedRoot {
+    /// The scope root's `ipnsName` bytes.
+    pub name: Vec<u8>,
+    /// The sequence of the record it replaced; 0 for none.
+    pub base: u64,
+    /// The sequence it was signed at.
+    pub sequence: u64,
+}
+
+impl PublishedRoot {
+    /// A first publish of `record` at `sequence`, for the test fakes.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn fresh(record: &ResealedScopeRoot, sequence: u64) -> Self {
+        Self {
+            name: record.ipns_name.clone(),
+            base: 0,
+            sequence,
+        }
+    }
 }
 
 /// The inputs to one scope root's read-plane rotation: its identity, its current

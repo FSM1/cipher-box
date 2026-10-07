@@ -1055,7 +1055,14 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   brings the next pass forward immediately and resolves it nocache, and reports
   back what that pass reconciled (ADR 0044). Any other cached folder refreshes
   on access past the staleness threshold — no background churn over the whole
-  tree; cached shared scopes consult their scope pointer on access.
+  tree; cached shared scopes consult their scope pointer on access. The
+  navigation probes the root of each scope it reads under first, at the name
+  the last walk or graft gated, else at the name the leg holds. When that root
+  moved past the sequence the walk or graft gated and past this device's own
+  confirmed publish at that name, or sits below the sequence floor (a replay),
+  or the probe or the floor store has no answer, it reads nothing for that
+  scope and the next tick reads. The floor bars a replay only: a gated read
+  outside a walk raises it.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is
@@ -1262,7 +1269,12 @@ cannot mean the root lags — it means the record fetched is not the current one
 typically a `directChildScopeIndex` entry naming a root a `rotateScopeWrite`
 has since moved. It resolves to a distinct _superseded_ verdict, handled by the
 pointer consult (FSM1/cipher-box-next#38 D4) and a re-resolve at `currentRootName`, failing closed
-if the fresh record is still below the floor. Admitting such a record would
+if the fresh record is still below the floor. A root whose owner-write-blob
+stays closed while the owner-signed re-point names it as the root it moved off
+gets the same verdict: a write cut moved the root after the sweep took its
+name, and the re-resolve reads the moved root through the gate. A pointer that
+vouches another root without that name proves no move, and the read stays
+unavailable. Admitting such a record would
 republish the scope's existing override seed at the current epoch — a
 revocation bypass, not a repair
 ([ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
@@ -1500,7 +1512,9 @@ rebases and signs above.
   drops it (ADR 0065).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
-  duration" was wrong and is retired.
+  duration" was wrong and is retired. A grantee follows the pointer on the
+  received-shares refresh, so for a personal bookmark that interval is the
+  refresh interval (ADR 0074).
 - Revoked readers: stale interior metadata for a sweep-length window, never a
   live grant, never anything sealed after the cut.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
@@ -1553,6 +1567,13 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   fires and a fallback-only pointer is never consulted. Therefore the pointer
   resolve joins the focus-window tick for open shared scopes, runs on access
   for cached ones, and is the first act on cold start.
+- **A grantee follows the pointer by the name its bookmark holds** (ADR 0074
+  D1, D2). The received-shares bookmark keeps `scopePointerName` with
+  `pointerReadKey`, and the on-access refresh consults the pointer for each
+  bookmark that holds a name, link-held or personal, and heals the bookmark to
+  the vouched root. A personal read whose pointer gives no answer reads the
+  stored root; a link-held read waits for a vouched root (ADR 0024 D5). A
+  bookmark with no name follows nothing until the owner posts again.
 - **Vault pointer** — the same re-point object for the root scope, on an
   indexed key chain from day one: `pointerKey_i = KDF(secret,
 "vault-pointer" ‖ i)`, index 0 default. Clients probe one index past the
@@ -1626,8 +1647,15 @@ surviving committed grants uniformly in the republish it already does.
   direct grant, a link mint and a conversion each append, so links and direct
   grants coexist and a folder holds any number of live links, each with its
   own permission and lifetime. A direct grant to an existing grantee is a
-  permission change when the permission differs, and nothing otherwise
-  ("already has access"). A write grant on a folder that is not a write
+  permission change when the permission differs. At the same permission it
+  adds no row and runs no cut, and it posts the share pointer again, which is
+  the owner's repair path for a bookmark with no scope pointer name. A
+  permission change of a personal grantee, up or down, posts the share pointer
+  to that grantee, at the root the change leaves, once the cut set is durable.
+  A cut from the last copy keeps no row and posts nothing; the owner shares
+  again (ADR 0068 D5).
+  A failed post leaves the change standing and sends `SharePointerNotPosted`,
+  and a write cut posts nothing to the other survivors (ADR 0074 D2). A write grant on a folder that is not a write
   scope yet runs the write-scope cut first (ADR 0024 D4, ADR 0026 C4).
   `grant-target-already-names-a-scope` and
   `invite-target-already-names-a-scope` retire for the append; D7 lists the
@@ -1637,7 +1665,12 @@ surviving committed grants uniformly in the republish it already does.
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
   sealed received-shares list, device-local over the host `StagingStore`
-  (ADR 0006), persisting the `pointerReadKey`; the owner keeps a denormalized
+  (ADR 0006), persisting the `pointerReadKey` and the `scopePointerName` the
+  owner-signed share pointer carries (ADR 0074 D1). A share pointer with no
+  name keeps the name the bookmark holds, and an accept on the equal-floor
+  short-circuit adds a name the bookmark does not hold before the ack. Only
+  the share pointer and the invite fragment supply the name, never a grant
+  blob or a scope root record; the owner keeps a denormalized
   sent-index in their own vault. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
 - **Link-held arm**
@@ -1663,8 +1696,11 @@ surviving committed grants uniformly in the republish it already does.
   deadline; a second join on one device takes the equal-floor short-circuit of
   the personal accept. The refresh prefers the personal tag and reads the link
   tag only while no personal blob opens and `linkSecret` is held; the persist
-  that records the first personal open deletes `linkSecret`, and the link holder
-  is then a grantee.
+  that records the first personal open deletes `linkSecret` and `linkDeadline`,
+  keeps `scopePointerName`, and the link holder is then a grantee (ADR 0074 D1).
+  The owner signature over the fragment names covers `scopePointerName`, so the
+  preview and the join refuse a fragment whose signature fails, and a link hold
+  always holds a verified name (ADR 0027 D5 as amended).
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies

@@ -62,6 +62,9 @@ signature shows no names, and the link still works. The fragment is plain det-CB
 and the names do not depend on the secret, so without the signature a forwarder could relabel a
 working link. Everything fits in the 2048-byte cap. The person's shared list shows the folder and
 "from <name>".
+Amended by ADR 0074 D1 on 2026-10-07: a link whose owner signature over the fragment names
+fails is refused, because the fragment now carries the scope pointer name under that
+signature; a link with a good signature and no names still works.
 
 **D6 — A grantee name is not an identity.** A revoke and a permission change bind to the identity key from
 the owner-signed row, never to a name. The dialog shows the key fingerprint next to the name on

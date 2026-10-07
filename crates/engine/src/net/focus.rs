@@ -28,6 +28,7 @@ use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
 use crate::sync::refresh::RefreshVerdict;
 use crate::sync::render::BaseSnapshot;
+use crate::sync::staleness::PinRead;
 use crate::sync::tick::ResolveMode;
 
 /// What one focus-folder pass did. The verdict is the pass's own read legs, kept
@@ -43,6 +44,9 @@ pub(crate) struct FolderRefreshReport {
     /// Children a refreshed folder stopped naming — an unlink this device did
     /// not author, which the owner's engine adopts into the bin.
     pub(crate) departed: Vec<UnlinkedChild>,
+    /// On a grafted leg, each name whose read a withheld-update hold folds
+    /// in ([`PinPass`](crate::sync::staleness::PinPass)).
+    pub(crate) pins: Vec<(Vec<u8>, PinRead)>,
 }
 
 impl FolderRefreshReport {
@@ -135,6 +139,7 @@ where
             verdict: RefreshVerdict::Reconciled,
             unread: false,
             departed: Vec::new(),
+            pins: Vec::new(),
         };
         for folder in folders.iter().rev() {
             let Some((name, adopted, scope)) = self
@@ -236,6 +241,7 @@ where
             verdict: RefreshVerdict::Reconciled,
             unread: false,
             departed: Vec::new(),
+            pins: Vec::new(),
         };
         for file in files {
             let Some((name, adopted, _)) = self
@@ -300,7 +306,7 @@ where
             }),
             root_name: owed.root_name.cloned(),
         }));
-        match resolve_child_record(
+        let read = resolve_child_record(
             self.transport,
             self.snapshot_cache,
             &adopter,
@@ -308,8 +314,16 @@ where
             self.scope_root_name,
             self.mode,
         )
-        .await
-        {
+        .await;
+        if self.plane.is_some() {
+            let pin = match &read {
+                Ok(ChildRecord::Admitted(read)) => read.pin,
+                Ok(ChildRecord::Withheld) => PinRead::Withheld,
+                _ => PinRead::Unread,
+            };
+            report.pins.push((name.as_str().as_bytes().to_vec(), pin));
+        }
+        match read {
             Ok(ChildRecord::Admitted(read)) => {
                 if let Some(fork) = read.fork {
                     self.forks.report(self.events, name.as_str(), fork.sequence);
@@ -318,7 +332,7 @@ where
                 Some((name, read.adopted, scope))
             }
             // Availability: the base keeps rendering last-known-good.
-            Ok(ChildRecord::Absent)
+            Ok(ChildRecord::Absent | ChildRecord::Withheld)
             | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {

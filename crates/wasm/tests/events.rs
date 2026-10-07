@@ -216,6 +216,13 @@ fn each_event_kind_crosses_as_its_stable_name() {
         ),
         (Event::RefusedClaimDropped, "refusedClaimDropped", 1),
         (
+            Event::SharePointerNotPosted {
+                scope_root: NodeId([0; 16]),
+            },
+            "sharePointerNotPosted",
+            2,
+        ),
+        (
             Event::AttributableAbuse {
                 description: String::new(),
             },

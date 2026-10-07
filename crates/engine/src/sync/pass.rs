@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::hex::lower as hex_lower;
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::seal::Permission as CommittedPermission;
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -39,9 +39,9 @@ use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
 use crate::net::rotation::ScopeWritePlane;
 use crate::net::{
-    DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
-    OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter,
-    ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
+    DescendantScopeRoot, FolderRefresh, FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial,
+    HeldRecords, OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved,
+    RootAdopter, ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
     resolve_and_hold,
 };
 use crate::rotation::scope_material::ScopeMaterial;
@@ -58,7 +58,7 @@ use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
-use crate::session::{SessionSecrets, SessionState};
+use crate::session::{RootSequences, SessionSecrets, SessionState};
 use crate::settings::{
     PlacementDecision, SessionPlacement, adopt_settings_summary, bin_retention_days,
     load_settings_at, owner_bin_retention_days, owner_retention, redecide_placement,
@@ -79,6 +79,7 @@ use crate::sync::rebase::{DropReason, QueueScanMemo, enclosing_scope_root, repla
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::render::BaseSnapshot;
+use crate::sync::staleness::PinPass;
 use crate::sync::tick::{
     ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, focus_scope_roots, nodes_in_scope,
@@ -132,6 +133,8 @@ struct Pass {
     contact_label_seed: SecretBytes,
     bin_keys: Rc<BinIndexKeys>,
     settings_signer: Rc<Ed25519Signer>,
+    /// The root adopt reconciled ([`PinPass::root_reconciled`]).
+    root_reconciled: bool,
 }
 
 /// The passes one tick drains, owned for the drain that borrows them.
@@ -375,6 +378,12 @@ where
         self.consult_scope_pointers(state, &mut pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
+        pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
+            matches!(
+                resolved.outcome,
+                ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
+            )
+        });
         let recovered_root = resolved
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
@@ -423,6 +432,7 @@ where
             contact_label_seed,
             bin_keys,
             settings_signer,
+            root_reconciled: false,
         })
     }
 
@@ -710,6 +720,11 @@ where
             && let Some((name, root_bytes)) = held_root
             && let Ok(name) = IpnsName::parse(&name)
         {
+            // The sequence of the record the walk gates, read before its awaits.
+            let root_sequence = IpnsRecord::unmarshal(&root_bytes)
+                .and_then(|record| record.verify(&name))
+                .ok()
+                .map(|record| record.sequence);
             let walked = walk
                 .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
                 .await;
@@ -721,6 +736,13 @@ where
                 .map(|walked| walked.refused.clone())
                 .unwrap_or_default();
             if let Ok(walked) = walked {
+                note_walked_sequences(
+                    &state.root_sequences,
+                    NodeId(self.root_id),
+                    &name,
+                    root_sequence,
+                    &walked.proved,
+                );
                 let departed = install_descendant_scopes(
                     &state.descendant_scope_roots,
                     &state.scope_read_seeds,
@@ -795,6 +817,12 @@ where
         // files stay queued for the pass that can.
         let mut folder_verdict = RefreshVerdict::Reconciled;
         let mut attempted_files: Vec<NodeId> = Vec::new();
+        let pins = PinPass {
+            now: pass.now,
+            root_reconciled: pass.root_reconciled,
+            profile: &self.seams.profile,
+            events: &self.seams.events,
+        };
         let scopes = ScopeSets {
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
@@ -834,6 +862,11 @@ where
                 .or_default();
         }
         let scope_roots = state.bookmarked_scope_roots.borrow().clone();
+        let focus_targets: Vec<NodeId> = by_scope
+            .values()
+            .flat_map(|targets| targets.folders.iter().chain(&targets.files).copied())
+            .collect();
+        let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
         let legs = ScopeLegContext {
             floors: &self.seams.floors,
             sharers: grafted,
@@ -878,7 +911,11 @@ where
                 mode: pass.mode,
                 observed_at: pass.now.0,
             };
-            let mut settle = |nodes: &[NodeId], report| {
+            let mut settle = |nodes: &[NodeId], report: FolderRefreshReport| {
+                for (name, read) in &report.pins {
+                    pins.observe_in(&mut state.withheld_pins.borrow_mut(), name, *read, true);
+                    read_pins.insert(name.clone());
+                }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(
                     &state.observed_unlinks,
                     &state.focus_refreshed,
@@ -940,6 +977,17 @@ where
             .borrow_mut()
             .open_files
             .retain(|row| !attempted_files.contains(&row.node));
+        // A hold lives while this pass read its name or the name stays in
+        // the focus window.
+        let mut in_focus = focus_names(
+            &state.snapshot.borrow(),
+            focus_targets.into_iter(),
+            state.focus.borrow().folders_in_view(),
+        );
+        in_focus.append(&mut read_pins);
+        pins.retain_in(&mut state.withheld_pins.borrow_mut(), |name| {
+            in_focus.contains(name)
+        });
         (folder_verdict, scopes)
     }
 
@@ -1383,6 +1431,7 @@ where
             scheduler: &seams.scheduler,
             profile: &seams.profile,
             on_access_misses: &state.on_access_misses,
+            root_sequences: &state.root_sequences,
             entropy: &seams.entropy,
             staging: &seams.staging,
             identity: &signer,
@@ -1471,6 +1520,7 @@ where
             contact_label_seed: &pass.contact_label_seed,
             list_lock: &state.received_shares_lock,
             mode: pass.mode,
+            root_reconciled: pass.root_reconciled,
         }
         .refresh(
             &self.seams.staging,
@@ -1486,6 +1536,8 @@ where
                 scope_roots: &state.bookmarked_scope_roots,
                 permissions: &state.bookmarked_permissions,
                 claims: &state.grafted_claims,
+                pointer_pins: &state.pointer_pins,
+                root_sequences: &state.root_sequences,
                 events: &self.seams.events,
             },
             pass.now,
@@ -1493,6 +1545,22 @@ where
         )
         .await;
     }
+}
+
+/// The record names of the focus window: each node a leg targets, and each
+/// node a folder in view lists.
+fn focus_names(
+    base: &Snapshot,
+    targets: impl Iterator<Item = NodeId>,
+    in_view: impl Iterator<Item = NodeId>,
+) -> BTreeSet<Vec<u8>> {
+    let listed: Vec<NodeId> = in_view
+        .flat_map(|folder| base.children(folder).into_iter().map(|child| child.id))
+        .collect();
+    targets
+        .chain(listed)
+        .filter_map(|node| base.node(node)?.ipns_name.clone())
+        .collect()
 }
 
 /// The interior scope the **first** queued op that names one needs
@@ -1946,6 +2014,28 @@ fn install_descendant_scopes(
     departed
 }
 
+/// Hold the sequence one walk gated for the vault root and for each scope
+/// root it proved, in place of the last walk's, in the same step as the scope
+/// sets it installs.
+fn note_walked_sequences(
+    sequences: &RefCell<RootSequences>,
+    root: NodeId,
+    root_name: &IpnsName,
+    root_sequence: Option<u64>,
+    proved: &[DescendantScopeRoot],
+) {
+    let root = root_sequence.map(|sequence| (root, root_name.clone(), sequence));
+    sequences
+        .borrow_mut()
+        .note_walk(root.into_iter().chain(proved.iter().map(|scope| {
+            (
+                NodeId(scope.scope_id),
+                scope.name.clone(),
+                scope.adopted.sequence,
+            )
+        })));
+}
+
 /// Report each scope whose root one walk read as a same-sequence fork.
 fn report_forked_scopes(
     forks: &ForkSightings,
@@ -2358,6 +2448,34 @@ mod tests {
                 write_cut_unfinished: false,
                 fork: None,
             }
+        }
+
+        /// A scope root one walk gated and the next walk omits holds no walk
+        /// value, so after it moves the probe reads the name its leg holds,
+        /// not the name the earlier walk gated.
+        #[test]
+        fn a_scope_the_next_walk_omits_holds_no_walk_value() {
+            let sequences = RefCell::new(RootSequences::default());
+            let root = NodeId([0x01; 16]);
+            let root_name = derive_write_name(&WRITE_SCOPE_SEED, &root.0);
+            let shared = proved(Err(WritePlaneDark::Keyless));
+            let old_name = shared.name.clone();
+
+            note_walked_sequences(&sequences, root, &root_name, Some(4), &[shared]);
+            assert_eq!(
+                sequences.borrow().walked_name(NodeId(SHARED)),
+                Some(old_name.clone())
+            );
+
+            note_walked_sequences(&sequences, root, &root_name, Some(5), &[]);
+            let sequences = sequences.borrow();
+            assert_eq!(
+                sequences.walked_name(NodeId(SHARED)),
+                None,
+                "the walk omitted it"
+            );
+            assert_eq!(sequences.held(old_name.as_str().as_bytes()), None);
+            assert_eq!(sequences.held(root_name.as_str().as_bytes()), Some(5));
         }
 
         /// The vault root's end carries the stamp of the cached read seed, so

@@ -799,7 +799,7 @@ where
         let lapsed = match &resolved {
             Ok(ChildRecord::Absent) => true,
             Ok(ChildRecord::Admitted(read)) => self.lapsed_copy(name, &read.observed).await,
-            Err(_) => false,
+            Ok(ChildRecord::Withheld) | Err(_) => false,
         };
         let mut revival = None;
         if lapsed {
@@ -814,6 +814,7 @@ where
                     adopted,
                     observed,
                     fork,
+                    ..
                 } = *read;
                 if let Some(fork) = fork {
                     pass.report
@@ -841,7 +842,8 @@ where
                 pass.report.rejected.push(name.as_str().to_owned());
                 None
             }
-            Err(
+            Ok(ChildRecord::Withheld)
+            | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {
                 pass.kept_back = true;

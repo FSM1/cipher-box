@@ -56,6 +56,7 @@ impl InMemoryMailboxHub {
             address: hex_lower(recipient_public_key),
             ack_failing: Arc::new(Mutex::new(false)),
             poll_failing: Arc::new(Mutex::new(false)),
+            post_failing: Arc::new(Mutex::new(false)),
             stale_poll: Arc::new(Mutex::new(None)),
         }
     }
@@ -135,6 +136,8 @@ pub struct InMemoryMailbox {
     ack_failing: Arc<Mutex<bool>>,
     /// When set, every HTTP poll fails: an inbox outage.
     poll_failing: Arc<Mutex<bool>>,
+    /// When set, every HTTP post this handle serves fails.
+    post_failing: Arc<Mutex<bool>>,
     /// What the next HTTP poll answers in place of the queue: a poll the API
     /// served before another device's delete landed.
     stale_poll: Arc<Mutex<Option<Vec<MailboxItem>>>>,
@@ -159,6 +162,11 @@ impl InMemoryMailbox {
     /// Make every HTTP poll fail, or clear the failure.
     pub fn set_poll_failing(&self, failing: bool) {
         *self.poll_failing.lock().expect("lock") = failing;
+    }
+
+    /// Make every HTTP post fail, or clear the failure.
+    pub fn set_post_failing(&self, failing: bool) {
+        *self.post_failing.lock().expect("lock") = failing;
     }
 
     /// Make the next HTTP poll answer the items queued now, whatever another
@@ -187,6 +195,9 @@ impl InMemoryMailbox {
             .1
             .trim_start_matches('/');
         Some(match (request.method, tail) {
+            (HttpMethod::Post, "") if *self.post_failing.lock().expect("lock") => {
+                Err(SeamError::new("mailbox post outage"))
+            }
             (HttpMethod::Post, "") => {
                 Ok(self.serve_post(request.body.as_deref().map(Vec::as_slice)))
             }

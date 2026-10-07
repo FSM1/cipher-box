@@ -34,6 +34,7 @@ use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
 use crate::rotation::lagging_read_seed;
 use crate::scope_seeds::StampedSeed;
 use crate::seams::{FloorStore, Http, RecordTransport, SeamError, SnapshotCache};
+use crate::sync::staleness::PinRead;
 use crate::sync::tick::ResolveMode;
 
 /// The child-record [`Adopter`] for one non-root node of an owned scope.
@@ -456,12 +457,19 @@ pub(crate) enum ChildRecord {
     Admitted(Box<AdmittedChild>),
     /// The endpoints agree the name holds no record, and none is cached.
     Absent,
+    /// The record the endpoints served was withheld (ADR 0071 D1), and no
+    /// last-known-good copy stands in for it.
+    Withheld,
 }
 
 pub(crate) struct AdmittedChild {
     pub(crate) adopted: Adopted,
     pub(crate) observed: Result<Observed, RefusedRead>,
     pub(crate) fork: Option<Fork>,
+    /// What this read tells a withheld-update hold: a fresh record, a
+    /// last-known-good body behind a withheld record (ADR 0071 D1), or a
+    /// last-known-good body behind no answer.
+    pub(crate) pin: PinRead,
 }
 
 /// Why a child-record resolve produced no adopted body.
@@ -497,7 +505,9 @@ where
 {
     match resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode).await? {
         ChildRecord::Admitted(read) => Ok(read.adopted),
-        ChildRecord::Absent => Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
+        ChildRecord::Absent | ChildRecord::Withheld => {
+            Err(ChildResolveError::Unavailable(NO_RECORD.to_owned()))
+        }
     }
 }
 
@@ -524,8 +534,9 @@ where
         .await
         .map_err(unavailable)?;
     let resolved = gated.resolved;
+    let withheld = gated.withheld;
     let mut fork = resolved.fork;
-    let lagging = async |record_bytes: &[u8], epoch, fork| {
+    let lagging = async |record_bytes: &[u8], epoch, fork, pin| {
         let (adopted, envelope) = read_lagging(
             transport,
             snapshot_cache,
@@ -536,7 +547,14 @@ where
             epoch,
         )
         .await?;
-        Ok(admitted_child(name, record_bytes, adopted, &envelope, fork))
+        Ok(admitted_child(
+            name,
+            record_bytes,
+            adopted,
+            &envelope,
+            fork,
+            pin,
+        ))
     };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
@@ -553,12 +571,13 @@ where
                 adopted,
                 observed,
                 fork,
+                pin: PinRead::Reached,
             })));
         }
         ResolveOutcome::TrustViolation(rejection) => {
             let fetched = adopter.assembled_record_bytes(name);
             return match (lagging_epoch(&rejection.reason), fetched) {
-                (Some(epoch), Some(bytes)) => lagging(&bytes, epoch, None).await,
+                (Some(epoch), Some(bytes)) => lagging(&bytes, epoch, None, PinRead::Reached).await,
                 (Some(epoch), None) => Err(lagging_unreachable(epoch, "its bytes are not held")),
                 (None, _) => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
@@ -567,14 +586,20 @@ where
         ResolveOutcome::NoUpdate => match resolved.last_known_good {
             Some(cached) => (cached, false),
             None if gated.absent => return Ok(ChildRecord::Absent),
+            None if withheld => return Ok(ChildRecord::Withheld),
             None => return Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
         },
+    };
+    let pin = match (current, withheld) {
+        (true, _) => PinRead::Reached,
+        (false, true) => PinRead::Withheld,
+        (false, false) => PinRead::Unread,
     };
     let (adopted, envelope) = match adopter.open_carried_at_floor(name, &record_bytes).await {
         Ok(adopted) => adopted,
         Err(GateError::Rejected(rejection)) => {
             return match lagging_epoch(&rejection.reason) {
-                Some(epoch) => lagging(&record_bytes, epoch, fork).await,
+                Some(epoch) => lagging(&record_bytes, epoch, fork, pin).await,
                 None => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
         }
@@ -601,6 +626,7 @@ where
         adopted,
         &envelope,
         fork,
+        pin,
     ))
 }
 
@@ -611,6 +637,7 @@ fn admitted_child(
     adopted: Adopted,
     envelope: &Envelope,
     fork: Option<Fork>,
+    pin: PinRead,
 ) -> ChildRecord {
     let observed =
         Observed::gated(name, adopted.sequence, envelope.v, record_bytes).map_err(|error| {
@@ -623,6 +650,7 @@ fn admitted_child(
         adopted,
         observed,
         fork,
+        pin,
     }))
 }
 
@@ -2011,9 +2039,119 @@ mod tests {
                     assert_eq!(adopted.epoch, LAGGING_EPOCH);
                     assert_eq!(read_fork, fork);
                 }
-                Ok(ChildRecord::Absent) => panic!("the record was absent"),
+                Ok(ChildRecord::Absent | ChildRecord::Withheld) => {
+                    panic!("the record was absent")
+                }
                 Err(_) => panic!("the lagging read failed"),
             }
+        }
+    }
+
+    /// A withheld read (ADR 0071 D1) with no cached body, as a manual
+    /// refresh reads, is withheld and not mere unavailability.
+    #[test]
+    fn a_withheld_read_with_no_cache_is_withheld() {
+        let published = publish(Spec::default());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), SEQUENCE + 1))
+            .expect("the floor raises");
+        let transport =
+            InMemoryRecordStore::new(vec![EndpointId::new("e0"), EndpointId::new("e1")]);
+        transport.seed_record(
+            &EndpointId::new("e1"),
+            published.name.as_str(),
+            published.record_bytes.clone(),
+        );
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let read = |transport: &InMemoryRecordStore| {
+            block_on(resolve_child_record(
+                transport,
+                &InMemorySnapshotCache::default(),
+                &adopter(&gw, &http, &floors, &published, NODE),
+                &published.name,
+                None,
+                ResolveMode::NoCache,
+            ))
+        };
+
+        transport.fail_endpoint(&EndpointId::new("e0"));
+        assert!(matches!(read(&transport), Ok(ChildRecord::Withheld)));
+
+        transport.fail_endpoint(&EndpointId::new("e1"));
+        assert!(
+            matches!(read(&transport), Err(ChildResolveError::Unavailable(_))),
+            "no answer is no withheld read"
+        );
+    }
+
+    /// A withheld read (ADR 0071 D1) that falls back to a cached body below
+    /// the read-epoch floor opens through the lagging arm, and still reports
+    /// the read as withheld.
+    #[test]
+    fn a_withheld_read_of_a_lagging_cached_body_stays_withheld() {
+        let published = publish(Spec::default());
+        let root = publish_root(
+            CURRENT_EPOCH,
+            history_links(LAGGING_EPOCH + 1, CURRENT_EPOCH),
+        );
+        let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &NODE).as_bytes());
+        let adopted_copy = IpnsRecord::create_v2(
+            &signer,
+            format!("/ipfs/{}", published.head.cid).as_bytes(),
+            SEQUENCE + 1,
+            TTL_NANOS,
+            "2098-01-01T00:00:00Z",
+        )
+        .marshal();
+        let floors = floors_after_a_cut();
+        for (name, floor) in [(&root.name, ROOT_SEQUENCE), (&published.name, SEQUENCE + 1)] {
+            block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), floor))
+                .expect("the floor raises");
+        }
+        let cache = InMemorySnapshotCache::default();
+        for (name, record) in [
+            (&root.name, &root.record_bytes),
+            (&published.name, &adopted_copy),
+        ] {
+            block_on(cache.put(name.as_str().as_bytes(), record)).expect("seed the cache");
+        }
+        let transport =
+            InMemoryRecordStore::new(vec![EndpointId::new("e0"), EndpointId::new("e1")]);
+        transport.seed_record(
+            &EndpointId::new("e1"),
+            published.name.as_str(),
+            published.record_bytes.clone(),
+        );
+        transport.fail_endpoint(&EndpointId::new("e0"));
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: root.head.block.clone().into(),
+        });
+
+        let read = block_on(resolve_child_record(
+            &transport,
+            &cache,
+            &adopter(&gw, &http, &floors, &published, NODE),
+            &published.name,
+            Some(&root.name),
+            ResolveMode::CacheFirst,
+        ));
+
+        match read {
+            Ok(ChildRecord::Admitted(read)) => {
+                assert_eq!(read.adopted.epoch, LAGGING_EPOCH);
+                assert_eq!(
+                    read.pin,
+                    PinRead::Withheld,
+                    "the cached body stands in for a withheld read"
+                );
+            }
+            Ok(ChildRecord::Absent | ChildRecord::Withheld) => panic!("no body opened"),
+            Err(_) => panic!("the lagging read failed"),
         }
     }
 

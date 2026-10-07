@@ -16,12 +16,13 @@ use crate::grants::conversion::{
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::inbox::OwnedClaim;
 use crate::grants::{
-    AckedClaim, ClaimDisposition, CommittedLink, GrantRecipient, fingerprint_identity_key,
-    link_of_sender, post_share_pointer_at,
+    AckedClaim, ClaimDisposition, CommittedLink, PointerRecipient, PointerTarget,
+    fingerprint_identity_key, link_of_sender, post_share_pointer_at,
 };
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
 use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
+use crate::session::RootSequences;
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -187,6 +188,7 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(crate) profile: &'a SyncTimingProfile,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
+    pub(crate) root_sequences: &'a RefCell<RootSequences>,
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     pub(crate) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
@@ -879,7 +881,7 @@ where
             .iter()
             .any(|delivery| delivery.outcome == ClaimOutcome::Granted)
         {
-            publish_edited_set(
+            let published = publish_edited_set(
                 &net,
                 self.entropy,
                 self.enc_secret,
@@ -888,6 +890,7 @@ where
                 &commitment_sig,
             )
             .await?;
+            self.root_sequences.borrow_mut().note_own(&published);
         }
         // The record carries every row now. An entry settles once its
         // pointer lands, and until then the pointer alone is posted again.
@@ -1006,7 +1009,7 @@ where
         );
         Ok(match recent {
             Some(OnAccessMiss::Absent) => None,
-            Some(OnAccessMiss::Vouched(root)) => Some(*root),
+            Some(OnAccessMiss::Vouched { root, .. }) => Some(*root),
             Some(OnAccessMiss::Rejected) => return Err(rejected()),
             None => PointerConsult {
                 scope_keys: self.scope_keys,
@@ -1048,6 +1051,7 @@ where
         parent_net
             .publish_scope_root(&resealed)
             .await
+            .map(drop)
             .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 
@@ -1117,13 +1121,12 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &GrantRecipient {
-                contact: claimant,
-                display_name: folder.to_owned(),
-                grantee_name: None,
+            &PointerRecipient::of(claimant, folder.to_owned()),
+            PointerTarget {
+                permission: pointer.permission,
+                scope_root_name: &parsed_scope_name(&target.scope.ipns_name)?,
+                scope_pointer_name: &self.scope_keys.pointer_name(&target.scope.scope_id),
             },
-            pointer.permission,
-            &parsed_scope_name(&target.scope.ipns_name)?,
         )
         .await
         .map_err(EngineError::from_create_grant)

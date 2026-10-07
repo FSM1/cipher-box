@@ -945,6 +945,34 @@ fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
     assert!(cut.is_complete());
 }
 
+/// A move journaled `Intra` whose source became a scope root before it landed
+/// left that scope all the same. The drop is the move already landed, so the
+/// cut it owes follows from the scope roots the replay lists, not from the
+/// crossing the op carries.
+#[test]
+fn an_already_satisfied_drop_journaled_intra_still_names_the_scope_it_left() {
+    let mut base = granted_scope_tree();
+    with_child(&mut base, id(6), id(7), "m.txt", NodeKind::File);
+    let op = Op::move_node(
+        id(7),
+        id(12),
+        id(6),
+        "m.txt",
+        None,
+        1,
+        AT,
+        ScopeCrossing::Intra,
+    );
+
+    let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
+
+    assert_eq!(
+        report.dropped_scope_exits,
+        vec![id(5)],
+        "the exit is owed whatever was journaled"
+    );
+}
+
 /// The enclosing-root fallback in the full-depth walk exists so an applied exit
 /// always cuts *something*. A drop is not evidence this op performed the exit,
 /// so a source folder a co-writer has since deleted must not escalate into a cut

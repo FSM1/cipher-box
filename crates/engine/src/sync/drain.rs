@@ -90,13 +90,15 @@ use crate::net::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
-use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
+use crate::rotation::{
+    LaggingSeedMiss, PublishedRoot, ScopeExitRotator, derive_write_name, lagging_read_seed,
+};
 use crate::seams::{
     CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
     UnixMillis,
 };
-use crate::session::SessionIdentity;
+use crate::session::{RootSequences, SessionIdentity};
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsHold};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
@@ -119,11 +121,11 @@ use crate::sync::project::{
 use crate::sync::provision::GENESIS_EPOCH;
 use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
-    replay,
+    expired_exit, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
-use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
+use crate::sync::scope_exit_debt::{owe_cut, owe_cut_durably, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, LiveBlocks, Preservation, PreservedBounds,
     preserve_dead_letter, reconcile_staging, reconcile_staging_over, release_version_blocks,
@@ -1698,6 +1700,8 @@ pub(crate) struct DrainCells<'a> {
     /// floor, holds the queue rather than publish over the lapsed index. A
     /// load that reaches it clears the cell.
     pub(crate) bin_index_unsettled: &'a Cell<Option<u64>>,
+    /// The sequences a navigation measures a scope root against.
+    pub(crate) root_sequences: &'a RefCell<RootSequences>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -3138,6 +3142,23 @@ where
                         continue;
                     }
                     KeptVerdict::Expired => {
+                        // A relocation the mark drops may have stopped before its
+                        // crossing committed, so the cut it owes is owed here, and
+                        // the op stays until that debt is durable. Owing a cut
+                        // needs only the boundary, not its proved material.
+                        let roots: Vec<NodeId> = scope
+                            .scope_roots
+                            .iter()
+                            .chain(scope.known_scope_roots)
+                            .copied()
+                            .collect();
+                        let exit = expired_exit(&self.cells.base.borrow(), &op, &roots);
+                        if let Some(root) = exit
+                            && !self.owe_scope_exit_durably(scope, root).await
+                        {
+                            kept.push(op_id);
+                            continue;
+                        }
                         self.dequeue_op(op_id).await?;
                         self.release_staged_blocks(&op).await;
                         notes.remove(op_id);
@@ -6786,6 +6807,18 @@ where
         .await;
     }
 
+    /// Take on that cut only if the debt is durable ([`owe_cut_durably`]).
+    async fn owe_scope_exit_durably(&self, scope: &DrainScope<'_>, scope_root: NodeId) -> bool {
+        owe_cut_durably(
+            &self.seams.staging,
+            self.bookkeeping_seal(scope),
+            scope.enc_secret,
+            self.cells.pending_scope_exits,
+            scope_root,
+        )
+        .await
+    }
+
     /// Re-seal the subtree at `target` out of `source` and into `dest`.
     ///
     /// A cross-scope relocation re-seals the moved subtree at the destination
@@ -8426,6 +8459,7 @@ where
         lost_winner: LostWinner,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
+        let base = observed.sequence();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
         let read_key = plane.end.read_key(&node.0);
         let nonce = fresh_nonce(&mut *self.seams.entropy.borrow_mut())
@@ -8524,6 +8558,16 @@ where
             // `keep_published` drops the op from the render, so the base takes
             // the record first, or the render loses what the op wrote.
             self.paint_confirmed(scope, node, body, sequence, created.as_ref());
+            if is_scope_root {
+                self.cells
+                    .root_sequences
+                    .borrow_mut()
+                    .note_own(&PublishedRoot {
+                        name: name.as_str().as_bytes().to_vec(),
+                        base,
+                        sequence,
+                    });
+            }
             self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }
@@ -9808,6 +9852,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            withheld: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -9840,6 +9885,7 @@ mod tests {
             absent: false,
             observed: None,
             envelope: None,
+            withheld: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -9877,6 +9923,7 @@ mod tests {
                 absent: false,
                 observed: None,
                 envelope: None,
+                withheld: false,
                 committed_floor: None,
             },
             &refused_name(),
