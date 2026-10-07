@@ -1588,9 +1588,9 @@ rebases and signs above.
   hard delete whose note names no folder and that leaves at T with no read
   of its folder leaves a child ref whose record is retired.
 - Flip before a delete: once a flip shows, a later delete of this device
-  expires an earlier op on its node at once, so a bin restore that comes
-  after it cannot cancel the delete, and a create that the flip lost stays
-  lost (ADR 0069 D6).
+  expires an earlier op on its node at once. A bin restore that comes after
+  it still cancels the delete, but it cannot bring back the earlier ops that
+  already left, so a create that the flip lost stays lost (ADR 0069 D6).
 - Cross-scope move: a move that re-seals into another scope leaves at its
   publish, so one that lands in the old tree after the walk is lost.
 - Kept delete under a moved ancestor: a later writer that moves an ancestor

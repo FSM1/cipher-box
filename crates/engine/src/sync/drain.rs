@@ -2800,13 +2800,10 @@ where
                 return Err(halt);
             }
             self.release_hold_of(applied.op_id);
-            // An op that is not kept leaves at its publish ([`keeps`]).
-            if !self.kept_now.get() {
-                self.dequeue_op(applied.op_id).await?;
-                report.completed.push(applied.op_id);
-            }
             // A published bin restore cancels its nearest earlier delete, also
             // one that became kept in this pass ([`overtaken_by_a_later_op`]).
+            // The delete leaves first: a restore left queued drops at its
+            // replay, and a kept delete left alone would bin the node again.
             if matches!(applied.op.kind, OpKind::Restore { .. })
                 && let Some((delete, _)) = queued
                     .iter()
@@ -2817,9 +2814,17 @@ where
                     .last()
             {
                 self.dequeue_op(*delete).await?;
+                let mut notes = self.kept_notes(scope).await?;
+                notes.remove(*delete);
+                self.store_kept_notes(scope, &notes).await?;
                 if !report.dropped.contains(delete) && !report.completed.contains(delete) {
                     report.dropped.push(*delete);
                 }
+            }
+            // An op that is not kept leaves at its publish ([`keeps`]).
+            if !self.kept_now.get() {
+                self.dequeue_op(applied.op_id).await?;
+                report.completed.push(applied.op_id);
             }
             self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);

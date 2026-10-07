@@ -3586,6 +3586,64 @@ fn a_bin_restore_cancels_a_delete_that_became_kept_in_the_same_pass() {
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// The removal of a cancelled delete and of its bin restore stops between
+/// the two. The delete leaves first, with its note, so a restart finds no
+/// kept delete, and after the flip the file is live.
+#[test]
+fn a_stop_between_the_two_removals_of_a_restore_leaves_no_kept_delete() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+    // The kept ops so far leave, so the note record holds only the delete's.
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(raw_queue(&fx.owner_device), 0);
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name, &doc_name], |fx| {
+        fx.world.record_store.fail_put_for(child_name.as_str());
+        block_on(fx.engine.command(Command::Delete { node: doc })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        block_on(fx.engine.command(Command::Restore {
+            node: doc,
+            into: None,
+        }))
+        .expect("the restore stages");
+        fx.world.record_store.heal_put_for(child_name.as_str());
+        fx.owner_device
+            .staging_store
+            .inner()
+            .fail_remove_op_after(1);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+
+    fx.owner_device.staging_store.inner().heal_remove_op();
+    restart_owner(&mut fx);
+    assert!(
+        !queued_ops_on(&fx.owner_device, doc)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "no delete is queued after the restart"
+    );
+    let notes = owner_scoped_key(KEPT_OP_NOTES_PREFIX, &kdf::enc_subkey(&SECRET));
+    assert!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&notes))
+            .expect("the store reads")
+            .is_none(),
+        "and the delete's note is gone"
+    );
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_names(&fx, &moved_child, child),
+        vec!["doc.bin".to_owned()],
+        "the file is live after the flip"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
 /// The residual over a chain: this device renames A to B and then to C, and
 /// a later writer sets A again. A reads as the value before the chain, so the
 /// whole chain applies again and C stays.
