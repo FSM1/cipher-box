@@ -3146,6 +3146,7 @@ where
                         if let Some(root) = exit
                             && !self.owe_scope_exit_durably(scope, root).await
                         {
+                            kept.push(op_id);
                             continue;
                         }
                         self.dequeue_op(op_id).await?;

@@ -950,7 +950,7 @@ fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
 /// cut it owes follows from the scope roots the replay lists, not from the
 /// crossing the op carries.
 #[test]
-fn an_already_satisfied_drop_journaled_intra_still_rotates_the_scope_it_left() {
+fn an_already_satisfied_drop_journaled_intra_still_names_the_scope_it_left() {
     let mut base = granted_scope_tree();
     with_child(&mut base, id(6), id(7), "m.txt", NodeKind::File);
     let op = Op::move_node(

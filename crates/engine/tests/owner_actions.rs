@@ -7658,6 +7658,17 @@ fn resume(fx: &mut GrantScenario) -> EventStream {
     events
 }
 
+/// Whether the device's raw queue still holds a relocation. The published-op
+/// mark hides a published op from [`FakeDevice::pending_ops`], so this reads
+/// the queue itself.
+fn relink_queued(device: &FakeDevice) -> bool {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .iter()
+        .any(|(_, op)| op.relocation().is_some())
+}
+
 /// Whether `events` told the member that `scope_root` still owes a cut.
 fn tells_cut_owed(events: &mut EventStream, scope_root: NodeId) -> bool {
     events_so_far(events).iter().any(|event| {
@@ -7671,6 +7682,10 @@ fn tells_cut_owed(events: &mut EventStream, scope_root: NodeId) -> bool {
 #[test]
 fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
     let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
     resume(&mut fx);
     assert_eq!(
         published_read_epoch(&fx.world, &fx.blocks, fx.folder),
@@ -7681,7 +7696,7 @@ fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
     assert!(
-        queued_crossings(&fx.owner_device).is_empty(),
+        !relink_queued(&fx.owner_device),
         "the resumed session dropped the published relink"
     );
     assert_eq!(
@@ -7727,35 +7742,51 @@ fn an_earlier_sessions_owed_cut_survives_a_resumed_relinks_cut() {
 }
 
 /// The op is the only thing that names the cut until the debt is durable, so a
-/// refused debt write keeps it queued for the next pass.
+/// refused debt write keeps it queued for the next pass, and an op that drains
+/// past it in the meantime must not carry the drained mark over it.
 #[test]
 fn a_refused_debt_write_keeps_the_resumed_relink_queued() {
     let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
     let debt = scope_exit_debt_key(&kdf::enc_subkey(&SECRET));
     let staging = fx.owner_device.staging_store.inner().clone();
-    let relink_queued = || {
-        let raw = block_on(staging.queued_ops()).expect("the queue reads");
-        decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
-            .mine
-            .iter()
-            .any(|(_, op)| op.relocation().is_some())
-    };
-    assert!(relink_queued(), "the stop left the relink queued");
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
     staging.fail_staged_writes_at(&debt);
 
     resume(&mut fx);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert!(relink_queued(), "the refused write kept the relink queued");
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the refused write kept the relink queued"
+    );
     assert_eq!(
         published_read_epoch(&fx.world, &fx.blocks, fx.folder),
         before,
         "and owed no cut that is not durable"
     );
+    // The kept ops around the relink expire, and a later rename publishes and
+    // leaves while the write is still refused, so the drained mark reaches as
+    // far as the relink lets it.
+    let later = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Rename {
+        node: later,
+        new_name: "renamed".into(),
+    }))
+    .expect("the rename queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the relink outlived the ops around it"
+    );
 
     staging.heal_staged_writes();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(
-        !relink_queued(),
+        !relink_queued(&fx.owner_device),
         "the next pass owed the cut and dropped it"
     );
     assert_eq!(

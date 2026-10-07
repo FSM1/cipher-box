@@ -1925,6 +1925,16 @@ mod tests {
         for (label, op, owed) in cases {
             assert_eq!(expired_exit(&base, &op, TWO_GRANTED), owed, "{label}");
         }
+        assert_eq!(
+            ScopeExit::of(
+                &base,
+                &relink(12, GONE, ScopeCrossing::ExitsGrantedSource),
+                TWO_GRANTED
+            )
+            .dropped,
+            None,
+            "a replay drop has no mark, so a lost destination owes nothing"
+        );
     }
 
     /// A delete unlinks its target from every folder that links it, and a pass

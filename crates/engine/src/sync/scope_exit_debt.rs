@@ -67,7 +67,7 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
     session: &RefCell<BTreeSet<NodeId>>,
     vault_root: NodeId,
 ) -> Vec<(NodeId, &'static str)> {
-    adopt_owed_cuts(staging, seal, enc_secret, session).await;
+    let read = adopt_owed_cuts(staging, seal, enc_secret, session).await;
     if session.borrow().is_empty() {
         return Vec::new();
     }
@@ -92,7 +92,7 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
     // A refused write leaves the obligation in memory alone, which is the state
     // the record exists to improve on, so the roots it would have named are
     // reported under that rather than under what stopped their rotation.
-    let durable = record_owed_cuts(staging, seal, enc_secret, &held).await;
+    let durable = read && record_owed_cuts(staging, seal, enc_secret, &held).await;
     cut.failed
         .iter()
         .filter(|(root, _)| held.contains(root))
@@ -128,13 +128,7 @@ pub(crate) async fn owe_cut<St: StagingStore>(
     session: &RefCell<BTreeSet<NodeId>>,
     scope_root: NodeId,
 ) -> bool {
-    adopt_owed_cuts(staging, seal, enc_secret, session).await;
-    let owed = {
-        let mut session = session.borrow_mut();
-        session.insert(scope_root);
-        session.clone()
-    };
-    record_owed_cuts(staging, seal, enc_secret, &owed).await
+    owe(staging, seal, enc_secret, session, scope_root, true).await
 }
 
 /// [`owe_cut`] for a caller that still holds what names the cut: a refused
@@ -147,9 +141,28 @@ pub(crate) async fn owe_cut_durably<St: StagingStore>(
     session: &RefCell<BTreeSet<NodeId>>,
     scope_root: NodeId,
 ) -> bool {
+    owe(staging, seal, enc_secret, session, scope_root, false).await
+}
+
+/// Owe `scope_root` and write the record. A record that will not read is not
+/// written over, because the write replaces every root it holds.
+async fn owe<St: StagingStore>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    session: &RefCell<BTreeSet<NodeId>>,
+    scope_root: NodeId,
+    keep_when_refused: bool,
+) -> bool {
+    let read = adopt_owed_cuts(staging, seal, enc_secret, session).await;
     let owed_before = session.borrow().contains(&scope_root);
-    let durable = owe_cut(staging, seal, enc_secret, session, scope_root).await;
-    if !durable && !owed_before {
+    let owed = {
+        let mut session = session.borrow_mut();
+        session.insert(scope_root);
+        session.clone()
+    };
+    let durable = read && record_owed_cuts(staging, seal, enc_secret, &owed).await;
+    if !durable && !keep_when_refused && !owed_before {
         session.borrow_mut().remove(&scope_root);
     }
     durable
@@ -160,19 +173,25 @@ pub(crate) async fn owe_cut_durably<St: StagingStore>(
 /// The restart path: an op that has already published has left the queue, so no
 /// replay re-supplies its trigger and this record is the only thing that still
 /// names the scope the move left.
+///
+/// Answers `false` when the store does not answer the read, so the caller does
+/// not write over a record it has not seen. An absent or unopenable record reads
+/// as nothing owed.
 async fn adopt_owed_cuts<St: StagingStore>(
     staging: &St,
     seal: BookkeepingSeal<'_>,
     enc_secret: &X25519Secret,
     session: &RefCell<BTreeSet<NodeId>>,
-) {
-    let Ok(Some(blob)) = staging.staged_bytes(&scope_exit_debt_key(enc_secret)).await else {
-        return;
+) -> bool {
+    let blob = match staging.staged_bytes(&scope_exit_debt_key(enc_secret)).await {
+        Ok(Some(blob)) => blob,
+        Ok(None) => return true,
+        Err(_) => return false,
     };
-    let Some(owed) = open_owed_cuts(seal, &blob) else {
-        return;
-    };
-    session.borrow_mut().extend(owed);
+    if let Some(owed) = open_owed_cuts(seal, &blob) {
+        session.borrow_mut().extend(owed);
+    }
+    true
 }
 
 /// Write `owed` through to the staging store, removing the record once nothing
@@ -585,6 +604,77 @@ mod tests {
 
         assert_eq!(owed, vec![(node(3), "debt-not-durable")]);
         assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// The record holds what an earlier session owed, so a read that fails must
+    /// not let a write replace it. The owe is refused, and a later read that
+    /// answers adds to the record.
+    #[test]
+    fn an_owe_over_a_record_that_will_not_read_writes_nothing() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(20));
+        let mine = secret(9);
+        let owe = |session: &RefCell<BTreeSet<NodeId>>, durably: bool| {
+            let seal = BookkeepingSeal::new(&mine, &entropy);
+            block_on(async {
+                if durably {
+                    owe_cut_durably(&staging, seal, &mine, session, node(4)).await
+                } else {
+                    owe_cut(&staging, seal, &mine, session, node(4)).await
+                }
+            })
+        };
+        assert!(owe(&RefCell::new(BTreeSet::from([node(3)])), false));
+        staging.fail_staged_reads_under(SCOPE_EXIT_DEBT_PREFIX);
+
+        for durably in [false, true] {
+            let session = RefCell::new(BTreeSet::new());
+            assert!(!owe(&session, durably), "the owe is refused");
+            assert_eq!(
+                session.borrow().contains(&node(4)),
+                !durably,
+                "and a caller that keeps its own record owes nothing new"
+            );
+        }
+        staging.heal_staged_reads();
+        assert_eq!(
+            stored(&staging, &entropy, &mine),
+            Some(BTreeSet::from([node(3), node(4)])),
+            "the first owe wrote both roots, and the refused ones wrote nothing"
+        );
+    }
+
+    /// The same rule at the settle: a pass that cut every root it held in
+    /// memory must not clear a record it could not read.
+    #[test]
+    fn a_settle_over_a_record_that_will_not_read_keeps_it() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(21));
+        let mine = secret(9);
+        block_on(owe_cut(
+            &staging,
+            BookkeepingSeal::new(&mine, &entropy),
+            &mine,
+            &RefCell::new(BTreeSet::new()),
+            node(3),
+        ));
+        staging.fail_staged_reads_under(SCOPE_EXIT_DEBT_PREFIX);
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::cutting_everything(),
+            &RefCell::new(BTreeSet::from([node(4)])),
+        );
+
+        assert!(owed.is_empty());
+        staging.heal_staged_reads();
+        assert_eq!(
+            stored(&staging, &entropy, &mine),
+            Some(BTreeSet::from([node(3)])),
+            "the record still names the root it could not read"
+        );
     }
 
     /// A cut that landed owes nothing, so a refused **removal** raises no alarm:
