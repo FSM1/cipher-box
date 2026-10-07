@@ -35,7 +35,7 @@ use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig,
@@ -968,6 +968,21 @@ fn stored_cursor(device: &FakeDevice) -> Option<RenewalCursor> {
     .expect("the store reads")
 }
 
+/// Store a cursor on `device` that holds the cycle that starts now.
+fn hold_the_cycle(world: &FakeWorld, device: &FakeDevice) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(
+        CursorStore::new(
+            &device.staging_store,
+            BookkeepingSeal::new(&enc, &entropy),
+            &enc,
+        )
+        .save(&RenewalCursor::starting(world.scheduler.now())),
+    )
+    .expect("the cycle is held");
+}
+
 /// Whether `request` registers `name` with the registry.
 fn registers(request: &HttpRequest, name: &str) -> bool {
     request.method == HttpMethod::Post
@@ -1890,6 +1905,357 @@ fn a_lapsed_vault_revives_at_the_recovery_pace() {
             "each file revives once the pace allows",
         );
     }
+}
+
+/// ADR 0062 consequence 1: a read that opens a lapsed folder moves it to the
+/// front of the revival order. In a vault that lapsed whole, the folder the
+/// walk reaches last revives in the first pass, while the recovery pace still
+/// holds back names that the cursor reaches before it, and it lists on the
+/// next read.
+#[test]
+fn a_read_that_opens_a_lapsed_folder_revives_it_first() {
+    const FOLDERS: usize = 40;
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut folders = written_then_left(&world, &blocks, |engine, tasks| {
+        for at in 0..FOLDERS {
+            block_on(engine.command(Command::Create {
+                parent: ROOT,
+                name: format!("f{at}"),
+                kind: NodeKind::Folder,
+            }))
+            .expect("a create stages");
+        }
+        tick(&world, engine, tasks);
+        let mut folders: Vec<NodeId> = (0..FOLDERS)
+            .map(|at| child_named(engine, ROOT, &format!("f{at}")))
+            .collect();
+        folders.sort();
+        let last = *folders.last().expect("a folder");
+        write_file(&world, engine, tasks, last, "inside.txt");
+        folders
+    });
+    let opened = folders.pop().expect("the folder the walk reaches last");
+    let before = record_at(&world, &write_name(opened));
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    block_on(engine.set_focus(Some(opened))).expect("the focus moves");
+    assert!(
+        unserved(&world, &write_name(opened)),
+        "the read finds the folder lapsed",
+    );
+
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &write_name(opened)),
+        "the first pass revives the opened folder",
+    );
+    assert_eq!(
+        record_at(&world, &write_name(opened)).sequence,
+        before.sequence + 1,
+        "the first pass revives the opened folder",
+    );
+    assert!(
+        folders
+            .iter()
+            .any(|folder| unserved(&world, &write_name(*folder))),
+        "the pace still holds back a folder the cursor reaches first",
+    );
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    block_on(engine.set_focus(Some(opened))).expect("the focus moves");
+    child_named(&engine, opened, "inside.txt");
+}
+
+/// A held cycle runs no cursor, so the queue keeps a folder whose revival met
+/// a 429 after the focus left it, and the next pass revives it.
+#[test]
+fn a_queued_folder_that_meets_a_429_in_a_held_cycle_revives_on_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    hold_the_cycle(&world, &device);
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    // No later read queues the folder again.
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the 429 holds the revival back");
+
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "the next pass revives the queued folder"
+    );
+    assert_eq!(record_at(&world, &name).sequence, before.sequence + 1);
+}
+
+/// A manual refresh queues a folder that the snapshot cache still holds. The
+/// pass admits the cached copy, and its revival meets a 429: the entry stays
+/// until a signature settles it.
+#[test]
+fn a_queued_folder_with_a_cached_copy_stays_queued_after_a_429() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let writer = world.device(b"the device that wrote");
+    let nodes = written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    hold_the_cycle(&world, &writer);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &writer, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on_while_ticking(engine.command(Command::ManualRefresh), &mut tasks)
+        .expect_err("no endpoint serves the lapsed folder");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the 429 holds the revival back");
+
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence + 1,
+        "the next pass revives the queued folder",
+    );
+}
+
+/// A held pass whose queued folder sits in a scope with a doomed-name journal
+/// entry that does not open names the journal, not the folder.
+#[test]
+fn a_held_pass_names_the_journal_of_a_scope_with_a_queued_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    hold_the_cycle(&world, &device);
+    let entry = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, NodeId([7; 16]));
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(&entry, b"not a sealed reclamation"),
+    )
+    .expect("stage the entry");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+
+    let failed: Vec<(String, String)> = core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::RenewalFailed {
+                routing_key,
+                detail,
+            } => Some((routing_key, detail)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        failed
+            .iter()
+            .any(|(key, detail)| key == write_name(ROOT).as_str()
+                && detail.contains("doomed-name journal")),
+        "the held pass names the journal",
+    );
+    assert!(
+        failed.iter().all(|(key, _)| key != name.as_str()),
+        "and reports nothing for the folder",
+    );
+    assert!(unserved(&world, &name), "the folder waits for the journal");
+}
+
+/// A transient failure of a queued visit keeps no cursor back: the queue
+/// retries it itself.
+#[test]
+fn a_transient_queued_visit_keeps_no_cursor_back() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "the cursor visit revives the folder"
+    );
+    let cursor = stored_cursor(&device).expect("the pass stores its cursor");
+    assert_eq!(
+        cursor.kept_back_since, None,
+        "the cursor moves past the queued 429"
+    );
+}
+
+/// A session whose queued folder `notes` the next held pass visits first.
+fn a_queued_folder_in_a_held_cycle(
+    world: &FakeWorld,
+    blocks: &Blocks,
+) -> (
+    IpnsName,
+    NodeId,
+    Engine<FakeSeamTypes>,
+    EventStream,
+    Vec<BoxedTask>,
+) {
+    let nodes = written_then_left(world, blocks, |engine, tasks| {
+        vec![create_folder(world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let lapsed = world.record_store.lapse(name.as_str()).expect("a record");
+    blocks.cache_for_recovery(name.as_str(), lapsed);
+
+    let device = world.device(b"a later session");
+    hold_the_cycle(world, &device);
+    let (engine, events, mut tasks) = boot(world, blocks, &device, 2);
+    tick(world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    (name, nodes[0], engine, events, tasks)
+}
+
+fn walk_refusals(events: &mut EventStream) -> usize {
+    core::iter::from_fn(|| events.try_next())
+        .filter(|event| {
+            matches!(event, Event::AttributableAbuse { description }
+                if description.ends_with(WALK_REFUSED))
+        })
+        .count()
+}
+
+/// A scope root that the gate rejects drops the queued folders of its scope,
+/// and the walk sends one trust event. Once the root admits again, the folder
+/// stays lapsed until a read queues it again, and the next pass revives it.
+#[test]
+fn a_scope_root_the_gate_rejects_drops_its_queued_folders() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, folder, engine, mut events, mut tasks) =
+        a_queued_folder_in_a_held_cycle(&world, &blocks);
+    let head_cid = core::str::from_utf8(&record_at(&world, &write_name(ROOT)).value)
+        .expect("utf8 value")
+        .strip_prefix("/ipfs/")
+        .expect("an /ipfs/ pointer")
+        .to_owned();
+    let head = blocks.get(&head_cid).expect("the head block");
+    blocks.replace(&head_cid, b"not an envelope".to_vec());
+    while events.try_next().is_some() {}
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        walk_refusals(&mut events),
+        1,
+        "the walk sends one trust event"
+    );
+
+    blocks.replace(&head_cid, head);
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    // The walk waits a poll for the boundary walk to read the root again.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the rejection dropped the entry");
+
+    block_on(engine.set_focus(Some(folder))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "a read queues the folder again, and the pass revives it",
+    );
+}
+
+/// The endpoints serve no scope root and the recovery copy fails the root
+/// adopt: the queued folders of that scope leave the queue, and two passes
+/// send one trust event.
+#[test]
+fn a_scope_root_whose_recovery_copy_the_gate_rejects_drops_its_queued_folders() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, folder, engine, mut events, mut tasks) =
+        a_queued_folder_in_a_held_cycle(&world, &blocks);
+    let root = write_name(ROOT);
+    let current = record_at(&world, &root);
+    let garbage = blocks.put(b"not an envelope".to_vec());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let forged = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{garbage}").as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    let served = world.record_store.lapse(root.as_str()).expect("a record");
+    // The liveness re-PUT would serve the root again.
+    world.record_store.fail_put_for(root.as_str());
+    blocks.cache_for_recovery(root.as_str(), forged);
+    while events.try_next().is_some() {}
+    for _ in 0..2 {
+        world.scheduler.advance(Duration::from_secs(60 * 60));
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(
+        walk_refusals(&mut events),
+        1,
+        "two passes send one trust event"
+    );
+
+    world.record_store.heal_put_for(root.as_str());
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root.as_str(), served.clone());
+    }
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the rejection dropped the entry");
+
+    block_on(engine.set_focus(Some(folder))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "a read queues the folder again, and the pass revives it",
+    );
 }
 
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a

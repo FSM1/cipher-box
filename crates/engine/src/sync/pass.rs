@@ -924,6 +924,7 @@ where
                 }
                 folder_verdict = folder_verdict.worst(settle_focus_leg(
                     &state.observed_unlinks,
+                    &state.lapsed_folders,
                     &state.focus_refreshed,
                     &self.seams.events,
                     nodes,

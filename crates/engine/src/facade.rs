@@ -7275,6 +7275,7 @@ where {
         let descendant_scope_roots = self.state.descendant_scope_roots.clone();
         let recovery_pace = self.state.recovery_pace.clone();
         let bin_index_unsettled = self.state.bin_index_unsettled.clone();
+        let lapsed_folders = self.state.lapsed_folders.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
@@ -7462,6 +7463,7 @@ where {
                         unfinished_write_cuts: &unfinished,
                         owed: &owed_rotation,
                         pace: &recovery_pace,
+                        lapsed: &lapsed_folders,
                     };
                     // A scope this session minted holds seeds before the next
                     // boundary walk names it.
@@ -10983,6 +10985,7 @@ where {
         move |nodes, report| {
             settle_focus_leg(
                 &self.state.observed_unlinks,
+                &self.state.lapsed_folders,
                 &self.state.focus_refreshed,
                 &self.events,
                 nodes,

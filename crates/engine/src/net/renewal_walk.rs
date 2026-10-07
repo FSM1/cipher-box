@@ -7,7 +7,7 @@ pub mod cursor;
 
 use core::cell::RefCell;
 use core::time::Duration;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ChildRef, NodeKind, ReadBody};
@@ -101,6 +101,29 @@ pub(crate) const OWED_UNREAD_NO_REVIVAL: &str =
 /// cycle without them, and [`CYCLE_HOLD`] would then hold for 7 days.
 pub const SCOPE_ROOTS_WAIT_POLLS: u32 = 10;
 
+/// The most folders the lapsed-folder queue holds; a new entry drops the
+/// oldest.
+pub(crate) const MAX_LAPSED_FOLDERS: usize = 64;
+
+/// A folder of an owned scope that a read found `Absent` on every endpoint.
+/// The next pass revives it before its cursor (ADR 0062 consequence 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LapsedFolder {
+    pub(crate) scope_id: [u8; 16],
+    pub(crate) node_id: [u8; 16],
+    pub(crate) name: IpnsName,
+}
+
+/// Queue `folder` once, as the newest entry.
+pub(crate) fn queue_lapsed_folder(queue: &RefCell<VecDeque<LapsedFolder>>, folder: LapsedFolder) {
+    let mut queue = queue.borrow_mut();
+    queue.retain(|queued| queued.node_id != folder.node_id);
+    if queue.len() >= MAX_LAPSED_FOLDERS {
+        queue.pop_front();
+    }
+    queue.push_back(folder);
+}
+
 /// One owned scope the walk roots at.
 pub(crate) struct WalkScope {
     pub(crate) scope_id: [u8; 16],
@@ -158,6 +181,8 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     pub(crate) owed: &'a OwedCell,
     /// The session's recovery pace, which each revival waits for.
     pub(crate) pace: &'a RecoveryPace,
+    /// The folders a read found lapsed, which a pass visits first.
+    pub(crate) lapsed: &'a RefCell<VecDeque<LapsedFolder>>,
 }
 
 /// What one pass did.
@@ -298,6 +323,8 @@ struct Pass<'s> {
     owed_unread: bool,
     /// The pass reported a revival that the unread record refused.
     no_revival_reported: bool,
+    /// The owned scope roots whose record the gate rejected in this pass.
+    rejected_roots: BTreeSet<[u8; 16]>,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -390,14 +417,17 @@ where
                     .collect()
             })
             .unwrap_or_default();
-        if held {
-            return WalkReport {
-                underived,
-                ..WalkReport::default()
-            };
+        let queued = self.lapsed.borrow().clone();
+        if held && queued.is_empty() {
+            return held_report(underived);
         }
         let owner_tag = owner_tag(self.enc_secret);
+        // A held pass scans the journal too: a queued visit skips a doomed
+        // name as a cursor visit does. It reports only its queued visits.
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
+            if held {
+                return held_report(underived);
+            }
             return stalled(scopes, JOURNAL_UNREADABLE);
         };
         // A record that does not read skips no scope: a lapsed name loses the
@@ -407,22 +437,38 @@ where
             Ok(owed) => (owed.within_bound, false),
             Err(_) => (BTreeSet::new(), true),
         };
-        let report = WalkReport {
-            failed: scopes
-                .iter()
-                .filter_map(|scope| {
-                    if doomed.unreadable.contains(&scope.scope_id) {
-                        Some(JOURNAL_UNREADABLE)
-                    } else if owed_unread {
-                        Some(OWED_UNREAD)
-                    } else {
-                        None
-                    }
-                    .map(|detail| (scope.name.as_str().to_owned(), detail))
-                })
-                .collect(),
-            underived,
-            ..WalkReport::default()
+        let report = if held {
+            WalkReport {
+                failed: scopes
+                    .iter()
+                    .filter(|scope| {
+                        doomed.unreadable.contains(&scope.scope_id)
+                            && queued
+                                .iter()
+                                .any(|folder| folder.scope_id == scope.scope_id)
+                    })
+                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
+                    .collect(),
+                ..held_report(underived)
+            }
+        } else {
+            WalkReport {
+                failed: scopes
+                    .iter()
+                    .filter_map(|scope| {
+                        if doomed.unreadable.contains(&scope.scope_id) {
+                            Some(JOURNAL_UNREADABLE)
+                        } else if owed_unread {
+                            Some(OWED_UNREAD)
+                        } else {
+                            None
+                        }
+                        .map(|detail| (scope.name.as_str().to_owned(), detail))
+                    })
+                    .collect(),
+                underived,
+                ..WalkReport::default()
+            }
         };
         let mut pass = Pass {
             cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
@@ -441,10 +487,27 @@ where
             owed,
             owed_unread,
             no_revival_reported: false,
+            rejected_roots: BTreeSet::new(),
             owner_tag,
             scopes,
             bins,
         };
+        let mut settled = Vec::new();
+        for folder in &queued {
+            if !still_running() {
+                break;
+            }
+            if self.visit_lapsed(&mut pass, folder).await {
+                settled.push(folder);
+            }
+        }
+        self.lapsed
+            .borrow_mut()
+            .retain(|folder| !settled.contains(&folder));
+        if held {
+            self.flush(&mut pass).await;
+            return pass.report;
+        }
         if pass.cursor.root.is_none() {
             pass.cursor = RenewalCursor::starting(now);
             pass.cursor.root = pass.roots().first().copied();
@@ -522,7 +585,12 @@ where
                     let mut admission = self.admit_root(scope).await;
                     let mut revival = None;
                     if matches!(admission, Err(ScopeRootAdmission::Gone)) {
+                        let rejected = pass.report.rejected.len();
                         revival = self.revive_root(pass, scope).await;
+                        // The recovery copy failed the root adopt.
+                        if pass.report.rejected.len() > rejected {
+                            pass.rejected_roots.insert(scope_id);
+                        }
                         if revival == Some(true) {
                             admission = self.admit_root(scope).await;
                         }
@@ -545,7 +613,13 @@ where
                                 admitted,
                             })
                         }
-                        Err(ScopeRootAdmission::Rejected | ScopeRootAdmission::HeadBlockAbsent) => {
+                        Err(
+                            rejection @ (ScopeRootAdmission::Rejected
+                            | ScopeRootAdmission::HeadBlockAbsent),
+                        ) => {
+                            if matches!(rejection, ScopeRootAdmission::Rejected) {
+                                pass.rejected_roots.insert(scope_id);
+                            }
                             pass.report.rejected.push(scope.name.as_str().to_owned());
                             None
                         }
@@ -742,6 +816,50 @@ where
                 Some((plane, node_id, body))
             }
         }
+    }
+
+    /// Visit a folder from the lapsed-folder queue, while the base still names
+    /// it at the queued name, under the plane of its scope root. Whether the
+    /// queue can drop it: the base no longer names it, the walk renews no name
+    /// in its scope, the gate rejected its scope root, or the visit ended with
+    /// no transient failure. The folder's own visit keeps no cursor back; a
+    /// scope root that keeps the entry keeps the cursor back only where
+    /// `material` does.
+    async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) -> bool {
+        let named = self
+            .guards
+            .base
+            .borrow()
+            .node(NodeId(folder.node_id))
+            .is_some_and(|meta| {
+                meta.kind == crate::facade::NodeKind::Folder
+                    && meta.ipns_name.as_deref() == Some(folder.name.as_str().as_bytes())
+            });
+        if !named
+            || !pass
+                .scopes
+                .iter()
+                .any(|scope| scope.scope_id == folder.scope_id)
+        {
+            return true;
+        }
+        // A visit there reports `NO_RECORD`; the pass names the journal.
+        if pass.doomed.unreadable.contains(&folder.scope_id) {
+            return false;
+        }
+        let material = self
+            .material(pass, folder.scope_id)
+            .await
+            .map(|material| queued_plane(material, folder));
+        let root_rejected = pass.rejected_roots.contains(&folder.scope_id);
+        let plane = match queued_step(material, root_rejected) {
+            Ok(plane) => plane,
+            Err(drop) => return drop,
+        };
+        let kept_back = core::mem::replace(&mut pass.kept_back, false);
+        self.admit(pass, &plane, folder.node_id, &folder.name, false)
+            .await;
+        !core::mem::replace(&mut pass.kept_back, kept_back)
     }
 
     /// Visit one child a folder names.
@@ -1312,6 +1430,14 @@ where
     )
 }
 
+/// A held pass before its queued visits: it reports only `underived`.
+fn held_report(underived: Vec<[u8; 16]>) -> WalkReport {
+    WalkReport {
+        underived,
+        ..WalkReport::default()
+    }
+}
+
 /// A pass that renews nothing, and reports `detail` for each owned scope root.
 fn stalled(scopes: &[WalkScope], detail: &'static str) -> WalkReport {
     WalkReport {
@@ -1376,6 +1502,30 @@ pub(crate) fn transient_renewal(outcome: &Result<Option<PublishOutcome>, Publish
             | PublishVerdict::RefusedUnaddressed
             | PublishVerdict::RefusedOversized => false,
         },
+    }
+}
+
+/// The plane a queued folder reads under, when the admitted scope root's write
+/// seed derives its name. The focus leg queues the scope it read under, which
+/// can be another plane: a nested scope root, or the second scope of a move.
+fn queued_plane(material: &ScopeMaterial, folder: &LapsedFolder) -> Option<Plane> {
+    material.signer_for(&folder.node_id, &folder.name)?;
+    Some(Plane {
+        scope_id: folder.scope_id,
+        read_seed: material.admitted.read_scope_seed.clone(),
+        seed_stamp: Some(material.admitted.read_epoch),
+    })
+}
+
+/// Whether a queued folder reads under `material`, the plane of its admitted
+/// scope root, or settles before any visit: `Err(true)` drops it, as the gate
+/// rejected the root; `Err(false)` keeps it, as the root did not admit or the
+/// cursor visit reads the folder under its own plane.
+fn queued_step(material: Option<Option<Plane>>, root_rejected: bool) -> Result<Plane, bool> {
+    match material {
+        Some(Some(plane)) => Ok(plane),
+        Some(None) => Err(false),
+        None => Err(root_rejected),
     }
 }
 
@@ -1513,6 +1663,60 @@ mod tests {
                 .is_none(),
             "an old name is never renewed",
         );
+    }
+
+    /// A queued folder whose name the scope root's write seed does not derive
+    /// reads under no plane, and the cursor visit covers it.
+    #[test]
+    fn a_queued_folder_under_another_plane_reads_under_none() {
+        let (current, other, node_id) = ([1u8; 32], [2u8; 32], [9u8; 16]);
+        let material = material(current);
+        let folder = |seed: &[u8; 32]| LapsedFolder {
+            scope_id: [0; 16],
+            node_id,
+            name: derive_write_name(seed, &node_id),
+        };
+        assert!(queued_plane(&material, &folder(&current)).is_some());
+        assert!(queued_plane(&material, &folder(&other)).is_none());
+        assert!(
+            matches!(
+                queued_step(Some(queued_plane(&material, &folder(&other))), false),
+                Err(false)
+            ),
+            "the entry stays, and no visit sends an event",
+        );
+    }
+
+    /// A root the gate rejects drops the queued folders of its scope; a root
+    /// that does not admit for another reason keeps them.
+    #[test]
+    fn a_rejected_scope_root_drops_its_queued_folders() {
+        assert!(matches!(queued_step(None, true), Err(true)));
+        assert!(matches!(queued_step(None, false), Err(false)));
+    }
+
+    /// A folder queued again moves to the newest place, and a full queue
+    /// drops its oldest entry.
+    #[test]
+    fn the_lapsed_folder_queue_keeps_each_folder_once_and_drops_the_oldest() {
+        let folder = |at: usize| {
+            let node_id = [at as u8; 16];
+            LapsedFolder {
+                scope_id: [0; 16],
+                node_id,
+                name: derive_write_name(&[1u8; 32], &node_id),
+            }
+        };
+        let queue = RefCell::new(VecDeque::new());
+        for at in 0..MAX_LAPSED_FOLDERS {
+            queue_lapsed_folder(&queue, folder(at));
+        }
+        queue_lapsed_folder(&queue, folder(0));
+        assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
+        assert_eq!(queue.borrow().back(), Some(&folder(0)));
+        queue_lapsed_folder(&queue, folder(MAX_LAPSED_FOLDERS));
+        assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
+        assert_eq!(queue.borrow().front(), Some(&folder(2)), "the oldest went");
     }
 
     #[test]

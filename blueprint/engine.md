@@ -256,6 +256,22 @@ bytes (FSM1/cipher-box-next#28 D2).
   lapsed when the fan-out reads it `Absent`, or when the cached copy the read
   admitted is past its EOL and the fan-out reads `Absent`. A visit that
   revives does not count toward the 500 visits; the recovery pace bounds it.
+  A focus read that finds an owned folder `Absent` on every endpoint puts it
+  in the session's lapsed-folder queue (at most 64 folders, the oldest drops).
+  Each pass visits the queued folders before its cursor, and also in a held
+  cycle, while the base still names each folder at the queued name. These
+  visits take the same pace, the same skips and the same owed-rotation refusal
+  (ADR 0062 consequence 1). A folder stays queued until its visit ends with
+  no transient failure (a signature, or a refusal for good), the base stops
+  naming it, or the gate rejects its scope root, through the read or through
+  the recovery copy. A read that admits a cached copy does not settle it. A
+  transient failure of the folder's own visit, an owed scope, or a scope root
+  that no endpoint and no recovery record serves keeps the entry and keeps no
+  cursor back. A scope root that is unavailable, or whose revival meets a
+  transient failure, keeps the entry and keeps the cursor back, as a cursor
+  visit does. A queued folder whose name the scope root's write seed does not
+  derive waits for its cursor visit. A held pass reports only its queued
+  visits, and the doomed-name journal of a scope that holds a queued folder.
   A pass that meets a transient failure (a transport error, a 401 after the
   refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
   failed PUT or a store error) keeps the stored cursor, so the next pass
