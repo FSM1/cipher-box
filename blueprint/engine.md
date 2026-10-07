@@ -188,8 +188,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   record; each of these only when the load writes a sequence floor at the
   revived sequence or above, so no drain write signs a second value there
   (ADR 0066); and a 404 at the recovery endpoint after every endpoint reads
-  `Absent`. A raw read lifts nothing, and a served record past its EOL counts
-  as lapsed. A chain or scope pointer revival that another
+  `Absent`. A raw read lifts nothing unless the durable floor already reaches
+  the sequence it served, and a served record past its EOL counts as lapsed. A chain or scope pointer revival that another
   device supersedes is retryable, and a scope pointer revival that a later
   pass can land or read back keeps the enrolment open. A lapsed vault pointer
   that only the produce bar refuses (ADR 0067 D4) is no trust violation: the
@@ -200,9 +200,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   the pace. Each session spends one paced recovery fetch for each owned scope
   that has no pointer record, which answers 404. The first hourly pass waits
   for these fetches before the walk, so N such scopes add about N / 25
-  minutes. A revival holds nothing in `HeldRecords` and raises no floor
-  above `S`; the gated read that follows it admits the record at `S + 1` and
-  raises the floor to it. After a bin index revival the session loads the bin
+  minutes. A revival holds nothing in `HeldRecords`. When its publish is
+  confirmed, a revival of the vault pointer chain, the settings record or the
+  bin index raises the floor to the sequence it signed through the own-publish
+  site (`raise_to_revived`), so after a restart a load refuses the older
+  record at `S`; the gated read that follows it admits the record at `S + 1`. After a bin index revival the session loads the bin
   index through the gate and holds it. No revival signs a name in a scope that
   has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
   not read, the session sends `renewalFailed` for it and revives no vault root
@@ -457,7 +459,8 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
-  (`publish_bin_index`, `publish_settings`), the name sequence of a
+  (`publish_bin_index`, `publish_settings`), the name sequence after a
+  confirmed revival of an owner record (`raise_to_revived`), the name sequence of a
   value this device signed in a liveness renewal, after `Published`
   (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more

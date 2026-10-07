@@ -426,6 +426,25 @@ where
     revive(api, seams, pace, &[request]).await.remove(0)
 }
 
+/// Raise the sequence floor of `name` to the sequence a revival signed, once
+/// its publish is confirmed: the own-publish raise of a landed owner record
+/// (ADR 0067 D2 (b)). After a restart, a load then refuses an older record at
+/// `S` rather than let a later write sign a second value at `S + 1`.
+pub(crate) async fn raise_to_revived<F: FloorStore>(
+    floors: &F,
+    name: &IpnsName,
+    result: &Result<Revived, ReviveError>,
+) {
+    if let Ok(Revived {
+        outcome: PublishOutcome::Published { sequence },
+        ..
+    }) = result
+    {
+        let _ =
+            floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), *sequence).await;
+    }
+}
+
 /// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
 pub(crate) async fn reads_absent<T: RecordTransport>(transport: &T, name: &IpnsName) -> bool {
     matches!(

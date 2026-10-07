@@ -19,7 +19,7 @@ use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
 use super::revival::{
     Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived,
-    revive_name,
+    raise_to_revived, revive_name,
 };
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::{ApiClient, ApiError};
@@ -397,6 +397,7 @@ where
                     plane: read,
                 };
                 let result = revive_name(api, seams, pace, request).await;
+                raise_to_revived(seams.floors, &name, &result).await;
                 let stop = result.is_err();
                 pass.unconfirmed = match &result {
                     Ok(_) | Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {

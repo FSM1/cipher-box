@@ -2375,20 +2375,11 @@ fn a_load_below_the_revived_sequence_keeps_the_bin_index_hold() {
     let blocks = Blocks::default();
     let (_, before) = a_binned_vault_lapsed(&world, &blocks);
     let bin = bin_name();
-    let old = IpnsRecord::create_v2(
-        &kdf::bin_index_ipns_keypair(&SECRET),
-        &before.value,
-        before.sequence,
-        2_000_000_000,
-        &eol_from(UnixMillis(0)),
-    )
-    .marshal();
-    // The revival reads `Absent`, corroborates and confirms its PUT; every
-    // read after that serves the record at `S` again.
-    let endpoints = world.record_store.endpoints().len();
+    let old = expired_bin_record(&before);
+    // Every read after the revival's PUT serves the record at `S` again.
     world
         .record_store
-        .serve_gets_for_after(bin.as_str(), 3 * endpoints, usize::MAX, Some(old));
+        .serve_after_put(bin.as_str(), 0, Some(old));
     // The first liveness pass meets a 429, so the start's hold stands.
     let fetches = Arc::new(core::sync::atomic::AtomicUsize::new(0));
     let device = world.device(b"a device after 100 days offline");
@@ -2426,5 +2417,69 @@ fn a_load_below_the_revived_sequence_keeps_the_bin_index_hold() {
         record_at(&world, &bin).sequence,
         before.sequence + 2,
         "a load at S + 1 lifts the hold, and the delete publishes its entry"
+    );
+}
+
+/// The bin index record `before` carries, signed again at its sequence with
+/// an EOL long past: the older record that endpoints can serve again.
+fn expired_bin_record(before: &VerifiedRecord) -> Vec<u8> {
+    IpnsRecord::create_v2(
+        &kdf::bin_index_ipns_keypair(&SECRET),
+        &before.value,
+        before.sequence,
+        2_000_000_000,
+        &eol_from(UnixMillis(0)),
+    )
+    .marshal()
+}
+
+/// ADR 0066: a bin index revival that lands raises the sequence floor to the
+/// sequence it signed, though the gated load after it reads nothing. After a
+/// restart that reads the revived record once and then the older record at
+/// `S`, the drain refuses `S` and signs nothing at `S + 1` a second time.
+#[test]
+fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (_, before) = a_binned_vault_lapsed(&world, &blocks);
+    let bin = bin_name();
+    let endpoints = world.record_store.endpoints().len();
+    // The revival's confirm read finds `S + 1`; the gated load after it finds
+    // nothing.
+    world
+        .record_store
+        .serve_after_put(bin.as_str(), endpoints, None);
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, tasks) = boot(&world, &blocks, &device, 2);
+    let revived = served_at(&world, &bin).expect("the revival landed");
+    assert_eq!(record_at(&world, &bin).sequence, before.sequence + 1);
+    assert_eq!(
+        block_on(
+            device
+                .floors(&SECRET)
+                .sequence_floor(bin.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
+        Some(before.sequence + 1),
+        "the confirmed revival raised the floor, with no gated load after it"
+    );
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    // The restart's first read finds `S + 1`; every read after it finds `S`.
+    world.record_store.serve_gets_for_after(
+        bin.as_str(),
+        endpoints,
+        usize::MAX,
+        Some(expired_bin_record(&before)),
+    );
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 3);
+    let fresh = write_file(&world, &mut engine, &mut tasks, ROOT, "fresh.txt");
+    block_on(engine.command(Command::Delete { node: fresh })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        served_at(&world, &bin),
+        Some(revived),
+        "the drain signs nothing at S + 1 again"
     );
 }

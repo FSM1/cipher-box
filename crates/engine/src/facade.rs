@@ -110,8 +110,8 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::revival::{
-    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent,
-    revive_name,
+    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead,
+    raise_to_revived, reads_absent, revive_name,
 };
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
@@ -4853,9 +4853,9 @@ const CHAIN_UNREVIVED: &str = "a lapsed index of the vault pointer chain did not
 enum BinIndexRevival {
     /// The fan-out reads it `Absent`, and the recovery endpoint holds no record.
     Unlapsed,
-    /// The fan-out serves a record within its EOL, which no gated load read
-    /// yet.
-    Served,
+    /// The fan-out serves a record within its EOL at `sequence`, which no
+    /// gated load read yet.
+    Served { sequence: u64 },
     /// The revival signed, and the gated load after it resolved the record.
     Revived,
     /// A lapsed record can still exist and revive later. A load must reach
@@ -4888,7 +4888,9 @@ where
         FanoutRecord::Found(record, _)
             if !crate::net::eol::is_expired(read.scheduler.now(), &record.validity) =>
         {
-            return BinIndexRevival::Served;
+            return BinIndexRevival::Served {
+                sequence: record.sequence,
+            };
         }
         // An endpoint that does not answer can hold the lapsed record.
         FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled { floor: 0 },
@@ -4900,6 +4902,7 @@ where
         plane: BinIndexRead { ..*read },
     };
     let result = revive_name(api, seams, pace, request).await;
+    raise_to_revived(read.floors, keys.name(), &result).await;
     let revived_at = match &result {
         Ok(revived) => Ok(match revived.outcome {
             PublishOutcome::Published { sequence } | PublishOutcome::Unconfirmed { sequence } => {
@@ -5968,8 +5971,18 @@ impl<T: SeamTypes> Engine<T> {
         // this for the same reason it skips provisioning above.
         if self.api_base_url.configured().is_some() {
             match bin_index {
-                BinIndexRevival::Unlapsed | BinIndexRevival::Served => {
-                    self.publish_genesis_bin_index(&api).await;
+                BinIndexRevival::Unlapsed => self.publish_genesis_bin_index(&api).await,
+                // A raw read settles nothing: only a gated load that resolves
+                // the record lets the drain write over it.
+                // A raw read settles only what the durable floor already
+                // covers: a drain write signs above that floor. Else only a
+                // gated load at the served sequence settles it.
+                BinIndexRevival::Served { sequence } => {
+                    if self.bin_floor_reaches(sequence).await {
+                        self.publish_genesis_bin_index(&api).await;
+                    } else if !self.hold_session_bin_index(sequence).await {
+                        self.state.bin_index_unsettled.set(Some(sequence));
+                    }
                 }
                 // The revival loaded and held the bin index.
                 BinIndexRevival::Revived => {}
@@ -6848,9 +6861,39 @@ impl<T: SeamTypes> Engine<T> {
             plane: read,
         };
         let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
+        raise_to_revived(&self.seams.floor_store, &name, &result).await;
         let signed = result.is_ok();
         emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
         signed
+    }
+
+    /// Load the session's bin index through the gate and hold it, settled at
+    /// `min` ([`hold_bin_index`]).
+    async fn hold_session_bin_index(&self, min: u64) -> bool {
+        let Some(session) = self.session.as_ref() else {
+            return false;
+        };
+        let keys = BinIndexKeys::derive(session.login_secret());
+        let read = BinIndexRead {
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            snapshots: &self.seams.snapshot_cache,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            keys: &keys,
+        };
+        hold_bin_index(&self.record_transport, &read, &self.state.held_records, min).await
+    }
+
+    /// Whether the session's durable bin index floor reached `min`
+    /// ([`bin_floor_reaches`]).
+    async fn bin_floor_reaches(&self, min: u64) -> bool {
+        let Some(session) = self.session.as_ref() else {
+            return false;
+        };
+        let keys = BinIndexKeys::derive(session.login_secret());
+        bin_floor_reaches(&self.seams.floor_store, &keys, min).await
     }
 
     /// Revive the lapsed bin index before its load ([`revive_and_hold_bin_index`]).
@@ -7332,12 +7375,13 @@ where {
                         // hold: a raw read can vanish before the drain loads.
                         bin_index_unsettled.set(match revival {
                             BinIndexRevival::Unlapsed | BinIndexRevival::Revived => None,
-                            BinIndexRevival::Served
-                                if hold_bin_index(&transport, &read, &held, min).await =>
+                            BinIndexRevival::Served { sequence }
+                                if hold_bin_index(&transport, &read, &held, min.max(sequence))
+                                    .await =>
                             {
                                 None
                             }
-                            BinIndexRevival::Served => Some(min),
+                            BinIndexRevival::Served { sequence } => Some(min.max(sequence)),
                             BinIndexRevival::Unsettled { floor } => Some(min.max(floor)),
                         });
                     }
