@@ -150,7 +150,7 @@ use crate::session::{SessionIdentity, SessionSecrets, SessionState};
 use crate::settings::{
     Placement, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad, SettingsOrigin,
     SettingsPublishError, VaultSettings, VaultSettingsSummary, adopt_settings_summary,
-    bin_retention_days, decide_placement, load_settings, placement_of, publish_settings_above,
+    bin_retention_days, decide_placement, load_settings, placement_of, publish_settings,
     reason_after_failed_save, report_settings_verdict, resolve_kept_bearer, settings_name,
     sign_above, summarize_settings,
 };
@@ -9793,7 +9793,7 @@ where {
             // The next pre-flight sets the flag again if the save does not land.
             self.state.byo_reconciled.set(false);
         }
-        let held = match publish_settings_above(
+        let held = match publish_settings(
             &self.record_transport,
             api,
             &self.seams.floor_store,

@@ -96,6 +96,7 @@ fn publish(
         &OrphanHeads::default(),
         secret,
         settings,
+        None,
     ))
     .expect("the settings record publishes");
 }
@@ -127,6 +128,7 @@ fn publish_unconfirmed(
         &OrphanHeads::default(),
         &SECRET,
         settings,
+        None,
     ))
     .expect_err("a transport that acks nothing back never confirms")
 }
@@ -269,6 +271,7 @@ fn consecutive_publishes_never_reuse_the_hpke_ephemeral() {
             &OrphanHeads::default(),
             &SECRET,
             &settings,
+            None,
         ))
         .expect("publish");
         let block = published_block(&device, &blocks, &settings_name(&SECRET));
@@ -499,6 +502,7 @@ fn a_settings_put_every_endpoint_refused_is_still_a_mark_of_a_choice() {
             &OrphanHeads::default(),
             &SECRET,
             &external_only(),
+            None,
         ))
         .is_err(),
         "every endpoint refused the record",
@@ -1282,6 +1286,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
             &OrphanHeads::default(),
             &SECRET,
             &settings,
+            None,
         ));
         assert_eq!(
             outcome.unwrap_err(),
@@ -1487,6 +1492,7 @@ fn a_bin_retention_above_the_bar_is_never_published() {
         &OrphanHeads::default(),
         &SECRET,
         &settings,
+        None,
     ));
 
     assert_eq!(
@@ -1730,6 +1736,7 @@ fn a_retry_mints_a_revision_above_the_attempt_it_replaces() {
             &OrphanHeads::default(),
             &SECRET,
             &configured(),
+            None,
         ))
         .unwrap_err(),
         SettingsPublishError::Unconfirmed,
@@ -1848,6 +1855,7 @@ fn an_unconfirmed_publish_leaves_the_live_record_still_admissible() {
             &OrphanHeads::default(),
             &SECRET,
             &VaultSettings::default(),
+            None,
         ))
         .unwrap_err(),
         SettingsPublishError::Unconfirmed,
@@ -1886,6 +1894,7 @@ fn a_mint_counter_that_does_not_advance_refuses_the_publish() {
             &OrphanHeads::default(),
             &SECRET,
             &configured(),
+            None,
         ))
         .unwrap_err(),
         SettingsPublishError::Revision,
@@ -1951,6 +1960,7 @@ fn a_register_first_refusal_retires_the_settings_head_it_uploaded() {
         &orphans,
         &SECRET,
         &configured(),
+        None,
     ));
     assert!(matches!(
         outcome.unwrap_err(),
@@ -1996,6 +2006,7 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
         &orphans,
         &SECRET,
         &configured(),
+        None,
     ));
     assert!(matches!(
         outcome.unwrap_err(),
@@ -2037,6 +2048,7 @@ fn a_settings_publish_every_endpoint_refused_retires_nothing() {
         &orphans,
         &SECRET,
         &configured(),
+        None,
     ));
     assert!(matches!(
         outcome.unwrap_err(),
@@ -2373,6 +2385,7 @@ fn a_session_that_only_loads_the_settings_record_keeps_it_alive() {
         &OrphanHeads::default(),
         &SECRET,
         &configured(),
+        None,
     ))
     .expect("the settings record publishes");
     let (_engine, _events, mut tasks) = boot_resolving(&world, &device, &blocks);
@@ -2808,6 +2821,7 @@ fn first_save(recovery: HttpResponse) -> (FakeDevice, Result<HeldRecord, Setting
         &OrphanHeads::default(),
         &SECRET,
         &configured(),
+        None,
     ));
     (device, outcome)
 }
@@ -2901,4 +2915,52 @@ fn a_first_save_with_no_recovery_answer_to_sign_above_is_refused() {
     let (device, outcome) = first_save(answer(404, Vec::new()));
     outcome.expect("no recovery record is a first run");
     assert_eq!(first_save_floor(&device), Some(1));
+}
+
+/// A caller that saves over a lapsed record its load verified passes that
+/// sequence as the basis, so a recovery 404 on a device with no floor still
+/// signs above it (ADR 0062 D4).
+#[test]
+fn a_save_over_a_lapsed_load_signs_above_its_sequence_when_recovery_has_none() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    world.scheduler.advance_to(NOW);
+    seed_settings_until(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        3,
+        LAPSED_EOL,
+    );
+    let SettingsLoad::Defaults(DefaultsReason::Expired {
+        sequence: observed,
+        head: LapsedHead::Opened,
+    }) = load(&world, &device, &blocks, &SECRET)
+    else {
+        panic!("the load reports the lapsed record");
+    };
+
+    serve_http(&device, &blocks, 5);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(4),
+        &OrphanHeads::default(),
+        &SECRET,
+        &configured(),
+        Some(observed),
+    ))
+    .expect("the save lands");
+
+    assert_eq!(first_save_floor(&device), Some(4));
 }

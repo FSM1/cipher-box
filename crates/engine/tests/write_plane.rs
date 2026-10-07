@@ -13945,6 +13945,7 @@ fn seed_vault_settings(
         &OrphanHeads::default(),
         &SECRET,
         settings,
+        None,
     ))
     .expect("the settings record publishes");
     blocks.set_advisory(flagged);
@@ -17383,6 +17384,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
             retention: RetentionPolicy::KeepAll,
             bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
+        None,
     ))
     .expect_err("the save does not reach the network");
     // Scoped to a publish failure: an earlier refusal would leave the mint
