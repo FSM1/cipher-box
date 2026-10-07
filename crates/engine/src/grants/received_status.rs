@@ -814,10 +814,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
+            // Only a link read waits for a vouched root (ADR 0024 D5).
             if received.link_hold(&key).is_none() {
                 continue;
             }
-            let Some(pointer_name) = share.scope_pointer_name.as_ref() else {
+            let Some(name) = &share.scope_pointer_name else {
                 continue;
             };
             let read = match pointers.get(&key) {
@@ -837,7 +838,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 &render.own_descendants.borrow(),
                 &share.scope_id,
             );
-            reads.push((pointer_name.as_str().as_bytes().to_vec(), read, shared));
+            reads.push((name.as_str().as_bytes().to_vec(), read, shared));
         }
         let mut pins = render.pointer_pins.borrow_mut();
         for (name, read, shared) in &reads {
