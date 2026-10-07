@@ -151,13 +151,15 @@ pub(crate) struct ReviveRequest<'a, P> {
     pub(crate) plane: P,
 }
 
-/// A revival that signed.
+/// One revival's result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Revived {
-    pub(crate) outcome: PublishOutcome,
-    /// This device held no floor for the record, so the revival restored the
-    /// server copy (ADR 0062 D5).
-    pub(crate) restored_from_server_copy: bool,
+pub(crate) struct Revival {
+    pub(crate) result: Result<PublishOutcome, ReviveError>,
+    /// The read of its plane admitted the recovered record on a device that
+    /// held no floor for it, so the device shows the server copy (ADR 0062
+    /// D5). It holds when a later step fails too: the admit wrote the floor, so
+    /// a retry is no longer floorless.
+    pub(crate) restored: bool,
 }
 
 /// A fail-closed revival failure.
@@ -370,7 +372,7 @@ pub(crate) async fn revive<T, H, C, F, Sch, P>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     requests: &[ReviveRequest<'_, P>],
-) -> Vec<Result<Revived, ReviveError>>
+) -> Vec<Revival>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -399,11 +401,13 @@ where
     };
     let mut revived = Vec::with_capacity(results.len());
     for result in results {
-        revived.push(match (result, &registered) {
+        let restored = result.as_ref().is_ok_and(|lapsed| lapsed.restored);
+        let result = match (result, &registered) {
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
             (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed).await,
-        });
+        };
+        revived.push(Revival { result, restored });
     }
     revived
 }
@@ -414,7 +418,7 @@ pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     request: ReviveRequest<'_, P>,
-) -> Result<Revived, ReviveError>
+) -> Revival
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -538,7 +542,7 @@ where
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
-) -> Result<Revived, ReviveError>
+) -> Result<PublishOutcome, ReviveError>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
@@ -563,10 +567,7 @@ where
     .await
     .ok_or(ReviveError::Moved)?
     .map_err(ReviveError::Publish)?;
-    Ok(Revived {
-        outcome: receipt.outcome,
-        restored_from_server_copy: lapsed.restored,
-    })
+    Ok(receipt.outcome)
 }
 
 /// The root adopt of an owned scope root.
@@ -842,6 +843,20 @@ mod tests {
         (world, device)
     }
 
+    /// A revival that signed, with whether it restored the server copy.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Revived {
+        outcome: PublishOutcome,
+        restored_from_server_copy: bool,
+    }
+
+    fn signed(revival: Revival) -> Result<Revived, ReviveError> {
+        revival.result.map(|outcome| Revived {
+            outcome,
+            restored_from_server_copy: revival.restored,
+        })
+    }
+
     fn revive_all<P: PlaneRead>(
         world: &FakeWorld,
         device: &FakeDevice,
@@ -865,6 +880,9 @@ mod tests {
             publishing: &publishing,
         };
         block_on(revive(&api(device), &seams, pace, requests))
+            .into_iter()
+            .map(signed)
+            .collect()
     }
 
     fn revive_one<P: PlaneRead>(

@@ -9,7 +9,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::engine::{EngineHost, TrayState};
+use crate::engine::{EngineHost, RESTORED_FROM_SERVER_COPY, TrayState};
 use crate::mount::MountStatus;
 
 /// ID used to look up the single tray icon instance.
@@ -45,7 +45,6 @@ fn warning_label(kind: &str) -> &'static str {
         "withheldUpdateEscalation" => "A shared folder is being kept from its latest update",
         "renewalFailed" => "CipherBox could not renew a record, so it may expire",
         "scopeExitCutOwed" => "CipherBox could not rotate a shared folder a move left",
-        "restoredFromServerCopy" => "CipherBox restored your vault from the server copy",
         _ => "CipherBox raised a condition it could not name",
     }
 }
@@ -95,7 +94,10 @@ impl Lines {
                 warnings,
                 ..
             } => Self {
-                status: match warnings.first() {
+                status: match warnings
+                    .iter()
+                    .find(|warning| warning.kind != RESTORED_FROM_SERVER_COPY)
+                {
                     Some(warning) => warning_label(warning.kind).to_owned(),
                     None => rung_label(*staleness).to_owned(),
                 },
@@ -286,6 +288,28 @@ mod tests {
         ] {
             assert_ne!(status, rung_label(rung));
         }
+    }
+
+    /// The restore notice is news, so the rung stays the status line, and a
+    /// later trust alert still takes it.
+    #[test]
+    fn the_restore_notice_never_takes_the_status_line() {
+        let restored = VaultWarning {
+            kind: RESTORED_FROM_SERVER_COPY,
+            detail: None,
+        };
+        let quiet = live(Staleness::Offline, vec![restored.clone()], 0);
+        assert_eq!(Lines::of(&quiet).status, rung_label(Staleness::Offline));
+
+        let abuse = VaultWarning {
+            kind: "attributableAbuse",
+            detail: None,
+        };
+        let alerted = live(Staleness::Fresh, vec![restored, abuse], 0);
+        assert_eq!(
+            Lines::of(&alerted).status,
+            warning_label("attributableAbuse")
+        );
     }
 
     #[test]

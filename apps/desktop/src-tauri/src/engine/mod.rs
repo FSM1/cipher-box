@@ -140,6 +140,10 @@ impl ParkedWrites {
     }
 }
 
+/// The kind of the notice that a revival restored the server copy (ADR 0062
+/// D5). It is news, not a condition, so it never takes the tray status line.
+pub const RESTORED_FROM_SERVER_COPY: &str = "restoredFromServerCopy";
+
 /// The warnings this session has raised, newest last.
 #[derive(Default)]
 struct Warnings(VecDeque<VaultWarning>);
@@ -170,7 +174,7 @@ impl Warnings {
                 detail: Some(detail.clone()),
             },
             Event::RestoredFromServerCopy { .. } => VaultWarning {
-                kind: "restoredFromServerCopy",
+                kind: RESTORED_FROM_SERVER_COPY,
                 detail: None,
             },
             Event::ScopeExitCutOwed { detail, .. } => VaultWarning {
@@ -213,6 +217,11 @@ impl Warnings {
         self.0.push_back(warning);
     }
 
+    fn dismiss_restored(&mut self) {
+        self.0
+            .retain(|warning| warning.kind != RESTORED_FROM_SERVER_COPY);
+    }
+
     fn list(&self) -> Vec<VaultWarning> {
         self.0.iter().cloned().collect()
     }
@@ -237,6 +246,8 @@ enum Request {
     Status(oneshot::Sender<Result<VaultStatus, String>>),
     /// Force a refresh with nocache semantics.
     Refresh(oneshot::Sender<Result<(), String>>),
+    /// Drop the "restored from the server copy" notice the member read.
+    DismissRestored(oneshot::Sender<()>),
     /// End the session at the facade. A logout is not a quit: the durable
     /// stores survive both, but the credential survives only the quit
     /// (blueprint/desktop.md, "Lifecycle").
@@ -384,6 +395,13 @@ impl EngineHost {
     /// (blueprint/desktop.md "Tray").
     pub async fn refresh(&self) -> Result<(), String> {
         self.ask(Request::Refresh)?.await.map_err(|_| NO_SESSION)?
+    }
+
+    /// Drops the "restored from the server copy" notice.
+    pub async fn dismiss_restored(&self) -> Result<(), String> {
+        self.ask(Request::DismissRestored)?
+            .await
+            .map_err(|_| NO_SESSION.to_owned())
     }
 
     /// Forces a refresh without waiting for its verdict: a network reconnect or
@@ -635,6 +653,11 @@ async fn serve(
             Woke::Request(None) | Woke::Event(None) => break,
             Woke::Request(Some(Request::Status(reply))) => {
                 let _ = reply.send(status(&mut projection, &warnings).await);
+            }
+            Woke::Request(Some(Request::DismissRestored(reply))) => {
+                warnings.dismiss_restored();
+                repaint(&shell, &mut projection, &warnings, &mut parked).await;
+                let _ = reply.send(());
             }
             // The pass is filed here and awaited elsewhere: its network legs
             // are the one thing a host may not serve a kernel behind
@@ -1117,6 +1140,27 @@ mod tests {
                 "renewalFailed",
                 "restoredFromServerCopy"
             ],
+        );
+    }
+
+    /// The member may drop the restore notice, and only that notice.
+    #[test]
+    fn a_dismiss_drops_only_the_restore_notice() {
+        let mut warnings = Warnings::default();
+        for event in [
+            Event::RestoredFromServerCopy {
+                routing_key: "a-routing-key".to_owned(),
+            },
+            Event::AttributableAbuse {
+                description: "gate rejection".to_owned(),
+            },
+        ] {
+            warnings.record(&event);
+        }
+        warnings.dismiss_restored();
+        assert_eq!(
+            warnings.list().iter().map(|w| w.kind).collect::<Vec<_>>(),
+            ["attributableAbuse"],
         );
     }
 

@@ -110,7 +110,7 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::revival::{
-    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent,
+    BinIndexRead, RecoveryPace, Revival, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
     revive_name,
 };
 use crate::net::rotation::scope_name;
@@ -4910,6 +4910,7 @@ async fn revive_and_hold_bin_index<T, H, C, F, Sn, Sch>(
     read: &BinIndexRead<'_, H, F, Sn, Sch>,
     held: &RefCell<HeldRecords>,
     events: &mpsc::UnboundedSender<Event>,
+    restored: &RestoredCopies,
 ) -> BinIndexRevival
 where
     T: RecordTransport + Clone + 'static,
@@ -4937,9 +4938,9 @@ where
         signer: Some(keys.signer()),
         plane: BinIndexRead { ..*read },
     };
-    let result = revive_name(api, seams, pace, request).await;
-    let revived_at = match &result {
-        Ok(revived) => Ok(match revived.outcome {
+    let revival = revive_name(api, seams, pace, request).await;
+    let revived_at = match &revival.result {
+        Ok(outcome) => Ok(match *outcome {
             PublishOutcome::Published { sequence } | PublishOutcome::Unconfirmed { sequence } => {
                 sequence
             }
@@ -4950,7 +4951,11 @@ where
         Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => Err(true),
         Err(_) => Err(false),
     };
-    emit_revival_failures(events, [(keys.name().as_str().to_owned(), result)]);
+    emit_revival_failures(
+        events,
+        restored,
+        [(keys.name().as_str().to_owned(), revival)],
+    );
     match revived_at {
         Ok(floor) if hold_bin_index(seams.transport, read, held, floor).await => {
             BinIndexRevival::Revived
@@ -5020,18 +5025,15 @@ async fn owed_scopes_within_bound<St: StagingStore>(
 /// recovery endpoint holds no record for has nothing to revive.
 pub(crate) fn emit_revival_failures(
     events: &mpsc::UnboundedSender<Event>,
-    revivals: impl IntoIterator<Item = (String, Result<Revived, ReviveError>)>,
+    restored: &RestoredCopies,
+    revivals: impl IntoIterator<Item = (String, Revival)>,
 ) {
-    for (routing_key, result) in revivals {
-        let outcome = match result {
-            Ok(revived) => {
-                if revived.restored_from_server_copy {
-                    let _ = events.unbounded_send(Event::RestoredFromServerCopy {
-                        routing_key: routing_key.clone(),
-                    });
-                }
-                Ok(Some(revived.outcome))
-            }
+    for (routing_key, revival) in revivals {
+        if revival.restored {
+            restored.report(events, &routing_key);
+        }
+        let outcome = match revival.result {
+            Ok(outcome) => Ok(Some(outcome)),
             Err(ReviveError::Publish(error)) => Err(error),
             // No record to revive, a device that takes the settings ladder of
             // ADR 0034 rather than a revival (ADR 0062 D4), a 429 that fails
@@ -5119,6 +5121,23 @@ pub(crate) fn emit_trust_violation(
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
+}
+
+/// The names this session reported restored from the server copy, so each
+/// sends [`Event::RestoredFromServerCopy`] once. A vault pointer admit writes
+/// no floor, so its retry reads as floorless again.
+#[derive(Default)]
+pub(crate) struct RestoredCopies(RefCell<BTreeSet<String>>);
+
+impl RestoredCopies {
+    /// Report `routing_key` restored, unless this session already did.
+    pub(crate) fn report(&self, events: &mpsc::UnboundedSender<Event>, routing_key: &str) {
+        if self.0.borrow_mut().insert(routing_key.to_owned()) {
+            let _ = events.unbounded_send(Event::RestoredFromServerCopy {
+                routing_key: routing_key.to_owned(),
+            });
+        }
+    }
 }
 
 /// The (routing key, sequence) pairs this session reported a same-sequence
@@ -6772,7 +6791,7 @@ impl<T: SeamTypes> Engine<T> {
             },
         )
         .await;
-        emit_revival_failures(&self.events, revivals);
+        emit_revival_failures(&self.events, &self.state.restored_copies, revivals);
         unconfirmed
     }
 
@@ -6865,9 +6884,13 @@ impl<T: SeamTypes> Engine<T> {
             signer: None,
             plane: read,
         };
-        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
-        let signed = result.is_ok();
-        emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
+        let revival = revive_name(api, &seams, &self.state.recovery_pace, request).await;
+        let signed = revival.result.is_ok();
+        emit_revival_failures(
+            &self.events,
+            &self.state.restored_copies,
+            [(name.as_str().to_owned(), revival)],
+        );
         signed
     }
 
@@ -6918,9 +6941,13 @@ impl<T: SeamTypes> Engine<T> {
             signer: Some(&signer),
             plane: read,
         };
-        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
-        let signed = result.is_ok();
-        emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
+        let revival = revive_name(api, &seams, &self.state.recovery_pace, request).await;
+        let signed = revival.result.is_ok();
+        emit_revival_failures(
+            &self.events,
+            &self.state.restored_copies,
+            [(name.as_str().to_owned(), revival)],
+        );
         signed
     }
 
@@ -6978,6 +7005,7 @@ impl<T: SeamTypes> Engine<T> {
             &read,
             &self.state.held_records,
             &self.events,
+            &self.state.restored_copies,
         )
         .await
     }
@@ -7323,6 +7351,7 @@ where {
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
         let fork_sightings = self.state.fork_sightings.clone();
+        let restored_copies = self.state.restored_copies.clone();
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
@@ -7381,6 +7410,7 @@ where {
                             on_access_misses: &on_access_misses,
                             publishing: &publishing,
                             pace: &recovery_pace,
+                            restored: &restored_copies,
                             owed: owed.as_ref(),
                         })
                         .await;
@@ -7422,6 +7452,7 @@ where {
                             &read,
                             &held,
                             &events,
+                            &restored_copies,
                         )
                         .await;
                         // Only a gated load that resolves the record lifts the
@@ -7531,9 +7562,8 @@ where {
                         .pass(&scopes, &bins, &scope_roots, &|| alive.get())
                         .await;
                     emit_renewal_failures(&events, &report.renewals);
-                    for routing_key in report.restored {
-                        let _ =
-                            events.unbounded_send(Event::RestoredFromServerCopy { routing_key });
+                    for routing_key in &report.restored {
+                        restored_copies.report(&events, routing_key);
                     }
                     for routing_key in &report.rejected {
                         emit_trust_violation(

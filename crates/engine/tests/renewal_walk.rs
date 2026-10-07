@@ -1927,6 +1927,138 @@ fn a_floorless_revival_reports_the_server_copy(returning: bool) {
     assert_eq!(restored, expected, "each revived name, once");
 }
 
+/// ADR 0062 D5: the admit restores the server copy even when the first
+/// signature fails. That session reports it once; the next session signs over
+/// the floor the admit wrote and reports nothing.
+#[test]
+fn a_failed_first_revival_signature_still_reports_the_server_copy_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![write_file(&world, engine, tasks, ROOT, "note.txt")]
+    });
+    let file = write_name(nodes[0]);
+    let before = record_at(&world, &file);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    world.record_store.fail_put_for(file.as_str());
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    world.record_store.heal_put_for(file.as_str());
+    assert!(unserved(&world, &file), "the first signature fails");
+    let restored = restored_names(&mut events);
+    assert_eq!(
+        restored
+            .iter()
+            .filter(|name| *name == file.as_str())
+            .count(),
+        1,
+        "the failed signature reports the restore",
+    );
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 3);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(record_at(&world, &file).sequence, before.sequence + 1);
+    assert!(
+        restored_names(&mut events).is_empty(),
+        "the floor the admit wrote stops a second report",
+    );
+}
+
+/// ADR 0062 D5: a vault pointer admit writes no floor, so a revival that does
+/// not confirm reads as floorless again on the retry. The session reports the
+/// name once.
+#[test]
+fn an_unconfirmed_pointer_revival_and_its_retry_report_the_server_copy_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let pointer = vault_pointer_name(&SECRET, 0);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    world.record_store.drop_puts();
+    let (mut engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+    world.record_store.keep_puts();
+    assert!(!engine.is_provisioned(), "the revival did not confirm");
+    let mut restored = restored_names(&mut events);
+
+    block_on(engine.command(Command::ManualRefresh)).expect("the refresh revives the chain");
+    assert!(engine.is_provisioned(), "the retry signs the pointer");
+    restored.extend(restored_names(&mut events));
+    assert_eq!(
+        restored
+            .iter()
+            .filter(|name| *name == pointer.as_str())
+            .count(),
+        1,
+        "one report for the name in the session",
+    );
+}
+
+/// ADR 0062 D5 and consequence 6: a recovery server gives a new device an old
+/// copy of a folder, and the new device revives it. The device that wrote the
+/// folder holds a higher floor, so its gate reports the revived record as a
+/// trust violation and does not adopt it.
+#[test]
+fn an_owner_device_above_a_revived_old_copy_reports_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let writer = world.device(b"the device that wrote");
+    let mut first = None;
+    let nodes = written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "notes");
+        first = served_at(&world, &write_name(folder));
+        write_file(&world, engine, tasks, folder, "a.txt");
+        write_file(&world, engine, tasks, folder, "b.txt");
+        vec![folder]
+    });
+    let folder = write_name(nodes[0]);
+    let first = first.expect("the first folder record");
+    let held = record_at(&world, &folder).sequence;
+    let old = IpnsRecord::unmarshal(&first)
+        .and_then(|record| record.verify(&folder))
+        .expect("the first record verifies")
+        .sequence;
+    assert!(old + 1 < held, "the old copy revives below the held floor");
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.cache_for_recovery(folder.as_str(), first);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(record_at(&world, &folder).sequence, old + 1);
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &writer, 3);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(abuse_reports(&mut events), 1, "one trust violation");
+    assert_eq!(
+        block_on(
+            writer
+                .floors(&SECRET)
+                .sequence_floor(folder.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
+        Some(held),
+        "the writer adopts nothing below its floor",
+    );
+    assert_eq!(
+        record_at(&world, &folder).sequence,
+        old + 1,
+        "the writer signs nothing over the revived record",
+    );
+}
+
 /// ADR 0062 consequence 2: one session makes at most 25 recovery fetches a
 /// minute, the session-start revival and the walk together, and a revival
 /// cycle waits for the pace rather than stopping at the walk budget.

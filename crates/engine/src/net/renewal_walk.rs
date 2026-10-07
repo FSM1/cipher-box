@@ -955,15 +955,15 @@ where
             signer,
             plane,
         };
-        let result = revive_name(self.api, &self.seams(), self.pace, request).await;
+        let revival = revive_name(self.api, &self.seams(), self.pace, request).await;
         let routing_key = name.as_str().to_owned();
-        let outcome = match result {
-            Ok(revived) => {
+        if revival.restored {
+            pass.report.restored.push(routing_key.clone());
+        }
+        let outcome = match revival.result {
+            Ok(outcome) => {
                 pass.visits = pass.visits.saturating_sub(1);
-                if revived.restored_from_server_copy {
-                    pass.report.restored.push(routing_key.clone());
-                }
-                Ok(Some(revived.outcome))
+                Ok(Some(outcome))
             }
             Err(ReviveError::Publish(error)) => Err(error),
             Err(ReviveError::TrustViolation) => {

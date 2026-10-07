@@ -69,6 +69,11 @@ export function forgetDevice(): Promise<void> {
   return invoke('session_forget_device');
 }
 
+/** Drops the "restored from the server copy" notice; the host repaints after. */
+export function dismissRestored(): Promise<void> {
+  return invoke('vault_dismiss_restored');
+}
+
 /** Calls `changed` whenever the engine emits, until the returned unlisten runs. */
 export function onVaultChanged(changed: () => void): Promise<UnlistenFn> {
   return listen(VAULT_CHANGED, changed);

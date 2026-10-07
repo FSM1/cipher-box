@@ -49,6 +49,7 @@ fn main() {
             session::session_logout,
             session::session_forget_device,
             session::vault_status,
+            session::vault_dismiss_restored,
             session::core_kit_get_item,
             session::core_kit_set_item,
             session::core_kit_purge,

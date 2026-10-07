@@ -17,7 +17,7 @@ import { createCoreKitSession } from './auth/coreKit';
 import { shellFacade } from './auth/facade';
 import { desktopConfig } from './config';
 import { renderShell, type LoginStep, type ShellActions, type ShellModel } from './frontDoor';
-import { onVaultChanged, readVaultStatus } from './vault';
+import { dismissRestored, onVaultChanged, readVaultStatus } from './vault';
 import { setWindowVisible, windowIntent, type WindowIntent } from './window';
 
 /** Renders an unknown throw as the one line the shell shows for it. */
@@ -122,6 +122,7 @@ function start(root: HTMLElement): void {
         }
       }),
     logout: () => void run('logout', () => flow.logout()).catch(ignore),
+    dismissRestored: () => void dismissRestored().catch(ignore),
   };
 
   /** The last decision the shell was given; repeating it fights the tray. */

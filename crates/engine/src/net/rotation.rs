@@ -78,8 +78,8 @@ use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{
-    Event, NodeId, emit_revival_failures, emit_trust_violation, report_unattested_row,
-    saturating_count,
+    Event, NodeId, RestoredCopies, emit_revival_failures, emit_trust_violation,
+    report_unattested_row, saturating_count,
 };
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
@@ -6283,6 +6283,8 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub publishing: &'a RefCell<BTreeSet<String>>,
     /// The session's recovery pace, which each revival waits for.
     pub pace: &'a RecoveryPace,
+    /// The names this session reported restored from the server copy.
+    pub restored: &'a RestoredCopies,
     /// The scopes whose owed rotation entry is within its bound, whose
     /// pointer no revival signs (ADR 0063 D4). `None` when the owed rotation
     /// record does not read, so no pointer revives.
@@ -6507,9 +6509,13 @@ where
         signer: Some(&signer),
         plane: read,
     };
-    let result = revive_name(pass.api, &seams, pass.pace, request).await;
-    let retryable = result.as_ref().err().map(ReviveError::is_retryable);
-    emit_revival_failures(pass.events, [(name.as_str().to_owned(), result)]);
+    let revival = revive_name(pass.api, &seams, pass.pace, request).await;
+    let retryable = revival.result.as_ref().err().map(ReviveError::is_retryable);
+    emit_revival_failures(
+        pass.events,
+        pass.restored,
+        [(name.as_str().to_owned(), revival)],
+    );
     if let Some(retryable) = retryable {
         return Err(retryable);
     }
@@ -17262,6 +17268,7 @@ mod tests {
             on_access_misses: &harness.on_access_misses,
             publishing: &RefCell::default(),
             pace: &RecoveryPace::default(),
+            restored: &RestoredCopies::default(),
             owed,
         }))
     }
