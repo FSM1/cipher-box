@@ -10114,6 +10114,55 @@ fn a_drain_write_over_a_same_sequence_fork_does_not_hold_the_root() {
     navigate_into_the_new_root(&mut fx, inner, doc);
 }
 
+/// Another owner device grants a folder inside a descendant scope while the
+/// endpoints still serve this device the record its walk gated. This device
+/// publishes the scope root twice over that record, and the endpoints then
+/// serve the other device's grant at the sequence of the first own publish.
+/// The served record is below the held one, so a navigation into the new root
+/// reads nothing and sends no abuse event; the next tick reads.
+#[test]
+fn a_navigation_over_a_fork_below_the_own_publish_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    let siblings = ["one", "two"].map(|name| {
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, name)
+    });
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let walked = sequence_at(&fx.world, &write_name(folder));
+    let walked_bytes = served_root_bytes(&fx, folder);
+    let doc = grant_inner_on_second_device(&fx, inner);
+    assert_eq!(
+        served_root(&fx, folder).sequence,
+        walked + 1,
+        "the other device published once"
+    );
+    let fork = served_root_bytes(&fx, folder);
+    serve_root(&fx, folder, &walked_bytes);
+    for sibling in siblings {
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: sibling,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done)
+        );
+    }
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(folder)),
+        walked + 2,
+        "this device published the scope root twice"
+    );
+    serve_root(&fx, folder, &fork);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
 /// The endpoints still serve a descendant scope root record from before this
 /// device's own confirmed publish. The lagging record is an availability
 /// outcome: a navigation inside the scope reads nothing and sends no abuse

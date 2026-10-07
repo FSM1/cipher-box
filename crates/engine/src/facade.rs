@@ -22244,7 +22244,8 @@ mod focus_access_tests {
 
     /// A served root above every name-bound sequence counts as moved, even
     /// when the floor at its name holds it: a gated read outside a walk raises
-    /// that floor. A floor store with no answer counts as moved.
+    /// that floor. A served root below the held record, and a floor store with
+    /// no answer, count as moved.
     #[test]
     fn a_probe_measures_the_root_against_the_walk_not_the_floor() {
         use crate::testkit::fakes::InMemoryFloorStore;
