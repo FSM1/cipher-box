@@ -542,8 +542,10 @@ pub fn rebase_one(
         OpKind::Restore { into, name, kind } => rebase_restore(working, op, *into, name, *kind),
         OpKind::Purge { .. } => rebase_purge(working, op),
         OpKind::Prune { keep_latest } => rebase_prune(working, op, *keep_latest),
-        OpKind::RestoreVersion { .. } => rebase_history_edit(working, op, 0),
-        OpKind::DeleteVersion { .. } => rebase_history_edit(working, op, 1),
+        OpKind::RestoreVersion { content_cid } => {
+            rebase_history_edit(working, op, 0, Some(content_cid))
+        }
+        OpKind::DeleteVersion { .. } => rebase_history_edit(working, op, 1, None),
     }
 }
 
@@ -614,14 +616,25 @@ fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpR
 /// `contentCid`, so a history that advanced under it still rebases and the
 /// drain decides against the record whether the named version is still there.
 /// `dropped` is what the edit takes off the rendered count — none for a
-/// restore, which reorders, and one for a delete.
-fn rebase_history_edit(working: &mut Snapshot, op: &Op, dropped: u64) -> OpResolution {
+/// restore, which reorders, and one for a delete. A restore projects the head
+/// it puts back, so a later edit formed against that head rebases on it.
+fn rebase_history_edit(
+    working: &mut Snapshot,
+    op: &Op,
+    dropped: u64,
+    head: Option<&[u8]>,
+) -> OpResolution {
     let Some(node) = working.node_mut(op.target) else {
         return OpResolution::dropped(DropReason::AlreadySatisfied);
     };
     node.content_version = node
         .content_version
         .map(|count| count.saturating_sub(dropped));
+    if let Some(head) = head
+        && node.content_version.is_some()
+    {
+        node.head_content_cid = Some(head.to_vec());
+    }
     OpResolution::applied()
 }
 

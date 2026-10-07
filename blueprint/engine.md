@@ -1145,9 +1145,12 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   history names its version. A rename or a move reads the folders its result
   names at their live names, and a version restore reads its file's live
   record: a node that shows the result or another value ends the op with no
-  apply, and one that shows the value before applies it again. The check of
-  a later op compares with the value that an earlier op of this device in
-  the queue sets. A second apply that a rebase or a permanent halt
+  apply, and one that shows the value before applies it again. A later
+  delete of this device expires every earlier op on its node at the check
+  of that op, a later bin
+  restore cancels that delete so the earlier ops stay, and no other later op
+  expires an earlier op; kept ops replay in queue order, and the check of a
+  later op compares with the value that the earlier replay sets. A second apply that a rebase or a permanent halt
   refuses leaves with no notice; a charged halt is charged, and the op
   dead-letters with a notice once its attempt budget is spent. A pass that
   cannot check the op, because the walk did not prove its root (a gate-refused

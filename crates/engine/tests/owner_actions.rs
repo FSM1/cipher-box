@@ -3387,9 +3387,12 @@ fn a_create_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip(
     let mut fx = GrantScenario::new();
     let (child, child_name) = write_granted_child(&mut fx);
 
+    let mut edited = Vec::new();
     cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
         let late = published_file(fx, child, "late.bin");
         publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, late, &[7u8; 64]);
+        let old_name = live_child(fx, &child_name, child, "late.bin");
+        edited = live_versions(fx, &old_name, late);
     });
     let (root, _) = live_scope(&fx);
     let moved_child = live_child(&fx, &root, fx.folder, "child");
@@ -3409,9 +3412,132 @@ fn a_create_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip(
         .id;
     let late_name = live_child(&fx, &moved_child, child, "late.bin");
     assert_eq!(
-        live_versions(&fx, &late_name, late).len(),
-        1,
+        live_versions(&fx, &late_name, late),
+        edited,
         "the file is live with the edited content"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// Two content edits of one file land in the old tree after the walk. The
+/// later edit does not end the earlier one: both apply again in order.
+#[test]
+fn an_edit_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+    let before = live_versions(&fx, &doc_name, doc);
+
+    let mut edited = Vec::new();
+    cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
+        publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+        publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[3u8; 64]);
+        edited = live_versions(fx, &doc_name, doc);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_doc = live_child(
+        &fx,
+        &live_child(&fx, &root, fx.folder, "child"),
+        child,
+        "doc.bin",
+    );
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc),
+        before,
+        "the moved tree does not carry the edits"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc),
+        edited,
+        "the file shows the last edit on top of the first"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A create, a soft delete and a bin restore of one file land in the old
+/// tree after the walk. The restore cancels the delete, so the create applies
+/// again and the file is live.
+#[test]
+fn a_create_a_delete_and_a_bin_restore_the_name_wave_did_not_carry_leave_the_file_live() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
+        let late = published_file(fx, child, "late.bin");
+        block_on(fx.engine.command(Command::Delete { node: late })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        block_on(fx.engine.command(Command::Restore {
+            node: late,
+            into: None,
+        }))
+        .expect("the restore stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    assert!(
+        live_names(&fx, &moved_child, child).is_empty(),
+        "the moved tree does not carry the create"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_names(&fx, &moved_child, child),
+        vec!["late.bin".to_owned()],
+        "the file is live after the flip"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A version restore and then a content edit of one file land in the old
+/// tree after the walk. Both apply again in order, so the file shows the
+/// edit.
+#[test]
+fn a_version_restore_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+    let history = live_versions(&fx, &doc_name, doc);
+
+    let mut edited = Vec::new();
+    cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
+        block_on(fx.engine.command(Command::RestoreVersion {
+            node: doc,
+            content_cid: history[1].clone(),
+        }))
+        .expect("the restore queues");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[3u8; 64]);
+        edited = live_versions(fx, &doc_name, doc);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_doc = live_child(
+        &fx,
+        &live_child(&fx, &root, fx.folder, "child"),
+        child,
+        "doc.bin",
+    );
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc),
+        history,
+        "the moved tree does not carry the restore or the edit"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc)[0],
+        edited[0],
+        "the file shows the edit"
     );
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }

@@ -3156,13 +3156,23 @@ where
                         }
                     }
                     // With no result, a check cannot tell a later write.
+                    // A cancelled delete leaves at once, while the bin restore
+                    // that cancels it is still queued. An op under a later
+                    // delete waits for its check: a bin restore can still
+                    // cancel that delete.
+                    let later = overtaken.get(&op_id).copied();
                     if gone
-                        || overtaken.contains(&op_id)
+                        || later == Some(Overtaken::ByRestore)
                         || (needs_result(&op.kind) && note.result.is_none())
                     {
                         KeptVerdict::Expired
                     } else {
-                        kept_verdict(&note, place, now)
+                        match kept_verdict(&note, place, now) {
+                            KeptVerdict::Recheck if later == Some(Overtaken::ByDelete) => {
+                                KeptVerdict::Expired
+                            }
+                            verdict => verdict,
+                        }
                     }
                 } else {
                     KeptVerdict::Expired
@@ -9891,24 +9901,37 @@ fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
     }
 }
 
+/// How a later op of this device on the same node decides an earlier op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overtaken {
+    /// A later delete removes the node.
+    ByDelete,
+    /// A later bin restore cancels this delete.
+    ByRestore,
+}
+
 /// The ops of `queue` that a later op of this device on the same node
-/// decides, so a check of them would undo it: each op under a later create,
-/// delete or bin restore, which makes or removes the node, and a content edit
-/// under a later content edit (ADR 0069 D6).
-fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeSet<OpId> {
+/// decides: a later delete expires every earlier op on its node at the
+/// check of that op, a later bin restore cancels that delete so the earlier
+/// ops stay, and no other later op expires an earlier op (ADR 0069 D6).
+fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
     let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
-    let mut overtaken = BTreeSet::new();
+    let mut overtaken = BTreeMap::new();
     for (op_id, op) in queue.iter().rev() {
-        let edit = matches!(op.kind, OpKind::UpdateContent { .. });
-        let (made, edited) = later.entry(op.target).or_default();
-        if *made || (edit && *edited) {
-            overtaken.insert(*op_id);
+        let (deleted, restoring) = later.entry(op.target).or_default();
+        let delete = matches!(op.kind, OpKind::Delete { .. });
+        if *deleted {
+            overtaken.insert(*op_id, Overtaken::ByDelete);
+        } else if delete && *restoring {
+            overtaken.insert(*op_id, Overtaken::ByRestore);
         }
-        *made |= matches!(
-            op.kind,
-            OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::Restore { .. }
-        );
-        *edited |= edit;
+        if delete && !*deleted {
+            *deleted = !*restoring;
+            *restoring = false;
+        }
+        if matches!(op.kind, OpKind::Restore { .. }) && !*deleted {
+            *restoring = true;
+        }
     }
     overtaken
 }
