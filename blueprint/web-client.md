@@ -194,9 +194,10 @@ all living in `packages/client` and running inside the engine worker realm:
   indicator → stale badge ("last synced X ago") → offline banner. Trust
   violations and withheld-update escalations render as a distinct warning
   class, never as staleness; dead-letters get a persistent, actionable
-  notice. Manual refresh is a facade command with nocache semantics, and a
-  refresh it could not land reports back as a failure rather than a repaint
-  (ADR 0044).
+  notice. A `restoredFromServerCopy` event shows one "restored from the
+  server copy" notice for the vault (ADR 0062 D5). Manual refresh is a facade
+  command with nocache semantics, and a refresh it could not land reports
+  back as a failure rather than a repaint (ADR 0044).
 - **Sharing UI is facade commands end to end**: invite links (the URL
   fragment carries the invite secret; the page hands it to the facade
   unread), contact-code import (QR / paste, verified in the engine), grant

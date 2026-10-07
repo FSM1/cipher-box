@@ -133,6 +133,12 @@ pub(crate) trait PlaneRead {
         bytes: &[u8],
     ) -> Result<Admitted, PlaneRefusal>;
 
+    /// Whether [`Self::admit`] writes a floor, so a retry after a later
+    /// refusal is no longer floorless ([`Revival::restored`]).
+    fn admit_writes_floor(&self) -> bool {
+        true
+    }
+
     /// Whether this device holds no floor for the record, read before
     /// [`Self::admit`] (ADR 0062 D5).
     async fn floorless<F: FloorStore>(&self, floors: &F, name: &IpnsName) -> SeamResult<bool> {
@@ -151,13 +157,17 @@ pub(crate) struct ReviveRequest<'a, P> {
     pub(crate) plane: P,
 }
 
-/// A revival that signed.
+/// One revival's result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Revived {
-    pub(crate) outcome: PublishOutcome,
-    /// This device held no floor for the record, so the revival restored the
-    /// server copy (ADR 0062 D5).
-    pub(crate) restored_from_server_copy: bool,
+pub(crate) struct Revival {
+    pub(crate) result: Result<PublishOutcome, ReviveError>,
+    /// The read of its plane admitted the recovered record on a device that
+    /// held no floor for it, so the device shows the server copy (ADR 0062
+    /// D5). After a later failure other than a trust violation, the flag stays
+    /// set only when the admit of the plane writes the floor
+    /// ([`PlaneRead::admit_writes_floor`]), because a retry is then no longer
+    /// floorless.
+    pub(crate) restored: bool,
 }
 
 /// A fail-closed revival failure.
@@ -370,7 +380,7 @@ pub(crate) async fn revive<T, H, C, F, Sch, P>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     requests: &[ReviveRequest<'_, P>],
-) -> Vec<Result<Revived, ReviveError>>
+) -> Vec<Revival>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -398,12 +408,18 @@ where
         register(api, &registrations).await
     };
     let mut revived = Vec::with_capacity(results.len());
-    for result in results {
-        revived.push(match (result, &registered) {
-            (Err(error), _) => Err(error),
+    for (result, request) in results.into_iter().zip(requests) {
+        let restored = match &result {
+            Ok(lapsed) => lapsed.restored,
+            Err((_, restored)) => *restored,
+        };
+        let result = match (result, &registered) {
+            (Err((error, _)), _) => Err(error),
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
             (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed).await,
-        });
+        };
+        let restored = restored && (result.is_ok() || request.plane.admit_writes_floor());
+        revived.push(Revival { result, restored });
     }
     revived
 }
@@ -414,7 +430,7 @@ pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     request: ReviveRequest<'_, P>,
-) -> Result<Revived, ReviveError>
+) -> Revival
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -446,13 +462,74 @@ pub(super) fn write_signer(
 }
 
 /// Steps 1 to 3: fetch the recovered record, corroborate it, and admit it
-/// through the read of its plane.
+/// through the read of its plane. A refusal carries the restore flag of
+/// [`Revival::restored`].
 async fn admit_lapsed<'a, T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     request: &ReviveRequest<'a, P>,
-) -> Result<Lapsed<'a>, ReviveError>
+) -> Result<Lapsed<'a>, (ReviveError, bool)>
+where
+    T: RecordTransport,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler,
+    P: PlaneRead,
+{
+    let (recovered, bytes, restored) = recover_lapsed(api, seams, pace, request)
+        .await
+        .map_err(|error| (error, false))?;
+    let name = request.name;
+    let served = Recovered {
+        inner: seams.transport,
+        key: name.as_str(),
+        record: &bytes,
+    };
+    let mut admitted = request
+        .plane
+        .admit(&served, name, &recovered, &bytes)
+        .await
+        .map_err(|refusal| match refusal {
+            PlaneRefusal::Rejected => (ReviveError::TrustViolation, false),
+            PlaneRefusal::Unavailable => (ReviveError::Unavailable, false),
+            // The read admitted the record before the publish basis refused it.
+            PlaneRefusal::Unsignable(error) => (ReviveError::Publish(error), restored),
+            PlaneRefusal::Mismatch => (ReviveError::PlaneMismatch, false),
+            PlaneRefusal::NotAtFloor => (ReviveError::NotAtFloor, false),
+        })?;
+    let signer = request
+        .signer
+        .cloned()
+        .or_else(|| admitted.signer.take())
+        .filter(|signer| signs_for(name, signer))
+        .ok_or((ReviveError::WrongSigner, restored))?;
+    // D2: the value the plane admitted, unchanged.
+    let value = super::fork::verified(name, admitted.observed.bytes())
+        .ok_or((ReviveError::TrustViolation, false))?
+        .value;
+    Ok(Lapsed {
+        name,
+        signer,
+        admitted,
+        value,
+        restored,
+    })
+}
+
+fn signs_for(name: &IpnsName, signer: &Ed25519Signer) -> bool {
+    IpnsName::from_public_key(&signer.verifying_key()) == *name
+}
+
+/// Steps 1 and 2: fetch the recovered record and corroborate it. Also reads
+/// whether this device holds no floor for it.
+async fn recover_lapsed<T, H, C, F, Sch, P>(
+    api: &ApiClient<H, C>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
+    request: &ReviveRequest<'_, P>,
+) -> Result<(VerifiedRecord, Vec<u8>, bool), ReviveError>
 where
     T: RecordTransport,
     H: Http,
@@ -462,9 +539,10 @@ where
     P: PlaneRead,
 {
     let name = request.name;
-    let signs_for =
-        |signer: &Ed25519Signer| IpnsName::from_public_key(&signer.verifying_key()) == *name;
-    if request.signer.is_some_and(|signer| !signs_for(signer)) {
+    if request
+        .signer
+        .is_some_and(|signer| !signs_for(name, signer))
+    {
         return Err(ReviveError::WrongSigner);
     }
     pace.slot(seams.scheduler).await;
@@ -497,40 +575,7 @@ where
         .floorless(seams.floors, name)
         .await
         .map_err(ReviveError::FloorRead)?;
-
-    let served = Recovered {
-        inner: seams.transport,
-        key: name.as_str(),
-        record: &bytes,
-    };
-    let mut admitted = request
-        .plane
-        .admit(&served, name, &recovered, &bytes)
-        .await
-        .map_err(|refusal| match refusal {
-            PlaneRefusal::Rejected => ReviveError::TrustViolation,
-            PlaneRefusal::Unavailable => ReviveError::Unavailable,
-            PlaneRefusal::Unsignable(error) => ReviveError::Publish(error),
-            PlaneRefusal::Mismatch => ReviveError::PlaneMismatch,
-            PlaneRefusal::NotAtFloor => ReviveError::NotAtFloor,
-        })?;
-    let signer = request
-        .signer
-        .cloned()
-        .or_else(|| admitted.signer.take())
-        .filter(signs_for)
-        .ok_or(ReviveError::WrongSigner)?;
-    // D2: the value the plane admitted, unchanged.
-    let value = super::fork::verified(name, admitted.observed.bytes())
-        .ok_or(ReviveError::TrustViolation)?
-        .value;
-    Ok(Lapsed {
-        name,
-        signer,
-        admitted,
-        value,
-        restored,
-    })
+    Ok((recovered, bytes, restored))
 }
 
 /// Steps 5 and 6: the fan-out still corroborates the admitted record, then the
@@ -538,7 +583,7 @@ where
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
-) -> Result<Revived, ReviveError>
+) -> Result<PublishOutcome, ReviveError>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
@@ -563,10 +608,7 @@ where
     .await
     .ok_or(ReviveError::Moved)?
     .map_err(ReviveError::Publish)?;
-    Ok(Revived {
-        outcome: receipt.outcome,
-        restored_from_server_copy: lapsed.restored,
-    })
+    Ok(receipt.outcome)
 }
 
 /// The root adopt of an owned scope root.
@@ -842,6 +884,20 @@ mod tests {
         (world, device)
     }
 
+    /// A revival that signed, with whether it restored the server copy.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Revived {
+        outcome: PublishOutcome,
+        restored_from_server_copy: bool,
+    }
+
+    fn signed(revival: Revival) -> Result<Revived, ReviveError> {
+        revival.result.map(|outcome| Revived {
+            outcome,
+            restored_from_server_copy: revival.restored,
+        })
+    }
+
     fn revive_all<P: PlaneRead>(
         world: &FakeWorld,
         device: &FakeDevice,
@@ -856,6 +912,18 @@ mod tests {
         pace: &RecoveryPace,
         requests: &[ReviveRequest<'_, P>],
     ) -> Vec<Result<Revived, ReviveError>> {
+        revive_raw(scheduler, device, pace, requests)
+            .into_iter()
+            .map(signed)
+            .collect()
+    }
+
+    fn revive_raw<P: PlaneRead>(
+        scheduler: &VirtualScheduler,
+        device: &FakeDevice,
+        pace: &RecoveryPace,
+        requests: &[ReviveRequest<'_, P>],
+    ) -> Vec<Revival> {
         let publishing = RefCell::default();
         let seams = RenewalSeams {
             transport: &device.record_store,
@@ -865,6 +933,64 @@ mod tests {
             publishing: &publishing,
         };
         block_on(revive(&api(device), &seams, pace, requests))
+    }
+
+    /// The one [`Revival`] of `name`, with the restore flag on either result.
+    fn revival_of<P: PlaneRead>(
+        world: &FakeWorld,
+        device: &FakeDevice,
+        name: &IpnsName,
+        signer: Option<&Ed25519Signer>,
+        plane: P,
+    ) -> Revival {
+        revive_raw(
+            &world.scheduler,
+            device,
+            &RecoveryPace::default(),
+            &[ReviveRequest {
+                name,
+                signer,
+                plane,
+            }],
+        )
+        .remove(0)
+    }
+
+    /// ADR 0062 D5: once the read admitted the record, a later refusal that is
+    /// not a trust violation keeps the restore flag.
+    #[test]
+    fn a_refusal_after_the_admit_keeps_the_restore_flag() {
+        let (world, device) = after_100_days();
+        let later = ENVELOPE_V + 1;
+        let (signer, record, head) = file_record_at(READ_SCOPE_SEED, 4, later);
+        let name = name_of(&signer);
+        recover(&device, record);
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+        let foreign = revival_of(
+            &world,
+            &device,
+            &name,
+            Some(&signer),
+            child_read(&device, &gateway, &http, Some(head)),
+        );
+        assert_eq!(
+            foreign.result,
+            Err(ReviveError::Publish(PublishError::ForeignVersion {
+                version: later
+            }))
+        );
+        assert!(foreign.restored, "a foreign version keeps the flag");
+
+        let signer = Ed25519Signer::from_seed([3; 32]);
+        let name = name_of(&signer);
+        let other = world.device(b"another device");
+        recover(&other, minted(&signer, b"/ipfs/bafyunsigned", 5));
+        let unsigned = revival_of(&world, &other, &name, None, Admits);
+        assert_eq!(unsigned.result, Err(ReviveError::WrongSigner));
+        assert!(
+            unsigned.restored,
+            "a signer missing after the admit keeps the flag"
+        );
     }
 
     fn revive_one<P: PlaneRead>(
@@ -1351,6 +1477,15 @@ mod tests {
     /// A file record at `sequence`, sealed under `seal_seed`, signed under the
     /// write scope seed, and its head block.
     fn file_record(seal_seed: [u8; 32], sequence: u64) -> (Ed25519Signer, Vec<u8>, LocalHead) {
+        file_record_at(seal_seed, sequence, ENVELOPE_V)
+    }
+
+    /// [`file_record`] sealed at envelope version `version`.
+    fn file_record_at(
+        seal_seed: [u8; 32],
+        sequence: u64,
+        version: u64,
+    ) -> (Ed25519Signer, Vec<u8>, LocalHead) {
         let node_seed = kdf::node_seed(&seal_seed, &NODE);
         let read_key = kdf::read_key(node_seed.as_bytes());
         let body = ReadBody::File {
@@ -1362,7 +1497,7 @@ mod tests {
         let envelope = seal_read_body(
             read_key.as_bytes(),
             &[0x31; 24],
-            ENVELOPE_V,
+            version,
             NODE,
             SCOPE,
             EPOCH,
@@ -1485,15 +1620,15 @@ mod tests {
         recover(&device, record);
         let (gateway, http) = (gateway(), ScriptedHttp::default());
 
-        assert_eq!(
-            revive_one(
-                &world,
-                &device,
-                &signer,
-                child_read(&device, &gateway, &http, Some(head)),
-            ),
-            Err(ReviveError::TrustViolation)
+        let revival = revival_of(
+            &world,
+            &device,
+            &name,
+            Some(&signer),
+            child_read(&device, &gateway, &http, Some(head)),
         );
+        assert_eq!(revival.result, Err(ReviveError::TrustViolation));
+        assert!(!revival.restored, "a refused record restores nothing");
         assert!(registrations(&device).is_empty());
         assert_eq!(floor_of(&device, &name), None);
         assert!(nothing_published(&device, &name));

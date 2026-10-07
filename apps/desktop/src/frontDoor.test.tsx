@@ -37,6 +37,7 @@ function actions(): ShellActions {
     submitEmailCode: vi.fn(() => Promise.resolve()),
     submitRecoveryPhrase: vi.fn(() => Promise.resolve()),
     logout: vi.fn(),
+    dismissRestored: vi.fn(),
   };
 }
 
@@ -265,6 +266,18 @@ describe('the front door', () => {
     expect(root.querySelector('[data-warning="renewalFailed"]')?.textContent).toContain(
       'the CAS race was lost'
     );
+  });
+
+  it('says that the vault was restored from the server copy, as news the member drops', () => {
+    const vault = vaultStatus({ warnings: [{ kind: 'restoredFromServerCopy', detail: null }] });
+    const acted = actions();
+    draw(model({ phase: 'signedIn', vault }), acted);
+    const notice = root.querySelector('[data-warning="restoredFromServerCopy"]');
+    expect(notice?.textContent).toContain('restored your vault from the server copy');
+    expect(notice?.getAttribute('role')).toBeNull();
+    expect(notice?.classList.contains('error')).toBe(false);
+    fireEvent.click(find('[data-action="dismiss-restored"]'));
+    expect(acted.dismissRestored).toHaveBeenCalled();
   });
 
   /** A class this table has not learned yet must still raise a readable line. */

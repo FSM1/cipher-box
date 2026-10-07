@@ -216,6 +216,12 @@ pub async fn core_kit_purge(core_kit: State<'_, CoreKitStore>) -> Result<(), Str
     core_kit.purge().await.map_err(|error| error.to_string())
 }
 
+/// Drops the "restored from the server copy" notice the member read.
+#[tauri::command]
+pub async fn vault_dismiss_restored(engine: State<'_, EngineHost>) -> Result<(), String> {
+    engine.dismiss_restored().await
+}
+
 /// The live vault's status, as the signed-in window renders it.
 #[tauri::command]
 pub async fn vault_status(engine: State<'_, EngineHost>) -> Result<VaultStatus, String> {

@@ -36,7 +36,8 @@ use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
 use crate::facade::{
-    ClaimCounts, EngineError, ForkSightings, LoginSecret, NodeId, RetainedDeadLetters, SyncStatus,
+    ClaimCounts, EngineError, ForkSightings, LoginSecret, NodeId, RestoredCopies,
+    RetainedDeadLetters, SyncStatus,
 };
 use crate::grants::accept::ReceivedSharesLock;
 use crate::grants::grafted::{
@@ -548,6 +549,8 @@ pub(crate) struct SessionState {
     pub(crate) byo_reconciled: Rc<Cell<bool>>,
     /// The same-sequence forks this session's reads reported.
     pub(crate) fork_sightings: Rc<ForkSightings>,
+    /// The names this session reported restored from the server copy.
+    pub(crate) restored_copies: Rc<RestoredCopies>,
 }
 
 /// What a navigation measures a served scope root against: per scope, the
@@ -800,6 +803,7 @@ impl SessionState {
             capture_proofs: Rc::default(),
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
+            restored_copies: Rc::new(RestoredCopies::default()),
         }
     }
 

@@ -88,6 +88,9 @@ const ROTATION_TRUST_STOP =
 const ROTATION_ABANDONED =
   'a change to who can open a shared folder could not be finished and was stopped - check the folder sharing and try again';
 
+/** A device with no floor revived the vault from the recovery record (ADR 0062 D5). */
+const RESTORED_FROM_SERVER_COPY = 'your vault was restored from the server copy';
+
 /** A permission change landed, but the grantee was not told; a grant again tells them. */
 const SHARE_POINTER_NOT_POSTED =
   'a permission change was saved, but the person was not told - share the folder with them again at the same permission';
@@ -260,6 +263,9 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
     } else if (event.kind === 'sharePointerNotPosted') {
       notificationStore.warn(`unposted:${toHex(event.scopeRoot)}`, SHARE_POINTER_NOT_POSTED);
+    } else if (event.kind === 'restoredFromServerCopy') {
+      // One state for the vault, however many of its names revived.
+      notificationStore.warn('restored-from-server-copy', RESTORED_FROM_SERVER_COPY);
     } else if (event.kind === 'writeCutUnfinished') {
       const scope = toHex(event.scopeRoot);
       const key = `unfinished:${scope}`;

@@ -237,6 +237,13 @@ fn each_event_kind_crosses_as_its_stable_name() {
             2,
         ),
         (
+            Event::RestoredFromServerCopy {
+                routing_key: String::new(),
+            },
+            "restoredFromServerCopy",
+            2,
+        ),
+        (
             Event::RenewalFailed {
                 routing_key: String::new(),
                 detail: String::new(),
