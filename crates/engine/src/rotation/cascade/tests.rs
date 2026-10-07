@@ -489,9 +489,16 @@ fn run_over<E: Entropy, F: FloorStore>(
     let scheduler = VirtualScheduler::new();
     let outcome = block_on(async {
         let plan = fx.plan(&root_index);
-        cascade_rotate_scope(&mut entropy, &floors, &scheduler, &net, &net, &plan, || {
-            Box::pin(async {})
-        })
+        cascade_rotate_scope(
+            &mut entropy,
+            &floors,
+            &scheduler,
+            &net,
+            &net,
+            &plan,
+            || Box::pin(async {}),
+            &|_, _| {},
+        )
         .await
     });
     let spawned = scheduler.take_spawned_tasks().len();
@@ -1387,6 +1394,124 @@ fn unresolvable_descendant_aborts_fail_closed() {
     assert_eq!(spawned, 0, "no sweep enqueued on a fail-closed abort");
     // B never floored (it never published).
     assert_eq!(block_on(floors.epoch_floor(&sid(0x0b))).unwrap(), None);
+}
+
+/// Each scope of a nested cascade is noted as cut once its own floor is
+/// durable, so a cascade that stops keeps the cuts that landed before it.
+#[test]
+fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
+    let noted = |net: FakeNet| {
+        let cuts = RefCell::new(Vec::new());
+        let floors = InMemoryFloorStore::default();
+        let plan_root = [childref(0x0a)];
+        let outcome = block_on(cascade_rotate_scope(
+            &mut SeededEntropy::new(0xCA5CADE),
+            &floors,
+            &VirtualScheduler::new(),
+            &net,
+            &net,
+            &RootFx::new(net.clone()).plan(&plan_root),
+            || Box::pin(async {}),
+            &|scope_id, epoch| {
+                let floor = block_on(floors.epoch_floor(&scope_id)).expect("the floor reads");
+                assert_eq!(
+                    floor,
+                    Some(epoch),
+                    "the hook runs once the new epoch is the floor"
+                );
+                cuts.borrow_mut().push((scope_id, epoch));
+            },
+        ));
+        (outcome.is_ok(), cuts.into_inner())
+    };
+    // Each scope starts at its own epoch, so a note carries the scope's own
+    // new epoch, never the root's.
+    let nested = || FakeNet::new().scope(0x0a, 7, &[0x0b]).scope(0x0b, 9, &[]);
+
+    assert_eq!(
+        noted(nested()),
+        (true, vec![(sid(0x00), 5), (sid(0x0a), 8), (sid(0x0b), 10)])
+    );
+    assert_eq!(
+        noted(nested().publish_fault(0x0b, RotationPublishError::NotPublished)),
+        (false, vec![(sid(0x00), 5), (sid(0x0a), 8)]),
+        "the cuts before the stop stay noted"
+    );
+}
+
+/// An [`InMemoryFloorStore`] whose commit of the root's cut-epoch record
+/// fails, after the read-epoch floor of the cut rose.
+struct CutEpochCommitFails {
+    inner: InMemoryFloorStore,
+    key: Vec<u8>,
+}
+
+impl FloorStore for CutEpochCommitFails {
+    async fn epoch_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+        self.inner.epoch_floor(key).await
+    }
+
+    async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> crate::seams::SeamResult<u64> {
+        self.inner.raise_epoch_floor(key, epoch).await
+    }
+
+    async fn sequence_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+        self.inner.sequence_floor(key).await
+    }
+
+    async fn raise_sequence_floor(
+        &self,
+        key: &[u8],
+        sequence: u64,
+    ) -> crate::seams::SeamResult<u64> {
+        self.inner.raise_sequence_floor(key, sequence).await
+    }
+
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> crate::seams::SeamResult<()> {
+        if raises.iter().any(|raise| raise.key == self.key) {
+            return Err(crate::seams::SeamError::new("cut-epoch commit refused"));
+        }
+        self.inner.commit_floors(raises).await
+    }
+
+    async fn clear(&self) -> crate::seams::SeamResult<()> {
+        self.inner.clear().await
+    }
+}
+
+/// The read-epoch floor is the cut: a cascade that then fails to record the
+/// cut epoch has still noted the cut.
+#[test]
+fn a_cut_epoch_record_that_fails_after_the_floor_rose_keeps_the_cut_noted() {
+    let net = FakeNet::new();
+    let revokee = net.owner.grantee.public().to_bytes();
+    let fx = RootFx::new(net.clone()).revoking(revokee);
+    let floors = CutEpochCommitFails {
+        inner: InMemoryFloorStore::default(),
+        key: revocation_cut_epoch_key(&sid(0x00), &revokee),
+    };
+    let cuts = RefCell::new(Vec::new());
+    let outcome = block_on(cascade_rotate_scope(
+        &mut SeededEntropy::new(0xCA5CADE),
+        &floors,
+        &VirtualScheduler::new(),
+        &net,
+        &net,
+        &fx.plan(&[]),
+        || Box::pin(async {}),
+        &|scope_id, epoch| cuts.borrow_mut().push((scope_id, epoch)),
+    ));
+
+    assert!(
+        matches!(outcome, Err(CascadeError::RevocationFloor { .. })),
+        "the cut-epoch record fails"
+    );
+    assert_eq!(
+        block_on(floors.epoch_floor(&sid(0x00))).expect("the floor reads"),
+        Some(5),
+        "after the read-epoch floor rose"
+    );
+    assert_eq!(cuts.into_inner(), vec![(sid(0x00), 5)]);
 }
 
 #[test]

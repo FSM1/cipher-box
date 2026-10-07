@@ -2428,6 +2428,78 @@ pub enum Event {
         )]
         scope_root: NodeId,
     },
+    /// A write cut started its name wave at a scope root.
+    NameWaveStarted {
+        /// The scope root the wave moves.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// When the wave started.
+        at: UnixMillis,
+    },
+    /// The name wave holds `moved` of the subtree's `total` nodes at their new
+    /// names. Sent once per node, the root last. A retry inside the bound counts
+    /// again from one under the same start.
+    NameWaveProgress {
+        /// The scope root the wave moves.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// The nodes at their new names so far.
+        moved: u32,
+        /// The nodes the wave moves, the root included.
+        total: u32,
+        /// When this node landed.
+        at: UnixMillis,
+    },
+    /// The name wave finished: the re-point landed and the old names retired.
+    /// A wave that stops sends no end: [`Self::RotationWorkOwed`] is its
+    /// terminal event.
+    NameWaveEnded {
+        /// The scope root the wave moved.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// The interior nodes the wave covered, the root excluded.
+        interior_nodes: u32,
+        /// The nodes the wave left out ([`Self::NodeDropped`]).
+        dropped: u32,
+        /// When the wave ended.
+        at: UnixMillis,
+    },
+    /// Sent at the end of each sweep run that returns an outcome. A failed run
+    /// sends none. The scope converged when `old_epoch_nodes` is zero. The
+    /// times are this session's only.
+    SweepConvergence {
+        /// The swept scope root.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// The read epoch the run gated the scope root at.
+        read_epoch: u64,
+        /// The interior nodes the run did not prove at `read_epoch`: a lost
+        /// race or a node it could not read. A lower bound when not zero: the
+        /// run does not count the nodes below a node it could not read.
+        old_epoch_nodes: u32,
+        /// When this session last cut the scope's read epoch.
+        cut_at: Option<UnixMillis>,
+        /// When the last run that re-sealed a node of the scope ended.
+        last_reseal_at: Option<UnixMillis>,
+        /// When this run ended.
+        at: UnixMillis,
+    },
     /// A claim this device converted added a grantee to a folder (ADR 0023
     /// D7). Transient: only the converting device sees it, and every owner
     /// device reads the grantee off the record.
@@ -2549,6 +2621,51 @@ impl fmt::Debug for Event {
             Self::WriteCutUnfinished { scope_root } => f
                 .debug_struct("WriteCutUnfinished")
                 .field("scope_root", scope_root)
+                .finish(),
+            Self::NameWaveStarted { scope_root, at } => f
+                .debug_struct("NameWaveStarted")
+                .field("scope_root", scope_root)
+                .field("at", at)
+                .finish(),
+            Self::NameWaveProgress {
+                scope_root,
+                moved,
+                total,
+                at,
+            } => f
+                .debug_struct("NameWaveProgress")
+                .field("scope_root", scope_root)
+                .field("moved", moved)
+                .field("total", total)
+                .field("at", at)
+                .finish(),
+            Self::NameWaveEnded {
+                scope_root,
+                interior_nodes,
+                dropped,
+                at,
+            } => f
+                .debug_struct("NameWaveEnded")
+                .field("scope_root", scope_root)
+                .field("interior_nodes", interior_nodes)
+                .field("dropped", dropped)
+                .field("at", at)
+                .finish(),
+            Self::SweepConvergence {
+                scope_root,
+                read_epoch,
+                old_epoch_nodes,
+                cut_at,
+                last_reseal_at,
+                at,
+            } => f
+                .debug_struct("SweepConvergence")
+                .field("scope_root", scope_root)
+                .field("read_epoch", read_epoch)
+                .field("old_epoch_nodes", old_epoch_nodes)
+                .field("cut_at", cut_at)
+                .field("last_reseal_at", last_reseal_at)
+                .field("at", at)
                 .finish(),
             Self::GranteeJoined {
                 scope_root,
@@ -3735,14 +3852,100 @@ pub(crate) async fn memoized_scan<St: StagingStore + QueueGeneration>(
 }
 
 /// The task a rotation enqueues once its cut is durable: [`SWEEP_MAX_PASSES`]
-/// passes, and whatever it leaves is the idle sweep job's.
-fn sweep_task_factory(sweeper: Sweeper) -> SweepTaskFactory {
-    Rc::new(move |scope, parent_node_seed| {
-        let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
-        Box::pin(async move {
-            let _ = run.await;
-        })
-    })
+/// passes, and whatever it leaves is the idle sweep job's. Each cut, once its
+/// epoch floor is durable, sets the cut time [`RotationTimes`] holds, through
+/// [`SweepTaskFactory::cut`].
+fn sweep_task_factory<Sch: Scheduler + Clone + 'static>(
+    sweeper: Sweeper,
+    scheduler: Sch,
+    times: Rc<RotationTimes>,
+) -> SweepTaskFactory {
+    let cut = {
+        let scheduler = scheduler.clone();
+        let times = times.clone();
+        Rc::new(move |scope_id, epoch| times.cut(scope_id, epoch, scheduler.now()))
+    };
+    SweepTaskFactory {
+        cut,
+        task: Rc::new(move |scope: ChildScopeRef, parent_node_seed| {
+            let scope_id = scope.scope_id;
+            let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
+            let scheduler = scheduler.clone();
+            let times = times.clone();
+            Box::pin(async move {
+                if let SweepRun::Swept(Ok(outcome)) = run.await {
+                    times.report(scope_id, &outcome, scheduler.now());
+                }
+            })
+        }),
+    }
+}
+
+/// When this session last cut each scope's read epoch, and when a sweep run
+/// at that epoch or later last re-sealed a node of it. Session memory only: a
+/// restart starts empty.
+struct RotationTimes {
+    events: mpsc::UnboundedSender<Event>,
+    scopes: RefCell<BTreeMap<[u8; 16], ScopeTimes>>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct ScopeTimes {
+    cut_epoch: u64,
+    cut_at: Option<UnixMillis>,
+    reseal_epoch: u64,
+    last_reseal_at: Option<UnixMillis>,
+}
+
+impl RotationTimes {
+    fn new(events: mpsc::UnboundedSender<Event>) -> Self {
+        Self {
+            events,
+            scopes: RefCell::default(),
+        }
+    }
+
+    /// A re-seal a run at `epoch` or later already reported stays: a sweep
+    /// can land one while the cut waits on its floor write.
+    fn cut(&self, scope_id: [u8; 16], epoch: u64, at: UnixMillis) {
+        let mut all = self.scopes.borrow_mut();
+        let times = all.entry(scope_id).or_default();
+        if times.cut_at.is_some() && epoch < times.cut_epoch {
+            return;
+        }
+        times.cut_epoch = epoch;
+        times.cut_at = Some(at);
+        if times.reseal_epoch < epoch {
+            times.last_reseal_at = None;
+        }
+    }
+
+    /// Sends the [`Event::SweepConvergence`] one sweep run's `outcome` reports.
+    fn report(&self, scope_id: [u8; 16], outcome: &SweepOutcome, at: UnixMillis) {
+        let times = {
+            let mut all = self.scopes.borrow_mut();
+            let times = all.entry(scope_id).or_default();
+            // A run at an epoch below the cut re-sealed for the cut before it.
+            if !outcome.converged.is_empty() && outcome.scope_read_epoch >= times.cut_epoch {
+                times.reseal_epoch = outcome.scope_read_epoch;
+                times.last_reseal_at = Some(at);
+            }
+            *times
+        };
+        let _ = self.events.unbounded_send(Event::SweepConvergence {
+            scope_root: NodeId(scope_id),
+            read_epoch: outcome.scope_read_epoch,
+            old_epoch_nodes: saturating_count(outcome.old_epoch_nodes()),
+            cut_at: times.cut_at,
+            last_reseal_at: times.last_reseal_at,
+            at,
+        });
+    }
+}
+
+/// `count` as an event field, saturated at its bound.
+pub(crate) fn saturating_count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// The scopes this vault owns that this session can place: the vault root at
@@ -5698,11 +5901,18 @@ impl<T: SeamTypes> Engine<T> {
 
         self.spawn_liveness_loop(api.clone());
         let sweeper = self.build_sweeper(api.clone());
-        *self.state.sweep_tasks.borrow_mut() = sweeper.clone().map(sweep_task_factory);
+        let rotation_times = Rc::new(RotationTimes::new(self.events.clone()));
+        *self.state.sweep_tasks.borrow_mut() = sweeper.clone().map(|sweeper| {
+            sweep_task_factory(
+                sweeper,
+                self.seams.scheduler.clone(),
+                rotation_times.clone(),
+            )
+        });
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         self.open_tick_loop();
         if let Some(sweeper) = sweeper {
-            self.spawn_sweep_job(sweeper);
+            self.spawn_sweep_job(sweeper, rotation_times);
         }
         self.api = Some(api);
         self.started = true;
@@ -6848,7 +7058,7 @@ where {
     /// Nothing about the wave is durable, so a restart starts with every such
     /// scope due: a cut whose own enqueued sweep failed, or that a restart cut
     /// short, converges here.
-    fn spawn_sweep_job(&self, sweeper: Sweeper)
+    fn spawn_sweep_job(&self, sweeper: Sweeper, times: Rc<RotationTimes>)
     where
         T::FloorStore: Clone + 'static,
     {
@@ -6904,9 +7114,11 @@ where {
                     sweeper(target.scope.clone(), target.ascent.clone(), 1).await
                 },
                 |target: &SweepTarget, result: &Result<SweepOutcome, SweepError>| {
-                    if let Ok(outcome) = result
-                        && !outcome.worth_another_pass()
-                    {
+                    let Ok(outcome) = result else {
+                        return;
+                    };
+                    times.report(target.scope.scope_id, outcome, scheduler.now());
+                    if !outcome.worth_another_pass() {
                         read_epoch_converged_at
                             .borrow_mut()
                             .insert(target.scope.scope_id, outcome.scope_read_epoch);
@@ -8080,16 +8292,20 @@ where {
                 target.ancestry(),
                 PointerConsultArm::Refused,
             );
-            flat_root_cut(
+            let outcome = flat_root_cut(
                 &net,
                 anchor.as_ref(),
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),
-                    make_sweep: || sweep(target.scope.clone(), target.parent_node_seed.clone()),
+                    make_sweep: || {
+                        (sweep.task)(target.scope.clone(), target.parent_node_seed.clone())
+                    },
                 },
             )
-            .await
+            .await?;
+            (sweep.cut)(target.scope.scope_id, outcome.new_read_epoch);
+            Ok(outcome)
         })
         .await
         .map(|_| ())
@@ -8885,9 +9101,10 @@ where {
                         pass.stop_owed(node, owed_steps.clone(), OwedStop::of_grant(stalled))
                             .await;
                         let sweep = self.sweep_factory()?;
-                        self.seams
-                            .scheduler
-                            .spawn(sweep(parent.clone(), parent_scope.parent_node_seed.clone()));
+                        self.seams.scheduler.spawn((sweep.task)(
+                            parent.clone(),
+                            parent_scope.parent_node_seed.clone(),
+                        ));
                     }
                     None => {
                         let _ = pass.owed().clear(node).await;
@@ -13277,6 +13494,88 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run at `epoch` that re-sealed a node, or none.
+    fn sweep_run(epoch: u64, resealed: bool) -> SweepOutcome {
+        SweepOutcome {
+            scope_read_epoch: epoch,
+            converged: if resealed { vec![[8; 16]] } else { Vec::new() },
+            ..SweepOutcome::default()
+        }
+    }
+
+    /// The `(cut_at, last_reseal_at)` pairs `stream` holds.
+    fn reported_times(
+        stream: &mut mpsc::UnboundedReceiver<Event>,
+    ) -> Vec<(Option<UnixMillis>, Option<UnixMillis>)> {
+        core::iter::from_fn(|| stream.try_recv().ok())
+            .map(|event| match event {
+                Event::SweepConvergence {
+                    cut_at,
+                    last_reseal_at,
+                    ..
+                } => (cut_at, last_reseal_at),
+                other => panic!("only sweep reports, not {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A second cut of a scope starts its times again: a run that re-seals
+    /// no node after it reports no re-seal time older than the cut.
+    #[test]
+    fn a_second_cut_drops_the_re_seal_time_of_the_first() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.cut(scope, 2, UnixMillis(1));
+        times.report(scope, &sweep_run(2, true), UnixMillis(2));
+        times.cut(scope, 3, UnixMillis(3));
+        times.report(scope, &sweep_run(3, false), UnixMillis(4));
+
+        assert_eq!(
+            reported_times(&mut stream),
+            vec![
+                (Some(UnixMillis(1)), Some(UnixMillis(2))),
+                (Some(UnixMillis(3)), None),
+            ]
+        );
+    }
+
+    /// A run at the new epoch can end while the cut waits on its floor write:
+    /// the cut keeps that re-seal time.
+    #[test]
+    fn a_cut_keeps_a_re_seal_at_its_own_epoch_that_landed_first() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.report(scope, &sweep_run(3, true), UnixMillis(5));
+        times.cut(scope, 3, UnixMillis(6));
+        times.report(scope, &sweep_run(3, false), UnixMillis(7));
+
+        assert_eq!(
+            reported_times(&mut stream),
+            vec![
+                (None, Some(UnixMillis(5))),
+                (Some(UnixMillis(6)), Some(UnixMillis(5))),
+            ]
+        );
+    }
+
+    /// A run at the old epoch can end after the cut: its re-seal belongs to
+    /// the cut before, so the new cut reports none.
+    #[test]
+    fn a_run_below_the_cut_epoch_sets_no_re_seal_time() {
+        let (events, mut stream) = mpsc::unbounded();
+        let times = RotationTimes::new(events);
+        let scope = [7; 16];
+        times.cut(scope, 3, UnixMillis(1));
+        times.report(scope, &sweep_run(2, true), UnixMillis(2));
+
+        assert_eq!(
+            reported_times(&mut stream),
+            vec![(Some(UnixMillis(1)), None)]
+        );
+    }
 
     #[test]
     fn a_subkey_two_contacts_bind_names_neither() {

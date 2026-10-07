@@ -79,6 +79,7 @@ use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{
     Event, NodeId, emit_revival_failures, emit_trust_violation, report_unattested_row,
+    saturating_count,
 };
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
@@ -6180,6 +6181,15 @@ where
             }
         }
     }
+
+    fn node_moved(&self, moved: usize, total: usize) {
+        let _ = self.events.unbounded_send(Event::NameWaveProgress {
+            scope_root: NodeId(self.scope_id),
+            moved: saturating_count(moved),
+            total: saturating_count(total),
+            at: self.scheduler.now(),
+        });
+    }
 }
 
 /// The seams and owner material one scope-pointer enrolment pass runs on.
@@ -10168,6 +10178,7 @@ mod tests {
                 carried_history_links: &[],
             },
             || Box::pin(async {}),
+            &|_, _| {},
         ))
     }
 

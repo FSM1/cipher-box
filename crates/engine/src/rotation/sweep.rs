@@ -57,11 +57,19 @@ use cipherbox_core::hex::lower as hex_lower;
 #[cfg(test)]
 pub(crate) mod sim;
 
-/// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
+/// Builds the lazy-wave sweep task a rotation enqueues
 /// ([`rotate_scope`](crate::rotation::rotate_scope)'s third effect), over the
 /// scope root the rotation read and the ancestor seed it read it under.
-pub(crate) type SweepTaskFactory =
-    Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+pub(crate) type SweepTask = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+
+/// What a read cut hands its scopes to once each cut is durable.
+#[derive(Clone)]
+pub(crate) struct SweepTaskFactory {
+    /// The sweep task a rotation enqueues.
+    pub(crate) task: SweepTask,
+    /// Notes that a read cut of this scope to this epoch is durable.
+    pub(crate) cut: Rc<dyn Fn([u8; 16], u64)>,
+}
 
 /// The session material a spawned sweep opens and re-seals under, held in a cell
 /// the engine empties on drop so teardown revokes it rather than waiting out the
@@ -377,6 +385,14 @@ impl SweepOutcome {
                 .unreachable
                 .iter()
                 .any(|(_, reason)| reason.is_retryable())
+    }
+
+    /// The interior nodes this outcome does not prove at
+    /// [`scope_read_epoch`](Self::scope_read_epoch): every node not re-sealed
+    /// or already there. A lower bound when not zero: the run does not count
+    /// the nodes below a node it could not read.
+    pub fn old_epoch_nodes(&self) -> usize {
+        self.dropped_lost_race.len() + self.unreachable.len()
     }
 
     /// The nodes this pass could not read, without the verdicts — what a caller

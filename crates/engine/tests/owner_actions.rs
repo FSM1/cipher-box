@@ -20783,3 +20783,212 @@ fn command_on(
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// Rotation progress: the name wave and the sweep report on the engine clock
+// ---------------------------------------------------------------------------
+
+/// A write revoke reports its name wave: one start, one progress event per
+/// node with the root last, and one end, each at the virtual clock's time.
+#[test]
+fn a_write_revoke_reports_each_node_of_its_name_wave_and_the_end() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    fx.world.scheduler.advance(Duration::from_secs(5));
+    let at = fx.world.scheduler.now();
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    let wave: Vec<Event> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::NameWaveStarted { .. }
+                    | Event::NameWaveProgress { .. }
+                    | Event::NameWaveEnded { .. }
+            )
+        })
+        .collect();
+    let scope_root = fx.folder;
+    let progress = |moved| Event::NameWaveProgress {
+        scope_root,
+        moved,
+        total: 3,
+        at,
+    };
+    assert_eq!(
+        wave,
+        vec![
+            Event::NameWaveStarted { scope_root, at },
+            progress(1),
+            progress(2),
+            progress(3),
+            Event::NameWaveEnded {
+                scope_root,
+                interior_nodes: 2,
+                dropped: 0,
+                at,
+            },
+        ]
+    );
+}
+
+/// A read revoke cuts the scope's read epoch, and the sweep it enqueues
+/// re-seals the interior nodes: the run reports no node left at the old
+/// epoch, with the cut time and the re-seal time on the virtual clock.
+#[test]
+fn the_sweep_a_read_revoke_enqueues_reports_no_node_left_at_the_old_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<Event> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SweepConvergence { .. }))
+        .collect();
+    let [
+        Event::SweepConvergence {
+            scope_root,
+            read_epoch,
+            old_epoch_nodes,
+            cut_at: reported_cut,
+            last_reseal_at,
+            at,
+        },
+    ] = reports.as_slice()
+    else {
+        panic!("one sweep run reports, not {reports:?}");
+    };
+    assert_eq!(*scope_root, fx.folder);
+    assert_eq!(*read_epoch, 2, "the run gated the root at the cut epoch");
+    assert_eq!(*old_epoch_nodes, 0, "no interior node is left behind");
+    assert_eq!(*reported_cut, Some(cut_at));
+    assert_eq!(*last_reseal_at, Some(*at), "this run re-sealed the nodes");
+    assert!(*at >= cut_at);
+}
+
+/// A write wave that stops sends its start and no end: the owed work is its
+/// terminal event.
+#[test]
+fn a_write_wave_that_stops_sends_no_end_and_reports_the_work_owed() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    let terminal: Vec<&str> = events_so_far(&mut fx._events)
+        .iter()
+        .filter_map(|event| match event {
+            Event::NameWaveStarted { scope_root, .. } if *scope_root == folder => Some("started"),
+            Event::NameWaveEnded { .. } => Some("ended"),
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == folder => Some("owed"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(terminal, vec!["started", "owed"]);
+}
+
+/// The sweep runs this pass reports, with the cut time and the last re-seal
+/// time of each.
+fn sweep_reports(
+    events: &mut EventStream,
+) -> Vec<(NodeId, Option<UnixMillis>, Option<UnixMillis>)> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                cut_at,
+                last_reseal_at,
+                ..
+            } => Some((scope_root, cut_at, last_reseal_at)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A stalled link mint spawns the sweep of the parent, which no cut moved: the
+/// parent's run reports no cut time.
+#[test]
+fn the_sweep_a_stalled_mint_spawns_reports_no_cut_of_the_parent() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    settle_filed_sweeps(&fx);
+
+    let parent: Vec<_> = sweep_reports(&mut fx._events)
+        .into_iter()
+        .filter(|(scope, _, _)| *scope == ROOT)
+        .collect();
+    assert!(!parent.is_empty(), "the parent's sweep reports");
+    assert!(
+        parent.iter().all(|(_, cut_at, _)| cut_at.is_none()),
+        "no cut of the parent occurred"
+    );
+}
+
+/// A manual rotation cuts the scope's read epoch: the sweep it enqueues
+/// reports the cut time and the new epoch.
+#[test]
+fn the_sweep_a_rotate_now_enqueues_reports_its_cut_time_and_new_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    nested_subtree(&mut fx);
+    events_so_far(&mut fx._events);
+    let cut_at = fx.world.scheduler.now();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+
+    let reports: Vec<(u64, Option<UnixMillis>)> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root,
+                read_epoch,
+                cut_at,
+                ..
+            } if scope_root == fx.folder => Some((read_epoch, cut_at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, vec![(2, Some(cut_at))]);
+}
