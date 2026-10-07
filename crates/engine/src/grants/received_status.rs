@@ -4670,13 +4670,22 @@ mod tests {
         fn a_personal_pointer_no_endpoint_answers_escalates_once_past_the_window() {
             let fx = granted_personal(Some(pointer_name()));
             fx.records.fail_get_for(pointer_name().as_str());
+            let reads = fx.records.get_count(scope_root_name().as_str());
 
             assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
             fx.forced_pass(5_999);
             assert_eq!(pointer_escalations(&fx), 0, "inside the window");
             assert_eq!(fx.forced_pass(6_000), ResolutionClass::Granted);
             assert_eq!(pointer_escalations(&fx), 1);
+            assert!(
+                fx.records.get_count(scope_root_name().as_str()) > reads,
+                "the stored root is read, not the last verdict kept"
+            );
             assert!(!fx.reported.get(), "the escalation is no trust verdict");
+
+            fx.forced_pass(7_000);
+            fx.forced_pass(60_000);
+            assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
         }
 
         /// ADR 0074 D2: a nameless personal bookmark follows no pointer, so it
