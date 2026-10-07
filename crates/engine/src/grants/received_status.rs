@@ -814,7 +814,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let Some(hold) = received.link_hold(&key) else {
+            // A nameless bookmark follows no pointer, so it has no pin to read.
+            let (Some(_), Some(name)) = (received.link_hold(&key), &share.scope_pointer_name)
+            else {
                 continue;
             };
             let read = match pointers.get(&key) {
@@ -834,11 +836,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 &render.own_descendants.borrow(),
                 &share.scope_id,
             );
-            reads.push((
-                hold.scope_pointer_name.as_str().as_bytes().to_vec(),
-                read,
-                shared,
-            ));
+            reads.push((name.as_str().as_bytes().to_vec(), read, shared));
         }
         let mut pins = render.pointer_pins.borrow_mut();
         for (name, read, shared) in &reads {
