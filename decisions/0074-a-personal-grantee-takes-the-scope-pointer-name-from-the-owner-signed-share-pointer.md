@@ -1,6 +1,6 @@
 # ADR 0074: A personal grantee takes the scope pointer name from the owner-signed share pointer
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-07
 - **Date:** 2026-10-07
 - **Relates to:** [#2327](https://github.com/FSM1/cipher-box/issues/2327),
   FSM1/cipher-box-next#38 D3, ADR 0004, ADR 0020, ADR 0024, ADR 0063
