@@ -133,6 +133,12 @@ pub(crate) trait PlaneRead {
         bytes: &[u8],
     ) -> Result<Admitted, PlaneRefusal>;
 
+    /// Whether [`Self::admit`] writes a floor, so a retry after a later
+    /// refusal is no longer floorless ([`Revival::restored`]).
+    fn admit_writes_floor(&self) -> bool {
+        true
+    }
+
     /// Whether this device holds no floor for the record, read before
     /// [`Self::admit`] (ADR 0062 D5).
     async fn floorless<F: FloorStore>(&self, floors: &F, name: &IpnsName) -> SeamResult<bool> {
@@ -400,7 +406,7 @@ where
         register(api, &registrations).await
     };
     let mut revived = Vec::with_capacity(results.len());
-    for result in results {
+    for (result, request) in results.into_iter().zip(requests) {
         let restored = match &result {
             Ok(lapsed) => lapsed.restored,
             Err((_, restored)) => *restored,
@@ -410,6 +416,7 @@ where
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
             (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed).await,
         };
+        let restored = restored && (result.is_ok() || request.plane.admit_writes_floor());
         revived.push(Revival { result, restored });
     }
     revived
@@ -947,41 +954,33 @@ mod tests {
         .remove(0)
     }
 
-    /// A read that admits the record from an envelope version this build does
-    /// not author.
-    struct AdmitsForeignVersion;
-
-    impl PlaneRead for AdmitsForeignVersion {
-        async fn admit<T: RecordTransport>(
-            &self,
-            _: &T,
-            _: &IpnsName,
-            _: &VerifiedRecord,
-            _: &[u8],
-        ) -> Result<Admitted, PlaneRefusal> {
-            Err(PlaneRefusal::Unsignable(PublishError::ForeignVersion {
-                version: 9,
-            }))
-        }
-    }
-
     /// ADR 0062 D5: once the read admitted the record, a later refusal that is
     /// not a trust violation keeps the restore flag.
     #[test]
     fn a_refusal_after_the_admit_keeps_the_restore_flag() {
         let (world, device) = after_100_days();
-        let signer = Ed25519Signer::from_seed([3; 32]);
+        let later = ENVELOPE_V + 1;
+        let (signer, record, head) = file_record_at(READ_SCOPE_SEED, 4, later);
         let name = name_of(&signer);
-        recover(&device, minted(&signer, b"/ipfs/bafyforeign", 5));
-        let foreign = revival_of(&world, &device, &name, Some(&signer), AdmitsForeignVersion);
+        recover(&device, record);
+        let (gateway, http) = (gateway(), ScriptedHttp::default());
+        let foreign = revival_of(
+            &world,
+            &device,
+            &name,
+            Some(&signer),
+            child_read(&device, &gateway, &http, Some(head)),
+        );
         assert_eq!(
             foreign.result,
             Err(ReviveError::Publish(PublishError::ForeignVersion {
-                version: 9
+                version: later
             }))
         );
         assert!(foreign.restored, "a foreign version keeps the flag");
 
+        let signer = Ed25519Signer::from_seed([3; 32]);
+        let name = name_of(&signer);
         let other = world.device(b"another device");
         recover(&other, minted(&signer, b"/ipfs/bafyunsigned", 5));
         let unsigned = revival_of(&world, &other, &name, None, Admits);
@@ -1476,6 +1475,15 @@ mod tests {
     /// A file record at `sequence`, sealed under `seal_seed`, signed under the
     /// write scope seed, and its head block.
     fn file_record(seal_seed: [u8; 32], sequence: u64) -> (Ed25519Signer, Vec<u8>, LocalHead) {
+        file_record_at(seal_seed, sequence, ENVELOPE_V)
+    }
+
+    /// [`file_record`] sealed at envelope version `version`.
+    fn file_record_at(
+        seal_seed: [u8; 32],
+        sequence: u64,
+        version: u64,
+    ) -> (Ed25519Signer, Vec<u8>, LocalHead) {
         let node_seed = kdf::node_seed(&seal_seed, &NODE);
         let read_key = kdf::read_key(node_seed.as_bytes());
         let body = ReadBody::File {
@@ -1487,7 +1495,7 @@ mod tests {
         let envelope = seal_read_body(
             read_key.as_bytes(),
             &[0x31; 24],
-            ENVELOPE_V,
+            version,
             NODE,
             SCOPE,
             EPOCH,

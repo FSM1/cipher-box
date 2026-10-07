@@ -301,6 +301,10 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
     }
 
     /// A device that never walked the chain holds no index floor.
+    fn admit_writes_floor(&self) -> bool {
+        false
+    }
+
     async fn floorless<G: FloorStore>(&self, floors: &G, _: &IpnsName) -> SeamResult<bool> {
         Ok(floor::vault_pointer_index_floor(floors, &self.scope_id)
             .await?
@@ -735,6 +739,10 @@ mod tests {
                     pass.revivals[0].1.result,
                     Err(ReviveError::Publish(PublishError::BelowBar { .. }))
                 ));
+                assert!(
+                    !pass.revivals[0].1.restored,
+                    "a pointer admit writes no floor, so a refusal restores nothing",
+                );
             } else {
                 assert_eq!(pass.unconfirmed, Some(ChainStall::TrustViolation));
                 assert!(matches!(
