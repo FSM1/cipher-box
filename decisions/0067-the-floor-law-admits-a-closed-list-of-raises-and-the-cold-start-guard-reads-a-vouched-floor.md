@@ -42,9 +42,9 @@ device signed in a liveness renewal, after `Published`.
 **D2 — The list of raises is closed.** `blueprint/engine.md` names each raise that D1 admits. A
 new raise enters the list only through an ADR or an amendment, also when it fits D1. Amended on
 2026-10-05 by FSM1/cipher-box#2321: the list adds the name sequence of a liveness renewal after
-`Published` (`renew_held`). Amended on 2026-10-07 by FSM1/cipher-box#2356: a confirmed revival
-publish raises the sequence floor through the own-publish class (b), via `raise_to_revived`; no
-new site.
+`Published` (`renew_held`). Amended on 2026-10-07 by FSM1/cipher-box#2356: the list adds the
+name sequence after a confirmed revival publish (`raise_to_revived`), a new list entry in class
+(b), for the bin index and the settings record.
 
 **D3 — The cold-start guard at the vault anchor reads a vouched floor.** The vouched floor is the
 highest `minReadEpoch` that a vault pointer vouched to this device. It is a floor-store key in

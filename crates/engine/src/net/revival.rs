@@ -427,9 +427,13 @@ where
 }
 
 /// Raise the sequence floor of `name` to the sequence a revival signed, once
-/// its publish is confirmed: the own-publish raise of a landed owner record
-/// (ADR 0067 D2 (b)). After a restart, a load then refuses an older record at
-/// `S` rather than let a later write sign a second value at `S + 1`.
+/// its publish is confirmed (ADR 0067 D2 (b)), for the bin index and the
+/// settings record only (blueprint/engine.md "Liveness"). After a restart, a
+/// load then refuses an older record at `S` rather than let a later write sign
+/// a second value at `S + 1`. A floor store error leaves the floor at `S`, as
+/// before the raise, and is not a failed revival: the record is published, the
+/// bin index hold reads the floor before it lifts, and the settings load after
+/// the revival raises it when it reads the record.
 pub(crate) async fn raise_to_revived<F: FloorStore>(
     floors: &F,
     name: &IpnsName,

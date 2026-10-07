@@ -5974,9 +5974,6 @@ impl<T: SeamTypes> Engine<T> {
                 BinIndexRevival::Unlapsed => self.publish_genesis_bin_index(&api).await,
                 // A raw read settles nothing: only a gated load that resolves
                 // the record lets the drain write over it.
-                // A raw read settles only what the durable floor already
-                // covers: a drain write signs above that floor. Else only a
-                // gated load at the served sequence settles it.
                 BinIndexRevival::Served { sequence } => {
                     if self.bin_floor_reaches(sequence).await {
                         self.publish_genesis_bin_index(&api).await;

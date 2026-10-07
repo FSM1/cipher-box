@@ -201,10 +201,17 @@ bytes (FSM1/cipher-box-next#28 D2).
   that has no pointer record, which answers 404. The first hourly pass waits
   for these fetches before the walk, so N such scopes add about N / 25
   minutes. A revival holds nothing in `HeldRecords`. When its publish is
-  confirmed, a revival of the vault pointer chain, the settings record or the
-  bin index raises the floor to the sequence it signed through the own-publish
-  site (`raise_to_revived`), so after a restart a load refuses the older
-  record at `S`; the gated read that follows it admits the record at `S + 1`. After a bin index revival the session loads the bin
+  confirmed, a revival of the bin index or the settings record raises the
+  floor to the sequence it signed (`raise_to_revived`), so after a restart a
+  load refuses the older record at `S`: a write reads these two floors
+  (`bin_floor_reaches`, the D4 save rule). The vault pointer and scope pointer
+  revivals raise no floor, because a confirmed publish that is then lost
+  would leave the recovery record below the floor and lock the plane. The
+  vault root revival raises no floor either; the restart fork it leaves (a
+  confirmed `S + 1` lost, an expired `S` served again, a drain write of
+  another `S + 1`) is an accepted residual that ADR 0066 reports and resolves
+  by the later EOL. The gated read that follows a revival admits the record at
+  `S + 1`. After a bin index revival the session loads the bin
   index through the gate and holds it. No revival signs a name in a scope that
   has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
   not read, the session sends `renewalFailed` for it and revives no vault root
@@ -460,7 +467,8 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
   (`publish_bin_index`, `publish_settings`), the name sequence after a
-  confirmed revival of an owner record (`raise_to_revived`), the name sequence of a
+  confirmed revival of the bin index or the settings record
+  (`raise_to_revived`), the name sequence of a
   value this device signed in a liveness renewal, after `Published`
   (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more

@@ -2436,7 +2436,9 @@ fn expired_bin_record(before: &VerifiedRecord) -> Vec<u8> {
 /// ADR 0066: a bin index revival that lands raises the sequence floor to the
 /// sequence it signed, though the gated load after it reads nothing. After a
 /// restart that reads the revived record once and then the older record at
-/// `S`, the drain refuses `S` and signs nothing at `S + 1` a second time.
+/// `S`, the drain refuses `S` and signs nothing at `S + 1` a second time. Only
+/// the floor assertion pins the raise: the start's served-sequence rule alone
+/// also keeps the drain from signing.
 #[test]
 fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
     let world = FakeWorld::new();
