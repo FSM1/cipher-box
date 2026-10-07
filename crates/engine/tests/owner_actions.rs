@@ -1127,6 +1127,14 @@ fn a_write_grants_share_pointer_names_the_root_its_wave_moved_to() {
         "the grantee is sent to the root the wave moved to"
     );
     assert_eq!(pointer.permission, CorePermission::Write);
+    assert_eq!(
+        pointer.scope_pointer_name,
+        Some(scope_pointer_name(
+            kdf::owner_pointer_seed(&SECRET).as_bytes(),
+            &fx.folder.0
+        )),
+        "and holds the scope pointer name it follows after a later cut"
+    );
 }
 
 /// The record the mint publishes before the wave lingers for ever — the wave
@@ -4555,6 +4563,85 @@ fn a_grantee_reads_a_folder_whose_losing_ref_the_grant_dropped() {
         "the held node is not visible to the grantee"
     );
     assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// ADR 0074 D1: a read grantee that holds no write seed follows the scope
+/// pointer to the root a write cut moved to, and sees a write that the owner
+/// made after the cut.
+#[test]
+fn a_personal_read_grantee_reads_the_moved_tree_after_a_write_cut() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    let before = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        fx.revoke_person(&bystander_identity()),
+        Ok(CommandOutcome::Done)
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        before,
+        "the write cut moved the scope root"
+    );
+    assert_the_grantee_sees_a_write_after_the_cut(&mut fx, grantee, &mut tasks);
+    assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// ADR 0074 D2: the downgrade posts the share pointer to the downgraded
+/// writer, so the writer follows the scope pointer as a read grantee.
+#[test]
+fn a_downgraded_writer_reads_the_moved_tree_after_its_downgrade() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_the_grantee_sees_a_write_after_the_cut(&mut fx, grantee, &mut tasks);
+    assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// The owner adds a folder in the granted scope after the cut. The grantee
+/// then lists it.
+fn assert_the_grantee_sees_a_write_after_the_cut(
+    fx: &mut GrantScenario,
+    mut grantee: Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    let added = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "after-the-cut",
+    );
+    settle(fx, &grantee, tasks);
+    block_on(grantee.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the grantee opens the folder");
+    settle(fx, &grantee, tasks);
+    let view = block_on(grantee.view()).expect("a rendered view");
+    assert!(
+        view.children(fx.folder)
+            .iter()
+            .any(|child| child.id == added),
+        "the grantee lists the folder the owner added after the cut"
+    );
 }
 
 /// The `ipnsName` `folder`'s published record names `child` by, read under
@@ -16494,6 +16581,7 @@ fn a_conversion_pass_leaves_an_item_that_is_not_its_own() {
             sharer_identity_pk: recipient_identity().verifying_key().to_sec1(),
             display_name: "theirs".to_owned(),
             permission: CorePermission::Read,
+            scope_pointer_name: None,
         }
         .encode(),
         "not-a-claim",

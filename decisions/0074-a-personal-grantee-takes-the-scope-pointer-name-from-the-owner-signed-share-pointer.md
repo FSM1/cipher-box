@@ -4,7 +4,7 @@
 - **Date:** 2026-10-07
 - **Relates to:** [#2327](https://github.com/FSM1/cipher-box/issues/2327),
   FSM1/cipher-box-next#38 D3, ADR 0004, ADR 0020, ADR 0024, ADR 0063
-- **Implemented by:** not landed
+- **Implemented by:** the PR that closes #2327
 - **Amends:** ADR 0024 D1, as the amendment of 2026-09-25 states it
 
 ## Context

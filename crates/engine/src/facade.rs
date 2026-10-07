@@ -46,7 +46,7 @@ use cipherbox_core::suite::ecdsa::{
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
@@ -93,9 +93,9 @@ use crate::grants::{
     row_is_owner_attested,
 };
 use crate::grants::{
-    EditedSet, FragmentNames, GrantEditError, GranteeNameCache, HeldRow, StagingGranteeNameCache,
-    append_row, held_row, mint_grant_row, mint_invite_row, name_row, post_share_pointer_at,
-    rename_grantee, seal_fragment, set_permission,
+    EditedSet, FragmentNames, GrantEditError, GranteeNameCache, HeldRow, PointerRecipient,
+    PointerTarget, StagingGranteeNameCache, append_row, held_row, mint_grant_row, mint_invite_row,
+    name_row, post_share_pointer_at, rename_grantee, seal_fragment, set_permission,
 };
 use crate::mailbox::poll_verified;
 use crate::name::{check_emittable, validate_name};
@@ -8149,7 +8149,8 @@ where {
 
     /// Cut the rows `kind` names out of the owner-signed set `current`
     /// publishes at `target` in one cut, and drive the cut through the planes
-    /// it demands. A `current` read from its last copy keeps no row.
+    /// it demands. A `current` read from its last copy keeps no row. Answers
+    /// the report of a cut that ran, and `None` for one that stands owed.
     async fn cut_at(
         &self,
         node: NodeId,
@@ -8157,7 +8158,7 @@ where {
         current: &CascadeTarget,
         kind: CutKind<'_>,
         from_last_copy: bool,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<CutRotationReport>, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
@@ -8177,13 +8178,14 @@ where {
             }
         }
         .map_err(EngineError::from_revoke)?;
-        self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
+        let report = self
+            .drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
             .await?;
         if from_last_copy {
             let unasked = current.commitment.entries.len() > asked;
             self.notice_rows_dropped(node, cut.commitment.cut_epoch, unasked);
         }
-        Ok(())
+        Ok(report)
     }
 
     /// Tell the host, once per session, that a cut from the last copy at
@@ -8773,6 +8775,7 @@ where {
             &grantee,
             &recipient,
             &scope_root_name,
+            &session.scope_pointer_name(&node.0),
         )
         .await
         {
@@ -9023,13 +9026,16 @@ where {
                     api.as_ref(),
                     session.identity(),
                     ENVELOPE_V,
-                    &GrantRecipient {
-                        contact,
+                    &PointerRecipient {
+                        identity_pk: contact.identity_pk(),
+                        enc_pub: contact.enc_subkey(),
                         display_name,
-                        grantee_name: None,
                     },
-                    permission.into(),
-                    &parsed_scope_name(&target.scope.ipns_name)?,
+                    PointerTarget {
+                        permission: permission.into(),
+                        scope_root_name: &parsed_scope_name(&target.scope.ipns_name)?,
+                        scope_pointer_name: &session.scope_pointer_name(&node.0),
+                    },
                 )
                 .await
                 .map(|()| CommandOutcome::Done)
@@ -9160,7 +9166,8 @@ where {
     /// scope inherited. A downgrade is a write revoke: the wave moves the scope
     /// off the names the grantee could author at, and the read row stays. Over
     /// a write mint whose wave failed, a downgrade runs two waves, the owed one
-    /// and its own. A link's permission is fixed (ADR 0025 D7).
+    /// and its own. A link's permission is fixed (ADR 0025 D7). Each change
+    /// then posts the share pointer to that grantee (ADR 0074 D2).
     async fn apply_permission<'a>(
         &'a self,
         node: NodeId,
@@ -9179,16 +9186,22 @@ where {
         if held.permission == CommittedPermission::from(permission) {
             return Err(EngineError::from_grant_edit(GrantEditError::SamePermission));
         }
-        match permission {
+        let root = match permission {
             Permission::Read => {
-                self.cut_at(
-                    node,
-                    &gated.target,
-                    &gated.current,
-                    CutKind::Downgrade(&held.tag),
-                    gated.net.fell_back(),
-                )
-                .await
+                let report = self
+                    .cut_at(
+                        node,
+                        &gated.target,
+                        &gated.current,
+                        CutKind::Downgrade(&held.tag),
+                        gated.net.fell_back(),
+                    )
+                    .await?;
+                // An owed cut moved nothing yet, so no root is there to name.
+                let Some(write) = report.and_then(|report| report.write) else {
+                    return Ok(());
+                };
+                write.new_root_name
             }
             Permission::Write => {
                 if !gated.target.is_write_scope(&gated.current) {
@@ -9199,9 +9212,52 @@ where {
                         .ok_or(GrantEditError::NotGranted)?;
                     set_permission(authority, scope, &held.tag, CommittedPermission::Write)
                 })
-                .await
+                .await?;
+                parsed_scope_name(&gated.target.scope.ipns_name)?
             }
-        }
+        };
+        // Best effort: the change landed, and a same-permission grant posts
+        // again (ADR 0074 D2).
+        let _ = self
+            .post_pointer_to_row(node, identity_pk, &held, permission, &root)
+            .await;
+        Ok(())
+    }
+
+    /// Post the share pointer to the grantee of the owner-signed row `held`,
+    /// at the keys the row commits (ADR 0074 D2).
+    async fn post_pointer_to_row(
+        &self,
+        node: NodeId,
+        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+        held: &HeldRow,
+        permission: Permission,
+        scope_root_name: &IpnsName,
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let unusable = || EngineError::MalformedInput {
+            check: CreateGrantError::UnusableRecipientKey.check(),
+        };
+        let recipient = PointerRecipient {
+            identity_pk: EcdsaVerifier::from_sec1(identity_pk).ok_or_else(unusable)?,
+            enc_pub: X25519Public::from_bytes(held.recipient_enc_pk).ok_or_else(unusable)?,
+            display_name: share_display_name(&*self.render().await?, node)?,
+        };
+        post_share_pointer_at(
+            &mut SharedEntropy(&self.entropy),
+            api.as_ref(),
+            session.identity(),
+            ENVELOPE_V,
+            &recipient,
+            PointerTarget {
+                permission: permission.into(),
+                scope_root_name,
+                scope_pointer_name: &session.scope_pointer_name(&node.0),
+            },
+        )
+        .await
+        .map_err(EngineError::from_create_grant)
     }
 
     /// Set the grantee name on the owner-attested row of the grantee
@@ -9706,7 +9762,6 @@ where {
         // one post no claim and record nothing.
         let link = LinkReader {
             share: &share,
-            hold: &hold,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),
@@ -11406,7 +11461,6 @@ where {
             .map_err(EngineError::from_received_share_store)?;
         let link = LinkReader {
             share: &share,
-            hold: &hold,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),
@@ -18644,6 +18698,7 @@ mod tests {
                 display_name: display_name.to_owned(),
                 permission: CorePermission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
+                scope_pointer_name: None,
             });
             block_on(store.persist(&list)).expect("the list persists");
         }
@@ -18794,6 +18849,7 @@ mod tests {
                     sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
                     display_name: "shared-folder".to_owned(),
                     permission: CorePermission::Read,
+                    scope_pointer_name: None,
                 }
                 .encode(),
                 "share-1",
@@ -18918,6 +18974,7 @@ mod tests {
                         sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
                         display_name: "shared-folder".to_owned(),
                         permission,
+                        scope_pointer_name: None,
                     }
                     .encode(),
                     "share-1",

@@ -815,6 +815,7 @@ pub async fn post_share_pointer<E, M>(
     grantee: &GranteeScopePlan<'_>,
     recipient: &GrantRecipient<'_>,
     scope_root_name: &IpnsName,
+    scope_pointer_name: &IpnsName,
 ) -> Result<(), CreateGrantError>
 where
     E: Entropy,
@@ -825,11 +826,46 @@ where
         mailbox,
         owner.identity_signer,
         grantee.v,
-        recipient,
-        grantee.permission(),
-        scope_root_name,
+        &PointerRecipient::from(recipient),
+        PointerTarget {
+            permission: grantee.permission(),
+            scope_root_name,
+            scope_pointer_name,
+        },
     )
     .await
+}
+
+/// The grantee a share pointer is sealed and routed to. A permission change
+/// takes both keys from the owner-signed row, so no contact book is read.
+pub struct PointerRecipient {
+    /// The mailbox routing address.
+    pub identity_pk: EcdsaVerifier,
+    /// The HPKE wrap target.
+    pub enc_pub: X25519Public,
+    /// Courtesy host label carried in the share pointer.
+    pub display_name: String,
+}
+
+impl From<&GrantRecipient<'_>> for PointerRecipient {
+    fn from(recipient: &GrantRecipient<'_>) -> Self {
+        Self {
+            identity_pk: recipient.identity_pk(),
+            enc_pub: recipient.enc_pub(),
+            display_name: recipient.display_name.clone(),
+        }
+    }
+}
+
+/// What a share pointer names.
+pub struct PointerTarget<'a> {
+    /// The advertised permission.
+    pub permission: Permission,
+    /// The name the scope root answers at now.
+    pub scope_root_name: &'a IpnsName,
+    /// The scope pointer name the grantee follows after a write cut
+    /// (ADR 0074 D1).
+    pub scope_pointer_name: &'a IpnsName,
 }
 
 /// [`post_share_pointer`] for a row appended to a scope root that already
@@ -839,20 +875,19 @@ pub async fn post_share_pointer_at<E, M>(
     mailbox: &M,
     owner_identity_signer: &EcdsaSigner,
     v: u64,
-    recipient: &GrantRecipient<'_>,
-    permission: Permission,
-    scope_root_name: &IpnsName,
+    recipient: &PointerRecipient,
+    target: PointerTarget<'_>,
 ) -> Result<(), CreateGrantError>
 where
     E: Entropy,
     M: Mailbox,
 {
-    let recipient_enc_pub = recipient.enc_pub();
     let pointer = SharePointer::bounded(
-        scope_root_name.as_str().as_bytes().to_vec(),
+        target.scope_root_name.as_str().as_bytes().to_vec(),
         owner_identity_signer.verifying_key().to_sec1(),
         recipient.display_name.clone(),
-        permission,
+        target.permission,
+        target.scope_pointer_name.clone(),
     )
     .map_err(CreateGrantError::DisplayNameTooLong)?;
     // Fresh HPKE ephemeral scalar, never a clock or a constant.
@@ -868,8 +903,8 @@ where
     let idempotency_key = format!("grant-{}", hex_lower(&idempotency_bytes));
     post_sealed(
         mailbox,
-        &recipient_enc_pub,
-        &recipient.identity_pk(),
+        &recipient.enc_pub,
+        &recipient.identity_pk,
         &ephemeral,
         v,
         owner_identity_signer,
@@ -2619,6 +2654,7 @@ mod tests {
                 &grantee,
                 &recipient,
                 &grantee.ipns_name(),
+                &grantee.ipns_name(),
             )
             .await
             .map(|()| outcome)
@@ -2796,6 +2832,7 @@ mod tests {
                     &grantee,
                     &recipient,
                     &grantee.ipns_name(),
+                    &grantee.ipns_name(),
                 )
                 .await
                 .map(|()| outcome)
@@ -2851,6 +2888,7 @@ mod tests {
                 &owner,
                 &grantee,
                 &recipient,
+                &grantee.ipns_name(),
                 &grantee.ipns_name(),
             ))
         };

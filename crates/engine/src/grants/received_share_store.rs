@@ -122,6 +122,7 @@ mod tests {
             display_name: "Shared Folder".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new(POINTER_KEY),
+            scope_pointer_name: None,
         });
         shares
     }

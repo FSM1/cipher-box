@@ -472,6 +472,7 @@ mod tests {
                 sharer_identity_pk: sharer().verifying_key().to_sec1(),
                 display_name: "shared-folder".to_owned(),
                 permission: Permission::Write,
+                scope_pointer_name: None,
             }
             .encode()
         }

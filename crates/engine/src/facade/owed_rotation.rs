@@ -1077,17 +1077,20 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &GrantRecipient {
-                contact: &contact,
+            &PointerRecipient {
+                identity_pk: contact.identity_pk(),
+                enc_pub: contact.enc_subkey(),
                 display_name,
-                grantee_name: None,
             },
-            if write {
-                CommittedPermission::Write
-            } else {
-                CommittedPermission::Read
+            PointerTarget {
+                permission: if write {
+                    CommittedPermission::Write
+                } else {
+                    CommittedPermission::Read
+                },
+                scope_root_name: &parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
+                scope_pointer_name: &self.scope_keys.pointer_name(&node.0),
             },
-            &parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
         )
         .await
         .map_err(|e| stop(EngineError::from_create_grant(e)))?;

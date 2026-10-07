@@ -295,6 +295,15 @@ scenario fails the meta-test):
   proved and minted scope roots, and a leg whose root holds no seed reads a
   record of the left scope and waits on a record of the root (`sync::pass`,
   `net::focus`).
+  A grantee with no write seed after a write cut (ADR 0074): a personal read
+  grantee and a downgraded writer each follow the scope pointer to the moved
+  root and list a folder the owner adds after the cut (`tests/owner_actions.rs`
+  `a_personal_read_grantee_reads_the_moved_tree_after_a_write_cut`,
+  `a_downgraded_writer_reads_the_moved_tree_after_its_downgrade`); a repost
+  adds the name to a bookmark with none on the equal-floor short-circuit
+  (`tests/grants_mailbox.rs`); the share pointer and the stored list carry the
+  name, and the encoder refuses a link hold with no name (`grants::accept`).
+  The two `owner_actions` tests fail on the code before ADR 0074.
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
@@ -420,6 +429,10 @@ is not the contract gate.
   appears as an `evaluate` argument in an uploaded trace.
   The device-approval approver signs in with the token of a wallet exchange,
   so its login binds the account and its registration passes (ADR 0058 D3).
+  The write-cut spec (`write-cut-follow.spec.ts`, ADR 0074) runs the
+  reproduction of a stale grantee after a write cut: a downgraded writer in
+  the PR gate's smoke slice, and a personal read grantee whose co-grantee the
+  owner revokes through a write link in the main gate.
   The account-switch spec signs two owner accounts in on one browser profile.
   It checks through the UI and the origin's storage that a switch keeps the
   other account's staging and floors databases and its staged records, and

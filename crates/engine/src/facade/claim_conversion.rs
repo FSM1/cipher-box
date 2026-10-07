@@ -16,8 +16,8 @@ use crate::grants::conversion::{
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::inbox::OwnedClaim;
 use crate::grants::{
-    AckedClaim, ClaimDisposition, CommittedLink, GrantRecipient, fingerprint_identity_key,
-    link_of_sender, post_share_pointer_at,
+    AckedClaim, ClaimDisposition, CommittedLink, PointerRecipient, PointerTarget,
+    fingerprint_identity_key, link_of_sender, post_share_pointer_at,
 };
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
@@ -1117,13 +1117,16 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &GrantRecipient {
-                contact: claimant,
+            &PointerRecipient {
+                identity_pk: claimant.identity_pk(),
+                enc_pub: claimant.enc_subkey(),
                 display_name: folder.to_owned(),
-                grantee_name: None,
             },
-            pointer.permission,
-            &parsed_scope_name(&target.scope.ipns_name)?,
+            PointerTarget {
+                permission: pointer.permission,
+                scope_root_name: &parsed_scope_name(&target.scope.ipns_name)?,
+                scope_pointer_name: &self.scope_keys.pointer_name(&target.scope.scope_id),
+            },
         )
         .await
         .map_err(EngineError::from_create_grant)

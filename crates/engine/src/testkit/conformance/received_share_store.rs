@@ -23,6 +23,7 @@ fn list(entries: &[(&[u8], u8, Permission)]) -> ReceivedSharesList {
             display_name: "Shared Folder".into(),
             permission: *permission,
             pointer_read_key: SecretBytes::new([*key_byte; 32]),
+            scope_pointer_name: None,
         });
     }
     shares
@@ -39,6 +40,7 @@ fn over_bound() -> ReceivedSharesList {
             display_name: "Shared Folder".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x5A; 32]),
+            scope_pointer_name: None,
         });
     }
     shares

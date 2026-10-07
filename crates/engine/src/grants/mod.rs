@@ -59,10 +59,10 @@ pub use contact_store::{
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
     GrantSubtree, GrantedReadScope, GranteeScopePlan, HeldNode, InteriorRecord, InteriorResealer,
-    MintNet, MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedGrant, PromotedScopeRoot,
-    PromotedSubtree, ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
-    mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
-    resume_owed_interior_move,
+    MintNet, MovingChild, OwnerGrantKeys, ParentScopePlan, PointerRecipient, PointerTarget,
+    PromotedGrant, PromotedScopeRoot, PromotedSubtree, ScopePointerVoucher, ScopeRootPromoter,
+    converge_grant_subtree, create_grant, mint_grantee_scope, post_share_pointer,
+    post_share_pointer_at, resume_grantee_scope, resume_owed_interior_move,
 };
 pub use cut_set::{
     GranteeCut, LinkSources, RevokedPerson, committed_grantee, expired_links, grantee_cut_set,
