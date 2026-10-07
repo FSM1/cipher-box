@@ -17200,6 +17200,47 @@ mod tests {
         }
     }
 
+    /// A pointer revival that a later pass can still land keeps the session's
+    /// enrolment latch open: a recovery endpoint that does not answer, and
+    /// owed rotation work that ends. The next pass revives the pointer.
+    #[test]
+    fn a_pointer_revival_that_can_still_land_keeps_the_enrolment_open() {
+        for first_pass_owes in [false, true] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            let walked = Cell::new(false);
+            let owed = if first_pass_owes {
+                harness
+                    .blocks
+                    .lock()
+                    .expect("lock")
+                    .insert(pointer.as_str().to_owned(), lapsed.clone());
+                BTreeSet::from([CHILD_SCOPE])
+            } else {
+                BTreeSet::new()
+            };
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &owed);
+            assert!(!walked.get(), "the first pass leaves the latch open");
+
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(pointer.as_str().to_owned(), lapsed.clone());
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+            assert!(
+                harness
+                    .held
+                    .borrow()
+                    .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
+                "the second pass revives and holds the pointer"
+            );
+            assert!(walked.get(), "and then closes the latch");
+        }
+    }
+
     /// The walk exists to find the pointers earlier sessions flipped, and a flip
     /// this session makes enrols at the flip, so a pass that reached every owned
     /// root leaves a later pass of the same session nothing to find. Re-walking
@@ -17414,14 +17455,32 @@ mod tests {
         );
     }
 
-    /// A scope the owner never re-pointed has no pointer record to hold, so the
-    /// enumeration costs a fetch and nothing else.
+    /// A scope with no pointer record holds no pointer. The enumeration asks
+    /// the recovery endpoint only for a scope whose write-epoch floor shows
+    /// that this device saw a pointer: here the vault root scope, staged with
+    /// that floor, and not the child scope.
     #[test]
     fn a_scope_that_was_never_re_pointed_enrols_no_pointer() {
         let child = vault_root(CHILD_SCOPE, Vec::new());
         let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &child)]);
 
         run_enrolment(&harness, &OwnerSeeds);
+        let recovered: Vec<String> = harness
+            .http
+            .requests()
+            .into_iter()
+            .filter_map(|request| {
+                request
+                    .url
+                    .split_once("/recovery/")
+                    .map(|(_, name)| name.to_owned())
+            })
+            .collect();
+        assert_eq!(
+            recovered,
+            [OwnerSeeds.pointer_name(&SCOPE).as_str().to_owned()],
+            "no recovery fetch for the child scope's pointer"
+        );
         assert!(
             harness
                 .held
