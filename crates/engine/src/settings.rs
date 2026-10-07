@@ -1172,14 +1172,17 @@ where
         }
         Err(error) => return Err(SettingsPublishError::Recovery(error)),
     };
-    let recovered = (bytes.len() <= MAX_RECORD_BYTES)
-        .then(|| IpnsRecord::unmarshal(&bytes).and_then(|record| record.verify(name)))
-        .and_then(Result::ok)
-        .ok_or_else(|| {
-            SettingsPublishError::Recovery(ApiError::Decode(
-                "the recovered settings record does not verify".into(),
-            ))
-        })?;
+    let unverified = || {
+        SettingsPublishError::Recovery(ApiError::Decode(
+            "the recovered settings record does not verify".into(),
+        ))
+    };
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err(unverified());
+    }
+    let recovered = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .map_err(|_| unverified())?;
     Ok(Some(recovered.sequence))
 }
 

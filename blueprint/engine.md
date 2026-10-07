@@ -268,13 +268,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
   and reports that it restored the server copy (D5). The settings record
-  carries a bearer credential, so a device revives it only when its floor
-  equals the recovered sequence (`Strictness::AtFloor`); that read alone sets
-  the EOL rule aside, and any other device takes the ADR 0034 ladder (D4).
-  A session makes at most 25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
-  for each account; a fetch over the pace waits for the next slot. The
-  recovery fetch of a first settings save (see "Vault settings load") is one
-  fetch for each user save, outside that pace. The adoption gate
+  carries a bearer credential, so a device revives it only when it holds a
+  floor equal to the recovered sequence; that read alone sets the EOL rule
+  aside, and any other device takes the ADR 0034 ladder (D4). A session
+  makes at most 25 recovery fetches a minute, below the `recovery` throttle
+  of 30 a minute for each account; a fetch over the pace waits for the next
+  slot. The recovery fetch of a first settings save (see "Vault settings
+  load") is one fetch for each user save, outside that pace. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
