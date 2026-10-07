@@ -2805,6 +2805,22 @@ where
                 self.dequeue_op(applied.op_id).await?;
                 report.completed.push(applied.op_id);
             }
+            // A published bin restore cancels its nearest earlier delete, also
+            // one that became kept in this pass ([`overtaken_by_a_later_op`]).
+            if matches!(applied.op.kind, OpKind::Restore { .. })
+                && let Some((delete, _)) = queued
+                    .iter()
+                    .take_while(|(op_id, _)| *op_id != applied.op_id)
+                    .filter(|(_, op)| {
+                        op.target == applied.op.target && matches!(op.kind, OpKind::Delete { .. })
+                    })
+                    .last()
+            {
+                self.dequeue_op(*delete).await?;
+                if !report.dropped.contains(delete) && !report.completed.contains(delete) {
+                    report.dropped.push(*delete);
+                }
+            }
             self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
         }
@@ -3156,15 +3172,12 @@ where
                                 .await?;
                         }
                     }
-                    // With no result, a check cannot tell a later write.
-                    // A cancelled delete leaves at once, while the bin restore
-                    // that cancels it is still queued. An op under a later
-                    // delete leaves once a flip shows: before it, a bin
-                    // restore can still cancel that delete.
+                    // ADR 0069 D6 ([`overtaken_by_a_later_op`]).
                     let later = overtaken.get(&op_id).copied();
                     if gone
                         || later == Some(Overtaken::ByRestore)
                         || (later == Some(Overtaken::ByDelete) && shows_a_flip(&note, place))
+                        // With no result, a check cannot tell a later write.
                         || (needs_result(&op.kind) && note.result.is_none())
                     {
                         KeptVerdict::Expired
@@ -9910,7 +9923,10 @@ enum Overtaken {
 /// The ops of `queue` that a later op of this device on the same node
 /// decides: a later delete expires every earlier op on its node once a
 /// flip shows, a later bin restore cancels that delete so the earlier
-/// ops stay, and no other later op expires an earlier op (ADR 0069 D6).
+/// ops stay, and no other later op expires an earlier op (ADR 0069 D6). A
+/// cancelled delete leaves at once; before a flip, a bin restore can still
+/// cancel a delete, so the ops under it wait. A restore that publishes
+/// cancels its delete durably ([`Drain::publish_queue`]).
 fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
     let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
     let mut overtaken = BTreeMap::new();

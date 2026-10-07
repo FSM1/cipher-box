@@ -3543,6 +3543,49 @@ fn a_version_restore_then_an_edit_the_name_wave_did_not_carry_apply_again_after_
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// A soft delete stops after its bin entry, and the user restores the file
+/// from the bin. The retry of the delete and the restore publish in one pass,
+/// so the delete becomes kept in that pass. The restore still cancels it
+/// durably, across a restart: after the flip the file is live.
+#[test]
+fn a_bin_restore_cancels_a_delete_that_became_kept_in_the_same_pass() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name, &doc_name], |fx| {
+        fx.world.record_store.fail_put_for(child_name.as_str());
+        block_on(fx.engine.command(Command::Delete { node: doc })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert!(
+            queued_ops_on(&fx.owner_device, doc)
+                .iter()
+                .any(|kind| matches!(kind, OpKind::Delete { .. })),
+            "the delete stopped before its publish"
+        );
+        block_on(fx.engine.command(Command::Restore {
+            node: doc,
+            into: None,
+        }))
+        .expect("the restore stages");
+        fx.world.record_store.heal_put_for(child_name.as_str());
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+
+    restart_owner(&mut fx);
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_names(&fx, &moved_child, child),
+        vec!["doc.bin".to_owned()],
+        "the file is live after the flip"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
 /// The residual over a chain: this device renames A to B and then to C, and
 /// a later writer sets A again. A reads as the value before the chain, so the
 /// whole chain applies again and C stays.

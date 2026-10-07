@@ -661,7 +661,8 @@ pub(crate) enum KeptPlace {
     /// (ADR 0069 D5).
     Unchecked { root: NodeId, live_write_epoch: u64 },
     /// As [`Self::Unchecked`], at a granted root that no one granting identity
-    /// names, so no floor can show it is no flip. It waits with no bound.
+    /// names, so no floor can show it is no flip. It counts as a flip
+    /// ([`shows_a_flip`]) and waits with no bound.
     Unnamespaced,
     /// Another pass, or none this tick, answers for the op's scope.
     Elsewhere,
@@ -705,27 +706,12 @@ pub(crate) fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
 pub(crate) fn kept_verdict(note: &KeptNote, place: KeptPlace, now: UnixMillis) -> KeptVerdict {
     match place {
         KeptPlace::Keyless { .. } => return KeptVerdict::Recheck,
-        KeptPlace::Unnamespaced => return KeptVerdict::Stay,
         KeptPlace::Writes {
-            root,
-            live_write_epoch,
-            anchor_read_live,
-        } if live_write_epoch > note.write_epoch
-            || note.scope.is_some_and(|scope| scope != root) =>
-        {
-            return if anchor_read_live {
-                KeptVerdict::Recheck
-            } else {
-                KeptVerdict::Stay
-            };
-        }
-        KeptPlace::Unchecked {
-            root,
-            live_write_epoch,
-        } if note.scope != Some(root) || live_write_epoch > note.write_epoch => {
-            return KeptVerdict::Stay;
-        }
-        KeptPlace::Writes { .. } | KeptPlace::Unchecked { .. } | KeptPlace::Elsewhere => {}
+            anchor_read_live: true,
+            ..
+        } if shows_a_flip(note, place) => return KeptVerdict::Recheck,
+        _ if shows_a_flip(note, place) => return KeptVerdict::Stay,
+        _ => {}
     }
     if now.0.saturating_sub(note.published_at.0) >= duration_millis(KEPT_OP_BOUND) {
         KeptVerdict::Expired
