@@ -114,18 +114,26 @@ folder before the file below it, each at `S + 1`, on a new device and on the
 device that wrote the vault; a session spends at most 25 recovery fetches in
 its first minute and revives the rest when the pace allows; a 429 at the
 chain revival leaves the session retryable with no root, and a refresh
-revives the chain and provisions; and a 429 at the bin index revival
-publishes no genesis bin index, and the next start revives it at `S + 1`,
-holds it and renews it later. At session start the settings record revives
+revives the chain and provisions; a chain revival that another device
+supersedes is retryable too; a lapsed pointer that only the produce bar
+refuses keeps the session dark with no trust violation, and one that both
+bars refuse is one trust violation; a 429 or an unavailable fan-out at the
+bin index revival publishes no genesis bin index, and the next start
+revives it at `S + 1`, holds it and renews it later; a soft delete waits
+while the bin index revival can still land; and an owed rotation record
+that does not read revives no vault root. At session start the settings record revives
 only on the device whose floor equals the recovered sequence, and the
 settings load after it reads the saved settings. In `tests/write_plane.rs` a
 vault that only the API cache serves revives at session start, and a 429
 there leaves a retryable session that converges. `net::vault_pointer`
 revives the chain up to the probe one index past the last and never below
-the index floor, and a 429 inside the chain leaves its end unconfirmed.
-`net::rotation` revives a lapsed owned scope pointer only in a scope the
-device holds a write-epoch floor for and that has no owed rotation entry,
-and a revival that a later pass can land keeps the enrolment open.
+the index floor, a 429 inside the chain or an unavailable index after a
+revived prefix leaves its end unconfirmed, and the produce bar alone gives
+no trust violation. `net::rotation` revives a lapsed owned scope pointer
+only in a scope the device holds a write-epoch floor for and that has no
+owed rotation entry, revives none while the owed rotation record does not
+read, and a revival that a later pass can land or read back, or that
+another device supersedes, keeps the enrolment open.
 
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one

@@ -173,13 +173,20 @@ bytes (FSM1/cipher-box-next#28 D2).
   the device holds a write-epoch floor for, when the hourly enrolment proves
   its scope.
   When the chain revival does not confirm the end of the chain (a 429, a 5xx,
-  or a revived index that still reads `Absent`), the session adopts no root,
+  a revived index that still reads `Absent`, or a fan-out that does not
+  answer after a revived index), the session adopts no root,
   mints nothing and reports `VaultUnprovisioned { retryable: true }`; the next
   provision in the session runs the chain revival and the vault root revival
-  again. A bin index revival that can still land (any result other than a
-  signature or a 404 at the recovery endpoint) skips the genesis publish for
-  that start. A scope pointer revival that a later pass can land keeps the
-  enrolment open.
+  again. A bin index revival that can still land (a fan-out that does not
+  answer, or any result other than a signature or a 404 at the recovery
+  endpoint) skips the genesis publish for
+  that start, and while it can still land the drain holds each bin index
+  write that a load with no record would build on an empty index, until a
+  load resolves the record. A chain or scope pointer revival that another
+  device supersedes is retryable, and a scope pointer revival that a later
+  pass can land or read back keeps the enrolment open. A lapsed vault pointer
+  that only the produce bar refuses (ADR 0067 D4) is no trust violation: the
+  device stays dark until a device without that floor revives it.
   The session-start revival and the walk share one recovery pace of 25
   fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
   the first minute. The vacancy probe and the first-save fetch are outside
