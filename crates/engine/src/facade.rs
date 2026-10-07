@@ -105,11 +105,13 @@ use crate::net::fanout_get_classified;
 use crate::net::publish::refuse_foreign_version;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::renewal_walk::{
-    BinRoot, OWED_UNREAD, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
+    BinRoot, OWED_UNREAD_NO_REVIVAL, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards,
+    WalkScope,
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::revival::{
-    BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent, revive_name,
+    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent,
+    revive_name,
 };
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
@@ -4857,6 +4859,80 @@ enum BinIndexRevival {
     Unsettled,
 }
 
+/// Revive the lapsed bin index (ADR 0062 D3). After a revival the gated load
+/// reads it at `S + 1` and holds it for renewal: the durable mark skips the
+/// genesis load. The session start and the liveness retry run it.
+async fn revive_and_hold_bin_index<T, H, C, F, Sn, Sch>(
+    api: &ApiClient<H, C>,
+    seams: &RenewalSeams<'_, T, F, Sch>,
+    pace: &RecoveryPace,
+    read: BinIndexRead<'_, H, F, Sn, Sch>,
+    held: &RefCell<HeldRecords>,
+    events: &mpsc::UnboundedSender<Event>,
+) -> BinIndexRevival
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler + Clone + 'static,
+{
+    let BinIndexRead {
+        gateway,
+        http,
+        floors,
+        snapshots,
+        scheduler,
+        profile,
+        keys,
+    } = read;
+    match fanout_get_classified(seams.transport, keys.name()).await {
+        FanoutRecord::Found(..) => return BinIndexRevival::Unlapsed,
+        // An endpoint that does not answer can hold the lapsed record.
+        FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled,
+        FanoutRecord::Absent => {}
+    }
+    let request = ReviveRequest {
+        name: keys.name(),
+        signer: Some(keys.signer()),
+        plane: BinIndexRead {
+            gateway,
+            http,
+            floors,
+            snapshots,
+            scheduler,
+            profile,
+            keys,
+        },
+    };
+    let result = revive_name(api, seams, pace, request).await;
+    let revival = match &result {
+        Ok(_) => BinIndexRevival::Revived,
+        Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
+            BinIndexRevival::Unlapsed
+        }
+        Err(_) => BinIndexRevival::Unsettled,
+    };
+    emit_revival_failures(events, [(keys.name().as_str().to_owned(), result)]);
+    if matches!(revival, BinIndexRevival::Revived) {
+        let observed = observed_at(held, HeldKey::BinIndex);
+        load_bin_index(
+            seams.transport,
+            gateway,
+            http,
+            floors,
+            snapshots,
+            scheduler,
+            profile,
+            keys,
+        )
+        .await
+        .enrol(held, observed);
+    }
+    revival
+}
+
 /// The scopes whose owed rotation entry is within its bound, whose names no
 /// renewal or revival signs (ADR 0063 D4). A record that does not read is an
 /// error: the caller reports it, as the renewal walk does, and revives nothing.
@@ -5868,7 +5944,8 @@ impl<T: SeamTypes> Engine<T> {
         if self.api_base_url.configured().is_some() {
             match bin_index {
                 BinIndexRevival::Unlapsed => self.publish_genesis_bin_index(&api).await,
-                BinIndexRevival::Revived => self.load_and_hold_bin_index().await,
+                // The revival loaded and held the bin index.
+                BinIndexRevival::Revived => {}
                 // A lapsed bin index can still revive, so no genesis index
                 // publishes over it this start, and the drain holds its own
                 // bin index writes ([`DrainCells::bin_index_unsettled`]).
@@ -6664,7 +6741,7 @@ impl<T: SeamTypes> Engine<T> {
         else {
             let _ = self.events.unbounded_send(Event::RenewalFailed {
                 routing_key: name.as_str().to_owned(),
-                detail: OWED_UNREAD.to_owned(),
+                detail: OWED_UNREAD_NO_REVIVAL.to_owned(),
             });
             return false;
         };
@@ -6749,7 +6826,7 @@ impl<T: SeamTypes> Engine<T> {
         signed
     }
 
-    /// Revive the lapsed bin index before its load (ADR 0062 D3).
+    /// Revive the lapsed bin index before its load ([`revive_and_hold_bin_index`]).
     async fn revive_bin_index(
         &self,
         api: &ApiClient<T::Http, T::CredentialStore>,
@@ -6758,12 +6835,6 @@ impl<T: SeamTypes> Engine<T> {
             return BinIndexRevival::Unlapsed;
         };
         let keys = BinIndexKeys::derive(session.login_secret());
-        match fanout_get_classified(&self.record_transport, keys.name()).await {
-            FanoutRecord::Found(..) => return BinIndexRevival::Unlapsed,
-            // An endpoint that does not answer can hold the lapsed record.
-            FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled,
-            FanoutRecord::Absent => {}
-        }
         let read = BinIndexRead {
             gateway: &self.gateway,
             http: &self.seams.http,
@@ -6773,44 +6844,15 @@ impl<T: SeamTypes> Engine<T> {
             profile: &self.profile,
             keys: &keys,
         };
-        let request = ReviveRequest {
-            name: keys.name(),
-            signer: Some(keys.signer()),
-            plane: read,
-        };
-        let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
-        let revival = match &result {
-            Ok(_) => BinIndexRevival::Revived,
-            Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
-                BinIndexRevival::Unlapsed
-            }
-            Err(_) => BinIndexRevival::Unsettled,
-        };
-        emit_revival_failures(&self.events, [(keys.name().as_str().to_owned(), result)]);
-        revival
-    }
-
-    /// Load the bin index and hold it for renewal. After a revival the durable
-    /// mark skips the genesis load, so this gated read raises the floor to the
-    /// revived record.
-    async fn load_and_hold_bin_index(&self) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let keys = BinIndexKeys::derive(session.login_secret());
-        let observed = observed_at(&self.state.held_records, HeldKey::BinIndex);
-        load_bin_index(
-            &self.record_transport,
-            &self.gateway,
-            &self.seams.http,
-            &self.seams.floor_store,
-            &self.seams.snapshot_cache,
-            &self.seams.scheduler,
-            &self.profile,
-            &keys,
+        revive_and_hold_bin_index(
+            api,
+            &seams,
+            &self.state.recovery_pace,
+            read,
+            &self.state.held_records,
+            &self.events,
         )
         .await
-        .enrol(&self.state.held_records, observed);
     }
 
     /// Fail-closed symmetry with the login path: clear the derived session and
@@ -7164,6 +7206,7 @@ where {
         let owed_rotation = self.state.owed_rotation.clone();
         let descendant_scope_roots = self.state.descendant_scope_roots.clone();
         let recovery_pace = self.state.recovery_pace.clone();
+        let bin_index_unsettled = self.state.bin_index_unsettled.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
@@ -7230,6 +7273,37 @@ where {
                             )
                             .await;
                         }
+                    }
+                    // The drain holds its bin index writes until this lands.
+                    let unsettled_keys = bin_index_unsettled
+                        .get()
+                        .then(|| bin_keys.borrow().clone())
+                        .flatten();
+                    if let Some(keys) = unsettled_keys {
+                        let revival = revive_and_hold_bin_index(
+                            &api,
+                            &RenewalSeams {
+                                transport: &transport,
+                                floors: &floors,
+                                scheduler: &scheduler,
+                                profile: &profile,
+                                publishing: &publishing,
+                            },
+                            &recovery_pace,
+                            BinIndexRead {
+                                gateway: &gateway,
+                                http: &http,
+                                floors: &floors,
+                                snapshots: &snapshot_cache,
+                                scheduler: &scheduler,
+                                profile: &profile,
+                                keys: &keys,
+                            },
+                            &held,
+                            &events,
+                        )
+                        .await;
+                        bin_index_unsettled.set(matches!(revival, BinIndexRevival::Unsettled));
                     }
                     let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                     keyless_re_put(&transport, &records).await;

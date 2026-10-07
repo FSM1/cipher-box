@@ -91,6 +91,9 @@ const REVIVAL_REFUSED: &str = "the revival refused the record the recovery endpo
 /// Why the walk renews every name as if no scope had owed work this pass.
 pub(crate) const OWED_UNREAD: &str =
     "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
+/// Why a revival outside the walk refused: unknown rotation debt.
+pub(crate) const OWED_UNREAD_NO_REVIVAL: &str =
+    "the owed rotation record did not read, so the lapsed name did not revive";
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that

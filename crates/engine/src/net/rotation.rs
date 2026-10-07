@@ -67,7 +67,7 @@ use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use super::register::register;
-use super::renewal_walk::RenewalSeams;
+use super::renewal_walk::{OWED_UNREAD_NO_REVIVAL, RenewalSeams};
 use super::retire::{retire, root_retire_ready};
 use super::revival::{RecoveryPace, ReviveError, ReviveRequest, ScopePointerRead, revive_name};
 use crate::api::{ApiClient, NameRegistration};
@@ -6367,6 +6367,7 @@ where
         frontier = next;
     }
     let mut consulted_scopes = Vec::new();
+    let owed_unread_reported = Cell::new(false);
     for scope_id in scopes {
         // The flip's own entry is the fresher one, and the liveness pass drops a
         // superseded entry before this runs rather than replaces it here.
@@ -6381,14 +6382,18 @@ where
             Ok(consulted) => {
                 consulted_scopes.push(scope_id);
                 let consulted = match consulted {
-                    None => match revive_scope_pointer(&pass, &consult, scope_id).await {
-                        Ok(revived) => revived,
-                        // A later pass can revive it: the latch stays open.
-                        Err(retryable) => {
-                            complete &= !retryable;
-                            None
+                    None => {
+                        match revive_scope_pointer(&pass, &consult, scope_id, &owed_unread_reported)
+                            .await
+                        {
+                            Ok(revived) => revived,
+                            // A later pass can revive it: the latch stays open.
+                            Err(retryable) => {
+                                complete &= !retryable;
+                                None
+                            }
                         }
-                    },
+                    }
                     consulted => consulted,
                 };
                 if let Some(consulted) = consulted {
@@ -6408,11 +6413,13 @@ where
 /// this device saw a pointer for revives: a scope that was never re-pointed
 /// holds no write-epoch floor and spends no recovery fetch. `Ok(None)` when
 /// there is nothing to revive; `Err` with whether a later pass can revive the
-/// pointer or read it back.
+/// pointer or read it back. An owed rotation record that does not read is
+/// reported once for each pass, through `owed_unread_reported`.
 async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
     pass: &ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
     consult: &PointerConsult<'_>,
     scope_id: [u8; 16],
+    owed_unread_reported: &Cell<bool>,
 ) -> Result<Option<ConsultedPointer>, bool>
 where
     K: OwnerScopeKeys + OwnerPointerSign,
@@ -6427,11 +6434,20 @@ where
         Ok(None) => return Ok(None),
         Err(_) => return Err(true),
     }
+    let name = pass.keys.pointer_name(&scope_id);
     // The owed rotation work ends, or its record reads, on a later pass.
-    if pass.owed.is_none_or(|owed| owed.contains(&scope_id)) {
+    let Some(owed) = pass.owed else {
+        if !owed_unread_reported.replace(true) {
+            let _ = pass.events.unbounded_send(Event::RenewalFailed {
+                routing_key: name.as_str().to_owned(),
+                detail: OWED_UNREAD_NO_REVIVAL.to_owned(),
+            });
+        }
+        return Err(true);
+    };
+    if owed.contains(&scope_id) {
         return Err(true);
     }
-    let name = pass.keys.pointer_name(&scope_id);
     let signer = pass.keys.pointer_signer(&scope_id);
     let read = ScopePointerRead {
         consult: PointerConsult {
@@ -17218,21 +17234,33 @@ mod tests {
     }
 
     /// Rotation debt that does not read is unknown debt: no scope pointer
-    /// revives and the latch stays open. The pass after the record reads
-    /// revives the pointer.
+    /// revives, the pass reports it once, and the latch stays open. The pass
+    /// after the record reads revives the pointer.
     #[test]
     fn an_unread_owed_record_revives_no_scope_pointer() {
         let (harness, _) = owner_session_over_a_clean_tree();
         let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
-        let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
-        harness
-            .blocks
-            .lock()
-            .expect("lock")
-            .insert(pointer.as_str().to_owned(), lapsed);
+        for scope_id in [CHILD_SCOPE, GRANDCHILD_SCOPE] {
+            let name = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
+            let lapsed = harness.store.lapse(name.as_str()).expect("staged");
+            harness
+                .blocks
+                .lock()
+                .expect("lock")
+                .insert(name.as_str().to_owned(), lapsed);
+        }
         let walked = Cell::new(false);
 
         run_enrolment_with_owed(&harness, &OwnerSeeds, &walked, None);
+        let reports = harness
+            .events()
+            .into_iter()
+            .filter(|event| {
+                matches!(event, Event::RenewalFailed { detail, .. }
+                    if detail == OWED_UNREAD_NO_REVIVAL)
+            })
+            .count();
+        assert_eq!(reports, 1, "one report for each pass, not for each scope");
         let served = || {
             harness
                 .store

@@ -14,6 +14,7 @@ use cipherbox_core::seal::{
 };
 
 use cipherbox_engine::gate::floor;
+use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
@@ -1996,6 +1997,8 @@ fn a_throttled_bin_index_revival_publishes_no_genesis_and_the_next_start_revives
     let bin = BinIndexKeys::derive(&SECRET).name().clone();
     let before = record_at(&world, &bin);
     lapse_into_the_recovery_cache(&world, &blocks);
+    // The start and the first liveness retry.
+    blocks.throttle_recovery_once(bin.as_str());
     blocks.throttle_recovery_once(bin.as_str());
     world.scheduler.advance(DAY * 100);
 
@@ -2089,14 +2092,17 @@ fn an_unavailable_bin_index_read_publishes_no_genesis_and_the_next_start_revives
 }
 
 /// ADR 0062 D3: while a lapsed bin index can still revive, the drain publishes
-/// no bin index over it. A soft delete waits, and after the next start revives
-/// the bin index the delete publishes its entry.
+/// no bin index over it, so a soft delete waits. The next liveness pass
+/// revives the bin index in the same session, and the delete then publishes
+/// its entry.
 #[test]
-fn a_soft_delete_waits_for_a_bin_index_revival_that_can_still_land() {
+fn a_soft_delete_waits_for_the_bin_index_revival_the_liveness_pass_retries() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let (nodes, before) = a_binned_vault_lapsed(&world, &blocks);
     let bin = bin_name();
+    // The start and the first liveness retry.
+    blocks.throttle_recovery_once(bin.as_str());
     blocks.throttle_recovery_once(bin.as_str());
 
     let device = world.device(b"a device after 100 days offline");
@@ -2110,10 +2116,9 @@ fn a_soft_delete_waits_for_a_bin_index_revival_that_can_still_land() {
         None,
         "the drain publishes no bin index over the lapsed one"
     );
-    drop((tasks, engine));
-    drop(world.scheduler.take_spawned_tasks());
 
-    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 3);
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    tick(&world, &engine, &mut tasks);
     tick(&world, &engine, &mut tasks);
     assert_eq!(
         record_at(&world, &bin).sequence,

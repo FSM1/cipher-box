@@ -180,9 +180,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   again. A bin index revival that can still land (a fan-out that does not
   answer, or any result other than a signature or a 404 at the recovery
   endpoint) skips the genesis publish for
-  that start, and while it can still land the drain holds each bin index
-  write that a load with no record would build on an empty index, until a
-  load resolves the record. A chain or scope pointer revival that another
+  that start. While it can still land, the drain holds each bin index write
+  that a load with no record would build on an empty index, and each hourly
+  liveness pass runs the bin index revival again under the shared pace. A
+  revival that lands, or a load that resolves the record, lifts the hold. A chain or scope pointer revival that another
   device supersedes is retryable, and a scope pointer revival that a later
   pass can land or read back keeps the enrolment open. A lapsed vault pointer
   that only the produce bar refuses (ADR 0067 D4) is no trust violation: the
