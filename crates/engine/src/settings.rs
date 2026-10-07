@@ -996,47 +996,11 @@ pub(crate) async fn reason_after_failed_save<F: FloorStore>(
 /// 90-day EOL and the API republisher is keyless, so a name nobody renews
 /// lapses on its own and every device without a cached copy then refuses the
 /// placement decision fail-closed.
+///
+/// It signs above `observed`, the sequence of the record the caller's load
+/// verified ([`sign_above`]), as well as above the sequence floor.
 #[allow(clippy::too_many_arguments)]
 pub async fn publish_settings<T, H, C, F, Sn, Sch>(
-    transport: &T,
-    api: &ApiClient<H, C>,
-    floors: &F,
-    snapshots: &Sn,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    entropy: &mut dyn Entropy,
-    orphans: &OrphanHeads,
-    login_secret: &[u8],
-    settings: &VaultSettings,
-) -> Result<HeldRecord, SettingsPublishError>
-where
-    T: RecordTransport + Clone + 'static,
-    H: Http,
-    C: CredentialStore,
-    F: FloorStore,
-    Sn: SnapshotCache,
-    Sch: Scheduler + Clone + 'static,
-{
-    publish_settings_above(
-        transport,
-        api,
-        floors,
-        snapshots,
-        scheduler,
-        profile,
-        entropy,
-        orphans,
-        login_secret,
-        settings,
-        None,
-    )
-    .await
-}
-
-/// [`publish_settings`], signing above `observed` as well as above the
-/// sequence floor ([`sign_above`]).
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn publish_settings_above<T, H, C, F, Sn, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
     floors: &F,
@@ -2659,6 +2623,7 @@ mod tests {
                 &OrphanHeads::default(),
                 &[7u8; 32],
                 &settings,
+                None,
             ));
             assert_eq!(
                 outcome.unwrap_err(),
@@ -2877,7 +2842,7 @@ mod tests {
                 "http://api.test",
             );
 
-            let outcome = block_on(publish_settings_above(
+            let outcome = block_on(publish_settings(
                 &device.record_store,
                 &api,
                 &device.floor_store,

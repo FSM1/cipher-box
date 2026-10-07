@@ -457,7 +457,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
-  (`publish_bin_index`, `publish_settings_above`), the name sequence of a
+  (`publish_bin_index`, `publish_settings`), the name sequence of a
   value this device signed in a liveness renewal, after `Published`
   (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more
