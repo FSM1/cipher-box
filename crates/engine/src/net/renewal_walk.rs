@@ -415,15 +415,23 @@ where
                     .collect()
             })
             .unwrap_or_default();
-        let lapsed = self.lapsed.take();
-        if held && lapsed.is_empty() {
+        let queued = self.lapsed.borrow().clone();
+        if held && queued.is_empty() {
             return WalkReport {
                 underived,
                 ..WalkReport::default()
             };
         }
         let owner_tag = owner_tag(self.enc_secret);
+        // A held pass scans the journal too: a queued visit skips a doomed
+        // name as a cursor visit does. It reports only its queued visits.
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
+            if held {
+                return WalkReport {
+                    underived,
+                    ..WalkReport::default()
+                };
+            }
             return stalled(scopes, JOURNAL_UNREADABLE);
         };
         // A record that does not read skips no scope: a lapsed name loses the
@@ -436,6 +444,7 @@ where
         let report = WalkReport {
             failed: scopes
                 .iter()
+                .filter(|_| !held)
                 .filter_map(|scope| {
                     if doomed.unreadable.contains(&scope.scope_id) {
                         Some(JOURNAL_UNREADABLE)
@@ -471,12 +480,18 @@ where
             scopes,
             bins,
         };
-        for folder in &lapsed {
+        let mut settled = Vec::new();
+        for folder in &queued {
             if !still_running() {
                 break;
             }
-            self.visit_lapsed(&mut pass, folder).await;
+            if self.visit_lapsed(&mut pass, folder).await {
+                settled.push(folder);
+            }
         }
+        self.lapsed
+            .borrow_mut()
+            .retain(|folder| !settled.contains(&folder));
         if held {
             self.flush(&mut pass).await;
             return pass.report;
@@ -781,8 +796,11 @@ where
     }
 
     /// Visit a folder from the lapsed-folder queue, while the base still names
-    /// it at the queued name, under the plane of its scope root.
-    async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) {
+    /// it at the queued name, under the plane of its scope root. Whether the
+    /// queue can drop it: the read admits it, the base no longer names it, the
+    /// walk renews no name in its scope, or the visit failed for good. The
+    /// queue retries a transient failure itself, so it keeps no cursor back.
+    async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) -> bool {
         let named = self
             .guards
             .base
@@ -792,19 +810,27 @@ where
                 meta.kind == crate::facade::NodeKind::Folder
                     && meta.ipns_name.as_deref() == Some(folder.name.as_str().as_bytes())
             });
-        if !named {
-            return;
+        if !named
+            || !pass
+                .scopes
+                .iter()
+                .any(|scope| scope.scope_id == folder.scope_id)
+        {
+            return true;
         }
         let Some(material) = self.material(pass, folder.scope_id).await else {
-            return;
+            return false;
         };
-        let plane = Plane {
-            scope_id: folder.scope_id,
-            read_seed: material.admitted.read_scope_seed.clone(),
-            seed_stamp: Some(material.admitted.read_epoch),
+        // The cursor visit reads such a folder under its own plane.
+        let Some(plane) = queued_plane(material, folder) else {
+            return false;
         };
-        self.admit(pass, &plane, folder.node_id, &folder.name, false)
+        let kept_back = core::mem::replace(&mut pass.kept_back, false);
+        let read = self
+            .admit(pass, &plane, folder.node_id, &folder.name, false)
             .await;
+        let transient = core::mem::replace(&mut pass.kept_back, kept_back);
+        read.is_some() || !transient
     }
 
     /// Visit one child a folder names.
@@ -1442,6 +1468,18 @@ pub(crate) fn transient_renewal(outcome: &Result<Option<PublishOutcome>, Publish
     }
 }
 
+/// The plane a queued folder reads under, when the admitted scope root's write
+/// seed derives its name. The focus leg queues the scope it read under, which
+/// can be another plane: a nested scope root, or the second scope of a move.
+fn queued_plane(material: &ScopeMaterial, folder: &LapsedFolder) -> Option<Plane> {
+    material.signer_for(&folder.node_id, &folder.name)?;
+    Some(Plane {
+        scope_id: folder.scope_id,
+        read_seed: material.admitted.read_scope_seed.clone(),
+        seed_stamp: Some(material.admitted.read_epoch),
+    })
+}
+
 /// Store where the walk stops: the path of folders down to the deepest one it
 /// is listing, capped at the depth-cap folder, whose subtree a later pass
 /// starts again.
@@ -1576,6 +1614,21 @@ mod tests {
                 .is_none(),
             "an old name is never renewed",
         );
+    }
+
+    /// A queued folder whose name the scope root's write seed does not derive
+    /// reads under no plane, and the cursor visit covers it.
+    #[test]
+    fn a_queued_folder_under_another_plane_reads_under_none() {
+        let (current, other, node_id) = ([1u8; 32], [2u8; 32], [9u8; 16]);
+        let material = material(current);
+        let folder = |seed: &[u8; 32]| LapsedFolder {
+            scope_id: [0; 16],
+            node_id,
+            name: derive_write_name(seed, &node_id),
+        };
+        assert!(queued_plane(&material, &folder(&current)).is_some());
+        assert!(queued_plane(&material, &folder(&other)).is_none());
     }
 
     /// A folder queued again moves to the newest place, and a full queue

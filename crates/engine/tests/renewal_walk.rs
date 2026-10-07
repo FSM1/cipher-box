@@ -1955,6 +1955,51 @@ fn a_read_that_opens_a_lapsed_folder_revives_it_first() {
     child_named(&engine, opened, "inside.txt");
 }
 
+/// A held cycle runs no cursor, so the queue keeps a folder whose revival met
+/// a 429 after the focus left it, and the next pass revives it.
+#[test]
+fn a_queued_folder_that_meets_a_429_in_a_held_cycle_revives_on_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(
+        CursorStore::new(
+            &device.staging_store,
+            BookkeepingSeal::new(&enc, &entropy),
+            &enc,
+        )
+        .save(&RenewalCursor::starting(world.scheduler.now())),
+    )
+    .expect("the cycle is held");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    // No later read queues the folder again.
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the 429 holds the revival back");
+
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "the next pass revives the queued folder"
+    );
+    assert_eq!(record_at(&world, &name).sequence, before.sequence + 1);
+}
+
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a
 /// device whose floor equals the recovered sequence, and the session loads
 /// the settings again. A new device takes the ADR 0034 ladder and signs

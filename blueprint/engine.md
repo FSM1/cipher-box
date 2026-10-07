@@ -261,7 +261,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   Each pass visits the queued folders before its cursor, and also in a held
   cycle, while the base still names each folder at the queued name. These
   visits take the same pace, the same skips and the same owed-rotation refusal
-  (ADR 0062 consequence 1).
+  (ADR 0062 consequence 1). A folder stays queued until the read admits it,
+  the base stops naming it, or its visit fails for good; a transient failure
+  retries on the next pass and keeps no cursor back. A queued folder whose
+  name the scope root's write seed does not derive waits for its cursor visit.
+  A held pass reports only its queued visits.
   A pass that meets a transient failure (a transport error, a 401 after the
   refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
   failed PUT or a store error) keeps the stored cursor, so the next pass
