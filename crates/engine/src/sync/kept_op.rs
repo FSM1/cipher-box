@@ -399,6 +399,11 @@ impl KeptNotes {
         self.notes.get(&op_id).cloned()
     }
 
+    /// The result the note of `op_id` records.
+    pub(crate) fn result(&self, op_id: OpId) -> Option<&KeptResult> {
+        self.notes.get(&op_id).and_then(|note| note.result.as_ref())
+    }
+
     /// The note of `op_id` as a pass reads it at `now`: a new one at
     /// [`UNKNOWN_WRITE_EPOCH`] for an op with none, and a publish time past
     /// `now` pulled back to `now`, so a clock step neither holds the op longer
@@ -526,8 +531,9 @@ pub(crate) enum KeptOutcome {
     Overtaken,
 }
 
-/// The live value that a result is checked against.
-#[derive(Debug, Clone, Copy)]
+/// The live value that a result is checked against. No `Debug`: a name is
+/// plaintext.
+#[derive(Clone, Copy)]
 pub(crate) enum LiveValue<'a> {
     /// The name of the node under the folder its note names.
     Name(&'a str),
@@ -613,10 +619,7 @@ impl KeptOps {
 
     /// The result the note of `op_id` records.
     pub(crate) fn result(&self, op_id: OpId) -> Option<&KeptResult> {
-        self.notes
-            .notes
-            .get(&op_id)
-            .and_then(|note| note.result.as_ref())
+        self.notes.result(op_id)
     }
 }
 

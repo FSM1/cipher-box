@@ -3216,6 +3216,95 @@ fn a_version_restore_the_name_wave_did_not_carry_applies_again_after_the_flip() 
     assert!(dead_letter_events(&mut fx._events).is_empty());
 }
 
+/// A create and a rename of the same node land in the old tree after the
+/// walk. The rename does not end the create: the create makes the node again
+/// and the rename applies again over it.
+#[test]
+fn a_create_then_a_rename_the_name_wave_did_not_carry_apply_again_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
+        let late = published_file(fx, child, "late.bin");
+        block_on(fx.engine.command(Command::Rename {
+            node: late,
+            new_name: "renamed.bin".into(),
+        }))
+        .expect("the rename stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    assert!(
+        live_names(&fx, &moved_child, child).is_empty(),
+        "the moved tree does not carry the create"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_names(&fx, &moved_child, child),
+        vec!["renamed.bin".to_owned()],
+        "the node is live under the new name"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// A kept restore applies again only over the head its check read. A head
+/// that another writer publishes between that check and the publish stays.
+#[test]
+fn a_kept_restore_does_not_apply_over_a_head_published_after_its_check() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let doc = published_file(&mut fx, child, "doc.bin");
+    for byte in 1u8..=3 {
+        publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[byte; 64]);
+    }
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+    let history = live_versions(&fx, &doc_name, doc);
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
+        block_on(fx.engine.command(Command::RestoreVersion {
+            node: doc,
+            content_cid: history[1].clone(),
+        }))
+        .expect("the restore queues");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_doc = live_child(
+        &fx,
+        &live_child(&fx, &root, fx.folder, "child"),
+        child,
+        "doc.bin",
+    );
+    let endpoints = fx.world.record_store.endpoints();
+    let checked = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], moved_doc.as_str());
+    let (mut phone, _phone_events, mut phone_tasks) = phone_on(&fx, child);
+    block_on(phone.command(Command::RestoreVersion {
+        node: doc,
+        content_cid: history[2].clone(),
+    }))
+    .expect("the later restore queues");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(live_versions(&fx, &moved_doc, doc)[0], history[2]);
+    // The check reads the head from before the later restore.
+    fx.world
+        .record_store
+        .serve_gets_for_after(moved_doc.as_str(), 0, endpoints.len(), checked);
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc)[0],
+        history[2],
+        "the later restore stays"
+    );
+}
+
 /// The residual of ADR 0069 D2: a later writer who sets the name from before
 /// a kept rename looks like a lost rename, so the rename applies again.
 #[test]
@@ -3247,8 +3336,8 @@ fn a_later_rename_back_to_the_name_before_reads_as_lost_and_the_rename_applies_a
     );
 }
 
-/// A move out of a granted folder re-seals into another scope, so it leaves
-/// the queue at its publish and is no kept op.
+/// A guard: a move out of a granted folder re-seals into another scope, so
+/// it leaves the queue at its publish and is no kept op.
 #[test]
 fn a_move_out_of_its_scope_leaves_the_queue_at_publish() {
     let mut fx = GrantScenario::new();

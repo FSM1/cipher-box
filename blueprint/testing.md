@@ -214,7 +214,7 @@ scenario fails the meta-test):
   restore that the wave did not carry apply again after the flip, also a
   rename across a restart, each stays a kept op and a later writer's other
   value stays, a later rename back to the name before applies the rename
-  again, and a move out of its scope leaves at publish (ADR 0069 D2,
+  again, and a move out of its scope leaves at publish, a create and a rename of one node both apply again, and a kept restore does not apply over a head published after its check (ADR 0069 D2, D6,
   `owner_actions.rs`); the result check reads landed, lost or overtaken, and
   a kept rename with no result in its note leaves with no apply
   (`kept_op.rs`, `drain.rs`); the kept op of a downgraded write

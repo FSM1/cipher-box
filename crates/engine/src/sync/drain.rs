@@ -3114,9 +3114,17 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
+        // A rename, a move or a restore does not make its node again or carry
+        // its content, so it never expires an earlier op on that node.
         let last_on: BTreeMap<NodeId, OpId> = scan
             .mine
             .iter()
+            .filter(|(_, op)| {
+                matches!(
+                    op.kind,
+                    OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
+                )
+            })
             .map(|(op_id, op)| (op.target, *op_id))
             .collect();
         for (op_id, op) in scan.mine {
@@ -3163,7 +3171,9 @@ where
                     // that node shows, so a check of this one would undo it.
                     // With no result, a check cannot tell a later write.
                     if gone
-                        || last_on.get(&op.target) != Some(&op_id)
+                        || last_on
+                            .get(&op.target)
+                            .is_some_and(|last| *last != op_id && !needs_result(&op.kind))
                         || (needs_result(&op.kind) && note.result.is_none())
                     {
                         KeptVerdict::Expired
@@ -3551,7 +3561,9 @@ where
     /// under a flip names, and compare the node there with the result of the
     /// op ([`kept_outcome`]). A landed op leaves as satisfied, and an
     /// overtaken one leaves so the later write stays. A lost op joins the
-    /// rebase and applies again.
+    /// rebase and applies again. An earlier op of this device that the rebase
+    /// applies again, a create the base lacks or a lost rename or move, sets
+    /// the place that the next op on its node is compared with.
     async fn read_kept_places(
         &self,
         scope: &DrainScope<'_>,
@@ -3560,7 +3572,12 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut leaving = BTreeMap::new();
+        let mut created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
+        let mut replayed: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
         for (op_id, op) in queued {
+            if let OpKind::Create { parent, name, .. } = &op.kind {
+                created.insert(op.target, (*parent, Zeroizing::new(name.clone())));
+            }
             let parent = kept.parent(*op_id);
             let Some(result) = kept.result(*op_id) else {
                 continue;
@@ -3595,28 +3612,40 @@ where
                         .map_err(at)?;
                 }
             }
-            let outcome = {
+            let place = {
                 let base = self.cells.base.borrow();
-                let live = match (base.parent_of(op.target), base.node(op.target)) {
-                    (Some(holder), Some(meta)) => match result {
-                        KeptResult::Rename { .. } if holder == parent => {
-                            LiveValue::Name(meta.name())
-                        }
-                        KeptResult::Move { .. } => LiveValue::Place(holder, meta.name()),
-                        _ => LiveValue::Absent,
-                    },
-                    _ => LiveValue::Absent,
-                };
-                kept_outcome(result, live)
+                let live = base
+                    .parent_of(op.target)
+                    .zip(base.node(op.target))
+                    .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())));
+                replayed
+                    .get(&op.target)
+                    .cloned()
+                    .or(live)
+                    .or_else(|| created.get(&op.target).cloned())
             };
-            match outcome {
+            let live = match (result, &place) {
+                (KeptResult::Rename { .. }, Some((holder, name))) if *holder == parent => {
+                    LiveValue::Name(name)
+                }
+                (KeptResult::Move { .. }, Some((holder, name))) => LiveValue::Place(*holder, name),
+                _ => LiveValue::Absent,
+            };
+            match kept_outcome(result, live) {
                 KeptOutcome::Landed => {
                     leaving.insert(*op_id, DropReason::AlreadySatisfied);
                 }
                 KeptOutcome::Overtaken => {
                     leaving.insert(*op_id, DropReason::TargetAdvanced);
                 }
-                KeptOutcome::Lost => {}
+                KeptOutcome::Lost => {
+                    let after = match result {
+                        KeptResult::Rename { after, .. } => (parent, after.clone()),
+                        KeptResult::Move { to, to_name, .. } => (*to, to_name.clone()),
+                        KeptResult::RestoreVersion { .. } => continue,
+                    };
+                    replayed.insert(op.target, after);
+                }
             }
         }
         Ok(leaving)
@@ -3660,6 +3689,9 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut landed = BTreeMap::new();
+        // The head that an edit or a restore of this device, which the rebase
+        // applies again, sets for the next op on its file.
+        let mut replayed: BTreeMap<NodeId, Vec<u8>> = BTreeMap::new();
         for (op_id, op) in queued {
             let restored = match op.kind {
                 OpKind::UpdateContent { .. } => None,
@@ -3698,9 +3730,12 @@ where
                 return Err(at(Halt::Unclassified));
             };
             if let Some(result) = restored {
-                let live = versions
-                    .first()
-                    .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid));
+                let live = match replayed.get(&op.target) {
+                    Some(head) => LiveValue::Head(head),
+                    None => versions
+                        .first()
+                        .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid)),
+                };
                 match kept_outcome(result, live) {
                     KeptOutcome::Landed => {
                         landed.insert(*op_id, DropReason::AlreadySatisfied);
@@ -3708,14 +3743,21 @@ where
                     KeptOutcome::Overtaken => {
                         landed.insert(*op_id, DropReason::TargetAdvanced);
                     }
-                    KeptOutcome::Lost => {}
+                    KeptOutcome::Lost => {
+                        if let KeptResult::RestoreVersion { after, .. } = result {
+                            replayed.insert(op.target, after.clone());
+                        }
+                    }
                 }
-            } else if let Some(content) = op.staged_content()
-                && versions
+            } else if let Some(content) = op.staged_content() {
+                if versions
                     .iter()
                     .any(|version| version.content_cid == content.root_cid)
-            {
-                landed.insert(*op_id, DropReason::AlreadySatisfied);
+                {
+                    landed.insert(*op_id, DropReason::AlreadySatisfied);
+                } else {
+                    replayed.insert(op.target, content.root_cid.clone());
+                }
             }
             if let Some(head) = versions.first() {
                 project_child_version(
@@ -7738,6 +7780,15 @@ where
         // Already current: this restore landed, or a concurrent writer put the
         // same version back first.
         if at == 0 {
+            return Ok(());
+        }
+        // A kept restore applies again only over the head its check read as
+        // the one before it: a head published since is a later write, which
+        // stays.
+        let notes = self.kept_notes(scope).await?;
+        if let Some(KeptResult::RestoreVersion { before, .. }) = notes.result(applied.op_id)
+            && versions[0].content_cid != *before
+        {
             return Ok(());
         }
         self.keep_result(KeptResult::RestoreVersion {

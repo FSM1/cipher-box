@@ -94,7 +94,10 @@ nothing, so with no such read the op waits for a pass that reads the folder, or 
 delete under a scope that this device can no longer write takes the keyless charge of D3 and
 dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold
 its folder. Proposed: a kept
-op that this device edits again leaves with no check, because the later op sets what the node shows. A second
+op that this device edits again leaves with no check, because the later op sets what the node shows. Amended on
+2026-10-07: only a later create, delete or content edit sets what the node shows. A later rename, move
+or version restore does not make the node again or carry its content, so the earlier op stays and is
+checked, and the later op is checked against the value that the earlier op sets. A second
 apply that cannot land leaves with no retire and no notice, because its version landed once.
 
 **D7 — A kept op is not pending.** The pending-op overlay, the pending flags, the staged-content
