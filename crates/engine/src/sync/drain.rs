@@ -5990,9 +5990,7 @@ where
         {
             return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::UnprovenFirstRun));
         }
-        let index = load
-            .writable()
-        .map_err(|reason| {
+        let index = load.writable().map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
                 emit_trust_violation(

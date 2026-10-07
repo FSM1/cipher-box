@@ -17125,6 +17125,16 @@ mod tests {
         walked: &Cell<bool>,
         owed: &BTreeSet<[u8; 16]>,
     ) -> Vec<[u8; 16]> {
+        run_enrolment_with_owed(harness, keys, walked, Some(owed))
+    }
+
+    /// `owed` is `None` when the owed rotation record does not read.
+    fn run_enrolment_with_owed<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+        owed: Option<&BTreeSet<[u8; 16]>>,
+    ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
             owner_seed_cache: None,
             api: &harness.api,
@@ -17147,7 +17157,7 @@ mod tests {
             on_access_misses: &harness.on_access_misses,
             publishing: &RefCell::default(),
             pace: &RecoveryPace::default(),
-            owed: Some(owed),
+            owed,
         }))
     }
 
@@ -17205,6 +17215,38 @@ mod tests {
                 assert!(!held);
             }
         }
+    }
+
+    /// Rotation debt that does not read is unknown debt: no scope pointer
+    /// revives and the latch stays open. The pass after the record reads
+    /// revives the pointer.
+    #[test]
+    fn an_unread_owed_record_revives_no_scope_pointer() {
+        let (harness, _) = owner_session_over_a_clean_tree();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(pointer.as_str().to_owned(), lapsed);
+        let walked = Cell::new(false);
+
+        run_enrolment_with_owed(&harness, &OwnerSeeds, &walked, None);
+        let served = || {
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], pointer.as_str())
+        };
+        assert_eq!(served(), None, "no revival signs");
+        assert!(!walked.get(), "the latch stays open");
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(
+            served().is_some(),
+            "the pointer revives once the record reads"
+        );
+        assert!(walked.get());
     }
 
     /// A revival that signs but that the consult does not read back keeps the

@@ -633,7 +633,11 @@ mod tests {
 
         let pass = revive_chain(&world, &device);
 
-        assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable), "a retryable verdict");
+        assert_eq!(
+            pass.unconfirmed,
+            Some(ChainStall::Retryable),
+            "a retryable verdict"
+        );
         assert!(matches!(pass.revivals[1].1, Err(ReviveError::Throttled)));
         assert!(served(&device, 0).is_some(), "index 0 revived");
     }

@@ -345,12 +345,16 @@ impl InMemoryRecordStore {
             .insert((endpoint.clone(), routing_key.to_owned()));
     }
 
-    /// Restore `routing_key`'s GET path.
+    /// Restore `routing_key`'s GET path at every endpoint.
     pub fn heal_get_for(&self, routing_key: &str) {
         self.get_failing_keys
             .lock()
             .expect("lock")
             .remove(routing_key);
+        self.get_failing_at
+            .lock()
+            .expect("lock")
+            .retain(|(_, key)| key != routing_key);
     }
 
     /// How many GETs this store has been asked for at `routing_key`, across

@@ -13,6 +13,7 @@ use cipherbox_core::seal::{
     ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
 };
 
+use cipherbox_engine::gate::floor;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
@@ -25,6 +26,7 @@ use cipherbox_engine::seams::{
     Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{VaultSettings, settings_name};
+use cipherbox_engine::sync::owed_rotation::owed_rotation_key;
 use cipherbox_engine::sync::pointer::vault_pointer_name;
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
@@ -2029,4 +2031,217 @@ fn a_throttled_bin_index_revival_publishes_no_genesis_and_the_next_start_revives
         before.sequence + 2,
         "the session holds the bin index and renews it",
     );
+}
+
+fn bin_name() -> IpnsName {
+    BinIndexKeys::derive(&SECRET).name().clone()
+}
+
+fn served_at(world: &FakeWorld, name: &IpnsName) -> Option<Vec<u8>> {
+    world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+}
+
+fn abuse_reports(events: &mut EventStream) -> usize {
+    core::iter::from_fn(|| events.try_next())
+        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+        .count()
+}
+
+/// One device bins a file and keeps another, then its session ends, and every
+/// record lapses into the recovery cache 100 days later.
+fn a_binned_vault_lapsed(world: &FakeWorld, blocks: &Blocks) -> (Vec<NodeId>, VerifiedRecord) {
+    let nodes = written_then_left(world, blocks, |engine, tasks| {
+        let binned = write_file(world, engine, tasks, ROOT, "binned.txt");
+        block_on(engine.command(Command::Delete { node: binned })).expect("the delete stages");
+        tick(world, engine, tasks);
+        vec![binned, write_file(world, engine, tasks, ROOT, "kept.txt")]
+    });
+    let before = record_at(world, &bin_name());
+    lapse_into_the_recovery_cache(world, blocks);
+    world.scheduler.advance(DAY * 100);
+    (nodes, before)
+}
+
+/// ADR 0062 D3: an endpoint that does not answer for a lapsed bin index can
+/// hold the record, so a new device publishes no genesis bin index over it,
+/// and the next start revives it.
+#[test]
+fn an_unavailable_bin_index_read_publishes_no_genesis_and_the_next_start_revives_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (_, before) = a_binned_vault_lapsed(&world, &blocks);
+    let bin = bin_name();
+    world
+        .record_store
+        .fail_get_at_for(&world.record_store.endpoints()[0], bin.as_str());
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, tasks) = boot(&world, &blocks, &device, 2);
+    assert_eq!(served_at(&world, &bin), None, "no genesis bin index");
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    world.record_store.heal_get_for(bin.as_str());
+    let (_engine, _events, _tasks) = boot(&world, &blocks, &device, 3);
+    assert_eq!(record_at(&world, &bin).sequence, before.sequence + 1);
+}
+
+/// ADR 0062 D3: while a lapsed bin index can still revive, the drain publishes
+/// no bin index over it. A soft delete waits, and after the next start revives
+/// the bin index the delete publishes its entry.
+#[test]
+fn a_soft_delete_waits_for_a_bin_index_revival_that_can_still_land() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (nodes, before) = a_binned_vault_lapsed(&world, &blocks);
+    let bin = bin_name();
+    blocks.throttle_recovery_once(bin.as_str());
+
+    let device = world.device(b"a device after 100 days offline");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    // The walk revives the file first, so the delete reaches its bin entry.
+    until_the_first_walk(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::Delete { node: nodes[1] })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        served_at(&world, &bin),
+        None,
+        "the drain publishes no bin index over the lapsed one"
+    );
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 3);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &bin).sequence,
+        before.sequence + 2,
+        "the revival at S + 1, then the delete's entry",
+    );
+}
+
+/// ADR 0063 D4: rotation debt that does not read is unknown debt, so the
+/// session-start revival signs no vault root and reports why.
+#[test]
+fn an_unread_owed_record_revives_no_vault_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let owed = owed_rotation_key(&kdf::enc_subkey(&SECRET));
+    device.staging_store.inner().fail_staged_reads_under(&owed);
+    let (_engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+    device.staging_store.inner().heal_staged_reads();
+
+    let root = write_name(ROOT);
+    assert_eq!(served_at(&world, &root), None, "the root does not revive");
+    assert!(
+        core::iter::from_fn(|| events.try_next()).any(|event| matches!(
+            event,
+            Event::RenewalFailed { routing_key, detail }
+                if routing_key == root.as_str() && detail.contains("owed rotation record")
+        )),
+        "the session reports the unread record",
+    );
+}
+
+/// ADR 0062 D1: another device revived index 0 while this start revived it, so
+/// the revival stops as superseded. The session stays retryable, and a refresh
+/// reads the other device's pointer and provisions.
+#[test]
+fn a_superseded_chain_revival_is_retryable_and_a_refresh_provisions() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let pointer = vault_pointer_name(&SECRET, 0);
+    let before = record_at(&world, &pointer);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+    let newer = IpnsRecord::create_v2(
+        &kdf::vault_pointer_index(&SECRET, 0),
+        &before.value,
+        before.sequence + 1,
+        2_000_000_000,
+        &eol_from(world.scheduler.now()),
+    )
+    .marshal();
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, pointer.as_str(), newer.clone());
+    }
+    // The chain reads index 0 `Absent`; the corroboration reads the revival.
+    world
+        .record_store
+        .serve_gets_for_after(pointer.as_str(), 0, endpoints.len(), None);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (mut engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+    assert!(!engine.is_provisioned());
+    assert!(
+        unprovisioned(&mut events, true),
+        "a superseded revival is retryable"
+    );
+
+    block_on(engine.command(Command::ManualRefresh)).expect("the refresh provisions");
+    assert!(engine.is_provisioned());
+    assert_eq!(
+        served_at(&world, &pointer),
+        Some(newer),
+        "this device signed nothing"
+    );
+    assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
+}
+
+/// ADR 0067 D4: the produce bar can sit above the vouched floor the cold start
+/// reads. A lapsed pointer only the produce bar refuses is no trust violation:
+/// nothing signs it and the session stays dark, until a device without that
+/// floor revives it. A pointer both bars refuse is one trust violation.
+#[test]
+fn a_lapsed_pointer_below_the_produce_bar_stays_dark_and_below_both_bars_is_reported() {
+    for vouched_below in [true, false] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        written_then_left(&world, &blocks, |engine, tasks| {
+            vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+        });
+        lapse_into_the_recovery_cache(&world, &blocks);
+        world.scheduler.advance(DAY * 100);
+
+        let device = world.device(b"a device after 100 days offline");
+        let floors = device.floors(&SECRET);
+        if vouched_below {
+            block_on(floor::raise_vouched_floor(
+                &floors,
+                &SCOPE,
+                OWNER_ROOT_EPOCH,
+            ))
+            .expect("the floor store answers");
+        }
+        block_on(floors.raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH + 1))
+            .expect("the floor store answers");
+        let (engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+
+        assert!(!engine.is_provisioned(), "the session stays dark");
+        assert_eq!(
+            served_at(&world, &vault_pointer_name(&SECRET, 0)),
+            None,
+            "nothing signs the pointer"
+        );
+        assert_eq!(
+            abuse_reports(&mut events),
+            usize::from(!vouched_below),
+            "only a pointer both bars refuse is a trust violation"
+        );
+    }
 }

@@ -101,13 +101,13 @@ use crate::mailbox::poll_verified;
 use crate::name::{check_emittable, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
+use crate::net::fanout_get_classified;
 use crate::net::publish::refuse_foreign_version;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::renewal_walk::{
     BinRoot, OWED_UNREAD, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
 };
 use crate::net::retire::{ReclaimStall, retire};
-use crate::net::fanout_get_classified;
 use crate::net::revival::{
     BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent, revive_name,
 };
@@ -125,7 +125,8 @@ use crate::net::{
     run_liveness_loop,
 };
 use crate::net::{
-    ChainRevival, ChainStall, FanoutRecord, VaultPointerRead, VaultPointerVoucher, revive_vault_pointer_chain,
+    ChainRevival, ChainStall, FanoutRecord, VaultPointerRead, VaultPointerVoucher,
+    revive_vault_pointer_chain,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
