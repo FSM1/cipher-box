@@ -11,15 +11,14 @@
 //! the five per-op race rules — and a terminally unrebasable op dead-letters
 //! with its staged bytes preserved rather than being silently dropped.
 //!
-//! A cross-scope relocation out of a granted scope resolves its source scope
-//! root full-depth and queues one trigger per root
-//! ([`rebase::ReplayReport::scope_exit_triggers`]);
+//! The rules of a cross-scope relocation live in [`crossing`];
 //! [`consume_scope_exit_triggers`](crate::rotation::consume_scope_exit_triggers)
-//! cuts them.
+//! cuts the scope roots a move left.
 
 pub mod bookkeeping;
 pub mod boot;
 pub(crate) mod cancel;
+pub(crate) mod crossing;
 pub(crate) mod doomed;
 pub(crate) mod drain;
 pub mod kept_op;

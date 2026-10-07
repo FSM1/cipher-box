@@ -103,6 +103,7 @@ use crate::settings::{Destinations, Placement, PlacementDecision, SettingsHold};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
+use crate::sync::crossing::{Authority, authoritative, enclosing_scope_root, landed_cut, owed_cut};
 use crate::sync::doomed::{
     MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS,
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
@@ -120,8 +121,7 @@ use crate::sync::project::{
 };
 use crate::sync::provision::GENESIS_EPOCH;
 use crate::sync::rebase::{
-    AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
-    expired_exit, replay,
+    AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
@@ -3180,7 +3180,7 @@ where
                             .chain(scope.known_scope_roots)
                             .copied()
                             .collect();
-                        let exit = expired_exit(&self.cells.base.borrow(), &op, &roots);
+                        let exit = landed_cut(&self.cells.base.borrow(), &op, &roots, true);
                         if let Some(root) = exit
                             && !self.owe_scope_exit_durably(scope, root).await
                         {
@@ -6736,12 +6736,21 @@ where
         }
         let source_plane = self.ensure_folder(scope, pass, source).await?;
         let dest_plane = self.ensure_folder(scope, pass, dest).await?;
-        // The two planes this pass resolved decide, not the crossing the command
-        // journaled: a grant minted between the two turns a relocation journaled
-        // intra-scope into one that leaves a scope somebody now reads, and
-        // publishing it as a plain ref move would carry the subtree out still
-        // sealed where that grantee opens it.
-        let crosses = source_plane.end.root != dest_plane.end.root;
+        // The two planes this pass resolved decide ([`authoritative`]):
+        // publishing a crossing as a plain ref move would carry the subtree out
+        // still sealed where the source scope's grantee opens it.
+        let authority = authoritative(crossing, source_plane.end.root, dest_plane.end.root);
+        let crosses = authority == Authority::Reseal;
+        // The plane pair is the evidence, not what this pass happened to
+        // publish: a resume whose re-seal an earlier pass already landed
+        // publishes nothing and owes the cut all the same.
+        let owed = owed_cut(
+            Some(source_plane.end.root),
+            Some(dest_plane.end.root),
+            scope.source.root,
+            crossing,
+            true,
+        );
         if crosses {
             self.hold_an_owed_move(target)?;
         }
@@ -6767,10 +6776,9 @@ where
             moved.repoint(dest_plane.end.write_name(&target.0).as_str().as_bytes());
             resealed
         } else {
-            // A crossing whose two ends this pass resolves onto one scope is
-            // one this pass cannot author. Charged: no later read changes the
-            // pair of ends this build assembled.
-            if !matches!(crossing, ScopeCrossing::Intra) {
+            // Charged: no later read changes the pair of ends this build
+            // assembled.
+            if authority == Authority::Unauthorable {
                 return Err(Halt::UploadAttempt);
             }
             Resealed::default()
@@ -6822,7 +6830,7 @@ where
             .await
             .map_err(Halt::from)?;
         if single_record {
-            self.commit_crossing(scope, &source_plane, resealed).await;
+            self.commit_crossing(scope, owed, resealed).await;
             return Ok(());
         }
 
@@ -6853,7 +6861,7 @@ where
             // so the next pass drops the op: what the re-seal published commits
             // here or never.
             if failure.confirmed {
-                self.commit_crossing(scope, &source_plane, resealed).await;
+                self.commit_crossing(scope, owed, resealed).await;
                 return Err(failure.halt);
             }
             let undone = self
@@ -6882,7 +6890,7 @@ where
         // Last, and only here: the source-remove is what makes the subtree's
         // old records unreferenced, and retiring a name a live ref still points
         // at would leave that reference outliving its referent.
-        self.commit_crossing(scope, &source_plane, resealed).await;
+        self.commit_crossing(scope, owed, resealed).await;
         Ok(())
     }
 
@@ -6903,28 +6911,20 @@ where
     }
 
     /// Commit what a crossing re-sealed: the destination records take over the
-    /// live set, the source names stand down, and a source scope somebody reads
-    /// is owed a cut.
-    ///
-    /// The exit trigger is derived from the plane the pass proved, not from the
-    /// crossing the command journaled: an interior scope root exists only
-    /// because a grant cut one (CONTEXT.md "Scope"), so a move that leaves one
-    /// owes it a rotation whatever the op says.
+    /// live set, the source names stand down, and the source scope it left is
+    /// `owed` a cut ([`owed_cut`]).
     async fn commit_crossing(
         &self,
         scope: &DrainScope<'_>,
-        source_plane: &SealPlane<'_>,
+        owed: Option<NodeId>,
         resealed: Resealed,
     ) {
         for (node_id, held) in resealed.held {
             self.hold(node_id, held);
         }
         self.retire_names(&resealed.vacated);
-        // The plane pair is the evidence, not what this pass happened to
-        // publish: a resume whose re-seal an earlier pass already landed
-        // publishes nothing and owes the cut all the same.
-        if source_plane.end.root != scope.source.root {
-            self.owe_scope_exit(scope, source_plane.end.root).await;
+        if let Some(root) = owed {
+            self.owe_scope_exit(scope, root).await;
         }
     }
 

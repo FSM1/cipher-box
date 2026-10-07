@@ -31,10 +31,13 @@ use cipherbox_core::codec::RedactedText;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
+use crate::sync::crossing::{RelocationPlan, landed_cut, plan, scope_of};
 use crate::sync::model::{NodeMeta, Snapshot, TakenNames, collation_key, lowest_free_suffix};
 #[cfg(test)]
 use crate::sync::op::NewNode;
-use crate::sync::op::{Op, OpKind, Replaced, ScopeCrossing};
+#[cfg(test)]
+use crate::sync::op::ScopeCrossing;
+use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
 
 /// How one op resolved against the working base.
@@ -49,11 +52,6 @@ pub enum OpResolution {
         effective_name: Option<Zeroizing<String>>,
         /// The add/add auto-suffix fired.
         suffixed: bool,
-        /// The granted source scope root this op exited, resolved full-depth
-        /// ([`enclosing_scope_root`]) — the root a
-        /// [`ScopeExit`](crate::rotation::RotationTrigger::ScopeExit) rotation
-        /// must cut.
-        scope_exit_trigger: Option<crate::facade::NodeId>,
     },
     /// The op was dropped as a no-op or a lost race.
     Dropped {
@@ -75,7 +73,6 @@ impl fmt::Debug for OpResolution {
             Self::Applied {
                 effective_name,
                 suffixed,
-                scope_exit_trigger,
             } => f
                 .debug_struct("Applied")
                 .field(
@@ -83,7 +80,6 @@ impl fmt::Debug for OpResolution {
                     &effective_name.as_deref().map(|name| RedactedText::of(name)),
                 )
                 .field("suffixed", suffixed)
-                .field("scope_exit_trigger", scope_exit_trigger)
                 .finish(),
             Self::Dropped {
                 reason,
@@ -275,11 +271,9 @@ pub struct ReplayReport {
     pub dropped: Vec<(OpId, DropReason)>,
     /// Dead-lettered ops — surfaced to the host; staged bytes preserved.
     pub dead_letters: Vec<(OpId, DeadLetterReason)>,
-    /// The granted source scope roots this replay exited, deduped and in
-    /// first-seen order: N ops leaving one scope are one rotation, never N
-    /// (blueprint/engine.md "Rotation primitives: Triggers").
-    pub scope_exit_triggers: Vec<crate::facade::NodeId>,
-    /// The subset of those an op **dropped** rather than applied.
+    /// The granted source scope roots that **dropped** ops had left, deduped
+    /// and in first-seen order: N ops leaving one scope are one rotation, never
+    /// N (blueprint/engine.md "Rotation primitives: Triggers").
     ///
     /// A drop is the move already landed, here or on another device, so the
     /// rotation it owes has no publish left to derive it from and this verdict
@@ -413,7 +407,7 @@ impl<K: PartialEq> ScanMemo<K> {
 ///
 /// `scope_roots` is what the session **knows**: every boundary it has proved,
 /// so a walk over link ancestry can say which scope owns a node
-/// ([`enclosing_scope_root`]). Which scope a pass publishes under is not asked
+/// ([`scope_of`]). Which scope a pass publishes under is not asked
 /// here — whether one pass can author an op is a property of the op, and every
 /// pass of a tick must reach the same verdict on it.
 pub fn replay(
@@ -428,7 +422,6 @@ pub fn replay(
     let mut applied = Vec::new();
     let mut dropped = Vec::new();
     let mut dead_letters = Vec::new();
-    let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
     let mut dropped_scope_exits: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
@@ -448,9 +441,7 @@ pub fn replay(
             OpResolution::Applied {
                 effective_name,
                 suffixed,
-                scope_exit_trigger,
             } => {
-                queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
                 applied.push(AppliedOp {
                     op_id: *op_id,
                     op: op.clone(),
@@ -463,7 +454,6 @@ pub fn replay(
                 reason,
                 scope_exit_trigger,
             } => {
-                queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
                 queue_trigger(&mut dropped_scope_exits, scope_exit_trigger);
                 dropped.push((*op_id, reason));
             }
@@ -476,7 +466,6 @@ pub fn replay(
         applied,
         dropped,
         dead_letters,
-        scope_exit_triggers,
         dropped_scope_exits,
     }
 }
@@ -492,13 +481,11 @@ impl OpResolution {
     }
 
     /// An applied op that carries no resolved name and no auto-suffix (delete,
-    /// relink, content edit); `scope_exit_trigger` is the resolved source scope
-    /// root, if any.
-    fn applied(scope_exit_trigger: Option<crate::facade::NodeId>) -> Self {
+    /// relink, content edit).
+    fn applied() -> Self {
         OpResolution::Applied {
             effective_name: None,
             suffixed: false,
-            scope_exit_trigger,
         }
     }
 }
@@ -511,7 +498,8 @@ pub fn rebase_one(
     op: &Op,
     scope_roots: &[crate::facade::NodeId],
 ) -> OpResolution {
-    let exit = ScopeExit::of(working, op, scope_roots);
+    // Read before the rebase mutates `working`: only a drop owes it.
+    let exit = landed_cut(working, op, scope_roots, false);
     match &op.kind {
         OpKind::Create { parent, name, node } => {
             rebase_create(working, op, *parent, name, node.kind())
@@ -577,7 +565,7 @@ fn rebase_restore(
         // satisfied: dropping it here would strand the entry for a linked node,
         // and the next delete of that node would inherit its `deletedAt` and
         // expire at once. The drain finds the node linked and drops the entry.
-        return OpResolution::applied(None);
+        return OpResolution::applied();
     }
     if !working.contains(into) {
         return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
@@ -590,7 +578,6 @@ fn rebase_restore(
     OpResolution::Applied {
         effective_name: Some(Zeroizing::new(effective)),
         suffixed,
-        scope_exit_trigger: None,
     }
 }
 
@@ -606,7 +593,7 @@ fn rebase_purge(working: &Snapshot, op: &Op) -> OpResolution {
     if working.contains(op.target) {
         return OpResolution::DeadLetter(DeadLetterReason::TargetStillLinked);
     }
-    OpResolution::applied(None)
+    OpResolution::applied()
 }
 
 /// A prune anchors on no version: it keeps the newest `keep_latest` whatever
@@ -620,7 +607,7 @@ fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpR
     node.content_version = node
         .content_version
         .map(|count| count.min(keep_latest.get()));
-    OpResolution::applied(None)
+    OpResolution::applied()
 }
 
 /// A restore or a delete of one version: the op names its target by
@@ -635,7 +622,7 @@ fn rebase_history_edit(working: &mut Snapshot, op: &Op, dropped: u64) -> OpResol
     node.content_version = node
         .content_version
         .map(|count| count.saturating_sub(dropped));
-    OpResolution::applied(None)
+    OpResolution::applied()
 }
 
 /// Queue one scope root for a scope-exit rotation, deduped: N ops leaving one
@@ -649,86 +636,6 @@ fn queue_trigger(
     {
         triggers.push(scope_root);
     }
-}
-
-/// The scope root a relocation owes a scope-exit rotation, resolved against the
-/// base before the rebase mutates it. Both readings are `None` for an op that
-/// crosses no granted boundary.
-#[derive(Debug, Clone, Copy, Default)]
-struct ScopeExit {
-    /// What an **applied** exit cuts: the full-depth walk, falling back to the
-    /// snapshot root, because an exit this op performed must rotate something
-    /// ([`enclosing_scope_root`]).
-    applied: Option<crate::facade::NodeId>,
-    /// What a **dropped** exit cuts: [`relocation_exit`], with no fallback. A
-    /// drop is no evidence this op performed the exit, so a source folder a
-    /// concurrent writer deleted must not escalate into a whole-vault cut.
-    dropped: Option<crate::facade::NodeId>,
-}
-
-impl ScopeExit {
-    fn of(base: &Snapshot, op: &Op, scope_roots: &[crate::facade::NodeId]) -> Self {
-        let applied = op.scope_exit_source().map(|from_parent| {
-            enclosing_scope_root(base, from_parent, scope_roots).unwrap_or(base.root)
-        });
-        Self {
-            applied,
-            dropped: relocation_exit(base, op, scope_roots, false),
-        }
-    }
-}
-
-/// The cut a relocation that the published-op mark drops owes: a destination
-/// that no longer resolves still owes the journaled exit, because the mark is
-/// evidence the move published.
-pub(crate) fn expired_exit(
-    base: &Snapshot,
-    op: &Op,
-    scope_roots: &[crate::facade::NodeId],
-) -> Option<crate::facade::NodeId> {
-    relocation_exit(base, op, scope_roots, true)
-}
-
-/// The interior scope root a relocation left, derived from the scope roots
-/// listed now and not from the crossing the op journaled: a grant minted after
-/// the journal entry still owes its cut (ADR 0045 D1). `base.root` grants
-/// nobody, so a move out of it owes nothing.
-///
-/// A destination that resolves to no listed root, which another writer may have
-/// deleted, is no evidence of a crossing: it owes the journaled exit only when
-/// `published`.
-fn relocation_exit(
-    base: &Snapshot,
-    op: &Op,
-    scope_roots: &[crate::facade::NodeId],
-    published: bool,
-) -> Option<crate::facade::NodeId> {
-    let (from_parent, new_parent, crossing) = op.relocation()?;
-    let source =
-        enclosing_scope_root(base, from_parent, scope_roots).filter(|root| *root != base.root)?;
-    match enclosing_scope_root(base, new_parent, scope_roots) {
-        Some(destination) => (destination != source).then_some(source),
-        None => (published && crossing == ScopeCrossing::ExitsGrantedSource).then_some(source),
-    }
-}
-
-/// The listed scope root at or above `node`, walking it and then its ancestors
-/// nearest-first — **full-depth** detection, so a node at depth N resolves the
-/// same root a node at depth 1 does (blueprint/engine.md "Rotation primitives:
-/// Triggers"; the one-level check is the v1 coverage hole).
-///
-/// `None` when the chain reaches no listed root. Each caller decides both
-/// whether to list the vault root and what the absence means: the drain lists it
-/// so every in-tree node resolves, while [`crate::facade`] leaves it off and
-/// falls back to it when it classifies a relocation's crossing.
-pub(crate) fn enclosing_scope_root(
-    working: &Snapshot,
-    node: crate::facade::NodeId,
-    scope_roots: &[crate::facade::NodeId],
-) -> Option<crate::facade::NodeId> {
-    core::iter::once(node)
-        .chain(working.ancestors(node))
-        .find(|candidate| scope_roots.contains(candidate))
 }
 
 /// Add vs add: always visible; the rebasing loser auto-suffixes.
@@ -757,7 +664,6 @@ fn rebase_create(
     OpResolution::Applied {
         effective_name: Some(Zeroizing::new(effective)),
         suffixed,
-        scope_exit_trigger: None,
     }
 }
 
@@ -776,7 +682,7 @@ fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpRes
         }
         Some(_) => {
             working.remove_deleted(op.target);
-            OpResolution::applied(None)
+            OpResolution::applied()
         }
     }
 }
@@ -804,7 +710,6 @@ fn rebase_rename(working: &mut Snapshot, op: &Op, new_name: &str) -> OpResolutio
     OpResolution::Applied {
         effective_name: Some(Zeroizing::new(effective)),
         suffixed,
-        scope_exit_trigger: None,
     }
 }
 
@@ -816,7 +721,7 @@ fn rebase_relink(
     op: &Op,
     from_parent: crate::facade::NodeId,
     new_parent: crate::facade::NodeId,
-    exit: ScopeExit,
+    exit: Option<crate::facade::NodeId>,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
@@ -827,19 +732,19 @@ fn rebase_relink(
         // already landed.
         Some(current) if current == new_parent => OpResolution::Dropped {
             reason: DropReason::AlreadySatisfied,
-            scope_exit_trigger: exit.dropped,
+            scope_exit_trigger: exit,
         },
         // Still under the source we moved from: the normal dest-first + remove.
         Some(current) if current == from_parent => {
             working.relocate(op.target, new_parent, None);
-            OpResolution::applied(exit.applied)
+            OpResolution::applied()
         }
         // A concurrent move relocated the child elsewhere: we are the race loser.
         Some(_) => OpResolution::dropped(DropReason::MoveRaceLost),
         // No current parent (was at root / unlinked): dest-first still links it.
         None => {
             working.relocate(op.target, new_parent, None);
-            OpResolution::applied(exit.applied)
+            OpResolution::applied()
         }
     }
 }
@@ -884,9 +789,9 @@ fn names_three_scopes(working: &Snapshot, op: &Op, scope_roots: &[crate::facade:
     let Some((from_parent, new_parent, _)) = op.relocation() else {
         return false;
     };
-    let ends = [from_parent, new_parent]
-        .map(|end| enclosing_scope_root(working, end, scope_roots).unwrap_or(working.root));
-    ends[0] != ends[1] && !ends.contains(&working.root)
+    let [source, destination] =
+        [from_parent, new_parent].map(|end| scope_of(working, end, scope_roots));
+    plan(source, destination, working.root) == RelocationPlan::Staged
 }
 
 /// Whether a delete's target is linked from scopes no one pass pairs.
@@ -912,7 +817,7 @@ fn delete_names_unpairable_scopes(
     let mut roots: Vec<crate::facade::NodeId> = working
         .links_to(op.target)
         .iter()
-        .map(|link| enclosing_scope_root(working, link.parent, scope_roots).unwrap_or(working.root))
+        .map(|link| scope_of(working, link.parent, scope_roots))
         .collect();
     roots.sort_unstable();
     roots.dedup();
@@ -935,7 +840,7 @@ fn rebase_move(
     new_parent: crate::facade::NodeId,
     new_name: &str,
     replacing: Option<Replaced>,
-    exit: ScopeExit,
+    exit: Option<crate::facade::NodeId>,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
@@ -978,7 +883,7 @@ fn rebase_move(
     {
         return OpResolution::Dropped {
             reason: DropReason::AlreadySatisfied,
-            scope_exit_trigger: exit.dropped,
+            scope_exit_trigger: exit,
         };
     }
 
@@ -1002,7 +907,6 @@ fn rebase_move(
     OpResolution::Applied {
         effective_name: Some(Zeroizing::new(effective)),
         suffixed,
-        scope_exit_trigger: exit.applied,
     }
 }
 
@@ -1043,7 +947,7 @@ fn rebase_update_content(
             node.content_version = node.content_version.map(|count| count + 1);
             node.head_content_cid = authored;
         }
-        return OpResolution::applied(None);
+        return OpResolution::applied();
     }
     // Resurrect a concurrently-deleted node from local knowledge, re-linking it
     // under a parent that still exists in gate-passing state.
@@ -1066,7 +970,6 @@ fn rebase_update_content(
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new(effective)),
                 suffixed,
-                scope_exit_trigger: None,
             }
         }
         _ => OpResolution::DeadLetter(DeadLetterReason::TargetGone),
@@ -1613,7 +1516,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("f (2).txt".to_owned())),
                 suffixed: true,
-                scope_exit_trigger: None,
             },
             "the resurrected node auto-suffixes off the taken name"
         );
@@ -1702,7 +1604,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("a (2).txt".to_owned())),
                 suffixed: true,
-                scope_exit_trigger: None,
             }
         );
         assert_eq!(base.node(id(2)).unwrap().name(), "a (2).txt");
@@ -1856,10 +1757,6 @@ mod tests {
             [(OpId(1), DeadLetterReason::CrossingUnauthorable)],
             "the two ends now sit in two shared folders, and no pass carries three"
         );
-        assert!(
-            report.scope_exit_triggers.is_empty(),
-            "and nothing was applied, so the exit it would have owed is not queued"
-        );
     }
 
     /// [`granted_scope`] with a second granted scope beside the first, and one
@@ -1874,68 +1771,6 @@ mod tests {
 
     /// The scope roots for [`two_granted_scopes`].
     const TWO_GRANTED: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16]), NodeId([8; 16])];
-
-    /// The cut a relocation the published-op mark drops owes. A destination the
-    /// base no longer holds is no evidence of a crossing, so only a journaled
-    /// exit owes a cut there, whichever scope the source sits in.
-    #[test]
-    fn an_expired_relocation_owes_the_cut_its_two_ends_name() {
-        const GONE: NodeId = NodeId([0x33; 16]);
-        let mut base = two_granted_scopes();
-        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
-        let relink =
-            |from: u8, to: NodeId, crossing| Op::relink(id(7), id(from), to, 1, AT, crossing);
-        let cases = [
-            (
-                "an exit journaled intra",
-                relink(12, id(6), ScopeCrossing::Intra),
-                Some(id(5)),
-            ),
-            (
-                "an exit as journaled",
-                relink(12, id(6), ScopeCrossing::ExitsGrantedSource),
-                Some(id(5)),
-            ),
-            (
-                "a move inside one scope",
-                relink(12, id(10), ScopeCrossing::Intra),
-                None,
-            ),
-            (
-                "a move out of the vault root",
-                relink(6, id(5), ScopeCrossing::Cross),
-                None,
-            ),
-            (
-                "an own scope, destination gone",
-                relink(12, GONE, ScopeCrossing::Intra),
-                None,
-            ),
-            (
-                "a second scope, destination gone",
-                relink(9, GONE, ScopeCrossing::Intra),
-                None,
-            ),
-            (
-                "a journaled exit, destination gone",
-                relink(12, GONE, ScopeCrossing::ExitsGrantedSource),
-                Some(id(5)),
-            ),
-        ];
-        for (label, op, owed) in cases {
-            assert_eq!(expired_exit(&base, &op, TWO_GRANTED), owed, "{label}");
-        }
-        assert_eq!(
-            ScopeExit::of(
-                &base,
-                &relink(12, GONE, ScopeCrossing::ExitsGrantedSource),
-                TWO_GRANTED
-            )
-            .dropped,
-            None,
-            "a replay drop has no mark, so a lost destination owes nothing"
-        );
-    }
 
     /// A delete unlinks its target from every folder that links it, and a pass
     /// carries the anchor plus one interior end. Two interior ends is the span
@@ -2057,11 +1892,6 @@ mod tests {
             report.dead_letters.is_empty(),
             "the anchor is one of the ends"
         );
-        assert_eq!(
-            report.scope_exit_triggers,
-            [id(5)],
-            "and the granted scope it left is the one cut it owes"
-        );
         assert!(
             report.dropped_scope_exits.is_empty(),
             "an applied exit owes its cut where the publish proves the planes"
@@ -2094,101 +1924,6 @@ mod tests {
             report.dropped_scope_exits,
             [id(5)],
             "and the granted scope it left is still owed its cut"
-        );
-    }
-
-    #[test]
-    fn a_scope_exit_names_the_granted_root_at_depth_one_and_at_depth_n() {
-        // The v1 coverage hole: a one-level check names `from_parent`, which is
-        // the scope root only for the depth-1 move.
-        for (from_parent, depth) in [(id(5), 1), (id(12), 4)] {
-            let mut base = granted_scope();
-            with_node(&mut base, from_parent, id(7), "moved", NodeKind::File);
-            let local = base.clone();
-            let res = rebase_one(
-                &mut base,
-                &local,
-                &Op::relink(
-                    id(7),
-                    from_parent,
-                    id(6),
-                    1,
-                    AT,
-                    ScopeCrossing::ExitsGrantedSource,
-                ),
-                NESTED_ROOTS,
-            );
-            assert_eq!(
-                res,
-                OpResolution::Applied {
-                    effective_name: None,
-                    suffixed: false,
-                    scope_exit_trigger: Some(id(5)),
-                },
-                "an exit from depth {depth} names the granted scope root"
-            );
-        }
-    }
-
-    #[test]
-    fn a_cross_scope_move_with_rename_queues_the_same_trigger() {
-        // A kernel rename journals `Move`, not `Relink`, so the desktop's whole
-        // move surface would be blind to a scope exit if this did not fire.
-        let mut base = granted_scope();
-        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
-        let local = base.clone();
-        let res = rebase_one(
-            &mut base,
-            &local,
-            &Op::move_node(
-                id(7),
-                id(12),
-                id(6),
-                "renamed.txt",
-                None,
-                1,
-                AT,
-                ScopeCrossing::ExitsGrantedSource,
-            ),
-            NESTED_ROOTS,
-        );
-        assert_eq!(
-            res,
-            OpResolution::Applied {
-                effective_name: Some(Zeroizing::new("renamed.txt".to_owned())),
-                suffixed: false,
-                scope_exit_trigger: Some(id(5)),
-            }
-        );
-    }
-
-    #[test]
-    fn a_source_chain_reaching_no_listed_root_falls_back_to_the_snapshot_root() {
-        // Rotating an enclosing root over-rotates; rotating nothing would leave
-        // a revokee holding a live seed.
-        let mut base = granted_scope();
-        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
-        let local = base.clone();
-        let res = rebase_one(
-            &mut base,
-            &local,
-            &Op::relink(
-                id(7),
-                id(12),
-                id(6),
-                1,
-                AT,
-                ScopeCrossing::ExitsGrantedSource,
-            ),
-            &[],
-        );
-        assert_eq!(
-            res,
-            OpResolution::Applied {
-                effective_name: None,
-                suffixed: false,
-                scope_exit_trigger: Some(id(0)),
-            }
         );
     }
 
@@ -2256,7 +1991,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("target.txt".to_owned())),
                 suffixed: false,
-                scope_exit_trigger: None,
             },
             "vacating the destination first is what keeps the entered name"
         );
@@ -2424,7 +2158,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("target.txt".to_owned())),
                 suffixed: false,
-                scope_exit_trigger: None,
             },
             "the target takes the name its own ancestor held"
         );
@@ -2460,7 +2193,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("target (2).txt".to_owned())),
                 suffixed: true,
-                scope_exit_trigger: None,
             }
         );
         assert!(base.contains(id(3)), "the edited node survives");
@@ -2496,7 +2228,6 @@ mod tests {
             OpResolution::Applied {
                 effective_name: Some(Zeroizing::new("target.txt".to_owned())),
                 suffixed: false,
-                scope_exit_trigger: None,
             },
             "the contested name is free, so the move just takes it"
         );

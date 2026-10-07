@@ -6996,6 +6996,52 @@ fn a_source_remove_that_confirms_and_then_fails_still_commits_the_crossing() {
     );
 }
 
+/// A move whose two ends sit in one granted scope leaves nothing behind, so it
+/// owes no cut, even on the vault-root pass that carries that scope as its
+/// second end. The pass anchor is not the scope the move stays in.
+#[test]
+fn a_move_inside_a_granted_folder_on_the_vault_root_pass_cuts_nothing() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let item =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "item");
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, inner);
+    converge_into_granted_scope(&fx, item);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    // The head crossing makes the granted scope the vault-root pass's second
+    // end, so the move behind it runs on that pass.
+    for (node, new_parent) in [(album, fx.folder), (item, inner)] {
+        block_on(fx.engine.command(Command::Relink { node, new_parent }))
+            .expect("the relocation queues");
+    }
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Cross, ScopeCrossing::Intra]
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "both moves published"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "and the move that stayed inside the granted scope cut nothing"
+    );
+}
+
 /// A crossing between two scopes that grant nobody owes no cut. The vault root
 /// is that scope: no share reaches it, so a move *into* a granted folder leaves
 /// nothing behind a rotation would protect.

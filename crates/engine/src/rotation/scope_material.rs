@@ -17,8 +17,8 @@ use zeroize::Zeroizing;
 use crate::facade::NodeId;
 use crate::net::DescendantScopeRoot;
 use crate::rotation::derive_write_name;
+use crate::sync::crossing::enclosing_scope_root;
 use crate::sync::model::Snapshot;
-use crate::sync::rebase::enclosing_scope_root;
 use crate::sync::render::BaseSnapshot;
 
 /// What one scope root seals under: both its scope seeds, at the read epoch its
