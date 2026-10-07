@@ -22,6 +22,7 @@ export type VaultWarningKind =
   | 'withheldUpdateEscalation'
   | 'renewalFailed'
   | 'scopeExitCutOwed'
+  | 'restoredFromServerCopy'
   | 'unjournaledWrites';
 
 export interface VaultWarning {

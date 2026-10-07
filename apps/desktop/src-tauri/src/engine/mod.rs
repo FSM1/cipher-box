@@ -169,6 +169,10 @@ impl Warnings {
                 kind: "renewalFailed",
                 detail: Some(detail.clone()),
             },
+            Event::RestoredFromServerCopy { .. } => VaultWarning {
+                kind: "restoredFromServerCopy",
+                detail: None,
+            },
             Event::ScopeExitCutOwed { detail, .. } => VaultWarning {
                 kind: "scopeExitCutOwed",
                 detail: Some(detail.clone()),
@@ -1100,6 +1104,9 @@ mod tests {
                 routing_key: "a-routing-key".to_owned(),
                 detail: "the CAS race was lost".to_owned(),
             },
+            Event::RestoredFromServerCopy {
+                routing_key: "a-routing-key".to_owned(),
+            },
         ]);
 
         assert_eq!(
@@ -1107,7 +1114,8 @@ mod tests {
             [
                 "attributableAbuse",
                 "withheldUpdateEscalation",
-                "renewalFailed"
+                "renewalFailed",
+                "restoredFromServerCopy"
             ],
         );
     }
@@ -1145,9 +1153,12 @@ mod tests {
             Event::AttributableAbuse {
                 description: format!("{NAME}: content-cid-mismatch"),
             },
+            Event::RestoredFromServerCopy {
+                routing_key: NAME.to_owned(),
+            },
         ]);
 
-        assert_eq!(retained.len(), 3, "every arm is retained");
+        assert_eq!(retained.len(), 4, "every arm is retained");
         for warning in &retained {
             let detail = warning.detail.clone().unwrap_or_default();
             assert!(!detail.contains(NAME), "{}: {detail}", warning.kind);

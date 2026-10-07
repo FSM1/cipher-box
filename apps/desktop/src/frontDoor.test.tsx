@@ -267,6 +267,14 @@ describe('the front door', () => {
     );
   });
 
+  it('says that the vault was restored from the server copy', () => {
+    const vault = vaultStatus({ warnings: [{ kind: 'restoredFromServerCopy', detail: null }] });
+    draw(model({ phase: 'signedIn', vault }), actions());
+    expect(root.querySelector('[data-warning="restoredFromServerCopy"]')?.textContent).toContain(
+      'restored your vault from the server copy'
+    );
+  });
+
   /** A class this table has not learned yet must still raise a readable line. */
   it('names a warning it has no label for, rather than rendering nothing', () => {
     const vault = vaultStatus({

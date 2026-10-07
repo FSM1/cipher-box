@@ -87,6 +87,11 @@ describe('readEvent', () => {
     for (const event of events) expect(readEvent(event)).toBe(event);
   });
 
+  it('passes the restored-from-server-copy event through', () => {
+    const event: EventDescriptor = { kind: 'restoredFromServerCopy', routingKey: 'k51abc' };
+    expect(readEvent(event)).toBe(event);
+  });
+
   it('fails closed on a staleness level this build does not know', () => {
     expect(() => readEvent(skewed({ kind: 'stalenessChanged', staleness: 'frozen' }))).toThrow(
       'unknown WASM staleness: frozen'

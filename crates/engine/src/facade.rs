@@ -2325,6 +2325,13 @@ pub enum Event {
         /// The record's routing key (`ipnsName`).
         routing_key: String,
     },
+    /// A revival on a device with no floor for the name signed the
+    /// corroborated recovery record: the vault shows the server copy
+    /// (ADR 0062 D5). Sent once for each revived name.
+    RestoredFromServerCopy {
+        /// The record's routing key (`ipnsName`).
+        routing_key: String,
+    },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
     /// fail-closed publish failure — or a start could not raise the vault
     /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
@@ -2590,6 +2597,10 @@ impl fmt::Debug for Event {
                 .finish(),
             Self::SameSequenceFork { routing_key } => f
                 .debug_struct("SameSequenceFork")
+                .field("routing_key", &RedactedText::of(routing_key))
+                .finish(),
+            Self::RestoredFromServerCopy { routing_key } => f
+                .debug_struct("RestoredFromServerCopy")
                 .field("routing_key", &RedactedText::of(routing_key))
                 .finish(),
             Self::RenewalFailed {
@@ -5004,16 +5015,23 @@ async fn owed_scopes_within_bound<St: StagingStore>(
     .map(|scopes| scopes.into_iter().map(|scope| scope.0).collect())
 }
 
-/// Report each revival that did not land. A refusal of the bytes a plane served
-/// is a trust violation; a name the recovery endpoint holds no record for has
-/// nothing to revive.
+/// Report each revival that did not land, and each that restored the server
+/// copy. A refusal of the bytes a plane served is a trust violation; a name the
+/// recovery endpoint holds no record for has nothing to revive.
 pub(crate) fn emit_revival_failures(
     events: &mpsc::UnboundedSender<Event>,
     revivals: impl IntoIterator<Item = (String, Result<Revived, ReviveError>)>,
 ) {
     for (routing_key, result) in revivals {
         let outcome = match result {
-            Ok(revived) => Ok(Some(revived.outcome)),
+            Ok(revived) => {
+                if revived.restored_from_server_copy {
+                    let _ = events.unbounded_send(Event::RestoredFromServerCopy {
+                        routing_key: routing_key.clone(),
+                    });
+                }
+                Ok(Some(revived.outcome))
+            }
             Err(ReviveError::Publish(error)) => Err(error),
             // No record to revive, a device that takes the settings ladder of
             // ADR 0034 rather than a revival (ADR 0062 D4), a 429 that fails
@@ -7513,6 +7531,10 @@ where {
                         .pass(&scopes, &bins, &scope_roots, &|| alive.get())
                         .await;
                     emit_renewal_failures(&events, &report.renewals);
+                    for routing_key in report.restored {
+                        let _ =
+                            events.unbounded_send(Event::RestoredFromServerCopy { routing_key });
+                    }
                     for routing_key in &report.rejected {
                         emit_trust_violation(
                             &events,

@@ -45,6 +45,7 @@ fn warning_label(kind: &str) -> &'static str {
         "withheldUpdateEscalation" => "A shared folder is being kept from its latest update",
         "renewalFailed" => "CipherBox could not renew a record, so it may expire",
         "scopeExitCutOwed" => "CipherBox could not rotate a shared folder a move left",
+        "restoredFromServerCopy" => "CipherBox restored your vault from the server copy",
         _ => "CipherBox raised a condition it could not name",
     }
 }

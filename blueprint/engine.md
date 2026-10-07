@@ -310,7 +310,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
-  and reports that it restored the server copy (D5). The settings record
+  and sends `restoredFromServerCopy` once for each name it revived (D5). The settings record
   carries a bearer credential, so a device revives it only when it holds a
   floor equal to the recovered sequence; that read alone sets the EOL rule
   aside, and any other device takes the ADR 0034 ladder (D4). A session

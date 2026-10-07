@@ -122,6 +122,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   refusedClaimDropped: true,
   attributableAbuse: true,
   sameSequenceFork: true,
+  restoredFromServerCopy: true,
   renewalFailed: true,
   vaultUnprovisioned: true,
   vaultSettingsChanged: true,

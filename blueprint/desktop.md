@@ -319,7 +319,9 @@ navigation (FSM1/cipher-box-next#33 D2):
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust
   violations and withheld-update escalations to a distinct warning state that
-  is never conflated with staleness (FSM1/cipher-box-next#33 D4). "Sync Now" is a manual-refresh
+  is never conflated with staleness (FSM1/cipher-box-next#33 D4). A
+  `restoredFromServerCopy` event shows the "restored from the server copy"
+  state in that section (ADR 0062 D5). "Sync Now" is a manual-refresh
   facade command with nocache semantics.
 - **Lifecycle**: menu-bar app; mount failure never fails login (session stays
   up, tray shows the error); logout = facade logout (engine zeroizes),

@@ -1851,6 +1851,82 @@ fn a_device_after_100_days_offline_finds_its_vault_root(returning: bool) {
     }
 }
 
+fn restored_names(events: &mut EventStream) -> Vec<String> {
+    core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::RestoredFromServerCopy { routing_key } => Some(routing_key),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR 0062 D5: a device with no floor that revives the lapsed vault reports
+/// each name it restored from the server copy once. A plain start and the
+/// device that holds the floors report nothing.
+#[test]
+fn a_floorless_revival_reports_the_server_copy_once_for_each_name() {
+    for returning in [false, true] {
+        a_floorless_revival_reports_the_server_copy(returning);
+    }
+}
+
+fn a_floorless_revival_reports_the_server_copy(returning: bool) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let writer = world.device(b"the device that wrote");
+    let nodes = written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "notes");
+        vec![
+            folder,
+            write_file(&world, engine, tasks, folder, "note.txt"),
+        ]
+    });
+
+    let plain = world.device(b"a device on a live vault");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &plain, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        restored_names(&mut events).is_empty(),
+        "a plain start restores nothing",
+    );
+    drop((tasks, engine));
+    drop(world.scheduler.take_spawned_tasks());
+
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+    let device = if returning {
+        writer
+    } else {
+        world.device(b"a device after 100 days offline")
+    };
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 3);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    world.scheduler.advance(Duration::from_secs(60));
+    poll_tasks_until_parked(&mut tasks);
+
+    let mut restored = restored_names(&mut events);
+    if returning {
+        assert!(
+            restored.is_empty(),
+            "the device holds a floor for each name"
+        );
+        return;
+    }
+    restored.sort();
+    let mut expected: Vec<String> = [
+        vault_pointer_name(&SECRET, 0),
+        write_name(ROOT),
+        BinIndexKeys::derive(&SECRET).name().clone(),
+        write_name(nodes[0]),
+        write_name(nodes[1]),
+    ]
+    .iter()
+    .map(|name| name.as_str().to_owned())
+    .collect();
+    expected.sort();
+    assert_eq!(restored, expected, "each revived name, once");
+}
+
 /// ADR 0062 consequence 2: one session makes at most 25 recovery fetches a
 /// minute, the session-start revival and the walk together, and a revival
 /// cycle waits for the pace rather than stopping at the walk budget.
