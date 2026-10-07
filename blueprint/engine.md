@@ -197,7 +197,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   index through the gate and holds it. No revival signs a name in a scope that
   has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
   not read, the session sends `renewalFailed` for it and revives no vault root
-  and no scope pointer.
+  and no scope pointer, and the renewal walk revives no lapsed name and keeps
+  its cursor back, though it still renews the live records.
   A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve

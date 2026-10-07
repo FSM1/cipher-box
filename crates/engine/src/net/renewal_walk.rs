@@ -293,6 +293,11 @@ struct Pass<'s> {
     /// The scopes with an owed rotation entry within its bound, whose names
     /// the walk does not renew (ADR 0063 D4, ADR 0065 D4).
     owed: BTreeSet<[u8; 16]>,
+    /// The owed rotation record does not read: the walk renews, but revives
+    /// nothing, as unknown rotation debt can owe any scope.
+    owed_unread: bool,
+    /// The pass reported a revival that the unread record refused.
+    no_revival_reported: bool,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -434,6 +439,8 @@ where
             doomed,
             kept_back: false,
             owed,
+            owed_unread,
+            no_revival_reported: false,
             owner_tag,
             scopes,
             bins,
@@ -930,6 +937,15 @@ where
         signer: Option<&Ed25519Signer>,
         plane: P,
     ) -> bool {
+        if pass.owed_unread {
+            if !core::mem::replace(&mut pass.no_revival_reported, true) {
+                pass.report
+                    .failed
+                    .push((name.as_str().to_owned(), OWED_UNREAD_NO_REVIVAL));
+            }
+            pass.kept_back = true;
+            return false;
+        }
         let request = ReviveRequest {
             name,
             signer,

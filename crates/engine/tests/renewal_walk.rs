@@ -2250,3 +2250,39 @@ fn a_lapsed_pointer_below_the_produce_bar_stays_dark_and_below_both_bars_is_repo
         );
     }
 }
+
+/// ADR 0063 D4: unknown rotation debt refuses every revival, the walk's too.
+/// While the owed rotation record does not read, the walk revives no lapsed
+/// child and reports it once for the pass; after the record reads, the next
+/// pass revives it.
+#[test]
+fn an_unread_owed_record_revives_no_lapsed_child_in_the_walk() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let lapsed = world.record_store.lapse(name.as_str()).expect("published");
+    blocks.cache_for_recovery(name.as_str(), lapsed);
+    let device = world.device(b"a later session");
+    let owed = owed_rotation_key(&kdf::enc_subkey(&SECRET));
+    device.staging_store.inner().fail_staged_reads_under(&owed);
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(served_at(&world, &name), None, "the walk revives nothing");
+    let refusals = core::iter::from_fn(|| events.try_next())
+        .filter(|event| {
+            matches!(event, Event::RenewalFailed { routing_key, detail }
+                if routing_key == name.as_str() && detail.contains("did not revive"))
+        })
+        .count();
+    assert_eq!(refusals, 1, "one report for the pass");
+
+    device.staging_store.inner().heal_staged_reads();
+    world.scheduler.advance(HOUR);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence + 1,
+        "the next pass revives the file"
+    );
+}
