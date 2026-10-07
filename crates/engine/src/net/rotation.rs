@@ -2686,6 +2686,7 @@ where
             direct_child_scope_index: write_body.direct_child_scope_index,
             carried_history_links: section.history_links,
             carried_ascent_link: section.ascent_link.is_some(),
+            read_sequence: observed.sequence(),
         };
         self.gated.park(RepublishBase {
             read_body,

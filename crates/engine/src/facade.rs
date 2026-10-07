@@ -8395,7 +8395,7 @@ where {
             None => pass.owe(node, owed.clone()).await?,
             Some(standing) => pass.replace_owed(node, standing, owed.clone()).await?,
         }
-        let (pending, granted_read_scope, published_root, published_roots) = match &share {
+        let (pending, granted_read_scope, published_root, published_roots, stall) = match &share {
             ScopeShare::Contact { contact, .. } => {
                 let recipient = GrantRecipient {
                     contact,
@@ -8430,6 +8430,7 @@ where {
                             granted.read_scope,
                             granted.published_root,
                             Vec::new(),
+                            Some(stalled.lost_a_race()),
                         )
                     }
                     Ok(outcome) => (
@@ -8437,6 +8438,7 @@ where {
                         granted.read_scope,
                         granted.published_root,
                         outcome.published_roots,
+                        None,
                     ),
                 }
             }
@@ -8499,6 +8501,7 @@ where {
                     minted.read_scope,
                     minted.published_root,
                     minted.published_roots,
+                    minted.stalled.as_ref().map(CreateGrantError::lost_a_race),
                 )
             }
         };
@@ -8507,17 +8510,28 @@ where {
         {
             let named = self.state.named_scope_roots();
             let mut sequences = self.state.root_sequences.borrow_mut();
-            // The parent publish lands last. When it held, no other device
-            // edited the parent, so the sets hold each root the subtree names.
+            // The promoted root holds only when no other device edited the
+            // parent and the sets name each root the subtree names. A landed
+            // handover proves the parent by its own publish, which lands last;
+            // a stalled one by the parent read the grant gated, unless the
+            // stall itself is evidence of another device's edit.
             let mut parent_held = false;
             for published in &published_roots {
                 parent_held = sequences.note_own(published);
             }
+            let parent_unedited = match stall {
+                None => parent_held,
+                Some(lost_a_race) => {
+                    !lost_a_race
+                        && current.read_sequence
+                            <= sequences.held(&parent_scope.scope.ipns_name).unwrap_or(0)
+                }
+            };
             if let Some(promoted) = &published_root
-                && (parent_held
-                    || subtree
-                        .iter()
-                        .all(|child| named.contains(&NodeId(child.scope_id))))
+                && parent_unedited
+                && subtree
+                    .iter()
+                    .all(|child| named.contains(&NodeId(child.scope_id)))
             {
                 sequences.note_promoted(promoted);
             }

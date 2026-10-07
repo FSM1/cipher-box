@@ -411,6 +411,25 @@ pub enum CreateGrantError {
 }
 
 impl CreateGrantError {
+    /// Whether another device changed a root this grant read, after the read.
+    pub(crate) fn lost_a_race(&self) -> bool {
+        matches!(
+            self,
+            Self::ParentScopeSuperseded
+                | Self::Publish(RotationPublishError::LostRace)
+                | Self::VouchScope(RotationPublishError::LostRace)
+                | Self::ParentPublish(RotationPublishError::LostRace)
+                | Self::InteriorPublish {
+                    error: RotationPublishError::LostRace,
+                    ..
+                }
+                | Self::DescendantPublish {
+                    error: RotationPublishError::LostRace,
+                    ..
+                }
+        )
+    }
+
     /// Every grant-creation check, in variant declaration order — the surface
     /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
     /// `Entropy` surfaces the seam's own verdict and stays off it.
@@ -2371,6 +2390,7 @@ mod tests {
                 carried_history_links: Vec::new(),
                 // Every scope this resolver reaches is a descendant.
                 carried_ascent_link: true,
+                read_sequence: 1,
             })
         }
     }

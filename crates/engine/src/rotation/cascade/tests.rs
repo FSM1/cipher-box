@@ -317,6 +317,7 @@ impl CascadeResealResolver for FakeNet {
             carried_history_links: Vec::new(),
             // Every scope this resolver reaches is a descendant.
             carried_ascent_link: true,
+            read_sequence: 1,
         })
     }
 }

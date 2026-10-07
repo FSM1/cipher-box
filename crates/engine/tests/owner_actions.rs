@@ -9367,6 +9367,64 @@ fn an_own_publish_over_another_devices_grant_does_not_hold_the_root() {
 }
 
 /// Inside a granted folder, another owner device grants a folder inside a
+/// folder after this device read the records, so the handover of this
+/// device's grant of the outer folder loses the race and stalls. A lost race is
+/// evidence of that edit, so the promoted root holds no value, and a
+/// navigation into the inner folder reads nothing and sends no abuse event.
+#[test]
+fn a_navigation_after_a_grant_handover_that_lost_a_race_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let names = [write_name(folder), write_name(inner)];
+    let store = &fx.world.record_store;
+    let read_at: Vec<(EndpointId, &IpnsName, Vec<u8>)> = store
+        .endpoints()
+        .into_iter()
+        .flat_map(|endpoint| {
+            names.iter().map(move |name| {
+                let record = store.record_at(&endpoint, name.as_str()).expect("a record");
+                (endpoint.clone(), name, record)
+            })
+        })
+        .collect();
+    let doc = grant_inner_on_second_device(&fx, inner);
+    let edited: Vec<(&IpnsName, Vec<u8>)> = names
+        .iter()
+        .map(|name| {
+            let record = store
+                .record_at(&store.endpoints()[0], name.as_str())
+                .expect("an edited record");
+            (name, record)
+        })
+        .collect();
+    // This device reads the records as they were. The other device's grant
+    // surfaces once this device re-seals the inner folder.
+    for (endpoint, name, record) in read_at {
+        store.seed_record(&endpoint, name.as_str(), record);
+    }
+    for (name, record) in edited {
+        store.seed_record_after_put(names[1].as_str(), name.as_str(), record);
+    }
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: outer,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![outer], "the handover stalled");
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// Inside a granted folder, another owner device grants a folder inside a
 /// folder, then this device grants the outer folder before a walk. The
 /// promoted root names the inner scope root, which this device's sets do not
 /// hold, so a navigation into the inner folder reads nothing and sends no
