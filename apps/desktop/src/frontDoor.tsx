@@ -54,6 +54,8 @@ export interface ShellActions {
   /** Finishes a sign-in held at the factor policy from the phrase alone. */
   submitRecoveryPhrase(phrase: string): Promise<void>;
   logout(): void;
+  /** Drops the "restored from the server copy" notice. */
+  dismissRestored(): void;
 }
 
 type Renderer = (model: ShellModel, actions: ShellActions) => ReactElement;
@@ -157,6 +159,7 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
   withheldUpdateEscalation: 'A shared folder is being kept from its latest update',
   renewalFailed: 'CipherBox could not renew a record, so it may expire',
   scopeExitCutOwed: 'CipherBox could not rotate a shared folder a move left',
+  restoredFromServerCopy: 'CipherBox restored your vault from the server copy',
   unjournaledWrites: 'CipherBox could not save changes the disconnected drive still held',
 };
 
@@ -178,7 +181,7 @@ function SignedIn({ model, actions }: { model: ShellModel; actions: ShellActions
   return (
     <section className="signed-in">
       <p>{model.display ?? 'Signed in'}</p>
-      <Vault model={model} />
+      <Vault model={model} actions={actions} />
       <section className="security" data-security="panel">
         {SECURITY_LINES.map((line) => (
           <Note key={line}>{line}</Note>
@@ -192,7 +195,7 @@ function SignedIn({ model, actions }: { model: ShellModel; actions: ShellActions
 }
 
 /** Counts and a rung; the files themselves are the mount's surface. */
-function Vault({ model }: { model: ShellModel }) {
+function Vault({ model, actions }: { model: ShellModel; actions: ShellActions }) {
   if (model.vaultError !== null) {
     return (
       <section className="vault" data-vault="status">
@@ -224,7 +227,11 @@ function Vault({ model }: { model: ShellModel }) {
         </p>
       )}
       {warnings.map((raised, index) => (
-        <Warning key={`${raised.kind}-${String(index)}`} warning={raised} />
+        <Warning
+          key={`${raised.kind}-${String(index)}`}
+          warning={raised}
+          dismiss={actions.dismissRestored}
+        />
       ))}
       {/* Never silent, and never folded into the staleness line: a parked write
           is a different thing from an old view. */}
@@ -274,8 +281,25 @@ function MountLine({ mount }: { mount: MountStatus }) {
  * which is the whole point of the line. The staleness table needs no such
  * guard — an unnamed rung is a cosmetic gap, not a silent warning.
  */
-function Warning({ warning: { kind, detail } }: { warning: VaultWarning }) {
+function Warning({
+  warning: { kind, detail },
+  dismiss,
+}: {
+  warning: VaultWarning;
+  dismiss: () => void;
+}) {
   const label = WARNING_LABELS[kind] ?? 'CipherBox raised a condition it could not name';
+  // News, not a fault: no alert, and the member may drop it.
+  if (kind === 'restoredFromServerCopy') {
+    return (
+      <p className="muted" data-vault="warning" data-warning={kind}>
+        {label}{' '}
+        <button type="button" data-action="dismiss-restored" onClick={dismiss}>
+          Dismiss
+        </button>
+      </p>
+    );
+  }
   return (
     <p className="error" role="alert" data-vault="warning" data-warning={kind}>
       {detail === null ? label : `${label} — ${detail}`}

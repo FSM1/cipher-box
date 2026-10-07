@@ -190,6 +190,8 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
 pub(crate) struct WalkReport {
     /// Every signature the pass attempted.
     pub(crate) renewals: Vec<EolRenewResult>,
+    /// The names a revival restored from the server copy (ADR 0062 D5).
+    pub(crate) restored: Vec<String>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
     /// The names the walk cannot renew, or renews without a record it does
@@ -1071,12 +1073,15 @@ where
             signer,
             plane,
         };
-        let result = revive_name(self.api, &self.seams(), self.pace, request).await;
+        let revival = revive_name(self.api, &self.seams(), self.pace, request).await;
         let routing_key = name.as_str().to_owned();
-        let outcome = match result {
-            Ok(revived) => {
+        if revival.restored {
+            pass.report.restored.push(routing_key.clone());
+        }
+        let outcome = match revival.result {
+            Ok(outcome) => {
                 pass.visits = pass.visits.saturating_sub(1);
-                Ok(Some(revived.outcome))
+                Ok(Some(outcome))
             }
             Err(ReviveError::Publish(error)) => Err(error),
             Err(ReviveError::TrustViolation) => {

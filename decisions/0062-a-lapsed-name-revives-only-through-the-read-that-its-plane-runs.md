@@ -12,7 +12,8 @@
   [ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md)
   (the renewal walk)
 - **Implemented by:** FSM1/cipher-box#2337, FSM1/cipher-box#2338, FSM1/cipher-box#2339 and
-  FSM1/cipher-box#2340, the four parts of FSM1/cipher-box#2108
+  FSM1/cipher-box#2340, the four parts of FSM1/cipher-box#2108; the D5 event and shell state in
+  FSM1/cipher-box#2374
 - **Amends:** none
 
 ## Context

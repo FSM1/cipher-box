@@ -18,7 +18,7 @@ use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
 use super::revival::{
-    Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived,
+    Admitted, PlaneRead, PlaneRefusal, RecoveryPace, Revival, ReviveError, ReviveRequest,
     revive_name,
 };
 use super::rotation::{PointerPipeline, publish_pointer_over};
@@ -300,6 +300,11 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
         }
     }
 
+    /// The pointer admit writes no index floor, so a retry reads as floorless.
+    fn admit_writes_floor(&self) -> bool {
+        false
+    }
+
     /// A device that never walked the chain holds no index floor.
     async fn floorless<G: FloorStore>(&self, floors: &G, _: &IpnsName) -> SeamResult<bool> {
         Ok(floor::vault_pointer_index_floor(floors, &self.scope_id)
@@ -319,7 +324,7 @@ fn below_bar(regression: FloorRegression) -> PublishError {
 /// What the session-start pass over the vault pointer chain found.
 pub(crate) struct ChainRevival {
     /// Each revival the pass ran, by routing key.
-    pub(crate) revivals: Vec<(String, Result<Revived, ReviveError>)>,
+    pub(crate) revivals: Vec<(String, Revival)>,
     /// `None` when the pass reached a chain end the cold start may read: the
     /// recovery endpoint holds no record one index past the last, or the
     /// fan-out did not answer before any revival, which the cold start reports
@@ -397,15 +402,15 @@ where
                     signer: Some(&signer),
                     plane: read,
                 };
-                let result = revive_name(api, seams, pace, request).await;
-                let stop = result.is_err();
-                pass.unconfirmed = match &result {
+                let revival = revive_name(api, seams, pace, request).await;
+                let stop = revival.result.is_err();
+                pass.unconfirmed = match &revival.result {
                     Ok(_) | Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
                         None
                     }
                     Err(error) => Some(ChainStall::of(error)),
                 };
-                pass.revivals.push((name.as_str().to_owned(), result));
+                pass.revivals.push((name.as_str().to_owned(), revival));
                 if stop {
                     return pass;
                 }
@@ -610,9 +615,13 @@ mod tests {
             .map(|index| vault_pointer_name(&SECRET, index).as_str().to_owned())
             .collect();
         assert_eq!(recovered_names(&device), names, "one past the last index");
-        assert!(revivals[..2].iter().all(|(_, result)| result.is_ok()));
+        assert!(
+            revivals[..2]
+                .iter()
+                .all(|(_, revival)| revival.result.is_ok())
+        );
         assert!(matches!(
-            revivals[2].1,
+            revivals[2].1.result,
             Err(ReviveError::Recovery(ApiError::Status { status: 404, .. }))
         ));
         for index in 0..2 {
@@ -645,7 +654,10 @@ mod tests {
             Some(ChainStall::Retryable),
             "a retryable verdict"
         );
-        assert!(matches!(pass.revivals[1].1, Err(ReviveError::Throttled)));
+        assert!(matches!(
+            pass.revivals[1].1.result,
+            Err(ReviveError::Throttled)
+        ));
         assert!(served(&device, 0).is_some(), "index 0 revived");
     }
 
@@ -725,13 +737,17 @@ mod tests {
             if vouched_below {
                 assert_eq!(pass.unconfirmed, Some(ChainStall::Refused));
                 assert!(matches!(
-                    pass.revivals[0].1,
+                    pass.revivals[0].1.result,
                     Err(ReviveError::Publish(PublishError::BelowBar { .. }))
                 ));
+                assert!(
+                    !pass.revivals[0].1.restored,
+                    "a pointer admit writes no floor, so a refusal restores nothing",
+                );
             } else {
                 assert_eq!(pass.unconfirmed, Some(ChainStall::TrustViolation));
                 assert!(matches!(
-                    pass.revivals[0].1,
+                    pass.revivals[0].1.result,
                     Err(ReviveError::TrustViolation)
                 ));
             }

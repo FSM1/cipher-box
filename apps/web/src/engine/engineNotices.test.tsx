@@ -121,6 +121,21 @@ describe('engine warnings', () => {
     expect(notice.textContent).toContain('share the folder with them again');
   });
 
+  it('renders a vault restored from the server copy as one notice for the vault', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'restoredFromServerCopy', routingKey: 'k51root' });
+      engine.emit({ kind: 'restoredFromServerCopy', routingKey: 'k51file' });
+    });
+
+    const notices = await screen.findAllByTestId('notification-notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain('restored from the server copy');
+    expect(notices[0].textContent).not.toContain('k51');
+  });
+
   it('renders a write cut another device has not finished as a warning', async () => {
     const engine = fakeEngine();
     draw(engine.client);

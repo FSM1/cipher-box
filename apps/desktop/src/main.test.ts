@@ -78,6 +78,7 @@ vi.mock('@cipherbox/login', () => ({
   },
 }));
 vi.mock('./vault', () => ({
+  dismissRestored: vi.fn(() => Promise.resolve()),
   onVaultChanged: shell.onVaultChanged,
   readVaultStatus: shell.readVaultStatus,
 }));
