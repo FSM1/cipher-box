@@ -435,27 +435,44 @@ mod tests {
             assert_eq!(landed_cut(&base, &op, LISTED, published), owed, "{label}");
         }
     }
-    /// Op bodies as the previous release encoded them, one per crossing and
-    /// relocation kind. Pinned bytes, not a round trip of this build.
-    const RELINK_INTRA: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"Intra"}}}"#;
-    const MOVE_INTRA: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"Intra"}}}"#;
-    const RELINK_CROSS: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"Cross"}}}"#;
-    const MOVE_CROSS: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"Cross"}}}"#;
-    const RELINK_EXIT: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"ExitsGrantedSource"}}}"#;
-    const MOVE_EXIT: &str = r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"ExitsGrantedSource"}}}"#;
 
     /// ADR 0020: the op queue reads what the previous release wrote. Each
     /// journaled crossing still decodes, and still reads as the plan it was.
+    /// The bodies are pinned bytes, not a round trip of this build.
     #[test]
     fn a_relocation_the_previous_release_journaled_decodes_with_its_crossing() {
         use crate::seams::UnixMillis;
         for (body, crossing, renamed) in [
-            (RELINK_INTRA, ScopeCrossing::Intra, false),
-            (MOVE_INTRA, ScopeCrossing::Intra, true),
-            (RELINK_CROSS, ScopeCrossing::Cross, false),
-            (MOVE_CROSS, ScopeCrossing::Cross, true),
-            (RELINK_EXIT, ScopeCrossing::ExitsGrantedSource, false),
-            (MOVE_EXIT, ScopeCrossing::ExitsGrantedSource, true),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"Intra"}}}"#,
+                ScopeCrossing::Intra,
+                false,
+            ),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"Intra"}}}"#,
+                ScopeCrossing::Intra,
+                true,
+            ),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"Cross"}}}"#,
+                ScopeCrossing::Cross,
+                false,
+            ),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"Cross"}}}"#,
+                ScopeCrossing::Cross,
+                true,
+            ),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Relink":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"crossing":"ExitsGrantedSource"}}}"#,
+                ScopeCrossing::ExitsGrantedSource,
+                false,
+            ),
+            (
+                r#"{"target":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"base_sequence":4,"authored_at":5,"kind":{"Move":{"from_parent":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"new_parent":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"new_name":"a","replacing":null,"crossing":"ExitsGrantedSource"}}}"#,
+                ScopeCrossing::ExitsGrantedSource,
+                true,
+            ),
         ] {
             let op = Op::decode_body(body.as_bytes()).expect("the previous release's body decodes");
             let expected = if renamed {

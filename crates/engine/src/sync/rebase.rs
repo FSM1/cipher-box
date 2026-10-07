@@ -31,7 +31,7 @@ use cipherbox_core::codec::RedactedText;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
-use crate::sync::crossing::{landed_cut, scope_of};
+use crate::sync::crossing::{RelocationPlan, landed_cut, plan, scope_of};
 use crate::sync::model::{NodeMeta, Snapshot, TakenNames, collation_key, lowest_free_suffix};
 #[cfg(test)]
 use crate::sync::op::NewNode;
@@ -271,10 +271,9 @@ pub struct ReplayReport {
     pub dropped: Vec<(OpId, DropReason)>,
     /// Dead-lettered ops — surfaced to the host; staged bytes preserved.
     pub dead_letters: Vec<(OpId, DeadLetterReason)>,
-    /// The granted source scope roots an op **dropped** rather than applied
-    /// had left, deduped and in first-seen order: N ops leaving one scope are
-    /// one rotation, never N (blueprint/engine.md "Rotation primitives:
-    /// Triggers").
+    /// The granted source scope roots that **dropped** ops had left, deduped
+    /// and in first-seen order: N ops leaving one scope are one rotation, never
+    /// N (blueprint/engine.md "Rotation primitives: Triggers").
     ///
     /// A drop is the move already landed, here or on another device, so the
     /// rotation it owes has no publish left to derive it from and this verdict
@@ -790,8 +789,9 @@ fn names_three_scopes(working: &Snapshot, op: &Op, scope_roots: &[crate::facade:
     let Some((from_parent, new_parent, _)) = op.relocation() else {
         return false;
     };
-    let ends = [from_parent, new_parent].map(|end| scope_of(working, end, scope_roots));
-    ends[0] != ends[1] && !ends.contains(&working.root)
+    let [source, destination] =
+        [from_parent, new_parent].map(|end| scope_of(working, end, scope_roots));
+    plan(source, destination, working.root) == RelocationPlan::Staged
 }
 
 /// Whether a delete's target is linked from scopes no one pass pairs.
