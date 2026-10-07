@@ -1892,6 +1892,69 @@ fn a_lapsed_vault_revives_at_the_recovery_pace() {
     }
 }
 
+/// ADR 0062 consequence 1: a read that opens a lapsed folder moves it to the
+/// front of the revival order. In a vault that lapsed whole, the folder the
+/// walk reaches last revives in the first pass, while the recovery pace still
+/// holds back names that the cursor reaches before it, and it lists on the
+/// next read.
+#[test]
+fn a_read_that_opens_a_lapsed_folder_revives_it_first() {
+    const FOLDERS: usize = 40;
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut folders = written_then_left(&world, &blocks, |engine, tasks| {
+        for at in 0..FOLDERS {
+            block_on(engine.command(Command::Create {
+                parent: ROOT,
+                name: format!("f{at}"),
+                kind: NodeKind::Folder,
+            }))
+            .expect("a create stages");
+        }
+        tick(&world, engine, tasks);
+        let mut folders: Vec<NodeId> = (0..FOLDERS)
+            .map(|at| child_named(engine, ROOT, &format!("f{at}")))
+            .collect();
+        folders.sort();
+        let last = *folders.last().expect("a folder");
+        write_file(&world, engine, tasks, last, "inside.txt");
+        folders
+    });
+    let opened = folders.pop().expect("the folder the walk reaches last");
+    let before = record_at(&world, &write_name(opened));
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    block_on(engine.set_focus(Some(opened))).expect("the focus moves");
+    assert!(
+        unserved(&world, &write_name(opened)),
+        "the read finds the folder lapsed",
+    );
+
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &write_name(opened)),
+        "the first pass revives the opened folder",
+    );
+    assert_eq!(
+        record_at(&world, &write_name(opened)).sequence,
+        before.sequence + 1,
+        "the first pass revives the opened folder",
+    );
+    assert!(
+        folders
+            .iter()
+            .any(|folder| unserved(&world, &write_name(*folder))),
+        "the pace still holds back a folder the cursor reaches first",
+    );
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    block_on(engine.set_focus(Some(opened))).expect("the focus moves");
+    child_named(&engine, opened, "inside.txt");
+}
+
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a
 /// device whose floor equals the recovered sequence, and the session loads
 /// the settings again. A new device takes the ADR 0034 ladder and signs

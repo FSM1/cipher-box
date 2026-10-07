@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 use super::child::{
     ChildAdopter, ChildRecord, ChildResolveError, OwedMoveScope, resolve_child_record,
 };
+use super::renewal_walk::LapsedFolder;
 use crate::content::Gateway;
 use crate::facade::{Event, ForkSightings, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError};
@@ -47,6 +48,8 @@ pub(crate) struct FolderRefreshReport {
     /// On a grafted leg, each name whose read a withheld-update hold folds
     /// in ([`PinPass`](crate::sync::staleness::PinPass)).
     pub(crate) pins: Vec<(Vec<u8>, PinRead)>,
+    /// The owned folders whose record every endpoint read `Absent`.
+    pub(crate) lapsed: Vec<LapsedFolder>,
 }
 
 impl FolderRefreshReport {
@@ -140,6 +143,7 @@ where
             unread: false,
             departed: Vec::new(),
             pins: Vec::new(),
+            lapsed: Vec::new(),
         };
         for folder in folders.iter().rev() {
             let Some((name, adopted, scope)) = self
@@ -245,6 +249,7 @@ where
             unread: false,
             departed: Vec::new(),
             pins: Vec::new(),
+            lapsed: Vec::new(),
         };
         for file in files {
             let Some((name, adopted, _)) = self
@@ -333,6 +338,15 @@ where
                 }
                 let scope = adopter.opened_scope().unwrap_or(self.scope_id);
                 Some((name, read.adopted, scope))
+            }
+            Ok(ChildRecord::Absent) if kind == NodeKind::Folder && self.plane.is_none() => {
+                report.fold(RefreshVerdict::Unreachable);
+                report.lapsed.push(LapsedFolder {
+                    scope_id: self.scope_id,
+                    node_id: node.0,
+                    name,
+                });
+                None
             }
             // Availability: the base keeps rendering last-known-good.
             Ok(ChildRecord::Absent | ChildRecord::Withheld)

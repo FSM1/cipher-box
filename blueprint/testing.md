@@ -112,7 +112,9 @@ every name lapsed, revives the vault pointer, the vault root and the bin
 index before the first tick, lists the vault, and the walk revives a lapsed
 folder before the file below it, each at `S + 1`, on a new device and on the
 device that wrote the vault; a session spends at most 25 recovery fetches in
-its first minute and revives the rest when the pace allows; a 429 at the
+its first minute and revives the rest when the pace allows; a folder that a
+read finds lapsed revives in the first pass, before names that the cursor
+reaches first, and lists on the next read; a 429 at the
 chain revival leaves the session retryable with no root, and a refresh
 revives the chain and provisions; a chain revival that another device
 supersedes is retryable too; a lapsed pointer that only the produce bar

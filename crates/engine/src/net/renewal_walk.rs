@@ -101,6 +101,29 @@ pub(crate) const OWED_UNREAD_NO_REVIVAL: &str =
 /// cycle without them, and [`CYCLE_HOLD`] would then hold for 7 days.
 pub const SCOPE_ROOTS_WAIT_POLLS: u32 = 10;
 
+/// The most folders the lapsed-folder queue holds; a new entry drops the
+/// oldest.
+pub(crate) const MAX_LAPSED_FOLDERS: usize = 64;
+
+/// A folder of an owned scope that a read found `Absent` on every endpoint.
+/// The next pass revives it before its cursor (ADR 0062 consequence 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LapsedFolder {
+    pub(crate) scope_id: [u8; 16],
+    pub(crate) node_id: [u8; 16],
+    pub(crate) name: IpnsName,
+}
+
+/// Queue `folder` once, as the newest entry.
+pub(crate) fn queue_lapsed_folder(queue: &RefCell<Vec<LapsedFolder>>, folder: LapsedFolder) {
+    let mut queue = queue.borrow_mut();
+    queue.retain(|queued| queued.node_id != folder.node_id);
+    if queue.len() >= MAX_LAPSED_FOLDERS {
+        queue.remove(0);
+    }
+    queue.push(folder);
+}
+
 /// One owned scope the walk roots at.
 pub(crate) struct WalkScope {
     pub(crate) scope_id: [u8; 16],
@@ -158,6 +181,8 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     pub(crate) owed: &'a OwedCell,
     /// The session's recovery pace, which each revival waits for.
     pub(crate) pace: &'a RecoveryPace,
+    /// The folders a read found lapsed, which a pass visits first.
+    pub(crate) lapsed: &'a RefCell<Vec<LapsedFolder>>,
 }
 
 /// What one pass did.
@@ -390,7 +415,8 @@ where
                     .collect()
             })
             .unwrap_or_default();
-        if held {
+        let lapsed = self.lapsed.take();
+        if held && lapsed.is_empty() {
             return WalkReport {
                 underived,
                 ..WalkReport::default()
@@ -445,6 +471,16 @@ where
             scopes,
             bins,
         };
+        for folder in &lapsed {
+            if !still_running() {
+                break;
+            }
+            self.visit_lapsed(&mut pass, folder).await;
+        }
+        if held {
+            self.flush(&mut pass).await;
+            return pass.report;
+        }
         if pass.cursor.root.is_none() {
             pass.cursor = RenewalCursor::starting(now);
             pass.cursor.root = pass.roots().first().copied();
@@ -742,6 +778,33 @@ where
                 Some((plane, node_id, body))
             }
         }
+    }
+
+    /// Visit a folder from the lapsed-folder queue, while the base still names
+    /// it at the queued name, under the plane of its scope root.
+    async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) {
+        let named = self
+            .guards
+            .base
+            .borrow()
+            .node(NodeId(folder.node_id))
+            .is_some_and(|meta| {
+                meta.kind == crate::facade::NodeKind::Folder
+                    && meta.ipns_name.as_deref() == Some(folder.name.as_str().as_bytes())
+            });
+        if !named {
+            return;
+        }
+        let Some(material) = self.material(pass, folder.scope_id).await else {
+            return;
+        };
+        let plane = Plane {
+            scope_id: folder.scope_id,
+            read_seed: material.admitted.read_scope_seed.clone(),
+            seed_stamp: Some(material.admitted.read_epoch),
+        };
+        self.admit(pass, &plane, folder.node_id, &folder.name, false)
+            .await;
     }
 
     /// Visit one child a folder names.
@@ -1513,6 +1576,30 @@ mod tests {
                 .is_none(),
             "an old name is never renewed",
         );
+    }
+
+    /// A folder queued again moves to the newest place, and a full queue
+    /// drops its oldest entry.
+    #[test]
+    fn the_lapsed_folder_queue_keeps_each_folder_once_and_drops_the_oldest() {
+        let folder = |at: usize| {
+            let node_id = [at as u8; 16];
+            LapsedFolder {
+                scope_id: [0; 16],
+                node_id,
+                name: derive_write_name(&[1u8; 32], &node_id),
+            }
+        };
+        let queue = RefCell::new(Vec::new());
+        for at in 0..MAX_LAPSED_FOLDERS {
+            queue_lapsed_folder(&queue, folder(at));
+        }
+        queue_lapsed_folder(&queue, folder(0));
+        assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
+        assert_eq!(queue.borrow().last(), Some(&folder(0)));
+        queue_lapsed_folder(&queue, folder(MAX_LAPSED_FOLDERS));
+        assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
+        assert_eq!(queue.borrow().first(), Some(&folder(2)), "the oldest went");
     }
 
     #[test]

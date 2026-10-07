@@ -44,6 +44,7 @@ use crate::grants::grafted::{
 };
 use crate::grants::received_status::ReceivedVerdicts;
 use crate::net::HeldRecords;
+use crate::net::renewal_walk::LapsedFolder;
 use crate::net::retire::{OrphanHeads, ReclaimStall};
 use crate::net::revival::RecoveryPace;
 use crate::net::rotation::OnAccessMisses;
@@ -323,6 +324,8 @@ pub(crate) struct SessionState {
     pub(crate) recovery_pace: Rc<RecoveryPace>,
     /// A lapsed bin index that can still revive (`DrainCells::bin_index_unsettled`).
     pub(crate) bin_index_unsettled: Rc<Cell<Option<u64>>>,
+    /// The folders a read found lapsed (`RenewalWalk::lapsed`).
+    pub(crate) lapsed_folders: Rc<RefCell<Vec<LapsedFolder>>>,
     /// Set once the session has sent `Event::ParkedWritesUnreadable`, so a
     /// start that runs the cold start twice sends it once.
     pub(crate) parked_unreadable_sent: Cell<bool>,
@@ -703,6 +706,7 @@ impl SessionState {
             publishing: Rc::new(RefCell::new(BTreeSet::new())),
             recovery_pace: Rc::new(RecoveryPace::default()),
             bin_index_unsettled: Rc::default(),
+            lapsed_folders: Rc::default(),
             parked_unreadable_sent: Cell::new(false),
             sync_status: Rc::new(RefCell::new(SyncStatus::default())),
             scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
