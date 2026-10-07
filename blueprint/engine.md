@@ -993,12 +993,14 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   on access past the staleness threshold — no background churn over the whole
   tree; cached shared scopes consult their scope pointer on access. The
   navigation probes the root of each scope it reads under first, at the name
-  the last walk or graft gated, else at the name the leg holds. When that root
-  moved past the sequence the walk or graft gated and past this device's own
-  confirmed publish at that name, or sits below the sequence floor (a replay),
-  or the probe or the floor store has no answer, it reads nothing for that
-  scope and the next tick reads. The floor bars a replay only: a gated read
-  outside a walk raises it.
+  the last walk or graft gated, else at the name the leg holds. The probe holds
+  one record at that name, by its signed `data`: the record the walk or graft
+  gated, or this device's own confirmed publish when its base was the held
+  record. When the served root is above the held record, or is another record
+  at its sequence (a same-sequence fork), or sits below the sequence floor (a
+  replay), or the probe or the floor store has no answer, it reads nothing for
+  that scope and the next tick reads. The floor bars a replay only: a gated
+  read outside a walk raises it.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is

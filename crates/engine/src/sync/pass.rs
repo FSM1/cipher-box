@@ -58,7 +58,7 @@ use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
-use crate::session::{RootSequences, SessionSecrets, SessionState};
+use crate::session::{HeldRoot, RootSequences, SessionSecrets, SessionState};
 use crate::settings::{
     PlacementDecision, SessionPlacement, adopt_settings_summary, bin_retention_days,
     load_settings_at, owner_bin_retention_days, owner_retention, redecide_placement,
@@ -720,11 +720,14 @@ where
             && let Some((name, root_bytes)) = held_root
             && let Ok(name) = IpnsName::parse(&name)
         {
-            // The sequence of the record the walk gates, read before its awaits.
-            let root_sequence = IpnsRecord::unmarshal(&root_bytes)
+            // The record the walk gates, read before its awaits.
+            let root_record = IpnsRecord::unmarshal(&root_bytes)
                 .and_then(|record| record.verify(&name))
                 .ok()
-                .map(|record| record.sequence);
+                .map(|record| HeldRoot {
+                    sequence: record.sequence,
+                    data: record.data,
+                });
             let walked = walk
                 .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
                 .await;
@@ -740,7 +743,7 @@ where
                     &state.root_sequences,
                     NodeId(self.root_id),
                     &name,
-                    root_sequence,
+                    root_record,
                     &walked.proved,
                 );
                 let departed = install_descendant_scopes(
@@ -2014,24 +2017,27 @@ fn install_descendant_scopes(
     departed
 }
 
-/// Hold the sequence one walk gated for the vault root and for each scope
-/// root it proved, in place of the last walk's, in the same step as the scope
-/// sets it installs.
+/// Hold the record one walk gated for the vault root and for each scope root
+/// it proved, in place of the last walk's, in the same step as the scope sets
+/// it installs.
 fn note_walked_sequences(
     sequences: &RefCell<RootSequences>,
     root: NodeId,
     root_name: &IpnsName,
-    root_sequence: Option<u64>,
+    root_record: Option<HeldRoot>,
     proved: &[DescendantScopeRoot],
 ) {
-    let root = root_sequence.map(|sequence| (root, root_name.clone(), sequence));
+    let root = root_record.map(|held| (root, root_name.clone(), held));
     sequences
         .borrow_mut()
         .note_walk(root.into_iter().chain(proved.iter().map(|scope| {
             (
                 NodeId(scope.scope_id),
                 scope.name.clone(),
-                scope.adopted.sequence,
+                HeldRoot {
+                    sequence: scope.adopted.sequence,
+                    data: scope.record_data.clone(),
+                },
             )
         })));
 }
@@ -2432,6 +2438,7 @@ mod tests {
                 recovered_after_rejection: false,
                 scope_id: SHARED,
                 name: derive_write_name(&WRITE_SCOPE_SEED, &SHARED),
+                record_data: Vec::new(),
                 parent_node_seed: Zeroizing::new([0x21; 32]),
                 adopted: Adopted {
                     read_body: ReadBody::Folder {
@@ -2461,13 +2468,19 @@ mod tests {
             let shared = proved(Err(WritePlaneDark::Keyless));
             let old_name = shared.name.clone();
 
-            note_walked_sequences(&sequences, root, &root_name, Some(4), &[shared]);
+            let at = |sequence| {
+                Some(HeldRoot {
+                    sequence,
+                    data: vec![1],
+                })
+            };
+            note_walked_sequences(&sequences, root, &root_name, at(4), &[shared]);
             assert_eq!(
                 sequences.borrow().walked_name(NodeId(SHARED)),
                 Some(old_name.clone())
             );
 
-            note_walked_sequences(&sequences, root, &root_name, Some(5), &[]);
+            note_walked_sequences(&sequences, root, &root_name, at(5), &[]);
             let sequences = sequences.borrow();
             assert_eq!(
                 sequences.walked_name(NodeId(SHARED)),
@@ -2475,7 +2488,10 @@ mod tests {
                 "the walk omitted it"
             );
             assert_eq!(sequences.held(old_name.as_str().as_bytes()), None);
-            assert_eq!(sequences.held(root_name.as_str().as_bytes()), Some(5));
+            assert_eq!(
+                sequences.held(root_name.as_str().as_bytes()),
+                at(5).as_ref()
+            );
         }
 
         /// The vault root's end carries the stamp of the cached read seed, so

@@ -8775,7 +8775,9 @@ where {
                 Some(lost_a_race) => {
                     !lost_a_race
                         && current.read_sequence
-                            <= sequences.held(&parent_scope.scope.ipns_name).unwrap_or(0)
+                            <= sequences
+                                .held(&parent_scope.scope.ipns_name)
+                                .map_or(0, |held| held.sequence)
                 }
             };
             if let Some(promoted) = &published_root
@@ -10638,7 +10640,12 @@ where {
             Some(name) => match fanout_get_classified(&self.record_transport, name).await {
                 FanoutRecord::Found(served, _) => {
                     let name = name.as_str().as_bytes();
-                    self.state.root_sequences.borrow().held(name) < Some(served.sequence)
+                    !self
+                        .state
+                        .root_sequences
+                        .borrow()
+                        .held(name)
+                        .is_some_and(|held| held.holds(&served))
                         || floor::check_sequence(
                             floors,
                             name,
@@ -21725,12 +21732,28 @@ mod focus_access_tests {
         block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
         assert!(moved(&floored), "a floor at the served sequence is no walk");
 
-        engine
-            .state
-            .root_sequences
-            .borrow_mut()
-            .note_walk([(FOLDER, name.clone(), 2)]);
-        assert!(!moved(&floored), "the walk gated the served sequence");
+        let held = |value: &[u8]| crate::session::HeldRoot {
+            sequence: 2,
+            data: IpnsRecord::create_v2(&signer, value, 2, 2_000_000_000, "2099-01-01T00:00:00Z")
+                .verify(&name)
+                .expect("the record verifies")
+                .data,
+        };
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            held(b"/ipfs/bafkqaab"),
+        )]);
+        assert!(
+            moved(&floored),
+            "another record at the walked sequence is a fork"
+        );
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            held(b"/ipfs/bafkqaaa"),
+        )]);
+        assert!(!moved(&floored), "the walk gated the served record");
         let failing = InMemoryFloorStore::default();
         failing.fail_floor_reads();
         assert!(

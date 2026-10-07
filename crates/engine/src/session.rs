@@ -24,7 +24,7 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
@@ -539,54 +539,87 @@ pub(crate) struct SessionState {
 }
 
 /// What a navigation measures a served scope root against: per scope, the
-/// name the last boundary walk gated and its sequence, the same for each graft
-/// root a grafted pass gated, and per name, the highest sequence this session
-/// published and confirmed. A sequence belongs to a name, so a root that moves
-/// to a fresh name holds neither. Session memory only.
+/// name and record the last boundary walk gated, the same for each graft root
+/// a grafted pass gated, and per name, the record this session published and
+/// confirmed over the held one. A record belongs to a name, so a root that
+/// moves to a fresh name holds neither. Session memory only.
 #[derive(Default)]
 pub(crate) struct RootSequences {
-    walked: BTreeMap<NodeId, (IpnsName, u64)>,
-    grafted: BTreeMap<NodeId, (IpnsName, u64)>,
-    own: BTreeMap<Vec<u8>, u64>,
+    walked: BTreeMap<NodeId, (IpnsName, HeldRoot)>,
+    grafted: BTreeMap<NodeId, (IpnsName, HeldRoot)>,
+    own: BTreeMap<Vec<u8>, HeldRoot>,
+}
+
+/// One held root record: its sequence and its signed `data`, the identity of
+/// a record (ADR 0066 D1). Empty `data` is no record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HeldRoot {
+    pub(crate) sequence: u64,
+    pub(crate) data: Vec<u8>,
+}
+
+impl HeldRoot {
+    /// Whether `served` is this record, or a record below it. Another record
+    /// at this sequence is a same-sequence fork, which can name a scope root
+    /// the sets do not hold.
+    pub(crate) fn holds(&self, served: &VerifiedRecord) -> bool {
+        served.sequence < self.sequence || self.is_record(served.sequence, &served.data)
+    }
+
+    fn is_record(&self, sequence: u64, data: &[u8]) -> bool {
+        self.sequence == sequence && !self.data.is_empty() && self.data == data
+    }
 }
 
 impl RootSequences {
     /// Replace the walk values with what one walk gated, in the same step as
     /// the scope sets the walk installs. A scope the walk omits holds no walk
-    /// value.
-    pub(crate) fn note_walk(&mut self, gated: impl IntoIterator<Item = (NodeId, IpnsName, u64)>) {
+    /// value. A gated record replaces the own record at its name.
+    pub(crate) fn note_walk(
+        &mut self,
+        gated: impl IntoIterator<Item = (NodeId, IpnsName, HeldRoot)>,
+    ) {
         self.walked = gated
             .into_iter()
-            .map(|(scope, name, sequence)| (scope, (name, sequence)))
+            .map(|(scope, name, held)| (scope, (name, held)))
             .collect();
+        for (name, _) in self.walked.values() {
+            self.own.remove(name.as_str().as_bytes());
+        }
     }
 
     /// Write in the same step as the render tree the grafted pass merges.
-    pub(crate) fn note_grafted(&mut self, scope: NodeId, name: &IpnsName, sequence: u64) {
-        self.grafted.insert(scope, (name.clone(), sequence));
+    pub(crate) fn note_grafted(&mut self, scope: NodeId, name: &IpnsName, held: HeldRoot) {
+        self.own.remove(name.as_str().as_bytes());
+        self.grafted.insert(scope, (name.clone(), held));
     }
 
     /// Write in the same step as the scope sets that publish changed. A publish
-    /// over a base above [`Self::held`] carries another device's edit, which
-    /// can name a scope root the sets do not hold, so it writes nothing.
+    /// over a base that is not [`Self::held`] carries another device's edit,
+    /// which can name a scope root the sets do not hold, so it writes nothing.
     /// Answers whether it wrote.
     pub(crate) fn note_own(&mut self, published: &PublishedRoot) -> bool {
-        if published.base > self.held(&published.name).unwrap_or(0) {
-            return false;
+        let over_held = match self.held(&published.name) {
+            Some(held) => held.is_record(published.base, &published.base_data),
+            None => published.base == 0,
+        };
+        if over_held {
+            self.note_promoted(published);
         }
-        self.note_promoted(published);
-        true
+        over_held
     }
 
     /// [`Self::note_own`] for a root a grant promoted, whose base is an
     /// interior record: the caller checks that the sets hold each scope root
     /// the promoted root names.
     pub(crate) fn note_promoted(&mut self, published: &PublishedRoot) {
-        let held = self
-            .own
-            .entry(published.name.clone())
-            .or_insert(published.sequence);
-        *held = (*held).max(published.sequence);
+        self.own.insert(
+            published.name.clone(),
+            HeldRoot {
+                sequence: published.sequence,
+                data: published.data.clone(),
+            },
+        );
     }
 
     /// The name the last walk, else the last grafted pass, gated for `scope`.
@@ -597,15 +630,16 @@ impl RootSequences {
             .map(|(name, _)| name.clone())
     }
 
-    /// The highest walked, grafted or own sequence at `name`.
-    pub(crate) fn held(&self, name: &[u8]) -> Option<u64> {
-        self.walked
-            .values()
-            .chain(self.grafted.values())
-            .filter(|(gated, _)| gated.as_str().as_bytes() == name)
-            .map(|(_, sequence)| *sequence)
-            .max()
-            .max(self.own.get(name).copied())
+    /// The record held at `name`: the own record, else the walked one, else
+    /// the grafted one.
+    pub(crate) fn held(&self, name: &[u8]) -> Option<&HeldRoot> {
+        self.own.get(name).or_else(|| {
+            self.walked
+                .values()
+                .chain(self.grafted.values())
+                .find(|(gated, _)| gated.as_str().as_bytes() == name)
+                .map(|(_, held)| held)
+        })
     }
 
     pub(crate) fn clear(&mut self) {

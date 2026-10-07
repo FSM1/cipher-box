@@ -82,6 +82,7 @@ use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
     drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
+use crate::net::signed_data;
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
     HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
@@ -8443,6 +8444,11 @@ where
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         let base = observed.sequence();
+        let base_data = if is_scope_root {
+            signed_data(name, observed.bytes()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
         let read_key = plane.end.read_key(&node.0);
         let nonce = fresh_nonce(&mut *self.seams.entropy.borrow_mut())
@@ -8548,7 +8554,9 @@ where
                     .note_own(&PublishedRoot {
                         name: name.as_str().as_bytes().to_vec(),
                         base,
+                        base_data,
                         sequence,
+                        data: signed_data(name, &record_bytes).unwrap_or_default(),
                     });
             }
             self.keep_published(scope, &plane.end, op_id).await;

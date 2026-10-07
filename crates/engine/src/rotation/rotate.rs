@@ -189,8 +189,12 @@ pub struct PublishedRoot {
     pub name: Vec<u8>,
     /// The sequence of the record it replaced; 0 for none.
     pub base: u64,
+    /// The signed `data` of the record it replaced; empty when unknown.
+    pub base_data: Vec<u8>,
     /// The sequence it was signed at.
     pub sequence: u64,
+    /// The signed `data` of the record it landed; empty when unknown.
+    pub data: Vec<u8>,
 }
 
 impl PublishedRoot {
@@ -200,7 +204,9 @@ impl PublishedRoot {
         Self {
             name: record.ipns_name.clone(),
             base: 0,
+            base_data: Vec::new(),
             sequence,
+            data: Vec::new(),
         }
     }
 }

@@ -89,7 +89,7 @@ use crate::grants::{
 };
 use crate::net::fanout::{
     AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified,
-    fanout_get_tied_classified, fanout_get_verify, fanout_get_verify_failed,
+    fanout_get_tied_classified, fanout_get_verify, fanout_get_verify_failed, signed_data,
 };
 use crate::net::resolve::{Adopter, unavailable_below_floor};
 use crate::profile::SyncTimingProfile;
@@ -1276,6 +1276,8 @@ pub(crate) struct DescendantScopeRoot {
     pub(crate) scope_id: [u8; 16],
     /// The name the parent's index vouches for, which the descent gated at.
     pub(crate) name: IpnsName,
+    /// The signed `data` of the record the descent gated; empty when unknown.
+    pub(crate) record_data: Vec<u8>,
     /// The ancestor node seed the gate re-derives this root's expected ascent
     /// keypair from (`gate::adoption` stage 3). Every read of this record needs
     /// it, the drain's own self-adopt included.
@@ -1806,10 +1808,17 @@ where
         } else {
             write
         };
+        let record_data = gated
+            .observed
+            .as_ref()
+            .ok()
+            .and_then(|observed| signed_data(&name, observed.bytes()))
+            .unwrap_or_default();
         Ok((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
                 name,
+                record_data,
                 parent_node_seed,
                 adopted: Adopted {
                     read_body: gated.read_body,
@@ -2809,6 +2818,7 @@ where
     ) -> Result<(RepublishBase, Vec<u8>, PublishedRoot), RotationPublishError> {
         let name = current.observed.name();
         let base = current.observed.sequence();
+        let base_data = signed_data(name, current.observed.bytes()).unwrap_or_default();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
@@ -2888,18 +2898,23 @@ where
             // through the base — pass-local, because raising the floor here would
             // make this device's own next resolve read its record as current
             // rather than adopt the epoch it just cut (`net/resolve.rs`).
-            PublishOutcome::Published { sequence } => Ok((
-                RepublishBase {
-                    observed: current.observed.clearing(sequence),
-                    ..current
-                },
-                receipt.record_bytes,
-                PublishedRoot {
-                    name: record.ipns_name.clone(),
-                    base,
-                    sequence,
-                },
-            )),
+            PublishOutcome::Published { sequence } => {
+                let data = signed_data(name, &receipt.record_bytes).unwrap_or_default();
+                Ok((
+                    RepublishBase {
+                        observed: current.observed.clearing(sequence),
+                        ..current
+                    },
+                    receipt.record_bytes,
+                    PublishedRoot {
+                        name: record.ipns_name.clone(),
+                        base,
+                        base_data,
+                        sequence,
+                        data,
+                    },
+                ))
+            }
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
             // re-publishing is idempotent-in-sequence.

@@ -13,7 +13,7 @@ use core::time::Duration;
 use std::collections::BTreeSet;
 
 use cipherbox_core::hex::lower as hex_lower;
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
@@ -9606,6 +9606,114 @@ fn a_navigation_after_a_grant_by_another_device_sends_no_abuse_event() {
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let doc = grant_inner_on_second_device(&fx, inner);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// The record bytes `node`'s scope root name serves on the first endpoint.
+fn served_root_bytes(fx: &GrantScenario, node: NodeId) -> Vec<u8> {
+    let endpoints = fx.world.record_store.endpoints();
+    fx.world
+        .record_store
+        .record_at(&endpoints[0], write_name(node).as_str())
+        .expect("the scope root is published")
+}
+
+/// [`served_root_bytes`], verified.
+fn served_root(fx: &GrantScenario, node: NodeId) -> VerifiedRecord {
+    IpnsRecord::unmarshal(&served_root_bytes(fx, node))
+        .and_then(|record| record.verify(&write_name(node)))
+        .expect("the scope root verifies")
+}
+
+/// The value `node`'s scope root name serves now, signed at the sequence of
+/// `held` with a later EOL, so the total order picks it over `held`: another
+/// owner device's edit as a same-sequence fork.
+fn forked_over(fx: &GrantScenario, node: NodeId, held: &VerifiedRecord) -> Vec<u8> {
+    let edited = served_root(fx, node);
+    assert!(
+        edited.sequence > held.sequence,
+        "the other device published"
+    );
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    IpnsRecord::create_v2(
+        &signer,
+        &edited.value,
+        held.sequence,
+        edited.ttl,
+        "2098-01-01T00:00:00Z",
+    )
+    .marshal()
+}
+
+/// Serve `record` at `node`'s scope root name from every endpoint.
+fn serve_root(fx: &GrantScenario, node: NodeId, record: &[u8]) {
+    let name = write_name(node);
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.to_vec());
+    }
+}
+
+/// Another owner device grants a folder inside a descendant scope, and its
+/// scope root record stands at the sequence this device's walk gated. A
+/// navigation into the new root before the next walk reads nothing and sends
+/// no abuse event; the next tick reads.
+#[test]
+fn a_navigation_after_a_same_sequence_grant_by_another_device_reads_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let held = served_root(&fx, folder);
+    let doc = grant_inner_on_second_device(&fx, inner);
+    let fork = forked_over(&fx, folder, &held);
+    serve_root(&fx, folder, &fork);
+
+    navigate_into_the_new_root(&mut fx, inner, doc);
+}
+
+/// The same fork, which surfaces after this device's walk and before its
+/// drain writes the scope root. The drain publish over the forked record does
+/// not hold the root, so a navigation into the new root reads nothing and
+/// sends no abuse event.
+#[test]
+fn a_drain_write_over_a_same_sequence_fork_does_not_hold_the_root() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let held = served_root(&fx, folder);
+    let held_bytes = served_root_bytes(&fx, folder);
+    let doc = grant_inner_on_second_device(&fx, inner);
+    let fork = forked_over(&fx, folder, &held);
+    serve_root(&fx, folder, &held_bytes);
+    // The fork lands once this device's drain has written the vault root,
+    // after the walk and before the drain reads the granted scope root.
+    fx.world.record_store.seed_record_after_put(
+        write_name(ROOT).as_str(),
+        write_name(folder).as_str(),
+        fork,
+    );
+
+    for (parent, name) in [(ROOT, "elsewhere"), (folder, "other")] {
+        block_on(fx.engine.command(Command::Create {
+            parent,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .expect("a metadata create stages");
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        served_root(&fx, folder).sequence > held.sequence,
+        "the drain wrote the scope root"
+    );
 
     navigate_into_the_new_root(&mut fx, inner, doc);
 }
