@@ -657,6 +657,7 @@ async fn rekey_one<E, F, P>(
     floors: &F,
     publisher: &P,
     plan: &RotateScopePlan<'_>,
+    cut_durable: &dyn Fn([u8; 16], u64),
 ) -> Result<(RekeyedScope, Zeroizing<[u8; SECRET_LEN]>), CascadeError>
 where
     E: Entropy,
@@ -761,6 +762,7 @@ where
         .raise_epoch_floor(&scope_id, new_read_epoch)
         .await
         .map_err(|error| CascadeError::Floor { scope_id, error })?;
+    cut_durable(scope_id, new_read_epoch);
     record_cut_epochs(
         floors,
         &scope_id,
@@ -825,8 +827,8 @@ where
 
     // 1) Re-key the root — the thread head. Its fresh seed derives its children's
     //    new parent node seeds.
-    let (root_rekeyed, root_fresh_seed) = rekey_one(entropy, floors, publisher, root_plan).await?;
-    cut_durable(root_scope_id, root_rekeyed.new_read_epoch);
+    let (root_rekeyed, root_fresh_seed) =
+        rekey_one(entropy, floors, publisher, root_plan, cut_durable).await?;
     let mut outcome = CascadeOutcome {
         rekeyed: vec![root_rekeyed],
     };
@@ -928,8 +930,8 @@ where
                 carried_history_links: &target.carried_history_links,
             };
 
-            let (rekeyed, child_fresh_seed) = rekey_one(entropy, floors, publisher, &plan).await?;
-            cut_durable(child.scope_id, rekeyed.new_read_epoch);
+            let (rekeyed, child_fresh_seed) =
+                rekey_one(entropy, floors, publisher, &plan, cut_durable).await?;
             outcome.rekeyed.push(rekeyed);
 
             // Enqueue this child's children, threaded on THIS child's fresh seed.

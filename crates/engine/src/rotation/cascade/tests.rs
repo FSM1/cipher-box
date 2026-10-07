@@ -1439,6 +1439,81 @@ fn each_scope_of_a_cascade_is_noted_cut_once_its_floor_is_durable() {
     );
 }
 
+/// An [`InMemoryFloorStore`] whose commit of the root's cut-epoch record
+/// fails, after the read-epoch floor of the cut rose.
+struct CutEpochCommitFails {
+    inner: InMemoryFloorStore,
+    key: Vec<u8>,
+}
+
+impl FloorStore for CutEpochCommitFails {
+    async fn epoch_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+        self.inner.epoch_floor(key).await
+    }
+
+    async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> crate::seams::SeamResult<u64> {
+        self.inner.raise_epoch_floor(key, epoch).await
+    }
+
+    async fn sequence_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+        self.inner.sequence_floor(key).await
+    }
+
+    async fn raise_sequence_floor(
+        &self,
+        key: &[u8],
+        sequence: u64,
+    ) -> crate::seams::SeamResult<u64> {
+        self.inner.raise_sequence_floor(key, sequence).await
+    }
+
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> crate::seams::SeamResult<()> {
+        if raises.iter().any(|raise| raise.key == self.key) {
+            return Err(crate::seams::SeamError::new("cut-epoch commit refused"));
+        }
+        self.inner.commit_floors(raises).await
+    }
+
+    async fn clear(&self) -> crate::seams::SeamResult<()> {
+        self.inner.clear().await
+    }
+}
+
+/// The read-epoch floor is the cut: a cascade that then fails to record the
+/// cut epoch has still noted the cut.
+#[test]
+fn a_cut_epoch_record_that_fails_after_the_floor_rose_keeps_the_cut_noted() {
+    let net = FakeNet::new();
+    let revokee = net.owner.grantee.public().to_bytes();
+    let fx = RootFx::new(net.clone()).revoking(revokee);
+    let floors = CutEpochCommitFails {
+        inner: InMemoryFloorStore::default(),
+        key: revocation_cut_epoch_key(&sid(0x00), &revokee),
+    };
+    let cuts = RefCell::new(Vec::new());
+    let outcome = block_on(cascade_rotate_scope(
+        &mut SeededEntropy::new(0xCA5CADE),
+        &floors,
+        &VirtualScheduler::new(),
+        &net,
+        &net,
+        &fx.plan(&[]),
+        || Box::pin(async {}),
+        &|scope_id, epoch| cuts.borrow_mut().push((scope_id, epoch)),
+    ));
+
+    assert!(
+        matches!(outcome, Err(CascadeError::RevocationFloor { .. })),
+        "the cut-epoch record fails"
+    );
+    assert_eq!(
+        block_on(floors.epoch_floor(&sid(0x00))).expect("the floor reads"),
+        Some(5),
+        "after the read-epoch floor rose"
+    );
+    assert_eq!(cuts.into_inner(), vec![(sid(0x00), 5)]);
+}
+
 #[test]
 fn publish_not_landed_aborts_fail_closed() {
     // A descendant whose re-key does not land aborts the cascade — a revocation
