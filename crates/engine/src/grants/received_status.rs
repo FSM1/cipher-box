@@ -35,6 +35,7 @@ use crate::gate::{
 use crate::name::validate_name;
 use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::scope_name;
+use crate::net::signed_data;
 use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
 use crate::profile::SyncTimingProfile;
 use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed};
@@ -42,7 +43,7 @@ use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
 };
-use crate::session::RootSequences;
+use crate::session::{HeldRoot, RootSequences};
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
@@ -154,6 +155,8 @@ struct Opened<'a> {
     share: &'a ReceivedShare,
     children: Vec<ChildRef>,
     sequence: u64,
+    /// The signed `data` of the root record this pass opened.
+    data: Vec<u8>,
     modified_at: u64,
 }
 
@@ -244,10 +247,14 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
     let share = open.share;
     let root = NodeId(share.scope_id);
     if let Ok(name) = scope_name(&share.scope_root_name) {
-        render
-            .root_sequences
-            .borrow_mut()
-            .note_grafted(root, &name, open.sequence);
+        render.root_sequences.borrow_mut().note_grafted(
+            root,
+            &name,
+            HeldRoot {
+                sequence: open.sequence,
+                data: open.data.clone(),
+            },
+        );
     }
     let scope_roots = render.scope_roots.borrow();
     let mut base = render.base.borrow_mut();
@@ -1216,6 +1223,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             share,
             children,
             sequence,
+            data: signed_data(&candidate.name, &candidate.record_bytes).unwrap_or_default(),
             modified_at,
         }))
     }

@@ -129,6 +129,7 @@ mod tests {
             recovered_after_rejection: false,
             scope_id: [n; 16],
             name: IpnsName::parse(NAME).expect("a valid name"),
+            record_data: Vec::new(),
             parent_node_seed: Zeroizing::new([n; SECRET_LEN]),
             adopted: Adopted {
                 read_body: ReadBody::Folder {
