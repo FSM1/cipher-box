@@ -48,14 +48,16 @@ cargo run --release -p cipherbox-load -- \
 `rotation-wave` runs one whole engine over the desktop production seams, not
 test-login accounts, on the `local` target only. The workflow passes no
 `--clients`, so its numbers compare with the one-engine table in
-`tools/perf/RESULTS.md`. `load-test.yml` also runs it every week at 16 nodes. Each engine signs in with a fresh identity,
-builds a folder of `--nodes` subfolders, and mints a read link at it, so that
-the folder is a scope root. Then it runs a read cut (`RotateNow`) and a write
-cut (`RotateWriteNow`), in that order, and records two spans from the engine's
-own events, on the engine clock:
+`tools/perf/RESULTS.md`. `load-test.yml` also runs it every week at 16 nodes.
+Each engine signs in with a fresh identity, builds a folder of `--nodes`
+subfolders, and mints a read link at it, so that the folder is a scope root.
+Then it runs a read cut (`RotateNow`) and a write cut (`RotateWriteNow`), in
+that order, and records spans from the engine's own events, on the engine
+clock:
 
 - `sweep-converge`: from the read cut to the end of the sweep run that reports
-  no node at the old epoch (`sweepConvergence`).
+  no node at the old epoch (`sweepConvergence`). `sweep-last-reseal` runs to
+  the end of the last sweep run that re-sealed a node.
 - `name-wave`: from `nameWaveStarted` to `nameWaveEnded`. `name-wave-node` is
   the time each node took to land.
 

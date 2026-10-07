@@ -6,7 +6,7 @@
 //! read cut files. Both measured spans come from the engine's own events, on
 //! the engine's `Scheduler` clock (blueprint/engine.md "Triggers").
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use cipherbox_desktop_seams::{
@@ -188,7 +188,7 @@ pub(crate) async fn run(plan: &RunPlan) -> Result<(Collector, f64), String> {
             .map_err(|error| format!("an engine did not finish: {error}"))?;
         collector.absorb(samples);
     }
-    Ok((collector, started.elapsed().as_secs_f64() * 1_000.0))
+    Ok((collector, elapsed_ms(started)))
 }
 
 fn seam_set(plan: &RunPlan, dir: &Path) -> Result<SeamSet<LoadSeamTypes>, String> {
@@ -220,11 +220,7 @@ fn elapsed_ms(since: Instant) -> f64 {
     since.elapsed().as_secs_f64() * 1_000.0
 }
 
-async fn one_account(
-    plan: &RunPlan,
-    dir: &PathBuf,
-    collector: &mut Collector,
-) -> Result<(), String> {
+async fn one_account(plan: &RunPlan, dir: &Path, collector: &mut Collector) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
     let seams = seam_set(plan, dir)?;
     let api_base_url = ApiBaseUrl::parse(&plan.api_url).map_err(|error| error.to_string())?;
@@ -341,7 +337,7 @@ async fn populate(
     let root = engine.root();
     create_folder(engine, root, FOLDER_NAME).await?;
     let folder = child_named(engine, root, FOLDER_NAME).await?;
-    await_published(engine, events, &[(root, 1)]).await?;
+    await_published(engine, events, root, 1).await?;
     let mut created = 0;
     while created < nodes {
         if created > 0 {
@@ -352,16 +348,17 @@ async fn populate(
             create_folder(engine, folder, &format!("node-{index}")).await?;
         }
         created += chunk;
-        await_published(engine, events, &[(folder, created)]).await?;
+        await_published(engine, events, folder, created).await?;
     }
     Ok(folder)
 }
 
-/// Refresh until each folder lists its count of children with none queued.
+/// Refresh until `folder` lists `count` children with none queued.
 async fn await_published(
     engine: &mut Engine<LoadSeamTypes>,
     events: &mut EventStream,
-    folders: &[(NodeId, u32)],
+    folder: NodeId,
+    count: u32,
 ) -> Result<(), String> {
     let deadline = Instant::now() + POPULATE_BUDGET;
     loop {
@@ -370,11 +367,7 @@ async fn await_published(
             .await
             .map_err(|error| format!("refresh: {error}"))?;
         drain(events);
-        let mut done = true;
-        for (folder, count) in folders {
-            done &= published(engine, *folder, *count).await?;
-        }
-        if done {
+        if published(engine, folder, count).await? {
             return Ok(());
         }
         if Instant::now() > deadline {

@@ -143,7 +143,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - uses: ./.github/actions/mock-ipns-routing
-        if: inputs.environment != 'staging' && (inputs.scenario || 'rotation-wave') == 'rotation-wave'
+        if: env.TARGET != 'staging' && env.SCENARIO == 'rotation-wave'
 
       - name: Stand up the local API over the CI stack
         if: inputs.environment != 'staging'
@@ -237,7 +237,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: load-metrics-${{ inputs.scenario || 'rotation-wave' }}-${{ inputs.environment || 'local' }}
+          name: load-metrics-${{ env.SCENARIO }}-${{ env.TARGET }}
           path: load-reports/*.json
           retention-days: 30
           if-no-files-found: warn

@@ -316,22 +316,19 @@ fn resolve_routing_endpoints(
     }
     let raw =
         env("LOAD_TEST_ROUTING_ENDPOINTS").unwrap_or_else(|| DEFAULT_LOCAL_ROUTING_URL.to_owned());
-    let endpoints: Vec<String> = raw
+    let endpoints = raw
         .split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
-        .collect();
+        .map(|url| {
+            guard_url(target, "LOAD_TEST_ROUTING_ENDPOINTS", url)?;
+            Ok(normalize_base(url.to_owned()))
+        })
+        .collect::<Result<Vec<_>, PlanError>>()?;
     if endpoints.is_empty() {
         return Err(bad("LOAD_TEST_ROUTING_ENDPOINTS names no endpoint"));
     }
-    endpoints
-        .into_iter()
-        .map(|url| {
-            guard_url(target, "LOAD_TEST_ROUTING_ENDPOINTS", &url)?;
-            Ok(normalize_base(url))
-        })
-        .collect()
+    Ok(endpoints)
 }
 
 /// Every dimension of a run is bounded, so no flag combination can turn a
