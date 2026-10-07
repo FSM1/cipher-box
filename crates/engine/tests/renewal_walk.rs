@@ -1929,9 +1929,9 @@ fn the_settings_record_revives_at_session_start_only_at_its_floor() {
 }
 
 fn unprovisioned(events: &mut EventStream, retryable: bool) -> bool {
-    core::iter::from_fn(|| events.try_next()).any(|event| {
-        matches!(event, Event::VaultUnprovisioned { retryable: at, .. } if at == retryable)
-    })
+    core::iter::from_fn(|| events.try_next()).any(
+        |event| matches!(event, Event::VaultUnprovisioned { retryable: at, .. } if at == retryable),
+    )
 }
 
 /// ADR 0062 D1 step 1: a 429 at the recovery read of the vault pointer leaves
@@ -1967,7 +1967,10 @@ fn a_throttled_chain_revival_stays_retryable_and_a_refresh_revives_it() {
     );
 
     block_on(engine.command(Command::ManualRefresh)).expect("the refresh revives the chain");
-    assert!(engine.is_provisioned(), "the refresh provisions the session");
+    assert!(
+        engine.is_provisioned(),
+        "the refresh provisions the session"
+    );
     assert_eq!(record_at(&world, &pointer).sequence, before.sequence + 1);
     assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
 }
@@ -2009,8 +2012,12 @@ fn a_throttled_bin_index_revival_publishes_no_genesis_and_the_next_start_revives
     assert_eq!(revived.sequence, before.sequence + 1);
     assert_eq!(revived.value, before.value, "the same bin index");
     assert_eq!(
-        block_on(device.floors(&SECRET).sequence_floor(bin.as_str().as_bytes()))
-            .expect("the floor store answers"),
+        block_on(
+            device
+                .floors(&SECRET)
+                .sequence_floor(bin.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
         Some(before.sequence + 1),
         "the load after the revival reads it through the gate",
     );
