@@ -246,9 +246,14 @@ bytes (FSM1/cipher-box-next#28 D2).
   revival re-signs the admitted value unchanged, an `/ipfs/` value or an inline
   sealed block, and never re-seals a body or re-points a name (D2). A device
   with no floor for the record revives from the corroborated recovery record
-  and reports that it restored the server copy (D5). A session makes at most
-  25 recovery fetches a minute, below the `recovery` throttle of 30 a minute
-  for each account; a fetch over the pace waits for the next slot. The adoption gate
+  and reports that it restored the server copy (D5). The settings record
+  carries a bearer credential, so a device revives it only when it holds a
+  floor equal to the recovered sequence; that read alone sets the EOL rule
+  aside, and any other device takes the ADR 0034 ladder (D4). A session
+  makes at most 25 recovery fetches a minute, below the `recovery` throttle
+  of 30 a minute for each account; a fetch over the pace waits for the next
+  slot. The recovery fetch of a floorless settings save (see "Vault settings
+  load") is one fetch for each user save, outside that pace. The adoption gate
   therefore does **not** reject on EOL; the one carve-out is the vault settings
   resolve, whose reader is always its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
@@ -400,7 +405,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
   after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
   `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
   sequence and adopted-revision marks after a landed owner record
-  (`publish_bin_index`, `publish_settings_above`), the name sequence of a
+  (`publish_bin_index`, `publish_settings`), the name sequence of a
   value this device signed in a liveness renewal, after `Published`
   (`renew_held`; an owner device or a write grantee), and the vouched floor
   (below); before the publish, only where it makes the device more
@@ -511,10 +516,17 @@ its degraded outcome applies a different policy rather than showing stale data.
   record the network serves, including one captured before the member rotated
   a BYO `access_token` the engine would then present as a bearer credential.
   The lapse degrades through the last-known-good path like every other
-  reason. The encode side needs no matching guard: the EOL is `now + 90 days`
-  off the injected clock, so a publish structurally cannot mint an
+  reason. The one exception is the revival read on a device whose floor
+  equals the recovered sequence (ADR 0062 D4, "Revival" above). The encode
+  side needs no matching guard: the EOL is `now + 90 days` off the injected
+  clock, so a publish structurally cannot mint an
   already-expired record.
-- **A save signs above a lapsed or unreadable record.** When the load reports
+- **A save signs above a lapsed or unreadable record.** A save on a device
+  with no floor also signs above the recovery endpoint's record, verified
+  under the settings name, so it does not publish at sequence 1 and an older
+  device does not report `RolledBack`. It signs above the higher of that
+  record and the record the load verified. A 404 answer means no record; a
+  429, another failure, or bytes that do not verify refuse the save. When the load reports
   `Expired` or `Unreadable` for a record that verified under the account's own
   settings key, a save signs above that record's sequence, and the floor rises
   only on a confirm. A body that a newer release wrote refuses the save
