@@ -56,24 +56,22 @@ use crate::facade::PreviewNames;
 /// reads through.
 ///
 /// The bookmark names no scope root yet: the first read takes it from the
-/// scope pointer. `names` are the fragment's names when the owner signature
-/// over them verifies. Without them, the display name is empty, which a host
-/// renders as a share through a link (ADR 0027 D5), and the bookmark keeps no
-/// scope pointer name (ADR 0074 D1 as amended).
+/// scope pointer. `names` are the fragment's names, under an owner signature
+/// the caller verified (ADR 0027 D5 as amended).
 pub(crate) fn pending_link_bookmark(
     fragment: &InviteFragment,
     owner: &Contact,
-    names: Option<&PreviewNames>,
+    names: &PreviewNames,
 ) -> (ReceivedShare, LinkHold) {
     (
         ReceivedShare {
             scope_root_name: Vec::new(),
             scope_id: fragment.scope_id,
             sharer_identity_pk: owner.identity_pk().to_sec1(),
-            display_name: names.map_or_else(String::new, |names| names.folder_name.clone()),
+            display_name: names.folder_name.clone(),
             permission: Permission::Read,
             pointer_read_key: fragment.pointer_read_key.clone(),
-            scope_pointer_name: names.map(|_| fragment.scope_pointer_name.clone()),
+            scope_pointer_name: Some(fragment.scope_pointer_name.clone()),
         },
         LinkHold::new(fragment.invite_secret.clone()),
     )
@@ -195,12 +193,14 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
 ) -> Result<LinkEntryRead, LinkReadRefusal> {
     let LinkReader {
         share,
-        pointer_name,
         owner,
         invitee,
         my_enc_secret,
     } = *link;
     let owner_identity = owner.identity_pk();
+    let Some(pointer_name) = &share.scope_pointer_name else {
+        return Ok(LinkEntryRead::Unavailable);
+    };
     let root = match held_scope_root(
         seams.transport,
         &seams.floors,
@@ -291,16 +291,11 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
 }
 
 /// What one read through a link reads with: the bookmark the fragment makes,
-/// the scope pointer name the fragment carries, the owner the fragment names,
-/// and this account's own encryption secret, which locates its own grant in
-/// the owner-signed set.
-///
-/// The read follows `pointer_name` even when the owner signature over the
-/// names fails (ADR 0027 D5), but only a verified name enters the bookmark.
+/// the owner the fragment names, and this account's own encryption secret,
+/// which locates its own grant in the owner-signed set.
 #[derive(Clone, Copy)]
 pub(crate) struct LinkReader<'a> {
     pub share: &'a ReceivedShare,
-    pub pointer_name: &'a IpnsName,
     pub owner: &'a Contact,
     pub invitee: &'a EphemeralInvitee,
     pub my_enc_secret: &'a X25519Secret,

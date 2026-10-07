@@ -1563,8 +1563,9 @@ surviving committed grants uniformly in the republish it already does.
   adds no row and runs no cut, and it posts the share pointer again, which is
   the owner's repair path for a bookmark with no scope pointer name. A
   permission change of a personal grantee, up or down, posts the share pointer
-  to that grantee, at the root the change leaves; a write cut posts nothing to
-  the other survivors (ADR 0074 D2). A write grant on a folder that is not a write
+  to that grantee, at the root the change leaves, once the cut set is durable;
+  a failed post leaves the change standing and sends `SharePointerNotPosted`,
+  and a write cut posts nothing to the other survivors (ADR 0074 D2). A write grant on a folder that is not a write
   scope yet runs the write-scope cut first (ADR 0024 D4, ADR 0026 C4).
   `grant-target-already-names-a-scope` and
   `invite-target-already-names-a-scope` retire for the append; D7 lists the
@@ -1607,10 +1608,9 @@ surviving committed grants uniformly in the republish it already does.
   tag only while no personal blob opens and `linkSecret` is held; the persist
   that records the first personal open deletes `linkSecret` and `linkDeadline`,
   keeps `scopePointerName`, and the link holder is then a grantee (ADR 0074 D1).
-  The join reads through the fragment's scope pointer name in all cases, but the
-  bookmark keeps that name only when the owner signature over the fragment
-  names verifies; with a bad signature the link works (ADR 0027 D5) and the
-  bookmark holds no name.
+  The owner signature over the fragment names covers `scopePointerName`, so the
+  preview and the join refuse a fragment whose signature fails, and a link hold
+  always holds a verified name (ADR 0027 D5 as amended).
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies

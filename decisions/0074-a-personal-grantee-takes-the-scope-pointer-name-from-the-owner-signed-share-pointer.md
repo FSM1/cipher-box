@@ -34,8 +34,9 @@ re-point object, sealed under the `pointerReadKey` that every grantee holds.
 That pins the grantee to the root from before the cut.
 
 Amended on 2026-10-07 by FSM1/cipher-box#2361: the invite fragment supplies
-the name only when its owner signature over the names verifies; a join with a
-bad signature still works (ADR 0027 D5) and stores no name.
+the name under its owner signature over the names, and the preview and the
+join refuse a fragment whose signature fails (ADR 0027 D5 as amended), so a
+link hold always holds a verified name.
 
 **D2. A bookmark with no name follows nothing until the owner posts again.**
 This applies to a bookmark stored before D1, and to a share pointer from an

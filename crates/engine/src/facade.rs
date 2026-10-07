@@ -51,7 +51,7 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
-use self::owed_rotation::{OwedStop, Redriven};
+use self::owed_rotation::{OwedCut, OwedStop, Redriven};
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
 use crate::bin_index::{
     BinIndexKeys, BinIndexLoad, BinnedNode, cached_bin_index, holds_a_bin_index_mark,
@@ -950,8 +950,9 @@ pub struct InvitePreview {
         tsify(type = "Uint8Array")
     )]
     pub scope: NodeId,
-    /// The names, only when the owner signature over them verifies. A link
-    /// with a bad signature shows none, and still works.
+    /// The names under the owner signature, which the preview verified. A
+    /// fragment whose signature does not verify is refused (ADR 0027 D5 as
+    /// amended).
     pub names: Option<PreviewNames>,
     /// The permission conversion grants, when the preview read the link entry.
     pub permission: Option<Permission>,
@@ -969,7 +970,7 @@ struct LinkOpening<'a, T: SeamTypes> {
     fragment: InviteFragment,
     invitee: EphemeralInvitee,
     owner: Contact,
-    names: Option<PreviewNames>,
+    names: PreviewNames,
     share: ReceivedShare,
     hold: LinkHold,
     seams: LinkSeams<'a, T>,
@@ -4296,6 +4297,10 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
 
 /// Why a link revoke waits: a conversion through the link is still pending.
 const LINK_CONVERSION_PENDING: &str = "link-has-a-pending-conversion";
+
+/// A fragment whose owner signature over the names does not verify.
+const INVITE_NAMES_DO_NOT_VERIFY: &str =
+    "the owner signature over the invite names does not verify";
 
 /// The refusal of a link revoke whose inbox poll failed.
 const MAILBOX_UNAVAILABLE: &str = "mailbox-unavailable";
@@ -8166,7 +8171,7 @@ where {
     /// Cut the rows `kind` names out of the owner-signed set `current`
     /// publishes at `target` in one cut, and drive the cut through the planes
     /// it demands. A `current` read from its last copy keeps no row. Answers
-    /// the report of a cut that ran, and `None` for one that stands owed.
+    /// what the cut proved of its cut set.
     async fn cut_at(
         &self,
         node: NodeId,
@@ -8174,7 +8179,7 @@ where {
         current: &CascadeTarget,
         kind: CutKind<'_>,
         from_last_copy: bool,
-    ) -> Result<Option<CutRotationReport>, EngineError> {
+    ) -> Result<OwedCut, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
@@ -8261,14 +8266,14 @@ where {
         scope_root_name: &IpnsName,
         cut: &RevokedCommittedSet,
         write_epoch: u64,
-    ) -> Result<Option<CutRotationReport>, EngineError> {
+    ) -> Result<OwedCut, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let keys = self.pass_keys(session)?;
         let vault_pointer_signer = self.vault_pointer_signer(session);
         let pass = self.conversion_pass(session, api, &keys);
         let _hold = pass.hold_owed(node)?;
-        let Some(report) = pass
+        let report = match pass
             .rotate_owed_cut(
                 node,
                 target,
@@ -8279,17 +8284,18 @@ where {
                 true,
             )
             .await?
-        else {
-            return Ok(None);
+        {
+            OwedCut::Ran(report) => *report,
+            stopped => return Ok(stopped),
         };
         if let Err(error) = self.after_write_wave(node, target, &report).await {
             let steps = vec![owed_rotation::owed_write_cut(write_epoch)?];
             pass.stop_owed(node, steps, OwedStop::of_post_step(&error))
                 .await;
-            return Ok(None);
+            return Ok(OwedCut::SetLanded);
         }
         let _ = pass.owed().clear(node).await;
-        Ok(Some(report))
+        Ok(OwedCut::Ran(Box::new(report)))
     }
 
     /// The post-steps of a name wave `report` names: the session's root name,
@@ -9200,19 +9206,30 @@ where {
         }
         let root = match permission {
             Permission::Read => {
-                let report = self
+                // A cut from the last copy keeps no row, so no grantee is
+                // there to tell (ADR 0068 D5).
+                let from_last_copy = gated.net.fell_back();
+                let cut = self
                     .cut_at(
                         node,
                         &gated.target,
                         &gated.current,
                         CutKind::Downgrade(&held.tag),
-                        gated.net.fell_back(),
+                        from_last_copy,
                     )
                     .await?;
-                // An owed cut landed the set with the row at read, and the
-                // grantee follows the pointer name to the root the wave moves to.
-                match report.and_then(|report| report.write) {
-                    Some(write) => write.new_root_name,
+                if from_last_copy {
+                    return Ok(());
+                }
+                let moved = match cut {
+                    OwedCut::Unproved => return Ok(()),
+                    OwedCut::Ran(report) => report.write.map(|write| write.new_root_name),
+                    OwedCut::SetLanded => None,
+                };
+                // A landed set holds the row at read, and the grantee follows
+                // the pointer name to the root the owed wave moves to.
+                match moved {
+                    Some(root) => root,
                     None => parsed_scope_name(&gated.target.scope.ipns_name)?,
                 }
             }
@@ -9457,6 +9474,7 @@ where {
         let report = self
             .drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
             .await?
+            .into_report()
             .ok_or_else(EngineError::rotation_work_owed)?;
         moved_scope(node, target, report)
     }
@@ -9542,14 +9560,18 @@ where {
                 check: "invite-names-the-own-vault-root",
             });
         }
-        let names =
-            fragment
-                .verified_names(&owner.identity_pk())
-                .map(|(owner_name, folder_name)| PreviewNames {
-                    owner_name: owner_name.to_owned(),
-                    folder_name: folder_name.to_owned(),
-                });
-        let (share, hold) = pending_link_bookmark(&fragment, &owner, names.as_ref());
+        // The signature covers the scope pointer name, so a fragment it does
+        // not verify is a changed one (ADR 0027 D5 as amended).
+        let names = fragment
+            .verified_names(&owner.identity_pk())
+            .map(|(owner_name, folder_name)| PreviewNames {
+                owner_name: owner_name.to_owned(),
+                folder_name: folder_name.to_owned(),
+            })
+            .ok_or_else(|| EngineError::TrustViolation {
+                message: INVITE_NAMES_DO_NOT_VERIFY.to_owned(),
+            })?;
+        let (share, hold) = pending_link_bookmark(&fragment, &owner, &names);
         let seams = JoinSeams {
             transport: &self.record_transport,
             gateway: &self.gateway,
@@ -9778,7 +9800,6 @@ where {
         // one post no claim and record nothing.
         let link = LinkReader {
             share: &share,
-            pointer_name: &fragment.scope_pointer_name,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),
@@ -11463,13 +11484,13 @@ where {
         self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let LinkOpening {
-            fragment: opened,
             invitee,
             owner,
             names,
             share,
             hold,
             seams,
+            ..
         } = self.open_link_fragment(fragment)?;
         let received = self
             .received_share_store(session)
@@ -11478,7 +11499,6 @@ where {
             .map_err(EngineError::from_received_share_store)?;
         let link = LinkReader {
             share: &share,
-            pointer_name: &opened.scope_pointer_name,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),
@@ -11515,7 +11535,7 @@ where {
         };
         Ok(InvitePreview {
             scope: NodeId(share.scope_id),
-            names,
+            names: Some(names),
             permission: permission.map(Permission::from),
             state,
             joined,
