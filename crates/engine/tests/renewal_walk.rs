@@ -968,6 +968,21 @@ fn stored_cursor(device: &FakeDevice) -> Option<RenewalCursor> {
     .expect("the store reads")
 }
 
+/// Store a cursor on `device` that holds the cycle that starts now.
+fn hold_the_cycle(world: &FakeWorld, device: &FakeDevice) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(
+        CursorStore::new(
+            &device.staging_store,
+            BookkeepingSeal::new(&enc, &entropy),
+            &enc,
+        )
+        .save(&RenewalCursor::starting(world.scheduler.now())),
+    )
+    .expect("the cycle is held");
+}
+
 /// Whether `request` registers `name` with the registry.
 fn registers(request: &HttpRequest, name: &str) -> bool {
     request.method == HttpMethod::Post
@@ -1971,17 +1986,7 @@ fn a_queued_folder_that_meets_a_429_in_a_held_cycle_revives_on_the_next_pass() {
     world.scheduler.advance(DAY * 100);
 
     let device = world.device(b"a device after 100 days offline");
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(9));
-    block_on(
-        CursorStore::new(
-            &device.staging_store,
-            BookkeepingSeal::new(&enc, &entropy),
-            &enc,
-        )
-        .save(&RenewalCursor::starting(world.scheduler.now())),
-    )
-    .expect("the cycle is held");
+    hold_the_cycle(&world, &device);
     let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
     tick(&world, &engine, &mut tasks);
     block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");

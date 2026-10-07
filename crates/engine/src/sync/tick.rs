@@ -12,7 +12,7 @@ use core::cell::RefCell;
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use cipherbox_core::ipns::IpnsName;
 use futures_channel::mpsc;
@@ -642,7 +642,7 @@ pub(crate) fn queue_focus_file(
 /// depart, stamp what it attempted, and announce a base it moved.
 pub(crate) fn settle_focus_leg(
     observed_unlinks: &RefCell<Vec<UnlinkedChild>>,
-    lapsed_folders: &RefCell<Vec<LapsedFolder>>,
+    lapsed_folders: &RefCell<VecDeque<LapsedFolder>>,
     focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
     events: &mpsc::UnboundedSender<Event>,
     nodes: &[NodeId],

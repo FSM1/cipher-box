@@ -21,7 +21,7 @@
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
@@ -325,7 +325,7 @@ pub(crate) struct SessionState {
     /// A lapsed bin index that can still revive (`DrainCells::bin_index_unsettled`).
     pub(crate) bin_index_unsettled: Rc<Cell<Option<u64>>>,
     /// The folders a read found lapsed (`RenewalWalk::lapsed`).
-    pub(crate) lapsed_folders: Rc<RefCell<Vec<LapsedFolder>>>,
+    pub(crate) lapsed_folders: Rc<RefCell<VecDeque<LapsedFolder>>>,
     /// Set once the session has sent `Event::ParkedWritesUnreadable`, so a
     /// start that runs the cold start twice sends it once.
     pub(crate) parked_unreadable_sent: Cell<bool>,

@@ -7,7 +7,7 @@ pub mod cursor;
 
 use core::cell::RefCell;
 use core::time::Duration;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ChildRef, NodeKind, ReadBody};
@@ -115,13 +115,13 @@ pub(crate) struct LapsedFolder {
 }
 
 /// Queue `folder` once, as the newest entry.
-pub(crate) fn queue_lapsed_folder(queue: &RefCell<Vec<LapsedFolder>>, folder: LapsedFolder) {
+pub(crate) fn queue_lapsed_folder(queue: &RefCell<VecDeque<LapsedFolder>>, folder: LapsedFolder) {
     let mut queue = queue.borrow_mut();
     queue.retain(|queued| queued.node_id != folder.node_id);
     if queue.len() >= MAX_LAPSED_FOLDERS {
-        queue.remove(0);
+        queue.pop_front();
     }
-    queue.push(folder);
+    queue.push_back(folder);
 }
 
 /// One owned scope the walk roots at.
@@ -182,7 +182,7 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     /// The session's recovery pace, which each revival waits for.
     pub(crate) pace: &'a RecoveryPace,
     /// The folders a read found lapsed, which a pass visits first.
-    pub(crate) lapsed: &'a RefCell<Vec<LapsedFolder>>,
+    pub(crate) lapsed: &'a RefCell<VecDeque<LapsedFolder>>,
 }
 
 /// What one pass did.
@@ -417,20 +417,14 @@ where
             .unwrap_or_default();
         let queued = self.lapsed.borrow().clone();
         if held && queued.is_empty() {
-            return WalkReport {
-                underived,
-                ..WalkReport::default()
-            };
+            return held_report(underived);
         }
         let owner_tag = owner_tag(self.enc_secret);
         // A held pass scans the journal too: a queued visit skips a doomed
         // name as a cursor visit does. It reports only its queued visits.
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
             if held {
-                return WalkReport {
-                    underived,
-                    ..WalkReport::default()
-                };
+                return held_report(underived);
             }
             return stalled(scopes, JOURNAL_UNREADABLE);
         };
@@ -441,23 +435,26 @@ where
             Ok(owed) => (owed.within_bound, false),
             Err(_) => (BTreeSet::new(), true),
         };
-        let report = WalkReport {
-            failed: scopes
-                .iter()
-                .filter(|_| !held)
-                .filter_map(|scope| {
-                    if doomed.unreadable.contains(&scope.scope_id) {
-                        Some(JOURNAL_UNREADABLE)
-                    } else if owed_unread {
-                        Some(OWED_UNREAD)
-                    } else {
-                        None
-                    }
-                    .map(|detail| (scope.name.as_str().to_owned(), detail))
-                })
-                .collect(),
-            underived,
-            ..WalkReport::default()
+        let report = if held {
+            held_report(underived)
+        } else {
+            WalkReport {
+                failed: scopes
+                    .iter()
+                    .filter_map(|scope| {
+                        if doomed.unreadable.contains(&scope.scope_id) {
+                            Some(JOURNAL_UNREADABLE)
+                        } else if owed_unread {
+                            Some(OWED_UNREAD)
+                        } else {
+                            None
+                        }
+                        .map(|detail| (scope.name.as_str().to_owned(), detail))
+                    })
+                    .collect(),
+                underived,
+                ..WalkReport::default()
+            }
         };
         let mut pass = Pass {
             cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
@@ -1401,6 +1398,14 @@ where
     )
 }
 
+/// A held pass before its queued visits: it reports only `underived`.
+fn held_report(underived: Vec<[u8; 16]>) -> WalkReport {
+    WalkReport {
+        underived,
+        ..WalkReport::default()
+    }
+}
+
 /// A pass that renews nothing, and reports `detail` for each owned scope root.
 fn stalled(scopes: &[WalkScope], detail: &'static str) -> WalkReport {
     WalkReport {
@@ -1643,16 +1648,16 @@ mod tests {
                 name: derive_write_name(&[1u8; 32], &node_id),
             }
         };
-        let queue = RefCell::new(Vec::new());
+        let queue = RefCell::new(VecDeque::new());
         for at in 0..MAX_LAPSED_FOLDERS {
             queue_lapsed_folder(&queue, folder(at));
         }
         queue_lapsed_folder(&queue, folder(0));
         assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
-        assert_eq!(queue.borrow().last(), Some(&folder(0)));
+        assert_eq!(queue.borrow().back(), Some(&folder(0)));
         queue_lapsed_folder(&queue, folder(MAX_LAPSED_FOLDERS));
         assert_eq!(queue.borrow().len(), MAX_LAPSED_FOLDERS);
-        assert_eq!(queue.borrow().first(), Some(&folder(2)), "the oldest went");
+        assert_eq!(queue.borrow().front(), Some(&folder(2)), "the oldest went");
     }
 
     #[test]
