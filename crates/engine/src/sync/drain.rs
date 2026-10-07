@@ -44,8 +44,8 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::bin_index::{
-    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, cached_bin_index, load_bin_index,
-    publish_bin_index_placed,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, bin_floor_reaches,
+    cached_bin_index, load_bin_index, publish_bin_index_placed,
 };
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
@@ -1692,10 +1692,12 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
-    /// Set while a lapsed bin index can still revive (ADR 0062 D3): a load
-    /// that finds no record then holds the queue rather than publish an empty
-    /// index over the lapsed one. A load that resolves a record clears it.
-    pub(crate) bin_index_unsettled: &'a Cell<bool>,
+    /// Set while a lapsed bin index can still revive (ADR 0062 D3), to the
+    /// sequence floor a load must reach: the revived sequence, or 0 when no
+    /// revival signed. A load that finds no record, or resolves one below that
+    /// floor, holds the queue rather than publish over the lapsed index. A
+    /// load that reaches it clears the cell.
+    pub(crate) bin_index_unsettled: &'a Cell<Option<u64>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -5985,7 +5987,8 @@ where
         )
         .await
         .enrol(self.cells.held, observed);
-        if self.cells.bin_index_unsettled.get()
+        let unsettled = self.cells.bin_index_unsettled.get();
+        if unsettled.is_some()
             && matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun))
         {
             return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::UnprovenFirstRun));
@@ -6001,7 +6004,12 @@ where
             }
             halt
         })?;
-        self.cells.bin_index_unsettled.set(false);
+        if let Some(min) = unsettled {
+            if !bin_floor_reaches(&self.seams.floors, self.inputs.bin_keys, min).await {
+                return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::Expired));
+            }
+            self.cells.bin_index_unsettled.set(None);
+        }
         self.establish_bin_index(index.clone());
         Ok(index)
     }

@@ -54,8 +54,8 @@ use zeroize::Zeroizing;
 use self::owed_rotation::{OwedStop, Redriven};
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
 use crate::bin_index::{
-    BinIndexKeys, BinIndexLoad, BinnedNode, cached_bin_index, holds_a_bin_index_mark,
-    load_bin_index, publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinnedNode, bin_floor_reaches, cached_bin_index,
+    holds_a_bin_index_mark, load_bin_index, publish_bin_index,
 };
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
@@ -4858,8 +4858,9 @@ enum BinIndexRevival {
     Served,
     /// The revival signed, and the gated load after it resolved the record.
     Revived,
-    /// A lapsed record can still exist and revive later.
-    Unsettled,
+    /// A lapsed record can still exist and revive later. A load must reach
+    /// `floor`, the sequence a revival signed, or 0 when none signed.
+    Unsettled { floor: u64 },
 }
 
 /// Revive the lapsed bin index (ADR 0062 D3). A served record past its EOL is
@@ -4890,7 +4891,7 @@ where
             return BinIndexRevival::Served;
         }
         // An endpoint that does not answer can hold the lapsed record.
-        FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled,
+        FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled { floor: 0 },
         FanoutRecord::Found(..) | FanoutRecord::Absent => {}
     }
     let request = ReviveRequest {
@@ -4899,28 +4900,37 @@ where
         plane: BinIndexRead { ..*read },
     };
     let result = revive_name(api, seams, pace, request).await;
-    let revival = match &result {
-        Ok(_) => BinIndexRevival::Revived,
-        Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
-            BinIndexRevival::Unlapsed
-        }
-        Err(_) => BinIndexRevival::Unsettled,
+    let revived_at = match &result {
+        Ok(revived) => Ok(match revived.outcome {
+            PublishOutcome::Published { sequence } | PublishOutcome::Unconfirmed { sequence } => {
+                sequence
+            }
+            PublishOutcome::LostRace {
+                published_sequence, ..
+            } => published_sequence,
+        }),
+        Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => Err(true),
+        Err(_) => Err(false),
     };
     emit_revival_failures(events, [(keys.name().as_str().to_owned(), result)]);
-    match revival {
-        BinIndexRevival::Revived if !hold_bin_index(seams.transport, read, held).await => {
-            BinIndexRevival::Unsettled
+    match revived_at {
+        Ok(floor) if hold_bin_index(seams.transport, read, held, floor).await => {
+            BinIndexRevival::Revived
         }
-        revival => revival,
+        Ok(floor) => BinIndexRevival::Unsettled { floor },
+        Err(true) => BinIndexRevival::Unlapsed,
+        Err(false) => BinIndexRevival::Unsettled { floor: 0 },
     }
 }
 
 /// Load the bin index through the gate and hold it. `true` when the load
-/// resolved a published record, which writes its floor and its durable mark.
+/// resolved a published record and wrote a sequence floor at `min` or above
+/// ([`bin_floor_reaches`]).
 async fn hold_bin_index<T, H, F, Sn, Sch>(
     transport: &T,
     read: &BinIndexRead<'_, H, F, Sn, Sch>,
     held: &RefCell<HeldRecords>,
+    min: u64,
 ) -> bool
 where
     T: RecordTransport,
@@ -4943,6 +4953,7 @@ where
     .await
     .enrol(held, observed);
     matches!(load, BinIndexLoad::Resolved(_))
+        && bin_floor_reaches(read.floors, read.keys, min).await
 }
 
 /// The scopes whose owed rotation entry is within its bound, whose names no
@@ -5889,9 +5900,10 @@ impl<T: SeamTypes> Engine<T> {
         };
         report_settings_verdict(&self.events, &settings);
         let bin_index = self.revive_bin_index(&api).await;
-        self.state
-            .bin_index_unsettled
-            .set(matches!(bin_index, BinIndexRevival::Unsettled));
+        self.state.bin_index_unsettled.set(match bin_index {
+            BinIndexRevival::Unsettled { floor } => Some(floor),
+            _ => None,
+        });
         // An empty chain is an account that has never published: mint its genesis
         // vault before anything reads one (`sync/provision.rs`). Register-first
         // has no offline form, so the harness's no-API mode skips provisioning
@@ -5964,7 +5976,7 @@ impl<T: SeamTypes> Engine<T> {
                 // A lapsed bin index can still revive, so no genesis index
                 // publishes over it this start, and the drain holds its own
                 // bin index writes ([`DrainCells::bin_index_unsettled`]).
-                BinIndexRevival::Unsettled => {}
+                BinIndexRevival::Unsettled { .. } => {}
             }
         }
         // A successful cold start is a successful reconcile: stamp it so the
@@ -7290,11 +7302,8 @@ where {
                         }
                     }
                     // The drain holds its bin index writes until this lands.
-                    let unsettled_keys = bin_index_unsettled
-                        .get()
-                        .then(|| bin_keys.borrow().clone())
-                        .flatten();
-                    if let Some(keys) = unsettled_keys {
+                    let unsettled = bin_index_unsettled.get().zip(bin_keys.borrow().clone());
+                    if let Some((min, keys)) = unsettled {
                         let read = BinIndexRead {
                             gateway: &gateway,
                             http: &http,
@@ -7321,14 +7330,16 @@ where {
                         .await;
                         // Only a gated load that resolves the record lifts the
                         // hold: a raw read can vanish before the drain loads.
-                        let settled = match revival {
-                            BinIndexRevival::Unlapsed | BinIndexRevival::Revived => true,
-                            BinIndexRevival::Served => {
-                                hold_bin_index(&transport, &read, &held).await
+                        bin_index_unsettled.set(match revival {
+                            BinIndexRevival::Unlapsed | BinIndexRevival::Revived => None,
+                            BinIndexRevival::Served
+                                if hold_bin_index(&transport, &read, &held, min).await =>
+                            {
+                                None
                             }
-                            BinIndexRevival::Unsettled => false,
-                        };
-                        bin_index_unsettled.set(!settled);
+                            BinIndexRevival::Served => Some(min),
+                            BinIndexRevival::Unsettled { floor } => Some(min.max(floor)),
+                        });
                     }
                     let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                     keyless_re_put(&transport, &records).await;
@@ -10666,7 +10677,7 @@ where {
         {
             Ok(ProvisionOutcome::Minted(vault)) => {
                 self.install_mint(*vault);
-                if !self.state.bin_index_unsettled.get() {
+                if self.state.bin_index_unsettled.get().is_none() {
                     self.publish_genesis_bin_index(&api).await;
                 }
             }

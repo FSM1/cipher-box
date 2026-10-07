@@ -2364,3 +2364,67 @@ fn only_a_gated_load_that_resolves_the_bin_index_lifts_the_hold() {
         );
     }
 }
+
+/// ADR 0066: after a bin index revival signs `S + 1`, a gated load that
+/// resolves the older, expired record at `S` lifts no hold, or a drain write
+/// would sign a second value at `S + 1`. The hold lifts only once a load
+/// writes a sequence floor at `S + 1` or above.
+#[test]
+fn a_load_below_the_revived_sequence_keeps_the_bin_index_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (_, before) = a_binned_vault_lapsed(&world, &blocks);
+    let bin = bin_name();
+    let old = IpnsRecord::create_v2(
+        &kdf::bin_index_ipns_keypair(&SECRET),
+        &before.value,
+        before.sequence,
+        2_000_000_000,
+        &eol_from(UnixMillis(0)),
+    )
+    .marshal();
+    // The revival reads `Absent`, corroborates and confirms its PUT; every
+    // read after that serves the record at `S` again.
+    let endpoints = world.record_store.endpoints().len();
+    world
+        .record_store
+        .serve_gets_for_after(bin.as_str(), 3 * endpoints, usize::MAX, Some(old));
+    // The first liveness pass meets a 429, so the start's hold stands.
+    let fetches = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+    let device = world.device(b"a device after 100 days offline");
+    {
+        let (blocks, bin, fetches) = (blocks.clone(), bin.clone(), fetches.clone());
+        serve_with(&device, &blocks.clone(), 4000, move |request| {
+            if request
+                .url
+                .ends_with(&format!("/recovery/{}", bin.as_str()))
+                && fetches.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                blocks.throttle_recovery_once(bin.as_str());
+            }
+        });
+    }
+    let (mut engine, _events, mut tasks) = boot_served(&world, &device, 2);
+    let revived = served_at(&world, &bin).expect("the revival landed");
+    assert_eq!(record_at(&world, &bin).sequence, before.sequence + 1);
+    let fresh = write_file(&world, &mut engine, &mut tasks, ROOT, "fresh.txt");
+    block_on(engine.command(Command::Delete { node: fresh })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        served_at(&world, &bin),
+        Some(revived),
+        "the drain signs nothing over the revived record"
+    );
+
+    world
+        .record_store
+        .serve_gets_for_after(bin.as_str(), 0, 0, None);
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &bin).sequence,
+        before.sequence + 2,
+        "a load at S + 1 lifts the hold, and the delete publishes its entry"
+    );
+}

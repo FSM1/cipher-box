@@ -419,7 +419,7 @@ where
             // The cold read could find the next index `Absent` and adopt the
             // prefix.
             FanoutRecord::Unavailable(_) => {
-                if found {
+                if found || revived.is_some() {
                     pass.unconfirmed = Some(ChainStall::Retryable);
                 }
                 return pass;
@@ -664,6 +664,22 @@ mod tests {
         assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable));
         assert_eq!(pass.revivals.len(), 1, "only index 0 revived");
         assert!(served(&device, 0).is_some());
+    }
+
+    /// The read right after a revival that the fan-out does not answer for
+    /// leaves the chain end unconfirmed too.
+    #[test]
+    fn an_unavailable_read_right_after_a_revival_leaves_its_end_unconfirmed() {
+        let (world, device) = after_100_days();
+        recover(&device, pointer_record(0, 3));
+        device
+            .record_store
+            .fail_gets_after_put(vault_pointer_name(&SECRET, 0).as_str());
+
+        let pass = revive_chain(&world, &device);
+
+        assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable));
+        assert_eq!(pass.revivals.len(), 1);
     }
 
     /// A pass after an earlier pass revived index 0 reads it `Found`; an index

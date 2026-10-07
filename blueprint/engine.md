@@ -185,7 +185,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   liveness pass runs the bin index revival again under the shared pace. These
   lift the hold: a revival that lands, whose gated load resolves the record; a
   gated load, in the liveness pass or in the drain, that resolves a served
-  record; and a 404 at the recovery endpoint after every endpoint reads
+  record; each of these only when the load writes a sequence floor at the
+  revived sequence or above, so no drain write signs a second value there
+  (ADR 0066); and a 404 at the recovery endpoint after every endpoint reads
   `Absent`. A raw read lifts nothing, and a served record past its EOL counts
   as lapsed. A chain or scope pointer revival that another
   device supersedes is retryable, and a scope pointer revival that a later
@@ -196,7 +198,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
   the first minute. The vacancy probe and the first-save fetch are outside
   the pace. Each session spends one paced recovery fetch for each owned scope
-  that has no pointer record, which answers 404. A revival holds nothing in `HeldRecords` and raises no floor
+  that has no pointer record, which answers 404. The first hourly pass waits
+  for these fetches before the walk, so N such scopes add about N / 25
+  minutes. A revival holds nothing in `HeldRecords` and raises no floor
   above `S`; the gated read that follows it admits the record at `S + 1` and
   raises the floor to it. After a bin index revival the session loads the bin
   index through the gate and holds it. No revival signs a name in a scope that

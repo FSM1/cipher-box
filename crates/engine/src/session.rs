@@ -320,8 +320,8 @@ pub(crate) struct SessionState {
     /// The session's one recovery pace, which the session-start revival and
     /// the renewal walk share (ADR 0062 consequence 2).
     pub(crate) recovery_pace: Rc<RecoveryPace>,
-    /// Whether a lapsed bin index can still revive (`DrainCells::bin_index_unsettled`).
-    pub(crate) bin_index_unsettled: Rc<Cell<bool>>,
+    /// A lapsed bin index that can still revive (`DrainCells::bin_index_unsettled`).
+    pub(crate) bin_index_unsettled: Rc<Cell<Option<u64>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](crate::facade::Engine::snapshot)
     /// classifies at read time off the same cell.
