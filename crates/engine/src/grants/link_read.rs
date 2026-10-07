@@ -50,36 +50,35 @@ use super::invite::{EphemeralInvitee, InviteFragment, post_invite_claim};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
 use super::received_status::committed_blob;
+use crate::facade::PreviewNames;
 
 /// The bookmark a join records before its first read, and the link keys it
 /// reads through.
 ///
 /// The bookmark names no scope root yet: the first read takes it from the
-/// scope pointer. `display_name` is the fragment's folder name when the owner
-/// signature over the names verifies, and empty otherwise, which a host
-/// renders as a share through a link (ADR 0027 D5).
+/// scope pointer. `names` are the fragment's names, under an owner signature
+/// the caller verified (ADR 0027 D5 as amended).
 pub(crate) fn pending_link_bookmark(
     fragment: &InviteFragment,
     owner: &Contact,
-    display_name: String,
+    names: &PreviewNames,
 ) -> (ReceivedShare, LinkHold) {
     (
         ReceivedShare {
             scope_root_name: Vec::new(),
             scope_id: fragment.scope_id,
             sharer_identity_pk: owner.identity_pk().to_sec1(),
-            display_name,
+            display_name: names.folder_name.clone(),
             permission: Permission::Read,
             pointer_read_key: fragment.pointer_read_key.clone(),
+            scope_pointer_name: Some(fragment.scope_pointer_name.clone()),
         },
-        LinkHold::new(
-            fragment.invite_secret.clone(),
-            fragment.scope_pointer_name.clone(),
-        ),
+        LinkHold::new(fragment.invite_secret.clone()),
     )
 }
 
-/// The pointer read edges of one link hold, as the fragment carried them.
+/// The pointer read edges of one bookmark, as an owner-signed source carried
+/// them.
 struct HeldPointerKeys<'a> {
     name: &'a IpnsName,
     read_key: &'a SecretBytes,
@@ -95,9 +94,9 @@ impl OwnerPointerRead for HeldPointerKeys<'_> {
     }
 }
 
-/// The scope root `share`'s pointer vouches for now: open the re-point object
-/// under the bookmark's pointer read key, verify it under `owner`, and refuse a
-/// rolled-back write epoch against `floors`.
+/// The scope root the pointer at `name` vouches for now: open the re-point
+/// object under `share`'s pointer read key, verify it under `owner`, and
+/// refuse a rolled-back write epoch against `floors`.
 ///
 /// `floors` must be the sharer-scoped view the share's other floors live in.
 /// `Ok(None)` when no pointer record stands at the name.
@@ -105,11 +104,11 @@ pub(crate) async fn held_scope_root<T: RecordTransport, F: FloorStore>(
     transport: &T,
     floors: &F,
     share: &ReceivedShare,
-    hold: &LinkHold,
+    name: &IpnsName,
     owner: &EcdsaVerifier,
 ) -> Result<Option<IpnsName>, PointerConsultError> {
     let keys = HeldPointerKeys {
-        name: &hold.scope_pointer_name,
+        name,
         read_key: &share.pointer_read_key,
     };
     Ok(PointerConsult {
@@ -194,20 +193,29 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
 ) -> Result<LinkEntryRead, LinkReadRefusal> {
     let LinkReader {
         share,
-        hold,
         owner,
         invitee,
         my_enc_secret,
     } = *link;
     let owner_identity = owner.identity_pk();
-    let root =
-        match held_scope_root(seams.transport, &seams.floors, share, hold, &owner_identity).await {
-            Ok(Some(root)) => root,
-            Ok(None) | Err(PointerConsultError::Unavailable) => {
-                return Ok(LinkEntryRead::Unavailable);
-            }
-            Err(PointerConsultError::Rejected) => return Err(LinkReadRefusal::Repoint),
-        };
+    let Some(pointer_name) = &share.scope_pointer_name else {
+        return Ok(LinkEntryRead::Unavailable);
+    };
+    let root = match held_scope_root(
+        seams.transport,
+        &seams.floors,
+        share,
+        pointer_name,
+        &owner_identity,
+    )
+    .await
+    {
+        Ok(Some(root)) => root,
+        Ok(None) | Err(PointerConsultError::Unavailable) => {
+            return Ok(LinkEntryRead::Unavailable);
+        }
+        Err(PointerConsultError::Rejected) => return Err(LinkReadRefusal::Repoint),
+    };
     let Some((verified, record, endpoint_failed)) =
         fanout_get_verify_failed(seams.transport, &root).await
     else {
@@ -283,12 +291,11 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
 }
 
 /// What one read through a link reads with: the bookmark the fragment makes,
-/// its link keys, the owner the fragment names, and this account's own
-/// encryption secret, which locates its own grant in the owner-signed set.
+/// the owner the fragment names, and this account's own encryption secret,
+/// which locates its own grant in the owner-signed set.
 #[derive(Clone, Copy)]
 pub(crate) struct LinkReader<'a> {
     pub share: &'a ReceivedShare,
-    pub hold: &'a LinkHold,
     pub owner: &'a Contact,
     pub invitee: &'a EphemeralInvitee,
     pub my_enc_secret: &'a X25519Secret,
@@ -577,6 +584,7 @@ mod tests {
                 display_name: "s".into(),
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x8a; 32]),
+                scope_pointer_name: Some(pointer.clone()),
             };
             let key = share.key();
             let mut list = ReceivedSharesList::new();
@@ -585,7 +593,6 @@ mod tests {
                 key,
                 LinkHold {
                     invite_secret: SecretBytes::new([0x4e; 32]),
-                    scope_pointer_name: pointer.clone(),
                     deadline,
                     claim: Some(HeldClaim::first_post(
                         InviteClaim {

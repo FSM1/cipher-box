@@ -319,6 +319,7 @@ impl GrantFixture {
             sharer_identity_pk: self.owner_identity_pub.to_sec1(),
             display_name: "Shared Folder".to_string(),
             permission: Permission::Read,
+            scope_pointer_name: None,
         }
     }
 
@@ -425,6 +426,7 @@ fn two_instance_share_accept_end_to_end() {
         // believed it would show in the outcome.
         &SharePointer {
             permission: Permission::Write,
+            scope_pointer_name: None,
             ..fx.share_pointer()
         }
         .encode(),
@@ -1016,6 +1018,79 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         0,
         "the stuck item is finally acked"
     );
+}
+
+/// ADR 0074 D2: a bookmark with no scope pointer name gets the name from the
+/// owner's next post. That post publishes nothing, so it takes the ack-only
+/// path, which must persist the name before the ack.
+#[test]
+fn a_repost_adds_the_scope_pointer_name_to_a_bookmark_with_none() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let accept = |item: &VerifiedMailboxItem, received: &mut ReceivedSharesList| {
+        block_on(accept_share(
+            &recipient.floor_store,
+            &recipient.mailbox,
+            &recipient.received_share_store,
+            item,
+            &contact,
+            &fx.recipient_enc,
+            &recipient_contact_label_seed(),
+            &fx.candidate(),
+            &fx.grant_blobs(),
+            &VAULT_ROOT_SCOPE,
+            received,
+        ))
+    };
+    let mut received = ReceivedSharesList::new();
+    let first = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    accept(&first, &mut received).expect("the first post accepts");
+    let key = (fx.owner_identity_pub.to_sec1(), fx.scope_id);
+    assert_eq!(received.find(&key).unwrap().scope_pointer_name, None);
+
+    let pointer_name =
+        IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key());
+    block_on(post_sealed(
+        &poster.mailbox,
+        &fx.recipient_enc.public(),
+        &fx.recipient_identity,
+        &EPH_MAILBOX,
+        V,
+        &fx.owner_identity,
+        &SharePointer {
+            scope_pointer_name: Some(pointer_name.clone()),
+            ..fx.share_pointer()
+        }
+        .encode(),
+        "repost",
+    ))
+    .expect("post");
+    let repost = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .remove(0);
+    let outcome = accept(&repost, &mut received).expect("the repost takes the ack-only path");
+
+    assert!(!outcome.newly_added);
+    assert_eq!(
+        received.find(&key).unwrap().scope_pointer_name,
+        Some(pointer_name.clone())
+    );
+    let stored = block_on(recipient.received_share_store.load()).expect("loads");
+    assert_eq!(
+        stored.find(&key).unwrap().scope_pointer_name,
+        Some(pointer_name),
+        "the name is durable"
+    );
+    assert_eq!(inbox_len(&fx, &recipient), 0, "and the repost is acked");
 }
 
 /// Anti-replay stays intact: a strict-sequence reject for a scope NOT in the

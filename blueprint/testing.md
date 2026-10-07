@@ -329,6 +329,22 @@ scenario fails the meta-test):
   proved and minted scope roots, and a leg whose root holds no seed reads a
   record of the left scope and waits on a record of the root (`sync::pass`,
   `net::focus`).
+  A grantee with no write seed after a write cut (ADR 0074): a personal read
+  grantee and a downgraded writer each follow the scope pointer to the moved
+  root and list a folder the owner adds after the cut (`tests/owner_actions.rs`
+  `a_personal_read_grantee_reads_the_moved_tree_after_a_write_cut`,
+  `a_downgraded_writer_reads_the_moved_tree_after_its_downgrade`); a repost
+  adds the name to a bookmark with none on the equal-floor short-circuit
+  (`tests/grants_mailbox.rs`); an owed downgrade still posts the name
+  (`an_owed_downgrade_still_posts_the_pointer_name_to_the_writer`), a wave
+  that stops before the cut set is proved posts nothing
+  (`a_downgrade_whose_wave_stops_first_posts_nothing`), and a failed post sends
+  the notice (`a_downgrade_whose_pointer_post_fails_sends_the_notice`, and the
+  web host's `engineNotices.test.tsx`); a fragment whose name a forwarder
+  changed is refused at the preview and the join
+  (`a_fragment_with_an_altered_pointer_name_is_refused_at_the_preview_and_the_join`); the
+  share pointer and the stored list carry the name (`grants::accept`). The two
+  read tests fail on the code before ADR 0074.
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
@@ -454,6 +470,10 @@ is not the contract gate.
   appears as an `evaluate` argument in an uploaded trace.
   The device-approval approver signs in with the token of a wallet exchange,
   so its login binds the account and its registration passes (ADR 0058 D3).
+  The write-cut spec (`write-cut-follow.spec.ts`, ADR 0074) runs the
+  reproduction of a stale grantee after a write cut: a downgraded writer in
+  the PR gate's smoke slice, and a personal read grantee whose co-grantee the
+  owner revokes through a write link in the main gate.
   The account-switch spec signs two owner accounts in on one browser profile.
   It checks through the UI and the origin's storage that a switch keeps the
   other account's staging and floors databases and its staged records, and

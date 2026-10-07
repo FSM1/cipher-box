@@ -1128,6 +1128,11 @@ fn a_write_grants_share_pointer_names_the_root_its_wave_moved_to() {
         "the grantee is sent to the root the wave moved to"
     );
     assert_eq!(pointer.permission, CorePermission::Write);
+    assert_eq!(
+        pointer.scope_pointer_name,
+        Some(folder_pointer(&fx)),
+        "and holds the scope pointer name it follows after a later cut"
+    );
 }
 
 /// The record the mint publishes before the wave lingers for ever — the wave
@@ -4628,6 +4633,85 @@ fn a_grantee_reads_a_folder_whose_losing_ref_the_grant_dropped() {
         "the held node is not visible to the grantee"
     );
     assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// ADR 0074 D1: a read grantee that holds no write seed follows the scope
+/// pointer to the root a write cut moved to, and sees a write that the owner
+/// made after the cut.
+#[test]
+fn a_personal_read_grantee_reads_the_moved_tree_after_a_write_cut() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    let before = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        fx.revoke_person(&bystander_identity()),
+        Ok(CommandOutcome::Done)
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        before,
+        "the write cut moved the scope root"
+    );
+    assert_the_grantee_sees_a_write_after_the_cut(&mut fx, grantee, &mut tasks);
+    assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// ADR 0074 D2: the downgrade posts the share pointer to the downgraded
+/// writer, so the writer follows the scope pointer as a read grantee.
+#[test]
+fn a_downgraded_writer_reads_the_moved_tree_after_its_downgrade() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let (grantee, mut events, mut tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_the_grantee_sees_a_write_after_the_cut(&mut fx, grantee, &mut tasks);
+    assert_eq!(abuse_events(&mut events), 0, "and no read is refused");
+}
+
+/// The owner adds a folder in the granted scope after the cut. The grantee
+/// then lists it.
+fn assert_the_grantee_sees_a_write_after_the_cut(
+    fx: &mut GrantScenario,
+    mut grantee: Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    let added = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "after-the-cut",
+    );
+    settle(fx, &grantee, tasks);
+    block_on(grantee.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the grantee opens the folder");
+    settle(fx, &grantee, tasks);
+    let view = block_on(grantee.view()).expect("a rendered view");
+    assert!(
+        view.children(fx.folder)
+            .iter()
+            .any(|child| child.id == added),
+        "the grantee lists the folder the owner added after the cut"
+    );
 }
 
 /// The `ipnsName` `folder`'s published record names `child` by, read under
@@ -13339,6 +13423,187 @@ fn stored_link_hold(fx: &GrantScenario) -> Option<LinkHold> {
         .cloned()
 }
 
+/// Whether the recipient's durable list holds a bookmark for the owner's
+/// folder.
+fn bookmarked(fx: &GrantScenario) -> bool {
+    let entropy = RefCell::new(SeededEntropy::new(41));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    block_on(
+        StagingReceivedShareStore::new(&fx.recipient_device.staging_store, &enc, &entropy).load(),
+    )
+    .expect("the list loads")
+    .find(&(owner_identity().verifying_key().to_sec1(), fx.folder.0))
+    .is_some()
+}
+
+/// ADR 0027 D5 as amended: the owner signature over the fragment names covers
+/// the scope pointer name. A forwarder changes the name and serves at it a
+/// valid owner-signed re-point object from before a write cut, which would
+/// pin the holder to the old root. The preview and the join refuse the
+/// fragment, and nothing is persisted.
+#[test]
+fn a_fragment_with_an_altered_pointer_name_is_refused_at_the_preview_and_the_join() {
+    let mut fx = GrantScenario::new();
+    let mut altered = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
+    let owner_pointer = altered.scope_pointer_name.clone();
+    let endpoints = fx.world.record_store.endpoints();
+    let pre_cut = IpnsRecord::unmarshal(
+        &fx.world
+            .record_store
+            .record_at(&endpoints[0], owner_pointer.as_str())
+            .expect("the mint published the scope pointer"),
+    )
+    .and_then(|record| record.verify(&owner_pointer))
+    .expect("the pointer record verifies")
+    .value;
+    let before = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        before,
+        "the write cut moved the root"
+    );
+    let forwarder = cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([0x6e; 32]);
+    let theirs = IpnsName::from_public_key(&forwarder.verifying_key());
+    let replayed = IpnsRecord::create_v2(&forwarder, &pre_cut, 1, TTL_NANOS, EOL).marshal();
+    for endpoint in &endpoints {
+        fx.world
+            .record_store
+            .seed_record(endpoint, theirs.as_str(), replayed.clone());
+    }
+    altered.scope_pointer_name = theirs;
+    let fragment = altered.encode().expect("inside the bound");
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    // The web host reads this exact message as a changed link.
+    let refusal = block_on(holder.preview_invite_link(&fragment)).expect_err("the preview refuses");
+    assert!(matches!(refusal, EngineError::TrustViolation { .. }));
+    assert_eq!(
+        refusal.to_string(),
+        "trust violation: invite-names-do-not-verify"
+    );
+    assert!(matches!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(!bookmarked(&fx), "nothing is bookmarked");
+    assert!(stored_link_hold(&fx).is_none(), "no link keys are stored");
+    assert!(inbox(&fx.owner_device).is_empty(), "no claim posts");
+}
+
+/// ADR 0074 D2: a downgrade whose wave stands owed still posts the share
+/// pointer, with the name, to the downgraded writer. The cut set landed with
+/// the row at read, and the name does not depend on the root the wave moves to.
+#[test]
+fn an_owed_downgrade_still_posts_the_pointer_name_to_the_writer() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    fx.world
+        .record_store
+        .serve_gets_for_after(granted.current_root.as_str(), 5, usize::MAX, None);
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave stands owed");
+    let pointers: Vec<SharePointer> = block_on(poll_verified(
+        &fx.recipient_device.mailbox,
+        &kdf::enc_subkey(&RECIPIENT_SECRET),
+        ENVELOPE_V,
+    ))
+    .expect("the inbox answers")
+    .iter()
+    .map(|item| SharePointer::decode(&item.payload).expect("the pointer decodes"))
+    .collect();
+    let downgrade = pointers
+        .iter()
+        .find(|pointer| pointer.permission == CorePermission::Read)
+        .expect("the downgrade posts a read pointer");
+    assert_eq!(downgrade.scope_pointer_name, Some(folder_pointer(&fx)));
+}
+
+/// ADR 0074 D2: a downgrade from the last copy of a planted root keeps no
+/// row, and its wave stops before the moved root lands. No pointer and no
+/// notice go to the writer.
+#[test]
+fn a_downgrade_whose_wave_stops_first_posts_nothing() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    let inbox_before = inbox(&fx.recipient_device).len();
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &writer_seed, sequence_at(&fx.world, &old_root) + 1);
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    events_so_far(&mut fx._events);
+
+    assert_eq!(downgrade_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        inbox_before,
+        "no share pointer is posted"
+    );
+    let folder = fx.folder;
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == folder
+        )),
+        "the wave stopped and stands owed"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::SharePointerNotPosted { .. })),
+        "and no notice is sent"
+    );
+}
+
+/// ADR 0074 D2: a downgrade whose share pointer post fails still completes,
+/// and the owner hears of the failed post.
+#[test]
+fn a_downgrade_whose_pointer_post_fails_sends_the_notice() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    events_so_far(&mut fx._events);
+    fx.owner_device.mailbox.set_post_failing(true);
+
+    assert_eq!(downgrade_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    fx.owner_device.mailbox.set_post_failing(false);
+    let folder = fx.folder;
+    assert!(
+        events_so_far(&mut fx._events).iter().any(|event| matches!(
+            event,
+            Event::SharePointerNotPosted { scope_root } if *scope_root == folder
+        )),
+        "the owner hears that the grantee was not told"
+    );
+}
+
 /// ADR 0024 D5: the pointer consult runs ahead of every write. A fragment
 /// whose owner code names another identity fails the re-point object's
 /// verify, so the join posts no claim, records no contact and bookmarks
@@ -13478,26 +13743,28 @@ fn a_second_join_of_one_link_keeps_the_verified_deadline() {
     );
 }
 
-/// ADR 0027 D5: names the owner signature does not cover bookmark no name,
-/// and the host renders its own label for a link-held share.
+/// ADR 0027 D5 as amended: a join of a fragment whose names the owner
+/// signature does not cover is refused, and bookmarks nothing.
 #[test]
-fn a_join_whose_names_do_not_verify_bookmarks_no_name() {
+fn a_join_whose_names_do_not_verify_is_refused() {
     let mut fx = GrantScenario::new();
     let mut relabelled = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
     relabelled.folder_name = "Taxes".to_owned();
     let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
 
-    assert_eq!(
+    assert!(matches!(
         join_link(
             &mut holder,
             &mut holder_tasks,
             relabelled.encode().expect("inside the bound"),
         ),
-        Ok(CommandOutcome::Done)
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(
+        block_on(holder.received_shares())
+            .expect("the list reads")
+            .is_empty()
     );
-    let shares = block_on(holder.received_shares()).expect("the list reads");
-    assert_eq!(shares[0].display_name, "");
-    assert!(shares[0].via_link);
 }
 
 /// Preview `fragment` on `holder`.
@@ -13530,8 +13797,8 @@ fn a_preview_leaves_every_seam_store_unchanged() {
     );
 }
 
-/// ADR 0027 D5: the names show only under the owner signature. A relabelled
-/// fragment shows none, and its link still previews.
+/// ADR 0027 D5 as amended: the names show under the owner signature, and a
+/// relabelled fragment is refused.
 #[test]
 fn a_preview_shows_the_names_only_when_the_owner_signature_verifies() {
     let mut fx = GrantScenario::new();
@@ -13550,10 +13817,10 @@ fn a_preview_shows_the_names_only_when_the_owner_signature_verifies() {
 
     let mut relabelled = InviteFragment::decode(&fragment).expect("the mint's own fragment");
     relabelled.folder_name = "Taxes".to_owned();
-    let forged = preview(&holder, &relabelled.encode().expect("inside the bound"))
-        .expect("a bad names signature still previews");
-    assert_eq!(forged.names, None);
-    assert_eq!(forged.state, LinkPreviewState::Live, "and the link works");
+    assert!(matches!(
+        preview(&holder, &relabelled.encode().expect("inside the bound")),
+        Err(EngineError::TrustViolation { .. })
+    ));
 }
 
 /// ADR 0028 D2: one read of the scope root lists its direct children by name
@@ -17564,6 +17831,7 @@ fn a_conversion_pass_leaves_an_item_that_is_not_its_own() {
             sharer_identity_pk: recipient_identity().verifying_key().to_sec1(),
             display_name: "theirs".to_owned(),
             permission: CorePermission::Read,
+            scope_pointer_name: None,
         }
         .encode(),
         "not-a-claim",

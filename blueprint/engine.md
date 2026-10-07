@@ -1448,7 +1448,9 @@ rebases and signs above.
   drops it (ADR 0065).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
-  duration" was wrong and is retired.
+  duration" was wrong and is retired. A grantee follows the pointer on the
+  received-shares refresh, so for a personal bookmark that interval is the
+  refresh interval (ADR 0074).
 - Revoked readers: stale interior metadata for a sweep-length window, never a
   live grant, never anything sealed after the cut.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
@@ -1501,6 +1503,13 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   fires and a fallback-only pointer is never consulted. Therefore the pointer
   resolve joins the focus-window tick for open shared scopes, runs on access
   for cached ones, and is the first act on cold start.
+- **A grantee follows the pointer by the name its bookmark holds** (ADR 0074
+  D1, D2). The received-shares bookmark keeps `scopePointerName` with
+  `pointerReadKey`, and the on-access refresh consults the pointer for each
+  bookmark that holds a name, link-held or personal, and heals the bookmark to
+  the vouched root. A personal read whose pointer gives no answer reads the
+  stored root; a link-held read waits for a vouched root (ADR 0024 D5). A
+  bookmark with no name follows nothing until the owner posts again.
 - **Vault pointer** — the same re-point object for the root scope, on an
   indexed key chain from day one: `pointerKey_i = KDF(secret,
 "vault-pointer" ‖ i)`, index 0 default. Clients probe one index past the
@@ -1574,8 +1583,15 @@ surviving committed grants uniformly in the republish it already does.
   direct grant, a link mint and a conversion each append, so links and direct
   grants coexist and a folder holds any number of live links, each with its
   own permission and lifetime. A direct grant to an existing grantee is a
-  permission change when the permission differs, and nothing otherwise
-  ("already has access"). A write grant on a folder that is not a write
+  permission change when the permission differs. At the same permission it
+  adds no row and runs no cut, and it posts the share pointer again, which is
+  the owner's repair path for a bookmark with no scope pointer name. A
+  permission change of a personal grantee, up or down, posts the share pointer
+  to that grantee, at the root the change leaves, once the cut set is durable.
+  A cut from the last copy keeps no row and posts nothing; the owner shares
+  again (ADR 0068 D5).
+  A failed post leaves the change standing and sends `SharePointerNotPosted`,
+  and a write cut posts nothing to the other survivors (ADR 0074 D2). A write grant on a folder that is not a write
   scope yet runs the write-scope cut first (ADR 0024 D4, ADR 0026 C4).
   `grant-target-already-names-a-scope` and
   `invite-target-already-names-a-scope` retire for the append; D7 lists the
@@ -1585,7 +1601,12 @@ surviving committed grants uniformly in the republish it already does.
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
   sealed received-shares list, device-local over the host `StagingStore`
-  (ADR 0006), persisting the `pointerReadKey`; the owner keeps a denormalized
+  (ADR 0006), persisting the `pointerReadKey` and the `scopePointerName` the
+  owner-signed share pointer carries (ADR 0074 D1). A share pointer with no
+  name keeps the name the bookmark holds, and an accept on the equal-floor
+  short-circuit adds a name the bookmark does not hold before the ack. Only
+  the share pointer and the invite fragment supply the name, never a grant
+  blob or a scope root record; the owner keeps a denormalized
   sent-index in their own vault. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
 - **Link-held arm**
@@ -1611,8 +1632,11 @@ surviving committed grants uniformly in the republish it already does.
   deadline; a second join on one device takes the equal-floor short-circuit of
   the personal accept. The refresh prefers the personal tag and reads the link
   tag only while no personal blob opens and `linkSecret` is held; the persist
-  that records the first personal open deletes `linkSecret`, and the link holder
-  is then a grantee.
+  that records the first personal open deletes `linkSecret` and `linkDeadline`,
+  keeps `scopePointerName`, and the link holder is then a grantee (ADR 0074 D1).
+  The owner signature over the fragment names covers `scopePointerName`, so the
+  preview and the join refuse a fragment whose signature fails, and a link hold
+  always holds a verified name (ADR 0027 D5 as amended).
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies

@@ -180,4 +180,4 @@ stored deadline, so that a link cut at its deadline reads "expired" and not "rev
 keys come as one set, and the D2 persist deletes all three. Consequence 1 holds for all three
 keys: the stored list keeps version 2, and a bookmark without them loads unchanged.
 Amended by ADR 0074 D1 on 2026-10-07: the D2 persist keeps `scopePointerName`, and a personal
-bookmark holds that key without `linkSecret`.
+bookmark holds that key without `linkSecret`. A link hold still holds the three keys as one set.

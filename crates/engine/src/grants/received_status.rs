@@ -493,7 +493,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .into_iter()
             .map(|(_, key)| key)
             .map_while(|key| {
-                let cost = 1 + usize::from(received.link_hold(&key).is_some());
+                let named = received
+                    .find(&key)
+                    .is_some_and(|share| share.scope_pointer_name.is_some());
+                let cost = 1 + usize::from(named);
                 budget = budget.checked_sub(cost)?;
                 Some(key)
             })
@@ -724,10 +727,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
     }
 
-    /// Follow the scope pointer of every scheduled bookmark that holds link
-    /// keys (ADR 0024 D5 step 3). Answers each one's verdict, and the scope
-    /// root each vouched-for bookmark must move to. A refused re-point object
-    /// is a trust verdict, reported here.
+    /// Follow the scope pointer of every scheduled bookmark that holds a scope
+    /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
+    /// verdict, and the scope root each vouched-for bookmark must move to. A
+    /// refused re-point object is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
@@ -742,8 +745,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut heals = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let (Some(hold), Some(contact), true) = (
-                received.link_hold(&key),
+            let (Some(name), Some(contact), true) = (
+                share.scope_pointer_name.as_ref(),
                 by_identity.get(&share.sharer_identity_pk),
                 scheduled.contains(&key),
             ) else {
@@ -753,7 +756,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 self.transport,
                 &self.sharer_floors(share),
                 share,
-                hold,
+                name,
                 &contact.identity_pk(),
             )
             .await
@@ -776,6 +779,17 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     PointerVerdict::Rejected
                 }
             };
+            // Only a link read waits for a vouched root (ADR 0024 D5). A
+            // personal read uses the stored root when the pointer gives none.
+            let personal = received.link_hold(&key).is_none();
+            if personal
+                && matches!(
+                    verdict,
+                    PointerVerdict::Absent | PointerVerdict::Unavailable
+                )
+            {
+                continue;
+            }
             verdicts.insert(key, verdict);
         }
         (verdicts, heals)
@@ -1448,6 +1462,7 @@ mod tests {
             display_name: "shared-folder".to_owned(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x9a; 32]),
+            scope_pointer_name: None,
         }
     }
 
@@ -2366,6 +2381,7 @@ mod tests {
                 display_name: "shared-folder".to_owned(),
                 permission,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
+                scope_pointer_name: None,
             });
             self.persist(&list).expect("the bookmark persists");
         }
@@ -2386,6 +2402,7 @@ mod tests {
                 display_name: display_name.to_owned(),
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
+                scope_pointer_name: None,
             });
             self.persist(&list)
         }
@@ -2403,6 +2420,7 @@ mod tests {
                     display_name: "shared-folder".to_owned(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -2434,6 +2452,7 @@ mod tests {
                     display_name: "shared-folder".to_owned(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -3424,6 +3443,7 @@ mod tests {
                     display_name: format!("share-{which}"),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             block_on(
@@ -4182,10 +4202,11 @@ mod tests {
                 display_name: "photos-folder".to_owned(),
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: Some(pointer_name()),
             };
             let key = share.key();
             list.reconcile(share);
-            list.hold_link(key, LinkHold::new(SecretBytes::new(secret), pointer_name()));
+            list.hold_link(key, LinkHold::new(SecretBytes::new(secret)));
             fx.persist(&list).expect("the join persists");
         }
 
@@ -4425,6 +4446,7 @@ mod tests {
                         display_name: String::new(),
                         permission: Permission::Read,
                         pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                        scope_pointer_name: None,
                     });
                     block_on(store.persist(&list)).expect("the join persists");
                 }))),
@@ -4660,16 +4682,11 @@ mod tests {
                     display_name: String::new(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                    scope_pointer_name: Some(scope_pointer_name(&POINTER_SEED, scope)),
                 };
                 let key = share.key();
                 list.reconcile(share);
-                list.hold_link(
-                    key,
-                    LinkHold::new(
-                        SecretBytes::new(LINK_SECRET),
-                        scope_pointer_name(&POINTER_SEED, scope),
-                    ),
-                );
+                list.hold_link(key, LinkHold::new(SecretBytes::new(LINK_SECRET)));
             }
             fx.persist(&list).expect("the joins persist");
             let unread = || -> Vec<[u8; 16]> {
