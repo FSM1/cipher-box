@@ -1980,6 +1980,39 @@ fn a_throttled_chain_revival_stays_retryable_and_a_refresh_revives_it() {
     assert_eq!(child_named(&engine, ROOT, "notes"), nodes[0]);
 }
 
+/// A start that adopts no root still surfaces the dead letters of its queue,
+/// as the adopting start does.
+#[test]
+fn a_stalled_chain_start_surfaces_an_undecodable_queue_entry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let pointer = vault_pointer_name(&SECRET, 0);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(pointer.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let op_id = block_on(device.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+    let (engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
+    assert!(!engine.is_provisioned(), "the session adopts no root");
+    assert!(
+        core::iter::from_fn(|| events.try_next()).any(|event| matches!(
+            event,
+            Event::DeadLetter { op_id: at, target: None, .. } if at == op_id
+        )),
+        "the undecodable entry surfaces as a dead letter",
+    );
+    assert!(
+        block_on(device.staging_store.queued_ops())
+            .expect("the queue reads")
+            .is_empty(),
+        "the dead-lettered op leaves the durable queue",
+    );
+}
+
 /// ADR 0062 D3: a lapsed bin index that a 429 keeps from reviving gets no
 /// genesis publish over it. The next start revives it at `S + 1` with the same
 /// value, reads it through the gate and holds it, so the liveness loop renews

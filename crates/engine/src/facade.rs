@@ -6468,6 +6468,34 @@ impl<T: SeamTypes> Engine<T> {
         // engine returns `NotStarted` rather than misclassifying a staging-store
         // failure as retryable `Seam`.
         let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
+        let pending = self.start_queue(session).await?;
+
+        let params = ColdStartParams {
+            login_secret: session.login_secret(),
+            owner_identity,
+            root_scope_id,
+            payload_version,
+            root,
+            pending_ops: &pending,
+        };
+        let events = self.events.clone();
+        cold_start(
+            pointer_fetch,
+            adopter,
+            &self.seams.floor_store,
+            &self.record_transport,
+            &self.seams.snapshot_cache,
+            &params,
+            &mut |event: Event| {
+                let _ = events.unbounded_send(event);
+            },
+        )
+        .await
+    }
+
+    /// The pending ops of a session start, with the dead letters the queue and
+    /// the staging store hold made nameable again.
+    async fn start_queue(&self, session: &SessionIdentity) -> Result<Vec<Op>, ColdStartError> {
         let raw = self
             .seams
             .staging_store
@@ -6561,28 +6589,7 @@ impl<T: SeamTypes> Engine<T> {
                     .map_err(ColdStartError::Seam)?;
             }
         }
-
-        let params = ColdStartParams {
-            login_secret: session.login_secret(),
-            owner_identity,
-            root_scope_id,
-            payload_version,
-            root,
-            pending_ops: &pending,
-        };
-        let events = self.events.clone();
-        cold_start(
-            pointer_fetch,
-            adopter,
-            &self.seams.floor_store,
-            &self.record_transport,
-            &self.seams.snapshot_cache,
-            &params,
-            &mut |event: Event| {
-                let _ = events.unbounded_send(event);
-            },
-        )
-        .await
+        Ok(pending)
     }
 
     /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
@@ -6721,11 +6728,12 @@ impl<T: SeamTypes> Engine<T> {
         &mut self,
         root: NodeId,
     ) -> Result<ColdStartOutcome, EngineError> {
-        let ops = match self.pending_ops().await {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let ops = match self.start_queue(session).await {
             Ok(ops) => ops,
             Err(error) => {
                 self.clear_failed_start();
-                return Err(error);
+                return Err(EngineError::from_cold_start(error));
             }
         };
         let base = Snapshot::new(root);
