@@ -265,9 +265,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   no transient failure (a signature, or a refusal for good), the base stops
   naming it, or the gate rejects its scope root, through the read or through
   the recovery copy. A read that admits a cached copy does not settle it. A
-  transient failure of the folder's own visit keeps it for the next pass and
-  keeps no cursor back. A scope root that is absent or unavailable keeps it
-  too, and keeps the cursor back as a cursor visit does. A queued folder whose
+  transient failure of the folder's own visit, an owed scope, or a scope root
+  that no endpoint and no recovery record serves keeps the entry and keeps no
+  cursor back. A scope root that is unavailable, or whose revival meets a
+  transient failure, keeps the entry and keeps the cursor back, as a cursor
+  visit does. A queued folder whose
   name the scope root's write seed does not derive waits for its cursor visit.
   A held pass reports only its queued visits, and the
   doomed-name journal of a scope that holds a queued folder.

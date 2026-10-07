@@ -2123,28 +2123,51 @@ fn a_transient_queued_visit_keeps_no_cursor_back() {
     );
 }
 
-/// A scope root that the gate rejects drops the queued folders of its scope.
-/// While the root fails, the boundary walk fails too, so later passes wait and
-/// the walk sends one trust event. Once the root admits again, a read queues
-/// the folder again and the next pass revives it.
-#[test]
-fn a_rejected_scope_root_drops_its_queued_folders_once() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
-        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+/// A session whose queued folder `notes` the next held pass visits first.
+fn a_queued_folder_in_a_held_cycle(
+    world: &FakeWorld,
+    blocks: &Blocks,
+) -> (
+    IpnsName,
+    NodeId,
+    Engine<FakeSeamTypes>,
+    EventStream,
+    Vec<BoxedTask>,
+) {
+    let nodes = written_then_left(world, blocks, |engine, tasks| {
+        vec![create_folder(world, engine, tasks, ROOT, "notes")]
     });
     let name = write_name(nodes[0]);
     let lapsed = world.record_store.lapse(name.as_str()).expect("a record");
     blocks.cache_for_recovery(name.as_str(), lapsed);
 
     let device = world.device(b"a later session");
-    hold_the_cycle(&world, &device);
-    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
-    tick(&world, &engine, &mut tasks);
+    hold_the_cycle(world, &device);
+    let (engine, events, mut tasks) = boot(world, blocks, &device, 2);
+    tick(world, &engine, &mut tasks);
     block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
     block_on(engine.set_focus(None)).expect("the focus moves");
+    (name, nodes[0], engine, events, tasks)
+}
 
+fn walk_refusals(events: &mut EventStream) -> usize {
+    core::iter::from_fn(|| events.try_next())
+        .filter(|event| {
+            matches!(event, Event::AttributableAbuse { description }
+                if description.ends_with(WALK_REFUSED))
+        })
+        .count()
+}
+
+/// A scope root that the gate rejects drops the queued folders of its scope,
+/// and the walk sends one trust event. Once the root admits again, the folder
+/// stays lapsed until a read queues it again, and the next pass revives it.
+#[test]
+fn a_scope_root_the_gate_rejects_drops_its_queued_folders() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, folder, engine, mut events, mut tasks) =
+        a_queued_folder_in_a_held_cycle(&world, &blocks);
     let head_cid = core::str::from_utf8(&record_at(&world, &write_name(ROOT)).value)
         .expect("utf8 value")
         .strip_prefix("/ipfs/")
@@ -2153,17 +2176,13 @@ fn a_rejected_scope_root_drops_its_queued_folders_once() {
     let head = blocks.get(&head_cid).expect("the head block");
     blocks.replace(&head_cid, b"not an envelope".to_vec());
     while events.try_next().is_some() {}
-    for _ in 0..2 {
-        world.scheduler.advance(Duration::from_secs(60 * 60));
-        tick(&world, &engine, &mut tasks);
-    }
-    let refused = core::iter::from_fn(|| events.try_next())
-        .filter(|event| {
-            matches!(event, Event::AttributableAbuse { description }
-                if description.ends_with(WALK_REFUSED))
-        })
-        .count();
-    assert_eq!(refused, 1, "the walk sends one trust event");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        walk_refusals(&mut events),
+        1,
+        "the walk sends one trust event"
+    );
 
     blocks.replace(&head_cid, head);
     world.scheduler.advance(Duration::from_secs(60 * 60));
@@ -2172,7 +2191,7 @@ fn a_rejected_scope_root_drops_its_queued_folders_once() {
     tick(&world, &engine, &mut tasks);
     assert!(unserved(&world, &name), "the rejection dropped the entry");
 
-    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(Some(folder))).expect("the focus moves");
     block_on(engine.set_focus(None)).expect("the focus moves");
     world.scheduler.advance(Duration::from_secs(60 * 60));
     tick(&world, &engine, &mut tasks);
@@ -2180,6 +2199,54 @@ fn a_rejected_scope_root_drops_its_queued_folders_once() {
         !unserved(&world, &name),
         "a read queues the folder again, and the pass revives it",
     );
+}
+
+/// The endpoints serve no scope root and the recovery copy fails the root
+/// adopt: the queued folders of that scope leave the queue, and two passes
+/// send one trust event.
+#[test]
+fn a_scope_root_whose_recovery_copy_the_gate_rejects_drops_its_queued_folders() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, _folder, engine, mut events, mut tasks) =
+        a_queued_folder_in_a_held_cycle(&world, &blocks);
+    let root = write_name(ROOT);
+    let current = record_at(&world, &root);
+    let garbage = blocks.put(b"not an envelope".to_vec());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let forged = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{garbage}").as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    let served = world.record_store.lapse(root.as_str()).expect("a record");
+    // The liveness re-PUT would serve the root again.
+    world.record_store.fail_put_for(root.as_str());
+    blocks.cache_for_recovery(root.as_str(), forged);
+    while events.try_next().is_some() {}
+    for _ in 0..2 {
+        world.scheduler.advance(Duration::from_secs(60 * 60));
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(
+        walk_refusals(&mut events),
+        1,
+        "two passes send one trust event"
+    );
+
+    world.record_store.heal_put_for(root.as_str());
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root.as_str(), served.clone());
+    }
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the rejection dropped the entry");
 }
 
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a
