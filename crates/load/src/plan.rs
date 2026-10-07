@@ -307,15 +307,15 @@ fn resolve_routing_endpoints(
     if !scenario.runs_engine() {
         return Ok(Vec::new());
     }
-    let raw = match (env("LOAD_TEST_ROUTING_ENDPOINTS"), target) {
-        (Some(raw), _) => raw,
-        (None, Target::Local) => DEFAULT_LOCAL_ROUTING_URL.to_owned(),
-        (None, Target::Staging) => {
-            return Err(bad(
-                "an engine scenario requires LOAD_TEST_ROUTING_ENDPOINTS on a deployed target",
-            ));
-        }
-    };
+    // Each engine leaves an account whose records the republisher keeps.
+    if target == Target::Staging {
+        return Err(bad(format!(
+            "scenario `{}` runs on the local target only",
+            scenario.as_str()
+        )));
+    }
+    let raw =
+        env("LOAD_TEST_ROUTING_ENDPOINTS").unwrap_or_else(|| DEFAULT_LOCAL_ROUTING_URL.to_owned());
     let endpoints: Vec<String> = raw
         .split(',')
         .map(str::trim)
@@ -809,55 +809,50 @@ mod tests {
         .expect_err("refused");
         assert!(error.0.contains("non-loopback"), "{error}");
 
-        let staging = |routing: &str| {
+        let local = |routing: &str| {
             build_plan(
-                &flags(&[("scenario", "rotation-wave"), ("target", "staging")]),
-                lookup(&[
-                    ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
-                    ("LOAD_TEST_GATEWAY_URL", "https://ipfs.staging.example.com"),
-                    ("LOAD_TEST_ROUTING_ENDPOINTS", routing),
-                ]),
+                &flags(&[("scenario", "rotation-wave"), ("target", "local")]),
+                lookup(&[("LOAD_TEST_ROUTING_ENDPOINTS", routing)]),
             )
         };
-        assert!(staging("").is_err());
-        assert!(staging(" , ").is_err());
-        assert!(staging("http://routing.staging.example.com").is_err());
+        assert!(local(" , ").is_err());
         assert_eq!(
-            staging("https://routing.staging.example.com/, https://delegated-ipfs.dev")
+            local("http://localhost:3001/, http://127.0.0.1:8190")
                 .expect("plan")
                 .routing_endpoints,
-            vec![
-                "https://routing.staging.example.com",
-                "https://delegated-ipfs.dev"
-            ]
+            vec!["http://localhost:3001", "http://127.0.0.1:8190"]
         );
     }
 
     #[test]
-    fn the_node_count_is_bounded_on_every_target() {
-        let nodes = |target: &str, count: &str| {
+    fn an_engine_scenario_refuses_the_staging_target() {
+        let error = build_plan(
+            &flags(&[("scenario", "rotation-wave"), ("target", "staging")]),
+            lookup(&[
+                ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
+                ("LOAD_TEST_GATEWAY_URL", "https://ipfs.staging.example.com"),
+                ("LOAD_TEST_ROUTING_ENDPOINTS", "https://delegated-ipfs.dev"),
+            ]),
+        )
+        .expect_err("refused");
+        assert!(error.0.contains("local target only"), "{error}");
+    }
+
+    #[test]
+    fn the_node_count_is_bounded() {
+        let nodes = |count: &str| {
             build_plan(
                 &flags(&[
                     ("scenario", "rotation-wave"),
-                    ("target", target),
+                    ("target", "local"),
                     ("nodes", count),
                 ]),
-                if target == "local" {
-                    lookup(&[])
-                } else {
-                    lookup(&[
-                        ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
-                        ("LOAD_TEST_GATEWAY_URL", "https://ipfs.staging.example.com"),
-                        ("LOAD_TEST_ROUTING_ENDPOINTS", "https://delegated-ipfs.dev"),
-                    ])
-                },
+                lookup(&[]),
             )
         };
-        assert!(nodes("local", "64").is_ok());
-        assert!(nodes("local", "65").is_err());
-        assert!(nodes("staging", "64").is_ok());
-        assert!(nodes("staging", "65").is_err());
-        assert!(nodes("staging", "0").is_err());
+        assert!(nodes("64").is_ok());
+        assert!(nodes("65").is_err());
+        assert!(nodes("0").is_err());
     }
 
     #[test]

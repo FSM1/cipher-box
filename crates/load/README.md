@@ -45,8 +45,10 @@ cargo run --release -p cipherbox-load -- \
 
 ## The rotation-wave scenario
 
-`rotation-wave` runs one whole engine per account over the desktop production
-seams, not test-login accounts. Each engine signs in with a fresh identity,
+`rotation-wave` runs one whole engine over the desktop production seams, not
+test-login accounts, on the `local` target only. The workflow passes no
+`--clients`, so its numbers compare with the one-engine table in
+`tools/perf/RESULTS.md`. `load-test.yml` also runs it every week at 16 nodes. Each engine signs in with a fresh identity,
 builds a folder of `--nodes` subfolders, and mints a read link at it, so that
 the folder is a scope root. Then it runs a read cut (`RotateNow`) and a write
 cut (`RotateWriteNow`), in that order, and records two spans from the engine's

@@ -22,16 +22,20 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
     let p95_ms = match (scenario, target) {
         (Scenario::ContentIngest | Scenario::GatewayRead, Target::Local) => 2_000.0,
         (Scenario::ContentIngest | Scenario::GatewayRead, Target::Staging) => 8_000.0,
-        // A sweep the bucket throttles converges on the idle job, one
-        // `sweep_cadence` later.
-        (Scenario::RotationWave, Target::Local) => 1_800_000.0,
-        (Scenario::RotationWave, Target::Staging) => 2_400_000.0,
+        // 16 nodes in RESULTS.md: the slowest sample, the populate, took 3.4 s.
+        (Scenario::RotationWave, Target::Local) => 60_000.0,
+        (Scenario::RotationWave, Target::Staging) => 120_000.0,
         (_, Target::Local) => 1_000.0,
         (_, Target::Staging) => 4_000.0,
     };
     Thresholds {
         p95_ms,
-        max_error_rate: 0.01,
+        // One failed sweep or wave is the fault the scenario exists to catch.
+        max_error_rate: if scenario == Scenario::RotationWave {
+            0.0
+        } else {
+            0.01
+        },
     }
 }
 
@@ -95,6 +99,25 @@ mod tests {
                 scenario.as_str()
             );
         }
+    }
+
+    #[test]
+    fn one_failed_rotation_sample_turns_the_run_red() {
+        let bands = thresholds_for(Scenario::RotationWave, Target::Local);
+        let mut samples = vec![(Outcome::Ok, 40.0); 107];
+        samples.push((Outcome::Failed, 0.0));
+        let breaches = evaluate(bands, &summaries(&samples));
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("error rate"), "{}", breaches[0]);
+    }
+
+    #[test]
+    fn a_rotation_sample_at_the_convergence_budget_turns_the_run_red() {
+        let bands = thresholds_for(Scenario::RotationWave, Target::Local);
+        let budget = crate::rotation::CONVERGE_BUDGET.as_millis() as f64;
+        let breaches = evaluate(bands, &summaries(&[(Outcome::Ok, budget)]));
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("p95"), "{}", breaches[0]);
     }
 
     #[test]

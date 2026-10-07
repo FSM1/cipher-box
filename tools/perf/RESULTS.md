@@ -236,5 +236,8 @@ uploads a block:
 
 Below the bucket, the sweep proves convergence in under one second at 16 nodes.
 Until a cross-client row lands, the `SyncTimingProfile::PRODUCTION`
-placeholders `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
-`sweep_cadence` and `migration_window` keep the values they carry.
+placeholders `escalation_window`, `focus_horizon`, `pointer_consult_interval`
+and `migration_window` keep the values they carry.
+
+`sweep_cadence` keeps 900 s on this measurement. The cadence bounds only the
+proof of convergence for a scope with more nodes than the content bucket.

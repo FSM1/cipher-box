@@ -30,7 +30,7 @@ use crate::seams::MemoryCredentialStore;
 const POPULATE_BUDGET: Duration = Duration::from_secs(300);
 /// How long the read cut's sweep may take to report convergence: a sweep the
 /// cut files gives up after three passes and leaves the rest to the idle job.
-const CONVERGE_BUDGET: Duration =
+pub(crate) const CONVERGE_BUDGET: Duration =
     Duration::from_secs(SyncTimingProfile::PRODUCTION.sweep_cadence.as_secs() + 300);
 /// The API's per-account content bucket refills over this window. Each phase
 /// starts on a full bucket, so the burst that built the subtree does not
@@ -69,6 +69,7 @@ pub(crate) struct Wave {
 pub(crate) fn name_wave(events: &[Event], scope_root: NodeId) -> Result<Wave, String> {
     let mut start = None;
     let mut previous = 0;
+    let mut landed = 0;
     let mut node_ms = Vec::new();
     for event in events {
         match event {
@@ -81,13 +82,17 @@ pub(crate) fn name_wave(events: &[Event], scope_root: NodeId) -> Result<Wave, St
                     previous = at.0;
                 }
             }
+            // A retry counts again from one: a node counts once, at the first
+            // event that shows it moved.
             Event::NameWaveProgress {
                 scope_root: root,
+                moved,
                 at,
                 ..
-            } if *root == scope_root && start.is_some() => {
+            } if *root == scope_root && start.is_some() && *moved > landed => {
                 node_ms.push(at.0.saturating_sub(previous));
                 previous = at.0;
+                landed = *moved;
             }
             Event::NameWaveEnded {
                 scope_root: root,
@@ -521,6 +526,22 @@ mod tests {
                 dropped: 0,
             })
         );
+    }
+
+    #[test]
+    fn a_retried_wave_counts_each_node_once() {
+        let events = [
+            started(SCOPE, 1_000),
+            progress(SCOPE, 1, 1_100),
+            progress(SCOPE, 2, 1_200),
+            progress(SCOPE, 1, 1_300),
+            progress(SCOPE, 2, 1_400),
+            progress(SCOPE, 3, 1_500),
+            ended(SCOPE, 1_520),
+        ];
+        let wave = name_wave(&events, SCOPE).expect("a wave");
+        assert_eq!(wave.node_ms, vec![100, 100, 300]);
+        assert_eq!(wave.total_ms, 520);
     }
 
     #[test]
