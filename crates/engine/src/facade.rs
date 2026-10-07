@@ -10960,9 +10960,9 @@ where {
     /// (#33 D2): the newly focused chain refreshes now rather than a poll cadence
     /// later, and only past the staleness threshold — a repeat visit renders the
     /// state already held. A scope whose served root is not the held root
-    /// record ([`Self::scope_root_moved`]), or whose root
-    /// probe has no answer, reads nothing here; the next tick reads it. Each
-    /// root is probed once per navigation.
+    /// record ([`Self::scope_root_moved`]), or whose root probe has no answer,
+    /// reads nothing here; the next tick reads it. Each root is probed once per
+    /// navigation.
     ///
     /// Shared-borrow, so a host can run its network legs beside the snapshot
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
@@ -22308,6 +22308,15 @@ mod focus_access_tests {
             held(b"/ipfs/bafkqaaa"),
         )]);
         assert!(!moved(&floored), "the walk gated the served record");
+        let failing = InMemoryFloorStore::default();
+        failing.fail_floor_reads();
+        assert!(
+            moved(&failing),
+            "a floor store with no answer counts as moved"
+        );
+        let above = InMemoryFloorStore::default();
+        block_on(above.raise_sequence_floor(name.as_str().as_bytes(), 3)).unwrap();
+        assert!(moved(&above), "a served record below the floor is a replay");
         engine.state.root_sequences.borrow_mut().note_walk([(
             FOLDER,
             name.clone(),
@@ -22327,20 +22336,6 @@ mod focus_access_tests {
             moved(&floored),
             "a served record below the held one is an availability outcome"
         );
-        engine.state.root_sequences.borrow_mut().note_walk([(
-            FOLDER,
-            name.clone(),
-            held(b"/ipfs/bafkqaaa"),
-        )]);
-        let failing = InMemoryFloorStore::default();
-        failing.fail_floor_reads();
-        assert!(
-            moved(&failing),
-            "a floor store with no answer counts as moved"
-        );
-        let above = InMemoryFloorStore::default();
-        block_on(above.raise_sequence_floor(name.as_str().as_bytes(), 3)).unwrap();
-        assert!(moved(&above), "a served record below the floor is a replay");
     }
 
     /// A record in a shared scope unseals only under that scope's own read

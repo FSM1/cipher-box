@@ -10114,6 +10114,19 @@ fn a_drain_write_over_a_same_sequence_fork_does_not_hold_the_root() {
     navigate_into_the_new_root(&mut fx, inner, doc);
 }
 
+/// Grant `node` to the recipient for reading.
+fn grant_to_recipient(engine: &mut Engine<FakeSeamTypes>, node: NodeId) {
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+}
+
 /// Another owner device grants a folder inside a descendant scope while the
 /// endpoints still serve this device the record its walk gated. This device
 /// publishes the scope root twice over that record, and the endpoints then
@@ -10142,16 +10155,7 @@ fn a_navigation_over_a_fork_below_the_own_publish_reads_nothing() {
     let fork = served_root_bytes(&fx, folder);
     serve_root(&fx, folder, &walked_bytes);
     for sibling in siblings {
-        assert_eq!(
-            block_on(fx.engine.command(Command::Grant {
-                node: sibling,
-                recipient_identity_public_key:
-                    recipient_identity().verifying_key().to_sec1().to_vec(),
-                permission: Permission::Read,
-                grantee_name: None,
-            })),
-            Ok(CommandOutcome::Done)
-        );
+        grant_to_recipient(&mut fx.engine, sibling);
     }
     assert_eq!(
         sequence_at(&fx.world, &write_name(folder)),
@@ -10183,15 +10187,7 @@ fn a_navigation_over_a_root_served_below_the_own_publish_reads_nothing() {
     let doc = write_doc_in(&fx.world, &mut second, &mut second_tasks, plain);
     let lagging = served_root_bytes(&fx, folder);
     let below = sequence_at(&fx.world, &write_name(folder));
-    assert_eq!(
-        block_on(fx.engine.command(Command::Grant {
-            node: other,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done)
-    );
+    grant_to_recipient(&mut fx.engine, other);
     assert!(
         sequence_at(&fx.world, &write_name(folder)) > below,
         "this device published the scope root"
