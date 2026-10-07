@@ -69,7 +69,8 @@ use cipherbox_engine::sync::owed_rotation::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
-    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_scoped_key, owner_tag,
+    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, doomed_journal_key,
+    owner_scoped_key, owner_tag, scope_exit_debt_key, seal_owed_cuts,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
@@ -7600,6 +7601,223 @@ fn a_relink_the_grant_overtook_still_re_seals_and_cuts() {
         before + 1,
         "and that scope was cut, off the plane the pass proved rather than the \
          crossing the op carries"
+    );
+}
+
+/// The overtaken relink of [`a_relink_the_grant_overtook_still_re_seals_and_cuts`],
+/// with the device stopped after the source-remove confirms and before the
+/// crossing commits. Answers the granted scope's read epoch before the stop.
+/// The caller boots the device again with [`resume`].
+fn stop_an_overtaken_relink_before_its_commit() -> (GrantScenario, u64) {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("an intra-scope relink queues");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "the grant leaves the relink queued as it was journaled"
+    );
+    converge_into_granted_scope(&fx, holiday);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    let mark = owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET));
+    let staging = fx.owner_device.staging_store.inner();
+    staging.park_after_staged_write(&mark);
+    for _ in 0..2 {
+        if !staging.holds_parked_write() {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+    }
+    assert!(
+        staging.holds_parked_write(),
+        "the source-remove confirmed and the pass stopped at its mark"
+    );
+    // The stop: the pass and its session go.
+    fx._tasks.clear();
+    staging.release_parked_write();
+    (fx, before)
+}
+
+/// Boot the stopped device again.
+fn resume(fx: &mut GrantScenario) -> EventStream {
+    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.engine = engine;
+    fx._tasks = tasks;
+    events
+}
+
+/// Whether the device's raw queue still holds a relocation. The published-op
+/// mark hides a published op from [`FakeDevice::pending_ops`], so this reads
+/// the queue itself.
+fn relink_queued(device: &FakeDevice) -> bool {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .iter()
+        .any(|(_, op)| op.relocation().is_some())
+}
+
+/// Whether `events` told the member that `scope_root` still owes a cut.
+fn tells_cut_owed(events: &mut EventStream, scope_root: NodeId) -> bool {
+    events_so_far(events).iter().any(|event| {
+        matches!(event, Event::ScopeExitCutOwed { scope_root: owed, .. } if *owed == scope_root)
+    })
+}
+
+/// On resume the op leaves the queue with no publish left to prove the planes
+/// from, so the crossing is derived again from the scope roots the resumed
+/// session lists.
+#[test]
+fn a_relink_the_grant_overtook_still_cuts_after_a_stop_before_its_commit() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
+    resume(&mut fx);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "the stop came before the cut"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    assert!(
+        !relink_queued(&fx.owner_device),
+        "the resumed session dropped the published relink"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and still cut the scope it left"
+    );
+}
+
+/// A cut an earlier session owed and could not land stands in the durable
+/// record. The resumed session owes the relink's cut before any settle reads
+/// that record, and the earlier debt must survive the write.
+#[test]
+fn an_earlier_sessions_owed_cut_survives_a_resumed_relinks_cut() {
+    const EARLIER: NodeId = NodeId([0x9d; 16]);
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let enc_secret = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(77));
+    let sealed = seal_owed_cuts(
+        BookkeepingSeal::new(&enc_secret, &entropy),
+        &BTreeSet::from([EARLIER]),
+    )
+    .expect("the debt seals");
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&scope_exit_debt_key(&enc_secret), &sealed),
+    )
+    .expect("the debt persists");
+
+    let mut events = resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "the relink's cut landed"
+    );
+    assert!(
+        tells_cut_owed(&mut events, EARLIER),
+        "and the earlier debt is still owed"
+    );
+}
+
+/// The op is the only thing that names the cut until the debt is durable, so a
+/// refused debt write keeps it queued for the next pass, and an op that drains
+/// past it in the meantime must not carry the drained mark over it.
+#[test]
+fn a_refused_debt_write_keeps_the_resumed_relink_queued() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let debt = scope_exit_debt_key(&kdf::enc_subkey(&SECRET));
+    let staging = fx.owner_device.staging_store.inner().clone();
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the stop left the relink queued"
+    );
+    staging.fail_staged_writes_at(&debt);
+
+    resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the refused write kept the relink queued"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before,
+        "and owed no cut that is not durable"
+    );
+    // The kept ops around the relink expire, and a later rename publishes and
+    // leaves while the write is still refused, so the drained mark reaches as
+    // far as the relink lets it.
+    let later = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Rename {
+        node: later,
+        new_name: "renamed".into(),
+    }))
+    .expect("the rename queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        relink_queued(&fx.owner_device),
+        "the relink outlived the ops around it"
+    );
+
+    staging.heal_staged_writes();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !relink_queued(&fx.owner_device),
+        "the next pass owed the cut and dropped it"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and the cut landed"
+    );
+}
+
+/// A boundary the resumed session knows but has not proved still owes its cut:
+/// owing one needs only the boundary, and the cut waits for the material.
+#[test]
+fn a_resumed_relink_out_of_an_unproved_scope_still_owes_its_cut() {
+    let (mut fx, before) = stop_an_overtaken_relink_before_its_commit();
+    let source = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(source.as_str());
+
+    let mut events = resume(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        tells_cut_owed(&mut events, fx.folder),
+        "the cut is owed while the scope is unproved"
+    );
+
+    fx.world.record_store.heal_get_for(source.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and lands once the scope is proved"
     );
 }
 

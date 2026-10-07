@@ -119,11 +119,11 @@ use crate::sync::project::{
 use crate::sync::provision::GENESIS_EPOCH;
 use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
-    replay,
+    expired_exit, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
-use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
+use crate::sync::scope_exit_debt::{owe_cut, owe_cut_durably, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, LiveBlocks, Preservation, PreservedBounds,
     preserve_dead_letter, reconcile_staging, reconcile_staging_over, release_version_blocks,
@@ -3132,6 +3132,23 @@ where
                         continue;
                     }
                     KeptVerdict::Expired => {
+                        // A relocation the mark drops may have stopped before its
+                        // crossing committed, so the cut it owes is owed here, and
+                        // the op stays until that debt is durable. Owing a cut
+                        // needs only the boundary, not its proved material.
+                        let roots: Vec<NodeId> = scope
+                            .scope_roots
+                            .iter()
+                            .chain(scope.known_scope_roots)
+                            .copied()
+                            .collect();
+                        let exit = expired_exit(&self.cells.base.borrow(), &op, &roots);
+                        if let Some(root) = exit
+                            && !self.owe_scope_exit_durably(scope, root).await
+                        {
+                            kept.push(op_id);
+                            continue;
+                        }
                         self.dequeue_op(op_id).await?;
                         self.release_staged_blocks(&op).await;
                         notes.remove(op_id);
@@ -6767,6 +6784,18 @@ where
             scope_root,
         )
         .await;
+    }
+
+    /// Take on that cut only if the debt is durable ([`owe_cut_durably`]).
+    async fn owe_scope_exit_durably(&self, scope: &DrainScope<'_>, scope_root: NodeId) -> bool {
+        owe_cut_durably(
+            &self.seams.staging,
+            self.bookkeeping_seal(scope),
+            scope.enc_secret,
+            self.cells.pending_scope_exits,
+            scope_root,
+        )
+        .await
     }
 
     /// Re-seal the subtree at `target` out of `source` and into `dest`.
