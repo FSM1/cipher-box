@@ -12959,6 +12959,41 @@ fn a_link_grantee_revoke_waits_for_the_pass_that_holds_the_lock() {
     assert_eq!(fx.link_entries(), 0, "with the link that admitted it");
 }
 
+/// A dismiss of the refused claims waits for a tick pass that holds the
+/// conversion lock on a stalled read, and lands once the read answers.
+#[test]
+fn a_dismiss_waits_for_the_pass_that_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    a_link_past_its_cap(&mut fx);
+    let other = park_the_sweep_on_another_folder(&mut fx);
+    assert_eq!(recorded_refusals(&fx), 1);
+
+    {
+        let mut dismiss = pin!(
+            fx.engine
+                .command(Command::DismissRefusedClaims { node: fx.folder })
+        );
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(dismiss.as_mut().poll(&mut cx).is_pending());
+        for _ in 0..3 {
+            fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+            poll_tasks_until_parked(&mut fx._tasks);
+            assert!(
+                dismiss.as_mut().poll(&mut cx).is_pending(),
+                "the dismiss waits while the pass holds the lock"
+            );
+        }
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        assert_eq!(
+            drive_command(&fx.world, dismiss, &mut fx._tasks),
+            Ok(CommandOutcome::Done),
+        );
+    }
+    assert_eq!(recorded_refusals(&fx), 0, "the refused entry is gone");
+}
+
 /// A link revoke whose wait for the conversion lock outlasts the budget
 /// answers the retryable refusal.
 #[test]
