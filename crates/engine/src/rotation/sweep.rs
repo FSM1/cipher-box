@@ -363,8 +363,8 @@ pub struct SweepOutcome {
     /// into, so a caller that needs the subtree proven converged (grant
     /// creation) refuses on a non-empty list rather than reading an `Ok` outcome
     /// as complete. The reason rides along because a trust rejection and an
-    /// availability stall are not the same answer: only the latter is worth
-    /// another pass.
+    /// availability stall are not the same answer
+    /// ([`worth_another_pass`](Self::worth_another_pass)).
     pub unreachable: Vec<([u8; 16], SweepResolveFailure)>,
     /// Scope roots the walk encountered that were missing from the scope's
     /// direct-child-scope index, repaired into it and **durably published** —
@@ -376,12 +376,25 @@ pub struct SweepOutcome {
 }
 
 impl SweepOutcome {
-    /// Whether re-running the idempotent pass could still convert something: an
-    /// index repair that lost the CAS, or any node the pass left below the
-    /// scope epoch. A verdict that looks settled counts too: owed rotation work
-    /// can re-seal the node between passes, and the pass cap bounds the cost.
+    /// Whether re-running the idempotent pass could still convert something: a
+    /// lost race, a node the pass could not read for a reason a retry clears,
+    /// or a settled residual beside a node this pass moved, since owed rotation
+    /// work can re-seal that residual between passes. A pass that moves nothing
+    /// and leaves only a settled residual settles the scope.
     pub(crate) fn worth_another_pass(&self) -> bool {
-        self.index_repair_lost_race || self.old_epoch_nodes() > 0
+        self.index_repair_lost_race
+            || !self.dropped_lost_race.is_empty()
+            || self
+                .unreachable
+                .iter()
+                .any(|(_, reason)| reason.is_retryable())
+            || (!self.converged.is_empty() && !self.unreachable.is_empty())
+    }
+
+    /// The read epoch a one-pass outcome settles its scope at, or `None` while
+    /// another round is worth running.
+    pub(crate) fn settled_epoch(&self) -> Option<u64> {
+        (!self.worth_another_pass()).then_some(self.scope_read_epoch)
     }
 
     /// The interior nodes this outcome does not prove at

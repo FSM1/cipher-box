@@ -6716,10 +6716,10 @@ where {
                         return;
                     };
                     times.report(target.scope.scope_id, outcome, scheduler.now());
-                    if !outcome.worth_another_pass() {
+                    if let Some(epoch) = outcome.settled_epoch() {
                         read_epoch_converged_at
                             .borrow_mut()
-                            .insert(target.scope.scope_id, outcome.scope_read_epoch);
+                            .insert(target.scope.scope_id, epoch);
                     }
                 },
             )
