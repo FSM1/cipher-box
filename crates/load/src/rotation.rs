@@ -117,11 +117,17 @@ pub(crate) fn name_wave(events: &[Event], scope_root: NodeId) -> Result<Wave, St
     })
 }
 
-/// Whether `event` reports that `scope_root` holds no node at the old epoch.
+/// Whether `event` reports that `scope_root` holds no node at the old epoch,
+/// after a cut this session timed: a report with no cut time measures nothing.
 fn converged(event: &Event, scope_root: NodeId) -> bool {
     matches!(
         event,
-        Event::SweepConvergence { scope_root: root, old_epoch_nodes: 0, .. } if *root == scope_root
+        Event::SweepConvergence {
+            scope_root: root,
+            old_epoch_nodes: 0,
+            cut_at: Some(_),
+            ..
+        } if *root == scope_root
     )
 }
 
@@ -142,22 +148,19 @@ pub(crate) fn sweep_convergence(
     scope_root: NodeId,
 ) -> Result<Convergence, String> {
     let Some(Event::SweepConvergence {
-        cut_at,
+        cut_at: Some(cut),
         last_reseal_at,
         at,
         ..
     }) = events.iter().find(|event| converged(event, scope_root))
     else {
-        return Err("no sweep run reported the scope converged".to_owned());
+        return Err("no sweep run reported the scope converged after the cut".to_owned());
     };
-    match (cut_at, last_reseal_at) {
-        (Some(cut), Some(reseal)) => Ok(Convergence {
-            confirmed_ms: at.0.saturating_sub(cut.0),
-            last_reseal_ms: reseal.0.saturating_sub(cut.0),
-        }),
-        (None, _) => Err("the converged report carries no cut time".to_owned()),
-        (_, None) => Err("the converged report carries no re-seal time".to_owned()),
-    }
+    let reseal = last_reseal_at.ok_or("the converged report carries no re-seal time")?;
+    Ok(Convergence {
+        confirmed_ms: at.0.saturating_sub(cut.0),
+        last_reseal_ms: reseal.0.saturating_sub(cut.0),
+    })
 }
 
 /// Run one engine per account, each in its own state directory.
@@ -553,6 +556,22 @@ mod tests {
             report(SCOPE, 0, Some(1_000), Some(2_500)),
             report(SCOPE, 0, Some(1_000), Some(9_000)),
         ];
+        assert_eq!(
+            sweep_convergence(&events, SCOPE),
+            Ok(Convergence {
+                confirmed_ms: 4_000,
+                last_reseal_ms: 1_500,
+            })
+        );
+    }
+
+    #[test]
+    fn a_converged_report_with_no_cut_time_does_not_end_the_wait() {
+        let events = [
+            report(SCOPE, 0, None, None),
+            report(SCOPE, 0, Some(1_000), Some(2_500)),
+        ];
+        assert!(!converged(&events[0], SCOPE));
         assert_eq!(
             sweep_convergence(&events, SCOPE),
             Ok(Convergence {
