@@ -217,7 +217,6 @@ fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
         OpResolution::Applied {
             effective_name: Some(Zeroizing::new("a (2).txt".to_owned())),
             suffixed: true,
-            scope_exit_trigger: None,
         }
     );
     assert_eq!(base.children(id(0)).len(), 2, "both adds are visible");
@@ -781,8 +780,10 @@ impl ScopeExitRotator for RecordingRotator {
     }
 }
 
-/// Replay `ops` off the durable queue and drive whatever scope exits it found.
-/// `placements` seeds each moved file where the op was formed against it.
+/// Replay `ops` off the durable queue and drive the scope exits its drops owe.
+/// `placements` seeds each moved file where the move already landed, because a
+/// drop is the one replay verdict that owes a cut; an applied move owes its cut
+/// where the drain proves the planes.
 fn exits_of(
     placements: &[(NodeId, NodeId)],
     ops: &[Op],
@@ -801,7 +802,7 @@ fn exits_of(
             with_child(&mut base, *parent, *target, "m.txt", NodeKind::File);
         }
         let report = replay(&base, &base, &scan.mine, GRANTED_ROOTS);
-        let triggers = report.scope_exit_triggers.clone();
+        let triggers = report.dropped_scope_exits.clone();
         let cut = consume_scope_exit_triggers(rotator, &triggers).await;
         (triggers, cut)
     })
@@ -826,7 +827,7 @@ fn a_scope_exit_rotates_the_source_scope_root_at_depth_one_and_at_depth_n() {
     for (parent, depth) in [(id(5), 1), (id(12), 4)] {
         let rotator = RecordingRotator::refusing(&[]);
         let (triggers, cut) = exits_of(
-            &[(id(7), parent)],
+            &[(id(7), id(6))],
             &[exiting_move(id(7), parent, "m.txt")],
             &rotator,
         );
@@ -844,14 +845,14 @@ fn a_scope_exit_rotates_the_source_scope_root_at_depth_one_and_at_depth_n() {
 #[test]
 fn many_ops_exiting_one_scope_rotate_it_exactly_once() {
     let rotator = RecordingRotator::refusing(&[]);
-    let placements = [(id(7), id(5)), (id(8), id(11)), (id(9), id(12))];
-    let ops: Vec<Op> = placements
+    let sources = [(id(7), id(5)), (id(8), id(11)), (id(9), id(12))];
+    let ops: Vec<Op> = sources
         .into_iter()
-        .enumerate()
-        .map(|(n, (target, parent))| exiting_move(target, parent, &format!("m{n}.txt")))
+        .map(|(target, parent)| exiting_move(target, parent, "m.txt"))
         .collect();
+    let landed = sources.map(|(target, _)| (target, id(6)));
 
-    let (triggers, cut) = exits_of(&placements, &ops, &rotator);
+    let (triggers, cut) = exits_of(&landed, &ops, &rotator);
 
     assert_eq!(triggers, vec![id(5)], "three exits, one source scope root");
     assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
@@ -862,7 +863,7 @@ fn many_ops_exiting_one_scope_rotate_it_exactly_once() {
 fn an_intra_scope_move_rotates_nothing() {
     let rotator = RecordingRotator::refusing(&[]);
     let (triggers, cut) = exits_of(
-        &[(id(7), id(12))],
+        &[(id(7), id(11))],
         &[Op::move_node(
             id(7),
             id(12),
@@ -882,7 +883,7 @@ fn an_intra_scope_move_rotates_nothing() {
 }
 
 /// Structurally, only a relocation carries a scope crossing: every other op kind
-/// answers `None` to `scope_exit_source`. Named here so the non-trigger list is
+/// answers `None` to `relocation`. Named here so the non-trigger list is
 /// asserted rather than merely true.
 #[test]
 fn create_delete_rename_and_content_edits_rotate_nothing() {
@@ -912,16 +913,15 @@ fn create_delete_rename_and_content_edits_rotate_nothing() {
     ];
 
     for (label, op) in cases {
-        // The structural claim, asserted at its source: every arm of rebase_one
-        // but the two relocation ones hardcodes a `None` trigger, so the replay
-        // assertion below cannot fail on its own.
+        // The structural claim, asserted at its source: only a relocation owes
+        // a cut, so the replay assertion below cannot fail on its own.
         assert!(
-            op.scope_exit_source().is_none(),
+            op.relocation().is_none(),
             "{label} carries no scope crossing"
         );
         let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
         assert!(
-            report.scope_exit_triggers.is_empty(),
+            report.dropped_scope_exits.is_empty(),
             "{label} queues no scope-exit trigger"
         );
     }
@@ -996,7 +996,7 @@ fn an_already_satisfied_drop_whose_source_is_gone_rotates_nothing() {
 fn a_failed_scope_exit_rotation_surfaces_and_keeps_its_trigger() {
     let rotator = RecordingRotator::refusing(&[id(5)]);
     let (triggers, cut) = exits_of(
-        &[(id(7), id(12))],
+        &[(id(7), id(6))],
         &[exiting_move(id(7), id(12), "m.txt")],
         &rotator,
     );

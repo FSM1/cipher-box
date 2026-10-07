@@ -65,6 +65,7 @@ use crate::settings::{
     report_settings_verdict, summarize_settings,
 };
 use crate::sync::BookkeepingSeal;
+use crate::sync::crossing::enclosing_scope_root;
 use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, EpochSeed, GrantedPass, ScopeEnd, SealPlane, TickInputs,
     TickScopes, hold_captures, published_op_mark,
@@ -75,7 +76,7 @@ use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
-use crate::sync::rebase::{DropReason, QueueScanMemo, enclosing_scope_root, replay};
+use crate::sync::rebase::{DropReason, QueueScanMemo, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::render::BaseSnapshot;

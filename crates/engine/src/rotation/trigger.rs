@@ -118,8 +118,7 @@ impl ScopeExitReport {
 
 /// Drive one [`RotationTrigger::ScopeExit`] rotation per queued scope root.
 ///
-/// `roots` is [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport),
-/// already deduped to one entry per source scope root. A failure neither
+/// `roots` is the owed scope-exit debt, one entry per source scope root. A failure neither
 /// short-circuits the pass nor is swallowed: the remaining roots still rotate
 /// and the failed one comes back in [`ScopeExitReport::failed`], because a
 /// scope exit that never rotates leaves a revokee holding a live seed.

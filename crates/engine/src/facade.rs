@@ -157,6 +157,7 @@ use crate::settings::{
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::crossing::{RelocationPlan, enclosing_scope_root, plan, scope_of};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
 use crate::sync::kept_op::retain_pending;
@@ -171,7 +172,7 @@ use crate::sync::provision::{
     GENESIS_EPOCH, GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan,
     ProvisionedVault, VaultPointerProbe, provision_vault,
 };
-use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
+use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue};
 use crate::sync::record::RecordClass;
 use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
@@ -3602,29 +3603,6 @@ impl EngineView {
     }
 }
 
-/// How one relocation reaches the destination scope: as the single op the
-/// caller asked for, or as the two legs a crossing between two interior scopes
-/// takes through the vault-root scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelocationPlan {
-    /// One op, carrying the crossing it makes.
-    Direct(ScopeCrossing),
-    /// Two ops: park the subtree in the vault-root scope, then bring it into
-    /// the destination scope. One drain pass anchors on the vault root and
-    /// carries one interior end beside it, so a crossing between two interior
-    /// scopes names an end no pass holds — while each of these legs has the
-    /// vault root at one end ([`ScopeCrossing`]).
-    Staged,
-}
-
-impl RelocationPlan {
-    /// Whether the relocation stays inside one scope, and so re-seals nothing
-    /// and cuts nothing.
-    fn is_intra(self) -> bool {
-        self == Self::Direct(ScopeCrossing::Intra)
-    }
-}
-
 /// Plan a relocation's scope crossing at journal time, from **both** ends.
 ///
 /// A destination the render does not hold is [`EngineError::UnknownNode`] — the
@@ -3670,19 +3648,11 @@ fn classify_crossing(
             message: "its destination folder is not in this session's scope".to_owned(),
         });
     }
-    let source = scope_of(rendered, from_parent, scope_roots);
-    let destination = scope_of(rendered, new_parent, scope_roots);
-    if source == destination {
-        return Ok(RelocationPlan::Direct(ScopeCrossing::Intra));
-    }
-    if source != rendered.root && destination != rendered.root {
-        return Ok(RelocationPlan::Staged);
-    }
-    Ok(RelocationPlan::Direct(if source == rendered.root {
-        ScopeCrossing::Cross
-    } else {
-        ScopeCrossing::ExitsGrantedSource
-    }))
+    Ok(plan(
+        scope_of(rendered, from_parent, scope_roots),
+        scope_of(rendered, new_parent, scope_roots),
+        rendered.root,
+    ))
 }
 
 /// The plan of a relocation with an end below a grafted root.
@@ -3831,13 +3801,6 @@ fn relocation_legs(
             arrive(via, ScopeCrossing::Cross),
         ),
     }
-}
-
-/// The scope `node` belongs to, named by its root. The render root is the
-/// fallback the shared walk leaves to its callers: it anchors the vault's
-/// initial scope, which every node reaching no listed root belongs to.
-fn scope_of(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> NodeId {
-    enclosing_scope_root(rendered, node, scope_roots).unwrap_or(rendered.root)
 }
 
 /// The scan of `staging`'s durable queue for `reader`'s identity, served from

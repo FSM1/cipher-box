@@ -606,15 +606,6 @@ impl Op {
         }
     }
 
-    /// The parent this op moved its target out of when the move left a granted
-    /// source scope — the node the full-depth scope-root walk starts from
-    /// ([`crate::sync::rebase`]). `None` for every other op.
-    pub fn scope_exit_source(&self) -> Option<NodeId> {
-        self.relocation()
-            .filter(|(_, _, crossing)| matches!(crossing, ScopeCrossing::ExitsGrantedSource))
-            .map(|(from_parent, _, _)| from_parent)
-    }
-
     /// The two parents and the crossing a relocation names — the one shape
     /// [`OpKind::Relink`] and [`OpKind::Move`] share. `None` for every other
     /// kind.
