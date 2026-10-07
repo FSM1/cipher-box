@@ -323,6 +323,8 @@ struct Pass<'s> {
     owed_unread: bool,
     /// The pass reported a revival that the unread record refused.
     no_revival_reported: bool,
+    /// The owned scope roots whose record the gate rejected in this pass.
+    rejected_roots: BTreeSet<[u8; 16]>,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -436,7 +438,19 @@ where
             Err(_) => (BTreeSet::new(), true),
         };
         let report = if held {
-            held_report(underived)
+            WalkReport {
+                failed: scopes
+                    .iter()
+                    .filter(|scope| {
+                        doomed.unreadable.contains(&scope.scope_id)
+                            && queued
+                                .iter()
+                                .any(|folder| folder.scope_id == scope.scope_id)
+                    })
+                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
+                    .collect(),
+                ..held_report(underived)
+            }
         } else {
             WalkReport {
                 failed: scopes
@@ -473,6 +487,7 @@ where
             owed,
             owed_unread,
             no_revival_reported: false,
+            rejected_roots: BTreeSet::new(),
             owner_tag,
             scopes,
             bins,
@@ -593,7 +608,13 @@ where
                                 admitted,
                             })
                         }
-                        Err(ScopeRootAdmission::Rejected | ScopeRootAdmission::HeadBlockAbsent) => {
+                        Err(
+                            rejection @ (ScopeRootAdmission::Rejected
+                            | ScopeRootAdmission::HeadBlockAbsent),
+                        ) => {
+                            if matches!(rejection, ScopeRootAdmission::Rejected) {
+                                pass.rejected_roots.insert(scope_id);
+                            }
                             pass.report.rejected.push(scope.name.as_str().to_owned());
                             None
                         }
@@ -794,9 +815,10 @@ where
 
     /// Visit a folder from the lapsed-folder queue, while the base still names
     /// it at the queued name, under the plane of its scope root. Whether the
-    /// queue can drop it: the read admits it, the base no longer names it, the
-    /// walk renews no name in its scope, or the visit failed for good. The
-    /// queue retries a transient failure itself, so it keeps no cursor back.
+    /// queue can drop it: the base no longer names it, the walk renews no name
+    /// in its scope, the gate rejected its scope root, or the visit ended with
+    /// no transient failure. The queue retries a transient failure itself, so
+    /// it keeps no cursor back.
     async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) -> bool {
         let named = self
             .guards
@@ -815,19 +837,23 @@ where
         {
             return true;
         }
-        let Some(material) = self.material(pass, folder.scope_id).await else {
+        // A visit there reports `NO_RECORD`; the pass names the journal.
+        if pass.doomed.unreadable.contains(&folder.scope_id) {
             return false;
-        };
-        // The cursor visit reads such a folder under its own plane.
-        let Some(plane) = queued_plane(material, folder) else {
-            return false;
+        }
+        let material = self
+            .material(pass, folder.scope_id)
+            .await
+            .map(|material| queued_plane(material, folder));
+        let root_rejected = pass.rejected_roots.contains(&folder.scope_id);
+        let plane = match queued_step(material, root_rejected) {
+            Ok(plane) => plane,
+            Err(drop) => return drop,
         };
         let kept_back = core::mem::replace(&mut pass.kept_back, false);
-        let read = self
-            .admit(pass, &plane, folder.node_id, &folder.name, false)
+        self.admit(pass, &plane, folder.node_id, &folder.name, false)
             .await;
-        let transient = core::mem::replace(&mut pass.kept_back, kept_back);
-        read.is_some() || !transient
+        !core::mem::replace(&mut pass.kept_back, kept_back)
     }
 
     /// Visit one child a folder names.
@@ -1485,6 +1511,18 @@ fn queued_plane(material: &ScopeMaterial, folder: &LapsedFolder) -> Option<Plane
     })
 }
 
+/// Whether a queued folder reads under `material`, the plane of its admitted
+/// scope root, or settles before any visit: `Err(true)` drops it, as the gate
+/// rejected the root; `Err(false)` keeps it, as the root did not admit or the
+/// cursor visit reads the folder under its own plane.
+fn queued_step(material: Option<Option<Plane>>, root_rejected: bool) -> Result<Plane, bool> {
+    match material {
+        Some(Some(plane)) => Ok(plane),
+        Some(None) => Err(false),
+        None => Err(root_rejected),
+    }
+}
+
 /// Store where the walk stops: the path of folders down to the deepest one it
 /// is listing, capped at the depth-cap folder, whose subtree a later pass
 /// starts again.
@@ -1634,6 +1672,21 @@ mod tests {
         };
         assert!(queued_plane(&material, &folder(&current)).is_some());
         assert!(queued_plane(&material, &folder(&other)).is_none());
+        assert!(
+            matches!(
+                queued_step(Some(queued_plane(&material, &folder(&other))), false),
+                Err(false)
+            ),
+            "the entry stays, and no visit sends an event",
+        );
+    }
+
+    /// A root the gate rejects drops the queued folders of its scope; a root
+    /// that does not admit for another reason keeps them.
+    #[test]
+    fn a_rejected_scope_root_drops_its_queued_folders() {
+        assert!(matches!(queued_step(None, true), Err(true)));
+        assert!(matches!(queued_step(None, false), Err(false)));
     }
 
     /// A folder queued again moves to the newest place, and a full queue

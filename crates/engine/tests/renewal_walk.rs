@@ -35,7 +35,7 @@ use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig,
@@ -2003,6 +2003,124 @@ fn a_queued_folder_that_meets_a_429_in_a_held_cycle_revives_on_the_next_pass() {
         "the next pass revives the queued folder"
     );
     assert_eq!(record_at(&world, &name).sequence, before.sequence + 1);
+}
+
+/// A manual refresh queues a folder that the snapshot cache still holds. The
+/// pass admits the cached copy, and its revival meets a 429: the entry stays
+/// until a signature settles it.
+#[test]
+fn a_queued_folder_with_a_cached_copy_stays_queued_after_a_429() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let writer = world.device(b"the device that wrote");
+    let nodes = written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    hold_the_cycle(&world, &writer);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &writer, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on_while_ticking(engine.command(Command::ManualRefresh), &mut tasks)
+        .expect_err("no endpoint serves the lapsed folder");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the 429 holds the revival back");
+
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence + 1,
+        "the next pass revives the queued folder",
+    );
+}
+
+/// A held pass whose queued folder sits in a scope with a doomed-name journal
+/// entry that does not open names the journal, not the folder.
+#[test]
+fn a_held_pass_names_the_journal_of_a_scope_with_a_queued_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    hold_the_cycle(&world, &device);
+    let entry = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, NodeId([7; 16]));
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(&entry, b"not a sealed reclamation"),
+    )
+    .expect("stage the entry");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+
+    let failed: Vec<(String, String)> = core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::RenewalFailed {
+                routing_key,
+                detail,
+            } => Some((routing_key, detail)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        failed
+            .iter()
+            .any(|(key, detail)| key == write_name(ROOT).as_str()
+                && detail.contains("doomed-name journal")),
+        "the held pass names the journal",
+    );
+    assert!(
+        failed.iter().all(|(key, _)| key != name.as_str()),
+        "and reports nothing for the folder",
+    );
+    assert!(unserved(&world, &name), "the folder waits for the journal");
+}
+
+/// A transient failure of a queued visit keeps no cursor back: the queue
+/// retries it itself.
+#[test]
+fn a_transient_queued_visit_keeps_no_cursor_back() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    lapse_into_the_recovery_cache(&world, &blocks);
+    blocks.throttle_recovery_once(name.as_str());
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "the cursor visit revives the folder"
+    );
+    let cursor = stored_cursor(&device).expect("the pass stores its cursor");
+    assert_eq!(
+        cursor.kept_back_since, None,
+        "the cursor moves past the queued 429"
+    );
 }
 
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a
