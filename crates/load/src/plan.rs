@@ -22,15 +22,19 @@ pub enum Scenario {
     Mixed,
     /// A BYO account's advisory pin rows: the registry path that never gates.
     ByoAdvisory,
+    /// One engine per account rotates a folder of `--nodes` subfolders: the
+    /// read cut's sweep convergence, then the write cut's name wave.
+    RotationWave,
 }
 
 impl Scenario {
-    pub const ALL: [Scenario; 5] = [
+    pub const ALL: [Scenario; 6] = [
         Scenario::ContentIngest,
         Scenario::GatewayRead,
         Scenario::NameWave,
         Scenario::Mixed,
         Scenario::ByoAdvisory,
+        Scenario::RotationWave,
     ];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -44,12 +48,21 @@ impl Scenario {
             Scenario::NameWave => "name-wave",
             Scenario::Mixed => "mixed",
             Scenario::ByoAdvisory => "byo-advisory",
+            Scenario::RotationWave => "rotation-wave",
         }
     }
 
-    /// Whether the scenario reads blocks back off the read accelerator.
+    /// Whether the scenario reads blocks back off the read accelerator. The
+    /// engine's sweep reads each node body there.
     fn needs_gateway(self) -> bool {
-        self == Scenario::GatewayRead
+        matches!(self, Scenario::GatewayRead | Scenario::RotationWave)
+    }
+
+    /// Whether the scenario runs a whole engine, which signs in with its own
+    /// identity and resolves records over `/routing/v1`, rather than
+    /// provisioning test-login accounts.
+    pub fn runs_engine(self) -> bool {
+        self == Scenario::RotationWave
     }
 
     /// The wire names, for usage text and error messages.
@@ -117,11 +130,17 @@ impl Target {
 pub const MAX_BLOCK_BYTES: u32 = 2 * 1024 * 1024;
 /// The registry's batch cap, published as `maxItems` (blueprint/api.md).
 pub const MAX_BATCH: u32 = 1000;
+/// Ceiling on the subfolders one rotated folder holds. Past the API's
+/// 60-per-minute content bucket the wave stops and the sweep waits for the
+/// idle job, so a larger folder measures the throttle again.
+pub const MAX_NODES: u32 = 64;
 
 const DEFAULT_LOCAL_API_URL: &str = "http://localhost:3000";
 /// Kubo's gateway by address: it serves `localhost` as a subdomain gateway and
 /// answers every path request with a 301 to a name that resolves nowhere.
 const DEFAULT_LOCAL_GATEWAY_URL: &str = "http://127.0.0.1:8080";
+/// The hermetic `/routing/v1` record store the local stack runs.
+const DEFAULT_LOCAL_ROUTING_URL: &str = "http://localhost:3001";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanError(pub String);
@@ -146,8 +165,13 @@ pub struct RunPlan {
     pub api_url: String,
     pub gateway_url: Option<String>,
     pub gateway_token: Option<String>,
+    /// The `/routing/v1` endpoints an engine scenario resolves records over.
+    pub routing_endpoints: Vec<String>,
+    /// Empty for an engine scenario, which never calls test-login.
     pub test_login_secret: String,
     pub clients: u32,
+    /// Subfolders in the folder an engine scenario rotates.
+    pub nodes: u32,
     pub ops_per_client: u32,
     pub block_bytes: u32,
     pub batch_size: u32,
@@ -273,6 +297,43 @@ fn resolve_gateway_url(
     Ok(Some(normalize_base(url)))
 }
 
+/// Each endpoint passes the host policy: the record transport shows the
+/// session's read pseudonym to every one of them.
+fn resolve_routing_endpoints(
+    scenario: Scenario,
+    target: Target,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<String>, PlanError> {
+    if !scenario.runs_engine() {
+        return Ok(Vec::new());
+    }
+    let raw = match (env("LOAD_TEST_ROUTING_ENDPOINTS"), target) {
+        (Some(raw), _) => raw,
+        (None, Target::Local) => DEFAULT_LOCAL_ROUTING_URL.to_owned(),
+        (None, Target::Staging) => {
+            return Err(bad(
+                "an engine scenario requires LOAD_TEST_ROUTING_ENDPOINTS on a deployed target",
+            ));
+        }
+    };
+    let endpoints: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if endpoints.is_empty() {
+        return Err(bad("LOAD_TEST_ROUTING_ENDPOINTS names no endpoint"));
+    }
+    endpoints
+        .into_iter()
+        .map(|url| {
+            guard_url(target, "LOAD_TEST_ROUTING_ENDPOINTS", &url)?;
+            Ok(normalize_base(url))
+        })
+        .collect()
+}
+
 /// Every dimension of a run is bounded, so no flag combination can turn a
 /// dispatched run into an unbounded one.
 fn bounded(
@@ -332,10 +393,22 @@ pub fn build_plan(
         api_url: resolve_api_url(target, &env)?,
         gateway_url: resolve_gateway_url(scenario, target, &env)?,
         gateway_token: env("LOAD_TEST_GATEWAY_TOKEN"),
-        test_login_secret: env("LOAD_TEST_SECRET").ok_or_else(|| {
-            bad("LOAD_TEST_SECRET is required; it must equal the API's TEST_LOGIN_SECRET")
-        })?,
-        clients: bounded(&mut flags, "clients", 5, 1, target.max_clients())? as u32,
+        routing_endpoints: resolve_routing_endpoints(scenario, target, &env)?,
+        test_login_secret: if scenario.runs_engine() {
+            String::new()
+        } else {
+            env("LOAD_TEST_SECRET").ok_or_else(|| {
+                bad("LOAD_TEST_SECRET is required; it must equal the API's TEST_LOGIN_SECRET")
+            })?
+        },
+        clients: bounded(
+            &mut flags,
+            "clients",
+            if scenario.runs_engine() { 1 } else { 5 },
+            1,
+            target.max_clients(),
+        )? as u32,
+        nodes: bounded(&mut flags, "nodes", 16, 1, u64::from(MAX_NODES))? as u32,
         ops_per_client: bounded(
             &mut flags,
             "ops-per-client",
@@ -708,5 +781,94 @@ mod tests {
         )
         .expect_err("refused");
         assert!(error.0.contains("non-loopback"), "{error}");
+    }
+
+    #[test]
+    fn an_engine_scenario_needs_no_login_secret_and_defaults_to_one_local_engine() {
+        let plan = build_plan(
+            &flags(&[("scenario", "rotation-wave"), ("target", "local")]),
+            lookup(&[]),
+        )
+        .expect("plan");
+        assert_eq!(plan.clients, 1);
+        assert_eq!(plan.nodes, 16);
+        assert_eq!(plan.routing_endpoints, vec!["http://localhost:3001"]);
+        assert_eq!(plan.gateway_url.as_deref(), Some("http://127.0.0.1:8080"));
+        assert!(plan.test_login_secret.is_empty());
+    }
+
+    #[test]
+    fn routing_endpoints_pass_the_same_host_policy_as_the_api_url() {
+        let error = build_plan(
+            &flags(&[("scenario", "rotation-wave"), ("target", "local")]),
+            lookup(&[(
+                "LOAD_TEST_ROUTING_ENDPOINTS",
+                "http://localhost:3001, https://delegated-ipfs.dev",
+            )]),
+        )
+        .expect_err("refused");
+        assert!(error.0.contains("non-loopback"), "{error}");
+
+        let staging = |routing: &str| {
+            build_plan(
+                &flags(&[("scenario", "rotation-wave"), ("target", "staging")]),
+                lookup(&[
+                    ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
+                    ("LOAD_TEST_GATEWAY_URL", "https://ipfs.staging.example.com"),
+                    ("LOAD_TEST_ROUTING_ENDPOINTS", routing),
+                ]),
+            )
+        };
+        assert!(staging("").is_err());
+        assert!(staging(" , ").is_err());
+        assert!(staging("http://routing.staging.example.com").is_err());
+        assert_eq!(
+            staging("https://routing.staging.example.com/, https://delegated-ipfs.dev")
+                .expect("plan")
+                .routing_endpoints,
+            vec![
+                "https://routing.staging.example.com",
+                "https://delegated-ipfs.dev"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_node_count_is_bounded_on_every_target() {
+        let nodes = |target: &str, count: &str| {
+            build_plan(
+                &flags(&[
+                    ("scenario", "rotation-wave"),
+                    ("target", target),
+                    ("nodes", count),
+                ]),
+                if target == "local" {
+                    lookup(&[])
+                } else {
+                    lookup(&[
+                        ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
+                        ("LOAD_TEST_GATEWAY_URL", "https://ipfs.staging.example.com"),
+                        ("LOAD_TEST_ROUTING_ENDPOINTS", "https://delegated-ipfs.dev"),
+                    ])
+                },
+            )
+        };
+        assert!(nodes("local", "64").is_ok());
+        assert!(nodes("local", "65").is_err());
+        assert!(nodes("staging", "64").is_ok());
+        assert!(nodes("staging", "65").is_err());
+        assert!(nodes("staging", "0").is_err());
+    }
+
+    #[test]
+    fn the_login_secret_stays_required_for_every_test_login_scenario() {
+        for scenario in Scenario::ALL.into_iter().filter(|s| !s.runs_engine()) {
+            let error = build_plan(
+                &flags(&[("scenario", scenario.as_str()), ("target", "local")]),
+                lookup(&[]),
+            )
+            .expect_err("refused");
+            assert!(error.0.contains("LOAD_TEST_SECRET"), "{error}");
+        }
     }
 }

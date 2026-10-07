@@ -9,6 +9,7 @@
 pub mod metrics;
 pub mod plan;
 pub mod report;
+mod rotation;
 pub mod runner;
 pub mod scenarios;
 pub mod seams;

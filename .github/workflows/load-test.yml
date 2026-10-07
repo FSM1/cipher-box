@@ -27,6 +27,7 @@ on:
           - name-wave
           - mixed
           - byo-advisory
+          - rotation-wave
       clients:
         description: 'Concurrent accounts (staging caps at 8)'
         required: false
@@ -47,6 +48,10 @@ on:
         description: 'Per-client start stagger in ms; 0 is a spike'
         required: false
         default: '0'
+      nodes:
+        description: 'Subfolders rotation-wave rotates, max 64'
+        required: false
+        default: '16'
 
 # Two runs against the same target would measure each other. Queue rather than
 # cancel, so a staging run already loading the 2-vCPU box finishes cleanly. A
@@ -63,7 +68,9 @@ jobs:
     name: 'Load Test: ${{ inputs.scenario }} on ${{ inputs.environment }}'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
-    timeout-minutes: 45
+    # rotation-wave can wait out one idle sweep cadence (15 min) for its
+    # sweep to converge.
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -100,6 +107,7 @@ jobs:
       BLOCK_BYTES: ${{ inputs.block_bytes }}
       BATCH_SIZE: ${{ inputs.batch_size }}
       RAMP_MS: ${{ inputs.ramp_ms }}
+      NODES: ${{ inputs.nodes }}
       TARGET: ${{ inputs.environment }}
 
     steps:
@@ -128,6 +136,9 @@ jobs:
       - name: Install dependencies
         if: inputs.environment == 'local'
         run: pnpm install --frozen-lockfile
+
+      - uses: ./.github/actions/mock-ipns-routing
+        if: inputs.environment == 'local' && inputs.scenario == 'rotation-wave'
 
       - name: Stand up the local API over the CI stack
         if: inputs.environment == 'local'
@@ -160,10 +171,22 @@ jobs:
           IPFS_GATEWAY_URL: ${{ vars.IPFS_GATEWAY_URL }}
           TEST_LOGIN_SECRET: ${{ secrets.TEST_LOGIN_SECRET }}
           IPFS_GATEWAY_TOKEN: ${{ secrets.IPFS_GATEWAY_TOKEN }}
+          ROUTING_ENDPOINTS: ${{ vars.VITE_ROUTING_ENDPOINTS }}
         run: |
           if [ "$TARGET" = 'staging' ]; then
-            if [ -z "$API_URL" ] || [ -z "$TEST_LOGIN_SECRET" ]; then
-              echo '::error::staging runs need the API_URL variable and TEST_LOGIN_SECRET secret'
+            if [ -z "$API_URL" ]; then
+              echo '::error::staging runs need the API_URL variable'
+              exit 1
+            fi
+            # An engine signs in with its own identity and calls no test-login.
+            if [ "$SCENARIO" = 'rotation-wave' ]; then
+              if [ -z "$IPFS_GATEWAY_URL" ] || [ -z "$ROUTING_ENDPOINTS" ]; then
+                echo '::error::rotation-wave on staging needs the IPFS_GATEWAY_URL and VITE_ROUTING_ENDPOINTS variables'
+                exit 1
+              fi
+              echo "LOAD_TEST_ROUTING_ENDPOINTS=$ROUTING_ENDPOINTS" >> "$GITHUB_ENV"
+            elif [ -z "$TEST_LOGIN_SECRET" ]; then
+              echo '::error::staging runs need the TEST_LOGIN_SECRET secret'
               exit 1
             fi
             if [ "$SCENARIO" = 'gateway-read' ]; then
@@ -199,7 +222,8 @@ jobs:
             --ops-per-client "$OPS_PER_CLIENT" \
             --block-bytes "$BLOCK_BYTES" \
             --batch-size "$BATCH_SIZE" \
-            --ramp-ms "$RAMP_MS"
+            --ramp-ms "$RAMP_MS" \
+            --nodes "$NODES"
 
       - name: Upload the metrics report
         if: always()

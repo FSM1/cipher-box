@@ -22,6 +22,10 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
     let p95_ms = match (scenario, target) {
         (Scenario::ContentIngest | Scenario::GatewayRead, Target::Local) => 2_000.0,
         (Scenario::ContentIngest | Scenario::GatewayRead, Target::Staging) => 8_000.0,
+        // A sweep the bucket throttles converges on the idle job, one
+        // `sweep_cadence` later.
+        (Scenario::RotationWave, Target::Local) => 1_800_000.0,
+        (Scenario::RotationWave, Target::Staging) => 2_400_000.0,
         (_, Target::Local) => 1_000.0,
         (_, Target::Staging) => 4_000.0,
     };

@@ -18,12 +18,14 @@ options:
   --pace-ms <n>          delay between an account's ops    (default 0 local, 1200 staging)
   --ramp-ms <n>          per-client start stagger          (default 0)
   --report-dir <path>    where the JSON report is written  (default load-reports)
+  --nodes <n>            subfolders rotation-wave rotates  (default 16)
 
 environment:
   LOAD_TEST_API_URL        required for staging; loopback-only for local
-  LOAD_TEST_SECRET         required; must equal the API's TEST_LOGIN_SECRET
+  LOAD_TEST_SECRET         required but for rotation-wave; must equal the API's TEST_LOGIN_SECRET
   LOAD_TEST_GATEWAY_URL    read accelerator, for the gateway-read scenario
-  LOAD_TEST_GATEWAY_TOKEN  bearer token for a gateway behind forward_auth";
+  LOAD_TEST_GATEWAY_TOKEN  bearer token for a gateway behind forward_auth
+  LOAD_TEST_ROUTING_ENDPOINTS  comma-separated /routing/v1 endpoints, for rotation-wave";
 
 fn main() -> ExitCode {
     match run() {

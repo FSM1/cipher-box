@@ -18,6 +18,7 @@ in CI's `Rust` area's `Workspace tests (Linux)` job.
 | `name-wave`      | `POST /registry/register` + `/retire` under a bulk name wave |
 | `mixed`          | ingest, registry, quota and a mailbox round-trip interleaved |
 | `byo-advisory`   | a BYO account's advisory pin rows, which never gate          |
+| `rotation-wave`  | a whole engine's read cut sweep and write cut name wave      |
 
 v1's `sustained-load` and `spike-test` are not scenarios here: a sustained run
 is a large `--ops-per-client`, and a spike is the default `--ramp-ms 0`, where
@@ -41,6 +42,32 @@ cargo run --release -p cipherbox-load -- \
 
 `--help` lists every flag and environment variable. A JSON report lands in
 `load-reports/`, and the process exits non-zero when a threshold breaches.
+
+## The rotation-wave scenario
+
+`rotation-wave` runs one whole engine per account over the desktop production
+seams, not test-login accounts. Each engine signs in with a fresh identity,
+builds a folder of `--nodes` subfolders, and mints a read link at it, so that
+the folder is a scope root. Then it runs a read cut (`RotateNow`) and a write
+cut (`RotateWriteNow`), in that order, and records two spans from the engine's
+own events, on the engine clock:
+
+- `sweep-converge`: from the read cut to the end of the sweep run that reports
+  no node at the old epoch (`sweepConvergence`).
+- `name-wave`: from `nameWaveStarted` to `nameWaveEnded`. `name-wave-node` is
+  the time each node took to land.
+
+Each phase waits one throttle window first, so it starts on a full content
+bucket. The scenario also needs the `/routing/v1` endpoints, in
+`LOAD_TEST_ROUTING_ENDPOINTS`; `local` defaults to the mock store on `:3001`.
+No command deletes the account, so each engine leaves its account behind.
+
+The API's content bucket allows 60 uploads a minute per account, and each node
+that the sweep re-seals or the wave moves uploads a block. Past about 55 nodes
+the wave stops part way, the cut becomes owed work, and the run exits non-zero.
+The proof that the sweep converged then waits for the idle job, one
+`sweep_cadence` (15 minutes) after the engine started. `--nodes` stops at 64
+for that reason.
 
 ## Targets
 
