@@ -500,10 +500,10 @@ fn an_isolated_availability_stall_still_spends_the_drivers_passes() {
     );
 }
 
-/// A settled verdict is not worth another pass — no retry re-opens a node no
+/// A pass that moves no node and leaves only a settled verdict — a node no
 /// seed reaches, a record the gate refused, or a record at a version this
-/// build cannot author — so the driver returns on the first pass with the
-/// node surfaced.
+/// build cannot author — settles: the driver returns on the first pass with
+/// the node surfaced.
 #[test]
 fn a_settled_isolation_does_not_spend_the_drivers_passes() {
     for reason in [
@@ -517,6 +517,17 @@ fn a_settled_isolation_does_not_spend_the_drivers_passes() {
         let outcome = drive(&net, 3, 0).expect("the pass completes");
         assert_eq!(outcome.unreachable, vec![(id(0x01), reason)]);
     }
+}
+
+#[test]
+fn a_node_left_at_the_old_epoch_converges_on_a_later_pass() {
+    let net = FakeNet::new(5, &[0x01, 0x02])
+        .node(0x01, 1, &[])
+        .node(0x02, 1, &[])
+        .node_fault_until(0x02, 1, SweepResolveFailure::Unreadable);
+    let outcome = drive(&net, 3, 1).expect("the second pass converges");
+    assert_eq!(outcome.old_epoch_nodes(), 0);
+    assert!(outcome.converged.contains(&id(0x02)));
 }
 
 #[test]
@@ -814,6 +825,54 @@ fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualSche
         },
     ));
     (seen, scheduler)
+}
+
+/// The idle job's round source: the one scope each round until `settled`
+/// holds an epoch, then none; `count` rounds in all.
+fn unsettled_rounds(
+    count: usize,
+    settled: &RefCell<Option<u64>>,
+) -> impl AsyncFnMut() -> Option<Vec<ChildScopeRef>> + '_ {
+    let remaining = Cell::new(count);
+    move || {
+        let left = remaining.get();
+        remaining.set(left.saturating_sub(1));
+        let due = settled.borrow().is_none();
+        async move { (left > 0).then(|| if due { vec![scope_ref(0x00)] } else { vec![] }) }
+    }
+}
+
+#[test]
+fn the_idle_job_settles_a_scope_whose_only_residual_is_settled() {
+    let net = FakeNet::new(5, &[0x01])
+        .node(0x01, 1, &[])
+        .node_fault(0x01, SweepResolveFailure::Unreadable);
+    let scheduler = VirtualScheduler::new().with_auto_advance();
+    let cadence = Duration::from_secs(30);
+    let settled = RefCell::new(None);
+    let seen: Reported = Reported::default();
+    block_on(run_sweep_job(
+        &scheduler,
+        cadence,
+        unsettled_rounds(3, &settled),
+        one_pass(&scheduler, &net, cadence),
+        |scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>| {
+            let outcome = result.as_ref().expect("swept");
+            *settled.borrow_mut() = outcome.settled_epoch();
+            seen.borrow_mut().push((scope.scope_id, result.clone()));
+        },
+    ));
+    assert_eq!(
+        seen.borrow().len(),
+        1,
+        "one report, then the scope is settled"
+    );
+    assert_eq!(*settled.borrow(), Some(5));
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(4 * 30_000),
+        "one idle per round, plus the idle before the round that stops"
+    );
 }
 
 fn swept(seen: &Reported, round: usize) -> SweepOutcome {

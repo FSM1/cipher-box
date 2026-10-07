@@ -87,6 +87,8 @@ pub(crate) struct PointerConsult<'a> {
 pub(crate) struct ConsultedPointer {
     /// The owner-vouched current root name.
     pub(crate) current_root: IpnsName,
+    /// The root the re-point moved off, as the owner signed it.
+    pub(crate) prev_root: Option<IpnsName>,
     /// The write-epoch floor in force once the consult ran: the vouched
     /// epoch, or the standing floor when a write-epoch lease deferred the
     /// raise.
@@ -144,6 +146,7 @@ impl PointerConsult<'_> {
                 .map_err(|_| PointerConsultError::Unavailable)?;
         Ok(Some(ConsultedPointer {
             current_root: repoint.current_root,
+            prev_root: repoint.prev_root,
             write_floor,
             deferred: write_floor < repoint.write_epoch,
             record_bytes,

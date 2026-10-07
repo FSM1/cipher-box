@@ -41,14 +41,15 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use cipherbox_engine::rotation::{
-    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory,
+    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, PublishedRoot,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode,
+    SweptScope, WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
 };
+use cipherbox_engine::sync::pointer::scope_pointer_name;
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::wide_token;
 use k256::ecdsa::SigningKey;
@@ -1740,9 +1741,9 @@ impl CascadeResealResolver for LocalNet {
 impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
-        _record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        Ok(())
+        record: &ResealedScopeRoot,
+    ) -> Result<PublishedRoot, RotationPublishError> {
+        Ok(PublishedRoot::fresh(record, 1))
     }
 }
 
@@ -1751,10 +1752,10 @@ impl ScopeRootPromoter for LocalNet {
         &self,
         _parent: &ChildScopeRef,
         _node: &NodeRef,
-        _record: &ResealedScopeRoot,
+        record: &ResealedScopeRoot,
         _held_outside: &[cipherbox_engine::grants::HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError> {
-        Ok(Vec::new())
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
+        Ok((Vec::new(), PublishedRoot::fresh(record, 1)))
     }
 }
 
@@ -1926,6 +1927,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     .and_then(|grant| grant.handover)
     .expect("the grant mints against the local net");
 
+    let scope_pointer_name = scope_pointer_name(&[0x77; 32], &grantee.scope_id);
     post_share_pointer(
         &mut entropy,
         &owner_client,
@@ -1933,6 +1935,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         &grantee,
         &recipient,
         &grantee.ipns_name(),
+        &scope_pointer_name,
     )
     .await
     .expect("the live mailbox accepts the grant path's own address and idempotency key");
@@ -1951,6 +1954,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     );
     let pointer = SharePointer::decode(&items[0].payload).expect("decode the share pointer");
     assert_eq!(pointer.permission, Permission::Read);
+    assert_eq!(pointer.scope_pointer_name, Some(scope_pointer_name));
     assert_eq!(
         pointer.sharer_identity_pk,
         owner_identity.verifying_key().to_sec1()

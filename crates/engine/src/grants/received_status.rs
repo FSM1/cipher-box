@@ -42,9 +42,11 @@ use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
 };
+use crate::session::RootSequences;
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
+use crate::sync::staleness::{PinPass, PinRead, WithheldPin};
 use crate::sync::tick::{ResolveMode, on_access_refresh_due};
 
 use super::accept::ReceivedShareStore;
@@ -79,6 +81,8 @@ pub(crate) struct ReceivedVerdict {
     /// The bookmark's own copy is the accept's snapshot of it, and a downgrade
     /// republishes the demoted set without delivering a fresh pointer.
     pub permission: Permission,
+    /// The open hold on a withheld update of this scope, if one stands.
+    pub withheld: Option<WithheldPin>,
 }
 
 /// The durable bars a verdict on one bookmarked shared scope is measured
@@ -134,6 +138,12 @@ pub(crate) struct ScopeRender<'a> {
     /// pass folds its scope-root bodies into, and every leg below a grafted
     /// root reads.
     pub claims: &'a RefCell<ClaimRecord>,
+    /// The withheld-update hold on each held bookmark's scope pointer, by
+    /// pointer name.
+    pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
+    /// The sequence this pass gated at each grafted root, which a navigation
+    /// measures that root against.
+    pub root_sequences: &'a RefCell<RootSequences>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -233,6 +243,12 @@ fn report_refusal(
 fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRender<'_>) {
     let share = open.share;
     let root = NodeId(share.scope_id);
+    if let Ok(name) = scope_name(&share.scope_root_name) {
+        render
+            .root_sequences
+            .borrow_mut()
+            .note_grafted(root, &name, open.sequence);
+    }
     let scope_roots = render.scope_roots.borrow();
     let mut base = render.base.borrow_mut();
     let split = GraftedPlane {
@@ -288,6 +304,8 @@ struct Classified {
     /// The link key this pass read with. `None` on the personal path.
     link: Option<EphemeralInvitee>,
     hold_change: Option<HoldChange>,
+    /// A record below the sequence floor while an endpoint failed.
+    withheld: bool,
 }
 
 impl Classified {
@@ -298,6 +316,7 @@ impl Classified {
             resolved: None,
             link: None,
             hold_change: None,
+            withheld: false,
         }
     }
 
@@ -389,6 +408,8 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     /// How this pass paces its re-resolves
     /// ([`refresh`](ReceivedShareStatus::refresh)).
     pub mode: ResolveMode,
+    /// [`PinPass::root_reconciled`].
+    pub root_reconciled: bool,
 }
 
 impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F> {
@@ -472,13 +493,24 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .into_iter()
             .map(|(_, key)| key)
             .map_while(|key| {
-                let cost = 1 + usize::from(received.link_hold(&key).is_some());
+                let named = received
+                    .find(&key)
+                    .is_some_and(|share| share.scope_pointer_name.is_some());
+                let cost = 1 + usize::from(named);
                 budget = budget.checked_sub(cost)?;
                 Some(key)
             })
             .collect();
         let (pointers, heals) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
+            .await;
+        let pins = PinPass {
+            now,
+            root_reconciled: self.root_reconciled,
+            profile,
+            events: render.events,
+        };
+        self.observe_pointer_pins(&received, &pointers, render, &pins)
             .await;
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
@@ -515,8 +547,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             // through the pointer (ADR 0024 D5), so an unanswered pointer keeps
             // the last verdict.
             let pointer = pointers.get(&key).copied();
+            let unread = |pin: &mut Option<WithheldPin>| {
+                pins.observe(pin, &share.scope_root_name, PinRead::Unread, false);
+            };
             if !scheduled.contains(&key) || pointer == Some(PointerVerdict::Unavailable) {
-                if let Some(held) = held {
+                if let Some(mut held) = held {
+                    unread(&mut held.withheld);
                     refreshed.insert(key, held);
                 }
                 continue;
@@ -535,12 +571,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                         link_class(ResolutionClass::Unresolvable, hold.deadline, now)
                     }
                 };
+                let mut withheld = held.and_then(|held| held.withheld);
+                unread(&mut withheld);
                 refreshed.insert(
                     key,
                     ReceivedVerdict {
                         class,
                         at: now,
                         permission: carried,
+                        withheld,
                     },
                 );
                 continue;
@@ -554,7 +593,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 resolved,
                 link,
                 hold_change,
+                withheld,
             } = classified;
+            let reached_record = resolved.is_some();
             if let Some(hold) = hold.filter(|_| !personal) {
                 let deadline = match &hold_change {
                     Some(HoldChange::Deadline(_, fresh)) => *fresh,
@@ -637,12 +678,22 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             if grafted && permission != Permission::Write {
                 render.write_seeds.borrow_mut().remove(&share.scope_id);
             }
+            let mut pin = held.and_then(|held| held.withheld);
+            let read = if withheld {
+                PinRead::Withheld
+            } else if reached_record {
+                PinRead::Reached
+            } else {
+                PinRead::Unread
+            };
+            pins.observe(&mut pin, &share.scope_root_name, read, grafted);
             refreshed.insert(
                 key,
                 ReceivedVerdict {
                     class,
                     at: now,
                     permission,
+                    withheld: pin,
                 },
             );
         }
@@ -676,10 +727,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
     }
 
-    /// Follow the scope pointer of every scheduled bookmark that holds link
-    /// keys (ADR 0024 D5 step 3). Answers each one's verdict, and the scope
-    /// root each vouched-for bookmark must move to. A refused re-point object
-    /// is a trust verdict, reported here.
+    /// Follow the scope pointer of every scheduled bookmark that holds a scope
+    /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
+    /// verdict, and the scope root each vouched-for bookmark must move to. A
+    /// refused re-point object is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
@@ -694,8 +745,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut heals = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let (Some(hold), Some(contact), true) = (
-                received.link_hold(&key),
+            let (Some(name), Some(contact), true) = (
+                share.scope_pointer_name.as_ref(),
                 by_identity.get(&share.sharer_identity_pk),
                 scheduled.contains(&key),
             ) else {
@@ -705,7 +756,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 self.transport,
                 &self.sharer_floors(share),
                 share,
-                hold,
+                name,
                 &contact.identity_pk(),
             )
             .await
@@ -728,9 +779,72 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     PointerVerdict::Rejected
                 }
             };
+            // Only a link read waits for a vouched root (ADR 0024 D5). A
+            // personal read uses the stored root when the pointer gives none.
+            let personal = received.link_hold(&key).is_none();
+            if personal
+                && matches!(
+                    verdict,
+                    PointerVerdict::Absent | PointerVerdict::Unavailable
+                )
+            {
+                continue;
+            }
             verdicts.insert(key, verdict);
         }
         (verdicts, heals)
+    }
+
+    /// Fold each held bookmark's pointer read into its hold. A pointer that no
+    /// endpoint answers is the pointer-plane suppression the escalation bounds
+    /// (blueprint/engine.md "Withheld-update escalation"); any answer ends the
+    /// hold. Rebuilt each pass, so a hold lives while its link hold does.
+    ///
+    /// A scope pointer exists only after a re-point, and a read that one
+    /// endpoint fails and another answers "no record" is also unanswered. So
+    /// only a scope whose write-epoch floor shows a pointer this device saw
+    /// opens a hold.
+    async fn observe_pointer_pins(
+        &self,
+        received: &ReceivedSharesList,
+        pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
+        render: &ScopeRender<'_>,
+        pass: &PinPass<'_>,
+    ) {
+        let mut reads = Vec::new();
+        for share in received.iter() {
+            let key = share.key();
+            // Only a link read waits for a vouched root (ADR 0024 D5).
+            if received.link_hold(&key).is_none() {
+                continue;
+            }
+            let Some(name) = &share.scope_pointer_name else {
+                continue;
+            };
+            let read = match pointers.get(&key) {
+                Some(PointerVerdict::Unavailable) => {
+                    match floor::write_epoch_floor(&self.sharer_floors(share), &share.scope_id)
+                        .await
+                    {
+                        Ok(Some(_)) => PinRead::Withheld,
+                        Ok(None) | Err(_) => PinRead::Unread,
+                    }
+                }
+                Some(_) => PinRead::Reached,
+                None => PinRead::Unread,
+            };
+            let shared = !is_own_scope(
+                render.own_root,
+                &render.own_descendants.borrow(),
+                &share.scope_id,
+            );
+            reads.push((name.as_str().as_bytes().to_vec(), read, shared));
+        }
+        let mut pins = render.pointer_pins.borrow_mut();
+        for (name, read, shared) in &reads {
+            pass.observe_in(&mut pins, name, *read, *shared);
+        }
+        pins.retain(|name, _| reads.iter().any(|(live, ..)| live == name));
     }
 
     /// What the owner's live commitment permits this vault in `share`'s scope,
@@ -824,7 +938,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             &sharer_enc,
             floors,
         ) {
-            Ok(_) if withheld => return Classified::unresolvable(),
+            Ok(_) if withheld => {
+                return Classified {
+                    withheld: true,
+                    ..Classified::unresolvable()
+                };
+            }
             Ok(facts) => facts,
             Err(rejection) => {
                 report_refusal(events, share, &rejection);
@@ -868,6 +987,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             resolved: Some((candidate, floors)),
             link,
             hold_change,
+            withheld: false,
         }
     }
 
@@ -1342,6 +1462,7 @@ mod tests {
             display_name: "shared-folder".to_owned(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x9a; 32]),
+            scope_pointer_name: None,
         }
     }
 
@@ -1567,6 +1688,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
+                    root_reconciled: true,
                 }
                 .classified(
                     share,
@@ -2133,20 +2255,17 @@ mod tests {
 
     /// Serve `fixture` at the scope root's name, at `sequence`.
     fn seed_scope_root(records: &InMemoryRecordStore, fixture: &OwnerRootFixture, sequence: u64) {
-        records.seed_record(
-            &EndpointId::new("e0"),
-            fixture.name.as_str(),
-            IpnsRecord::create_v2(
-                &kdf::ipns_keypair(
-                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                ),
-                format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                sequence,
-                2_000_000_000,
-                "2099-01-01T00:00:00Z",
-            )
-            .marshal(),
-        );
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes()),
+            format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+            sequence,
+            2_000_000_000,
+            "2099-01-01T00:00:00Z",
+        )
+        .marshal();
+        for endpoint in records.endpoints() {
+            records.seed_record(&endpoint, fixture.name.as_str(), record.clone());
+        }
     }
 
     /// The whole grantee side: the sharer's published scope root serving
@@ -2174,6 +2293,11 @@ mod tests {
         granted: Permission,
         /// Whether the last pass attributed abuse to the sharer.
         reported: Cell<bool>,
+        /// The names each withheld-update escalation named, across passes.
+        escalations: RefCell<Vec<Vec<u8>>>,
+        pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
+        /// What the pass reports about its vault root resolve.
+        root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
     }
 
@@ -2189,8 +2313,20 @@ mod tests {
 
         /// The same world under a grant of `permission`.
         fn granting(children: Vec<ChildRef>, vault_root: [u8; 16], permission: Permission) -> Self {
+            Self::over(children, vault_root, permission, &["e0"])
+        }
+
+        /// The same world, with every endpoint in `endpoints` serving the
+        /// scope root.
+        fn over(
+            children: Vec<ChildRef>,
+            vault_root: [u8; 16],
+            permission: Permission,
+            endpoints: &[&str],
+        ) -> Self {
             let fixture = shared_scope_fixture(children, permission);
-            let records = InMemoryRecordStore::new(vec![EndpointId::new("e0")]);
+            let records =
+                InMemoryRecordStore::new(endpoints.iter().copied().map(EndpointId::new).collect());
             seed_scope_root(&records, &fixture, 1);
             let fx = Self {
                 fixture,
@@ -2216,6 +2352,9 @@ mod tests {
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
                 granted: permission,
                 reported: Cell::new(false),
+                escalations: RefCell::new(Vec::new()),
+                pointer_pins: RefCell::new(BTreeMap::new()),
+                root_reconciled: Cell::new(true),
                 list_lock: ReceivedSharesLock::new(()),
             };
             block_on(
@@ -2242,6 +2381,7 @@ mod tests {
                 display_name: "shared-folder".to_owned(),
                 permission,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
+                scope_pointer_name: None,
             });
             self.persist(&list).expect("the bookmark persists");
         }
@@ -2262,6 +2402,7 @@ mod tests {
                 display_name: display_name.to_owned(),
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
+                scope_pointer_name: None,
             });
             self.persist(&list)
         }
@@ -2279,6 +2420,7 @@ mod tests {
                     display_name: "shared-folder".to_owned(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -2310,6 +2452,7 @@ mod tests {
                     display_name: "shared-folder".to_owned(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -2361,10 +2504,17 @@ mod tests {
             let (events, mut rx) = mpsc::unbounded();
             block_on(self.refresh_over(transport, &events, at_millis, mode));
             drop(events);
-            self.reported.set(
-                core::iter::from_fn(|| rx.try_recv().ok())
-                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
-            );
+            let mut reported = false;
+            for event in core::iter::from_fn(|| rx.try_recv().ok()) {
+                match event {
+                    Event::AttributableAbuse { .. } => reported = true,
+                    Event::WithheldUpdateEscalation { ipns_name } => {
+                        self.escalations.borrow_mut().push(ipns_name);
+                    }
+                    _ => {}
+                }
+            }
+            self.reported.set(reported);
             self.verdicts
                 .borrow()
                 .get(&(sharer_signer().verifying_key().to_sec1(), SCOPE))
@@ -2394,6 +2544,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &self.list_lock,
                     mode,
+                    root_reconciled: self.root_reconciled.get(),
                 }
                 .refresh(
                     &self.staging,
@@ -2409,6 +2560,8 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        pointer_pins: &self.pointer_pins,
+                        root_sequences: &RefCell::default(),
                         events,
                     },
                     UnixMillis(at_millis),
@@ -2427,6 +2580,125 @@ mod tests {
                 .map(|child| child.name().to_owned())
                 .collect()
         }
+    }
+
+    /// A two-endpoint world whose scope root this vault adopted at sequence 1,
+    /// now held below a sequence floor of `floor`: `e1` serves the old record
+    /// and `e0` fails (ADR 0071 D1). The CI escalation window is 5 s.
+    fn withheld_at(vault_root: [u8; 16], floor: u64) -> RenderedScope {
+        let fx = RenderedScope::over(
+            vec![shared_child(0xa1, "photos")],
+            vault_root,
+            Permission::Read,
+            &["e0", "e1"],
+        );
+        fx.bookmark();
+        assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+        fx.hold_below(floor);
+        fx
+    }
+
+    impl RenderedScope {
+        fn hold_below(&self, floor: u64) {
+            block_on(
+                self.floors
+                    .raise_sequence_floor(scope_root_name().as_str().as_bytes(), floor),
+            )
+            .expect("the floor store answers");
+            self.records.fail_endpoint(&EndpointId::new("e0"));
+        }
+
+        fn escalated(&self) -> usize {
+            self.escalations.borrow().len()
+        }
+    }
+
+    /// A withheld shared scope escalates one time, after the window, while
+    /// the pass's other resolves succeed. The read stays unavailable and
+    /// accuses nobody (ADR 0071 D1).
+    #[test]
+    fn a_withheld_shared_scope_escalates_once_past_the_window() {
+        let fx = withheld_at(VAULT_ROOT, 2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::Unresolvable);
+        assert_eq!(fx.forced_pass(5_999), ResolutionClass::Unresolvable);
+        assert_eq!(fx.escalated(), 0, "inside the window");
+
+        assert_eq!(fx.forced_pass(6_000), ResolutionClass::Unresolvable);
+        assert!(!fx.reported.get(), "the escalation is no trust verdict");
+        assert_eq!(
+            *fx.escalations.borrow(),
+            vec![scope_root_name().as_str().as_bytes().to_vec()]
+        );
+
+        fx.forced_pass(7_000);
+        fx.forced_pass(60_000);
+        assert_eq!(fx.escalated(), 1, "one time per hold");
+    }
+
+    /// While the vault root does not reconcile the hold is an outage, not a
+    /// targeted pin, and that time does not count toward the window.
+    #[test]
+    fn a_withheld_shared_scope_escalates_only_when_other_resolves_succeed() {
+        let fx = withheld_at(VAULT_ROOT, 2);
+        fx.root_reconciled.set(false);
+        for at in [1_000, 6_000, 60_000] {
+            assert_eq!(fx.forced_pass(at), ResolutionClass::Unresolvable);
+        }
+        assert_eq!(fx.escalated(), 0);
+
+        fx.root_reconciled.set(true);
+        fx.forced_pass(60_001);
+        assert_eq!(fx.escalated(), 0, "the outage time does not count");
+        fx.forced_pass(65_000);
+        assert_eq!(fx.escalated(), 0);
+        fx.forced_pass(65_001);
+        assert_eq!(fx.escalated(), 1, "one window of healthy passes");
+    }
+
+    /// A read that reaches a record ends the hold, so the next hold measures
+    /// its own window and escalates again.
+    #[test]
+    fn an_honest_read_ends_the_hold_and_a_new_hold_starts_a_new_window() {
+        let mut fx = withheld_at(VAULT_ROOT, 2);
+        fx.forced_pass(1_000);
+        fx.forced_pass(6_000);
+        assert_eq!(fx.escalated(), 1);
+
+        fx.records.heal_endpoint(&EndpointId::new("e0"));
+        fx.republish(vec![shared_child(0xa1, "photos")], 2);
+        assert_eq!(fx.forced_pass(7_000), ResolutionClass::Granted);
+
+        fx.hold_below(3);
+        fx.forced_pass(8_000);
+        fx.forced_pass(12_999);
+        assert_eq!(fx.escalated(), 1, "the new hold has its own window");
+        fx.forced_pass(13_000);
+        assert_eq!(fx.escalated(), 2);
+    }
+
+    /// A pass that reaches no record keeps the hold: it neither starts nor
+    /// ends one.
+    #[test]
+    fn a_pass_that_reaches_no_record_keeps_the_hold() {
+        let fx = withheld_at(VAULT_ROOT, 2);
+        fx.forced_pass(1_000);
+        fx.records.fail_endpoint(&EndpointId::new("e1"));
+        fx.forced_pass(3_000);
+        fx.records.heal_endpoint(&EndpointId::new("e1"));
+        fx.forced_pass(6_000);
+        assert_eq!(fx.escalated(), 1);
+    }
+
+    /// A bookmark that names this vault's own scope is no shared scope, and
+    /// ADR 0071 leaves an owned-scope signal open.
+    #[test]
+    fn a_withheld_owned_scope_never_escalates() {
+        let fx = withheld_at(SCOPE, 2);
+        for at in [1_000, 6_000, 60_000] {
+            assert_eq!(fx.forced_pass(at), ResolutionClass::Unresolvable);
+        }
+        assert_eq!(fx.escalated(), 0);
     }
 
     /// A read grantee reads the live folder, not the listing that was current
@@ -3096,6 +3368,7 @@ mod tests {
         permissions: RefCell<BookmarkedPermissions>,
         claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
+        pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
     }
 
     impl TwoSharers {
@@ -3153,6 +3426,7 @@ mod tests {
                 permissions: RefCell::new(BookmarkedPermissions::new()),
                 claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
+                pointer_pins: RefCell::new(BTreeMap::new()),
             };
             let mine = my_enc();
             let contacts = StagingContactStore::new(&fx.staging, &mine, &fx.entropy);
@@ -3169,6 +3443,7 @@ mod tests {
                     display_name: format!("share-{which}"),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
+                    scope_pointer_name: None,
                 });
             }
             block_on(
@@ -3253,6 +3528,7 @@ mod tests {
                     contact_label_seed: &label_seed(),
                     list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
+                    root_reconciled: true,
                 }
                 .refresh(
                     &self.staging,
@@ -3268,6 +3544,8 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
+                        pointer_pins: &self.pointer_pins,
+                        root_sequences: &RefCell::default(),
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -3630,6 +3908,7 @@ mod tests {
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
         let permissions = RefCell::new(BookmarkedPermissions::new());
         let claims = RefCell::new(ClaimRecord::default());
+        let pointer_pins = RefCell::new(BTreeMap::new());
         let (events, _rx) = mpsc::unbounded();
 
         let departed = depart_contested(
@@ -3644,6 +3923,8 @@ mod tests {
                 scope_roots: &scope_roots,
                 permissions: &permissions,
                 claims: &claims,
+                pointer_pins: &pointer_pins,
+                root_sequences: &RefCell::default(),
                 events: &events,
             },
         );
@@ -3921,10 +4202,11 @@ mod tests {
                 display_name: "photos-folder".to_owned(),
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: Some(pointer_name()),
             };
             let key = share.key();
             list.reconcile(share);
-            list.hold_link(key, LinkHold::new(SecretBytes::new(secret), pointer_name()));
+            list.hold_link(key, LinkHold::new(SecretBytes::new(secret)));
             fx.persist(&list).expect("the join persists");
         }
 
@@ -4164,6 +4446,7 @@ mod tests {
                         display_name: String::new(),
                         permission: Permission::Read,
                         pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                        scope_pointer_name: None,
                     });
                     block_on(store.persist(&list)).expect("the join persists");
                 }))),
@@ -4212,6 +4495,151 @@ mod tests {
             assert!(!fx.reported.get(), "availability accuses nobody");
         }
 
+        /// A held bookmark whose scope root opened, in a vault anchored at
+        /// `vault_root`.
+        fn granted_link(vault_root: [u8; 16]) -> RenderedScope {
+            let mut fx = RenderedScope::rooted_at(Vec::new(), vault_root);
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+            fx
+        }
+
+        fn pointer_escalations(fx: &RenderedScope) -> usize {
+            let name = pointer_name().as_str().as_bytes().to_vec();
+            fx.escalations
+                .borrow()
+                .iter()
+                .filter(|escalated| **escalated == name)
+                .count()
+        }
+
+        /// A scope pointer that no endpoint answers while the vault root
+        /// reconciles is the pointer-plane suppression: one escalation after
+        /// the window, and no trust event.
+        #[test]
+        fn a_pointer_no_endpoint_answers_escalates_once_past_the_window() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+
+            fx.forced_pass(1_000);
+            fx.forced_pass(5_999);
+            assert_eq!(pointer_escalations(&fx), 0, "inside the window");
+            fx.forced_pass(6_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+            assert!(!fx.reported.get(), "the escalation is no trust verdict");
+
+            fx.forced_pass(7_000);
+            fx.forced_pass(60_000);
+            assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
+        }
+
+        /// While the vault root does not reconcile, an unanswered pointer is an
+        /// outage, and the window starts when the vault root recovers.
+        #[test]
+        fn a_pointer_unanswered_in_a_full_outage_escalates_one_window_after_recovery() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.root_reconciled.set(false);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+
+            fx.root_reconciled.set(true);
+            fx.forced_pass(60_001);
+            fx.forced_pass(65_000);
+            assert_eq!(
+                pointer_escalations(&fx),
+                0,
+                "the outage time does not count"
+            );
+            fx.forced_pass(65_001);
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A held bookmark over two endpoints, where `e1` holds no pointer
+        /// record and `e0` fails from now on. With `seen`, `e0` served the
+        /// pointer to an earlier pass.
+        fn pointer_one_endpoint_absent(seen: bool) -> RenderedScope {
+            let mut fx =
+                RenderedScope::over(Vec::new(), VAULT_ROOT, Permission::Read, &["e0", "e1"]);
+            join(&fx);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            if seen {
+                serve_pointer(&fx, &sharer_signer(), 1);
+            }
+            fx.forced_pass(0);
+            fx.records.fail_endpoint(&EndpointId::new("e0"));
+            fx
+        }
+
+        /// A failed endpoint and a "no record" answer for a pointer that this
+        /// device never saw is no suppression: the scope may have no pointer.
+        #[test]
+        fn a_pointer_never_seen_does_not_escalate_while_an_endpoint_fails() {
+            let fx = pointer_one_endpoint_absent(false);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// The same answers, for a pointer this device saw, is suppression.
+        #[test]
+        fn a_pointer_seen_before_escalates_while_an_endpoint_fails() {
+            let fx = pointer_one_endpoint_absent(true);
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A pointer that every endpoint answers with "no record" is an answer.
+        #[test]
+        fn an_absent_pointer_never_escalates() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            for at in [0, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// An answer ends the hold, so a new hold measures a new window.
+        #[test]
+        fn a_pointer_answer_ends_the_hold() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.forced_pass(1_000);
+            fx.forced_pass(4_000);
+            fx.records.heal_get_for(pointer_name().as_str());
+            fx.forced_pass(5_000);
+            fx.records.fail_get_for(pointer_name().as_str());
+            fx.forced_pass(6_000);
+            fx.forced_pass(10_999);
+            assert_eq!(
+                pointer_escalations(&fx),
+                0,
+                "the answer restarted the window"
+            );
+            fx.forced_pass(11_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+        }
+
+        /// A pointer of a scope this vault owns never escalates.
+        #[test]
+        fn an_owned_scope_pointer_never_escalates() {
+            let fx = granted_link(SCOPE);
+            fx.records.fail_get_for(pointer_name().as_str());
+            for at in [1_000, 6_000, 60_000] {
+                fx.forced_pass(at);
+            }
+            assert_eq!(pointer_escalations(&fx), 0);
+        }
+
         /// A first read with no pointer answer keeps the link keys, and a later
         /// pass reads the folder.
         #[test]
@@ -4254,16 +4682,11 @@ mod tests {
                     display_name: String::new(),
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                    scope_pointer_name: Some(scope_pointer_name(&POINTER_SEED, scope)),
                 };
                 let key = share.key();
                 list.reconcile(share);
-                list.hold_link(
-                    key,
-                    LinkHold::new(
-                        SecretBytes::new(LINK_SECRET),
-                        scope_pointer_name(&POINTER_SEED, scope),
-                    ),
-                );
+                list.hold_link(key, LinkHold::new(SecretBytes::new(LINK_SECRET)));
             }
             fx.persist(&list).expect("the joins persist");
             let unread = || -> Vec<[u8; 16]> {

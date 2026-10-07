@@ -1538,6 +1538,7 @@ fn the_same_epoch_helper_seals_the_bytes_the_explicit_form_seals() {
         direct_child_scope_index: Vec::new(),
         carried_history_links: Vec::new(),
         carried_ascent_link: false,
+        read_sequence: 1,
     };
     let committed = committed_set(&commitment, &sig, &ledger);
 

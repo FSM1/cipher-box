@@ -26,15 +26,15 @@ use crate::net::publish::Observed;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
     CommittedSet, GrantCutPlan, LaggingNode, NoBound, NodeRef, NodeStop, PrevEpochSeed,
-    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
-    ResolveFailure, ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
-    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
-    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild,
-    SweptNode, SweptScope, WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError,
-    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    build_repoint_object, cascade_rotate_scope, derive_write_name, reseal_scope_root,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write,
-    sweep_pass,
+    PublishedRoot, RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds,
+    ResealedScopeRoot, ResolveFailure, ResumedRoot, RevokeError, RevokedCommittedSet, RotateError,
+    RotateOnCutError, RotateScopePlan, RotateScopeWritePlan, RotationPublishError,
+    ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweptChild, SweptNode, SweptScope, WriteHistory, WritePublishError,
+    WriteRevokeKind, WriteRotateError, WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver,
+    WriteWavePublisher, build_repoint_object, cascade_rotate_scope, derive_write_name,
+    reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope,
+    rotate_scope_write, sweep_pass,
 };
 use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
@@ -452,9 +452,9 @@ struct ScriptedPublisher(Result<(), RotationPublishError>);
 impl ScopeRootPublisher for ScriptedPublisher {
     async fn publish_scope_root(
         &self,
-        _record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        self.0.clone()
+        record: &ResealedScopeRoot,
+    ) -> Result<PublishedRoot, RotationPublishError> {
+        self.0.clone().map(|()| PublishedRoot::fresh(record, 1))
     }
 }
 

@@ -97,9 +97,9 @@ use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
-    DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed, RecoveredWave,
-    RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
-    ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan, RotationOutcome,
+    DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed, PublishedRoot,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan, RotationOutcome,
     RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher, SweepPublisher,
     SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope, WriteHistory,
     WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name,
@@ -183,9 +183,14 @@ pub enum PointerConsultArm {
 pub(crate) enum OnAccessMiss {
     /// No pointer record stands at the scope's pointer name.
     Absent,
-    /// The owner-signed re-point vouches this root, and the blob stayed closed
-    /// at the floor it left.
-    Vouched(Box<IpnsName>),
+    /// The owner-signed re-point vouches `root`, moved off `prev_root`, and
+    /// the blob stayed closed at the floor it left.
+    Vouched {
+        /// The vouched current root.
+        root: Box<IpnsName>,
+        /// The root the re-point moved off.
+        prev_root: Option<Box<IpnsName>>,
+    },
     /// The re-point did not authenticate, or vouched below the floor.
     Rejected,
 }
@@ -194,7 +199,7 @@ impl OnAccessMiss {
     fn failure(&self) -> ResolveFailure {
         match self {
             Self::Rejected => ResolveFailure::Rejected,
-            Self::Absent | Self::Vouched(_) => ResolveFailure::Unavailable,
+            Self::Absent | Self::Vouched { .. } => ResolveFailure::Unavailable,
         }
     }
 }
@@ -262,6 +267,7 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
     let epoch = consulted.write_floor;
     Ok(Some(PointerSighting {
         current_root: consulted.current_root,
+        prev_root: consulted.prev_root,
         deferred: consulted.deferred,
         opened: open_write_scope_seed_at(enc_secret, envelope, owb, epoch)
             .map(|seed| (seed, epoch)),
@@ -272,6 +278,7 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
 /// with the epoch it opened at, when the blob opened.
 struct PointerSighting {
     current_root: IpnsName,
+    prev_root: Option<IpnsName>,
     /// See [`ConsultedPointer::deferred`].
     deferred: bool,
     opened: Option<(Zeroizing<[u8; SECRET_LEN]>, u64)>,
@@ -2574,9 +2581,14 @@ where
             Ok(Some(PointerSighting { deferred: true, .. })) => {
                 return Err(ResolveFailure::Unavailable);
             }
-            Ok(Some(PointerSighting { current_root, .. })) => {
-                OnAccessMiss::Vouched(Box::new(current_root))
-            }
+            Ok(Some(PointerSighting {
+                current_root,
+                prev_root,
+                ..
+            })) => OnAccessMiss::Vouched {
+                root: Box::new(current_root),
+                prev_root: prev_root.map(Box::new),
+            },
             Ok(None) => OnAccessMiss::Absent,
             Err(PointerConsultError::Unavailable) => return Err(ResolveFailure::Unavailable),
             Err(PointerConsultError::Rejected) => {
@@ -2591,6 +2603,24 @@ where
         let failure = miss.failure();
         self.on_access_misses.record(scope_id, now, miss);
         Err(failure)
+    }
+
+    /// [`SweepResolveFailure::Superseded`] when the owner-signed re-point
+    /// moved the root off `name`: the caller re-resolves at the vouched name
+    /// through the gate. A pointer that vouches another root without naming
+    /// `name` as the root it left proves no move of this root.
+    fn moved_from(&self, scope_id: [u8; 16], name: &IpnsName) -> Option<SweepResolveFailure> {
+        let now = self.scheduler.now();
+        match self
+            .on_access_misses
+            .recent(&scope_id, now, self.profile.pointer_consult_interval)
+        {
+            Some(OnAccessMiss::Vouched {
+                prev_root: Some(prev_root),
+                ..
+            }) if *prev_root == *name => Some(SweepResolveFailure::Superseded),
+            _ => None,
+        }
     }
 
     /// The scope-pointer consult under this net's owner material.
@@ -2664,7 +2694,7 @@ where
             envelope,
             section,
             read_body,
-            sequence: _,
+            sequence,
             read_scope_seed,
             write_scope_seed,
         } = root;
@@ -2690,6 +2720,7 @@ where
             direct_child_scope_index: write_body.direct_child_scope_index,
             carried_history_links: section.history_links,
             carried_ascent_link: section.ascent_link.is_some(),
+            read_sequence: sequence,
         };
         self.gated.park(RepublishBase {
             read_body,
@@ -2768,14 +2799,16 @@ where
     /// republishes from: the read body and the preserved fields are carried
     /// forward byte for byte, so the record now standing at the name has the
     /// same ones, and the CAS bound rises to the sequence this publish spent
-    /// ([`GatedRoots`]). The signed record it landed rides beside the base.
+    /// ([`GatedRoots`]). The signed record it landed and the
+    /// [`PublishedRoot`] ride beside the base.
     async fn run(
         &self,
         record: &ResealedScopeRoot,
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
-    ) -> Result<(RepublishBase, Vec<u8>), RotationPublishError> {
+    ) -> Result<(RepublishBase, Vec<u8>, PublishedRoot), RotationPublishError> {
         let name = current.observed.name();
+        let base = current.observed.sequence();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
@@ -2861,6 +2894,11 @@ where
                     ..current
                 },
                 receipt.record_bytes,
+                PublishedRoot {
+                    name: record.ipns_name.clone(),
+                    base,
+                    sequence,
+                },
             )),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
@@ -2916,7 +2954,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
 
@@ -2933,7 +2971,7 @@ where
             )
             .map_err(|_| RotationPublishError::Rejected)?,
         };
-        let (published, record_bytes) = self
+        let (published, record_bytes, root) = self
             .root_publish()
             .run(record, &override_seed, current)
             .await?;
@@ -2941,7 +2979,7 @@ where
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
         self.gated.park(published);
-        Ok(())
+        Ok(root)
     }
 }
 
@@ -2960,7 +2998,7 @@ where
         node: &NodeRef,
         record: &ResealedScopeRoot,
         held_outside: &[HeldNode],
-    ) -> Result<Vec<NodeRef>, RotationPublishError> {
+    ) -> Result<(Vec<NodeRef>, PublishedRoot), RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The promoted root replaces the record read at the node's own name, and
         // that read is the CAS basis. At any other name the publish would have
@@ -2996,12 +3034,12 @@ where
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
-        let (_, record_bytes) = self
+        let (_, record_bytes, root) = self
             .root_publish()
             .run(record, &override_seed, base)
             .await?;
         self.keep_own_publish(&name, &record_bytes).await;
-        Ok(children)
+        Ok((children, root))
     }
 }
 
@@ -3370,7 +3408,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<PublishedRoot, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // [`new_override_seed`]'s grantee mirror, on the same release-active
         // rule: a section this rotator can no longer reopen is never signed
@@ -3399,10 +3437,11 @@ where
             .granted_root(NodeId(record.scope_id))
             .map_err(|_| RotationPublishError::Rejected)?;
         let floors = self.granted_floors(granted);
-        self.root_publish(&floors)
+        let (_, _, root) = self
+            .root_publish(&floors)
             .run(record, &override_seed, current)
             .await?;
-        Ok(())
+        Ok(root)
     }
 }
 
@@ -3778,7 +3817,10 @@ where
             root_observed(&root, over_sequence).map_err(|_| SweepResolveFailure::VersionSkew)?;
         self.open_write_seed_on_access(&mut root, scope.scope_id)
             .await
-            .map_err(SweepResolveFailure::from)?;
+            .map_err(|failure| {
+                self.moved_from(scope.scope_id, &name)
+                    .unwrap_or(failure.into())
+            })?;
         let GatedWriteBody {
             write_scope_seed,
             body: write_body,
@@ -4074,6 +4116,7 @@ where
             section,
         })
         .await
+        .map(drop)
     }
 }
 
@@ -8019,6 +8062,46 @@ mod tests {
         );
     }
 
+    /// The sweep never walks a root that may not be the live one.
+    #[test]
+    fn a_pointer_that_vouches_another_root_moves_only_the_root_it_names_as_left() {
+        let (child, child_ref, _) = one_level();
+        let elsewhere = derive_write_name(&[0x4e; 32], &CHILD_SCOPE);
+        let read = |prev_root: Option<IpnsName>| {
+            let harness = Harness::plain();
+            harness.stage(CHILD_SCOPE, &child, None);
+            stage_scope_pointer(
+                &harness,
+                CHILD_SCOPE,
+                &owner_identity(),
+                &RepointObject {
+                    scope_id: CHILD_SCOPE,
+                    current_root: elsewhere.clone(),
+                    write_epoch: MINT_EPOCH + 1,
+                    min_read_epoch: MINT_EPOCH,
+                    prev_root,
+                },
+            );
+            block_on(harness.net(&[child_ref.clone()]).resolve_scope(&child_ref)).err()
+        };
+
+        assert_eq!(
+            read(None),
+            Some(SweepResolveFailure::Unavailable),
+            "a pointer that names no root it left proves no move"
+        );
+        assert_eq!(
+            read(Some(elsewhere.clone())),
+            Some(SweepResolveFailure::Unavailable),
+            "nor one that left another root"
+        );
+        assert_eq!(
+            read(Some(child.name.clone())),
+            Some(SweepResolveFailure::Superseded),
+            "a re-point off this root moves it"
+        );
+    }
+
     /// The pointer the grant cut published is the whole authority: it states the
     /// epoch, the consult raises the floor on sight of it, and the record then
     /// opens under the floor the plane left.
@@ -9060,6 +9143,18 @@ mod tests {
             !harness.events().is_empty(),
             "the trade the fallback made is surfaced, never silent",
         );
+    }
+
+    /// A target read over the last gate-passing copy reports the sequence of
+    /// that copy, not the sequence of the refused record its publish clears.
+    #[test]
+    fn a_target_read_over_a_refused_record_reports_the_gated_sequence() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let scope = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+
+        let target = block_on(harness.net(&[]).resolve_anchored(&scope)).expect("the last copy");
+
+        assert_eq!(target.read_sequence, 1, "the gate adopted the copy at 1");
     }
 
     /// No cached copy, no fallback: a rotation that cannot prove a body under
@@ -17259,6 +17354,7 @@ mod tests {
             &SCOPE,
             ConsultedPointer {
                 current_root: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE),
+                prev_root: None,
                 write_floor: 1,
                 deferred: false,
                 record_bytes: b"a record read before the flip".to_vec(),

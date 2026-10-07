@@ -968,6 +968,7 @@ fn create_family() -> RejectFamily {
                 &grantee,
                 &recipient,
                 &name,
+                &name,
             ))
             .err()
             .unwrap_or_else(|| panic!("{name_of}: the post must fail closed")),

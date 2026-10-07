@@ -109,6 +109,18 @@ describe('engine warnings', () => {
     expect(notice.textContent).not.toContain('owed-scope-not-indexed');
   });
 
+  it('renders a share pointer that was not posted as a warning to share again', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'sharePointerNotPosted', scopeRoot: new Uint8Array(16).fill(6) });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('share the folder with them again');
+  });
+
   it('renders a write cut another device has not finished as a warning', async () => {
     const engine = fakeEngine();
     draw(engine.client);

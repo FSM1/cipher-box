@@ -18,6 +18,26 @@ use crate::sync::owed_rotation::{
 
 /// What stopped one owed step: a key-material-free check, and its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// What an owed cut proved of its cut set when it returned.
+pub(crate) enum OwedCut {
+    /// Every plane ran.
+    Ran(Box<CutRotationReport>),
+    /// The cut set is durable, and a later step stands owed.
+    SetLanded,
+    /// A step stopped before any proof that the cut set is durable.
+    Unproved,
+}
+
+impl OwedCut {
+    /// The report of a cut that ran through every plane.
+    pub(crate) fn into_report(self) -> Option<CutRotationReport> {
+        match self {
+            Self::Ran(report) => Some(*report),
+            Self::SetLanded | Self::Unproved => None,
+        }
+    }
+}
+
 pub(crate) struct OwedStop {
     pub(crate) detail: String,
     pub(crate) class: OwedWorkClass,
@@ -288,7 +308,7 @@ where
     /// Drive `cut` at `node` under an owed rotation entry (ADR 0063 D2, D5):
     /// the entry is durable before the first publish, and a step that stops
     /// after it, fail-closed or not, leaves the entry, tells the host, and
-    /// answers `Ok(None)`. `write_epoch` is the write epoch of the record the
+    /// answers what it proved of the cut set ([`OwedCut`]). `write_epoch` is the write epoch of the record the
     /// cut was authorized against.
     ///
     /// A read-only cut clears its entry here. A cut that moves the write plane
@@ -306,7 +326,7 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
         write_epoch: u64,
         command: bool,
-    ) -> Result<Option<CutRotationReport>, EngineError> {
+    ) -> Result<OwedCut, EngineError> {
         let write = if cut.planes().write() {
             Some(owed_write_cut(write_epoch)?)
         } else {
@@ -356,7 +376,7 @@ where
                 .await;
                 self.stop_owed(node, write.into_iter().collect(), cut_stop(error))
                     .await;
-                return Ok(None);
+                return Ok(OwedCut::SetLanded);
             }
             // The wave moved the root first (ADR 0068 D3). The entry stays
             // owed, so the re-drive raises the floor again before it clears it.
@@ -368,13 +388,13 @@ where
                 )
                 .await;
                 self.stop_owed(node, steps, cut_stop(error)).await;
-                return Ok(None);
+                return Ok(OwedCut::Unproved);
             }
             // The re-drive finishes the entry, or keeps it while the owner runs
             // the command again within the bound (ADR 0068 D4).
             Err(error @ RotateOnCutError::WriteFirst(_)) => {
                 self.stop_owed(node, steps, cut_stop(error)).await;
-                return Ok(None);
+                return Ok(OwedCut::Unproved);
             }
             Err(error) => {
                 return match self
@@ -383,7 +403,7 @@ where
                 {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(error)).await;
-                        Ok(None)
+                        Ok(OwedCut::SetLanded)
                     }
                     Some(false) => {
                         let _ = self.owed().clear(node).await;
@@ -409,12 +429,12 @@ where
                 OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(error)),
             )
             .await;
-            return Ok(None);
+            return Ok(OwedCut::SetLanded);
         }
         if write.is_none() {
             let _ = self.owed().clear(node).await;
         }
-        Ok(Some(report))
+        Ok(OwedCut::Ran(Box::new(report)))
     }
 
     /// Write the entry `cut` owes at `scope`. A `command` that runs the same
@@ -949,7 +969,13 @@ where
         )
         .await
         {
-            Ok(Some(_)) => Ok(()),
+            Ok(Some(outcome)) => {
+                let mut sequences = self.root_sequences.borrow_mut();
+                for published in &outcome.published_roots {
+                    sequences.note_own(published);
+                }
+                Ok(())
+            }
             // A parent-scope writer can publish a record at the folder's name,
             // so a root with no grant section does not prove the promotion
             // never ran.
@@ -1077,17 +1103,16 @@ where
             self.api,
             self.identity,
             ENVELOPE_V,
-            &GrantRecipient {
-                contact: &contact,
-                display_name,
-                grantee_name: None,
+            &PointerRecipient::of(&contact, display_name),
+            PointerTarget {
+                permission: if write {
+                    CommittedPermission::Write
+                } else {
+                    CommittedPermission::Read
+                },
+                scope_root_name: &parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
+                scope_pointer_name: &self.scope_keys.pointer_name(&node.0),
             },
-            if write {
-                CommittedPermission::Write
-            } else {
-                CommittedPermission::Read
-            },
-            &parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
         )
         .await
         .map_err(|e| stop(EngineError::from_create_grant(e)))?;

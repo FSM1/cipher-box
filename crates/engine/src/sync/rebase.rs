@@ -34,9 +34,7 @@ use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, TakenNames, collation_key, lowest_free_suffix};
 #[cfg(test)]
 use crate::sync::op::NewNode;
-#[cfg(test)]
-use crate::sync::op::ScopeCrossing;
-use crate::sync::op::{Op, OpKind, Replaced};
+use crate::sync::op::{Op, OpKind, Replaced, ScopeCrossing};
 use crate::sync::record::{RecordClass, RecordReader};
 
 /// How one op resolved against the working base.
@@ -662,22 +660,55 @@ struct ScopeExit {
     /// snapshot root, because an exit this op performed must rotate something
     /// ([`enclosing_scope_root`]).
     applied: Option<crate::facade::NodeId>,
-    /// What a **dropped** exit cuts: the walk's own answer alone. A drop is no
-    /// evidence this op performed the exit, so a source folder a concurrent
-    /// writer deleted must not escalate the fallback into a whole-vault cut.
+    /// What a **dropped** exit cuts: [`relocation_exit`], with no fallback. A
+    /// drop is no evidence this op performed the exit, so a source folder a
+    /// concurrent writer deleted must not escalate into a whole-vault cut.
     dropped: Option<crate::facade::NodeId>,
 }
 
 impl ScopeExit {
     fn of(base: &Snapshot, op: &Op, scope_roots: &[crate::facade::NodeId]) -> Self {
-        let Some(from_parent) = op.scope_exit_source() else {
-            return Self::default();
-        };
-        let found = enclosing_scope_root(base, from_parent, scope_roots);
+        let applied = op.scope_exit_source().map(|from_parent| {
+            enclosing_scope_root(base, from_parent, scope_roots).unwrap_or(base.root)
+        });
         Self {
-            applied: Some(found.unwrap_or(base.root)),
-            dropped: found,
+            applied,
+            dropped: relocation_exit(base, op, scope_roots, false),
         }
+    }
+}
+
+/// The cut a relocation that the published-op mark drops owes: a destination
+/// that no longer resolves still owes the journaled exit, because the mark is
+/// evidence the move published.
+pub(crate) fn expired_exit(
+    base: &Snapshot,
+    op: &Op,
+    scope_roots: &[crate::facade::NodeId],
+) -> Option<crate::facade::NodeId> {
+    relocation_exit(base, op, scope_roots, true)
+}
+
+/// The interior scope root a relocation left, derived from the scope roots
+/// listed now and not from the crossing the op journaled: a grant minted after
+/// the journal entry still owes its cut (ADR 0045 D1). `base.root` grants
+/// nobody, so a move out of it owes nothing.
+///
+/// A destination that resolves to no listed root, which another writer may have
+/// deleted, is no evidence of a crossing: it owes the journaled exit only when
+/// `published`.
+fn relocation_exit(
+    base: &Snapshot,
+    op: &Op,
+    scope_roots: &[crate::facade::NodeId],
+    published: bool,
+) -> Option<crate::facade::NodeId> {
+    let (from_parent, new_parent, crossing) = op.relocation()?;
+    let source =
+        enclosing_scope_root(base, from_parent, scope_roots).filter(|root| *root != base.root)?;
+    match enclosing_scope_root(base, new_parent, scope_roots) {
+        Some(destination) => (destination != source).then_some(source),
+        None => (published && crossing == ScopeCrossing::ExitsGrantedSource).then_some(source),
     }
 }
 
@@ -1843,6 +1874,68 @@ mod tests {
 
     /// The scope roots for [`two_granted_scopes`].
     const TWO_GRANTED: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16]), NodeId([8; 16])];
+
+    /// The cut a relocation the published-op mark drops owes. A destination the
+    /// base no longer holds is no evidence of a crossing, so only a journaled
+    /// exit owes a cut there, whichever scope the source sits in.
+    #[test]
+    fn an_expired_relocation_owes_the_cut_its_two_ends_name() {
+        const GONE: NodeId = NodeId([0x33; 16]);
+        let mut base = two_granted_scopes();
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
+        let relink =
+            |from: u8, to: NodeId, crossing| Op::relink(id(7), id(from), to, 1, AT, crossing);
+        let cases = [
+            (
+                "an exit journaled intra",
+                relink(12, id(6), ScopeCrossing::Intra),
+                Some(id(5)),
+            ),
+            (
+                "an exit as journaled",
+                relink(12, id(6), ScopeCrossing::ExitsGrantedSource),
+                Some(id(5)),
+            ),
+            (
+                "a move inside one scope",
+                relink(12, id(10), ScopeCrossing::Intra),
+                None,
+            ),
+            (
+                "a move out of the vault root",
+                relink(6, id(5), ScopeCrossing::Cross),
+                None,
+            ),
+            (
+                "an own scope, destination gone",
+                relink(12, GONE, ScopeCrossing::Intra),
+                None,
+            ),
+            (
+                "a second scope, destination gone",
+                relink(9, GONE, ScopeCrossing::Intra),
+                None,
+            ),
+            (
+                "a journaled exit, destination gone",
+                relink(12, GONE, ScopeCrossing::ExitsGrantedSource),
+                Some(id(5)),
+            ),
+        ];
+        for (label, op, owed) in cases {
+            assert_eq!(expired_exit(&base, &op, TWO_GRANTED), owed, "{label}");
+        }
+        assert_eq!(
+            ScopeExit::of(
+                &base,
+                &relink(12, GONE, ScopeCrossing::ExitsGrantedSource),
+                TWO_GRANTED
+            )
+            .dropped,
+            None,
+            "a replay drop has no mark, so a lost destination owes nothing"
+        );
+    }
 
     /// A delete unlinks its target from every folder that links it, and a pass
     /// carries the anchor plus one interior end. Two interior ends is the span

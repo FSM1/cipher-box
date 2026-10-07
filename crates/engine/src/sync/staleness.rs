@@ -13,7 +13,11 @@
 //! is not mere staleness — it is a targeted stale-view pin (it also covers the
 //! pointer-plane network-suppression residual, #38 D2).
 
-use crate::facade::Staleness;
+use std::collections::BTreeMap;
+
+use futures_channel::mpsc;
+
+use crate::facade::{Event, Staleness};
 use crate::profile::SyncTimingProfile;
 use crate::seams::UnixMillis;
 use crate::sync::tick::elapsed_at_least;
@@ -98,6 +102,137 @@ pub fn withheld_escalation(
         && other_resolves_succeeding
         && now.0.saturating_sub(pinned_since.0)
             >= crate::sync::duration_millis(profile.escalation_window)
+}
+
+/// A run of withheld reads of one name (ADR 0071 D1), from the first withheld
+/// read to the next read that reaches a record. Session memory only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WithheldPin {
+    /// The start of the window: the first withheld read, or the first pass
+    /// whose vault root reconciled after an outage, as only healthy time
+    /// counts.
+    pub(crate) since: UnixMillis,
+    /// Whether this hold already sent its escalation.
+    pub(crate) escalated: bool,
+    /// Whether the last pass that saw this hold had no reconciled vault root.
+    pub(crate) paused: bool,
+}
+
+/// What one pass learned about a name a hold watches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinRead {
+    /// The read was held back: a record below the sequence floor while an
+    /// endpoint failed, or a scope pointer that no endpoint answered.
+    Withheld,
+    /// A record the read could use: the hold ends.
+    Reached,
+    /// No answer, or no read this pass: the hold stays.
+    Unread,
+}
+
+/// Fold one pass's `read` of a name into its `pin`, and answer whether the
+/// escalation goes out now: one time per hold, under [`withheld_escalation`].
+fn observe_pin(
+    pin: &mut Option<WithheldPin>,
+    read: PinRead,
+    now: UnixMillis,
+    is_shared_scope: bool,
+    root_reconciled: bool,
+    profile: &SyncTimingProfile,
+) -> bool {
+    let held = match (read, pin.as_mut()) {
+        (PinRead::Reached, _) => {
+            *pin = None;
+            return false;
+        }
+        (PinRead::Unread, None) => return false,
+        (PinRead::Withheld, None) => pin.insert(WithheldPin {
+            since: now,
+            escalated: false,
+            paused: false,
+        }),
+        (_, Some(held)) => held,
+    };
+    if !root_reconciled {
+        held.paused = true;
+        return false;
+    }
+    if held.paused {
+        held.paused = false;
+        held.since = now;
+    }
+    if read != PinRead::Withheld
+        || held.escalated
+        || !withheld_escalation(now, held.since, is_shared_scope, true, profile)
+    {
+        return false;
+    }
+    held.escalated = true;
+    true
+}
+
+/// What one pass folds every withheld-update hold under.
+pub(crate) struct PinPass<'a> {
+    pub(crate) now: UnixMillis,
+    /// Whether the vault root resolve of this pass reconciled, which tells a
+    /// targeted hold from an outage.
+    pub(crate) root_reconciled: bool,
+    pub(crate) profile: &'a SyncTimingProfile,
+    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+}
+
+impl PinPass<'_> {
+    /// Fold `read` of `name` into `pin`, and send the escalation for `name`
+    /// when it is due.
+    pub(crate) fn observe(
+        &self,
+        pin: &mut Option<WithheldPin>,
+        name: &[u8],
+        read: PinRead,
+        is_shared_scope: bool,
+    ) {
+        if observe_pin(
+            pin,
+            read,
+            self.now,
+            is_shared_scope,
+            self.root_reconciled,
+            self.profile,
+        ) {
+            let _ = self.events.unbounded_send(Event::WithheldUpdateEscalation {
+                ipns_name: name.to_vec(),
+            });
+        }
+    }
+
+    /// [`Self::observe`] on the hold that `pins` keeps for `name`.
+    pub(crate) fn observe_in(
+        &self,
+        pins: &mut BTreeMap<Vec<u8>, WithheldPin>,
+        name: &[u8],
+        read: PinRead,
+        is_shared_scope: bool,
+    ) {
+        let mut pin = pins.get(name).copied();
+        self.observe(&mut pin, name, read, is_shared_scope);
+        match pin {
+            Some(pin) => pins.insert(name.to_vec(), pin),
+            None => pins.remove(name),
+        };
+    }
+
+    /// Keep the holds in `pins` whose name `keep` names. A pass whose vault
+    /// root did not reconcile pauses each kept hold, also one it did not read.
+    pub(crate) fn retain_in(
+        &self,
+        pins: &mut BTreeMap<Vec<u8>, WithheldPin>,
+        keep: impl Fn(&[u8]) -> bool,
+    ) {
+        pins.retain(|name, pin| {
+            pin.paused |= !self.root_reconciled;
+            keep(name)
+        });
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +386,71 @@ mod tests {
             true,
             &P
         ));
+    }
+
+    /// A hold that no pass reads while the vault root is down still pauses,
+    /// so the outage does not count toward the window.
+    #[test]
+    fn a_kept_hold_no_pass_reads_in_an_outage_stays_paused() {
+        let (events, mut rx) = futures_channel::mpsc::unbounded();
+        let pass = |at, root_reconciled| PinPass {
+            now: UnixMillis(at),
+            root_reconciled,
+            profile: &P,
+            events: &events,
+        };
+        let name: &[u8] = b"k51-shared-folder";
+        let mut pins = BTreeMap::new();
+        pass(0, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        pass(100_000, false).retain_in(&mut pins, |_| true);
+        pass(1_000_000, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        assert!(rx.try_recv().is_err(), "the window starts at this pass");
+        pass(1_600_000, true).observe_in(&mut pins, name, PinRead::Withheld, true);
+        let sent = rx.try_recv().ok();
+        assert!(matches!(
+            sent,
+            Some(Event::WithheldUpdateEscalation { ipns_name }) if ipns_name == name
+        ));
+
+        pass(1_700_000, true).retain_in(&mut pins, |_| false);
+        assert!(pins.is_empty(), "a name out of the window ends its hold");
+    }
+
+    /// One hold escalates one time, after a window of passes whose vault root
+    /// reconciled; a reached record ends it.
+    #[test]
+    fn a_pin_escalates_once_per_hold_over_healthy_time() {
+        let mut pin = None;
+        let mut observe = |read, at, reconciled| {
+            observe_pin(&mut pin, read, UnixMillis(at), true, reconciled, &P)
+        };
+        assert!(!observe(PinRead::Unread, 0, true), "no read opens no hold");
+        assert!(!observe(PinRead::Withheld, 0, true));
+        assert!(
+            !observe(PinRead::Withheld, 400_000, false),
+            "an outage pass"
+        );
+        assert!(
+            !observe(PinRead::Withheld, 1_100_000, true),
+            "a pause past the window counts nothing: the window starts here"
+        );
+        assert!(!observe(PinRead::Withheld, 1_699_999, true));
+        assert!(observe(PinRead::Withheld, 1_700_000, true));
+        assert!(!observe(PinRead::Withheld, 2_000_000, true), "one time");
+        assert!(!observe(PinRead::Reached, 2_000_001, true));
+        assert!(!observe(PinRead::Withheld, 2_000_002, true));
+        assert!(observe(PinRead::Withheld, 2_600_002, true), "a new hold");
+
+        let mut owned = None;
+        for at in [0, 600_000, 6_000_000] {
+            assert!(!observe_pin(
+                &mut owned,
+                PinRead::Withheld,
+                UnixMillis(at),
+                false,
+                true,
+                &P
+            ));
+        }
     }
 }

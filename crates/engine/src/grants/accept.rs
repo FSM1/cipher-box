@@ -54,6 +54,9 @@ pub struct SharePointer {
     pub display_name: String,
     /// The advertised permission (courtesy; the committed ledger is authority).
     pub permission: Permission,
+    /// The scope pointer name the owner signs into the post (ADR 0074 D1).
+    /// `None` from an older owner build.
+    pub scope_pointer_name: Option<IpnsName>,
 }
 
 impl fmt::Debug for SharePointer {
@@ -66,6 +69,10 @@ impl fmt::Debug for SharePointer {
             )
             .field("display_name", &RedactedText::of(&self.display_name))
             .field("permission", &self.permission)
+            .field(
+                "scope_pointer_name",
+                &self.scope_pointer_name.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -82,6 +89,7 @@ impl SharePointer {
         sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
         display_name: String,
         permission: Permission,
+        scope_pointer_name: IpnsName,
     ) -> Result<Self, TooLong> {
         within("displayName", display_name.len(), MAX_NODE_NAME_BYTES)?;
         Ok(Self {
@@ -89,6 +97,7 @@ impl SharePointer {
             sharer_identity_pk,
             display_name,
             permission,
+            scope_pointer_name: Some(scope_pointer_name),
         })
     }
 
@@ -101,6 +110,9 @@ impl SharePointer {
             "permission",
             Value::Text(self.permission.as_wire().to_string()),
         );
+        if let Some(name) = &self.scope_pointer_name {
+            m.insert("scopePointerName", Value::Text(name.as_str().to_owned()));
+        }
         m.insert("scopeRootName", Value::Bytes(self.scope_root_name.clone()));
         m.insert(
             "sharerIdentityPk",
@@ -109,8 +121,9 @@ impl SharePointer {
         encode_fixed_depth(&Value::Map(m))
     }
 
-    /// Decode a share pointer (strict det-CBOR). A missing/mistyped field or an
-    /// unknown permission string is [`Malformed`].
+    /// Decode a share pointer (strict det-CBOR). A missing/mistyped field, an
+    /// unknown permission string or a `scopePointerName` that is not an IPNS
+    /// name is [`Malformed`]. A key this build does not know is ignored.
     pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let value = decode(bytes)?;
         let map = value.as_map()?;
@@ -120,11 +133,13 @@ impl SharePointer {
         let display_name = req(map, "displayName")?.as_text()?.to_string();
         let permission = Permission::from_wire(req(map, "permission")?.as_text()?)
             .ok_or(Malformed::InvalidPermission)?;
+        let scope_pointer_name = scope_pointer_name(map)?;
         Ok(Self {
             scope_root_name,
             sharer_identity_pk,
             display_name,
             permission,
+            scope_pointer_name,
         })
     }
 }
@@ -161,6 +176,10 @@ pub struct ReceivedShare {
     /// The scope's stable pointer read key, persisted for scope-pointer resolve.
     /// Never public: no host frames a bookmark's secret.
     pub(crate) pointer_read_key: SecretBytes,
+    /// The scope pointer name, from an owner-signed source only: the share
+    /// pointer or the invite fragment (ADR 0074 D1). `None` follows nothing
+    /// until the owner posts again (D2).
+    pub scope_pointer_name: Option<IpnsName>,
 }
 
 impl ReceivedShare {
@@ -185,6 +204,7 @@ impl ReceivedShare {
             && self.display_name == other.display_name
             && self.permission == other.permission
             && self.pointer_read_key == other.pointer_read_key
+            && self.scope_pointer_name == other.scope_pointer_name
     }
 }
 
@@ -196,6 +216,10 @@ impl fmt::Debug for ReceivedShare {
             .field("display_name", &RedactedText::of(&self.display_name))
             .field("permission", &self.permission)
             .field("pointer_read_key", &"<redacted>")
+            .field(
+                "scope_pointer_name",
+                &self.scope_pointer_name.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -206,9 +230,6 @@ impl fmt::Debug for ReceivedShare {
 pub struct LinkHold {
     /// The invite secret, which re-derives both ephemeral halves.
     pub(crate) invite_secret: SecretBytes,
-    /// The scope pointer the fragment named. The holder resolves it on every
-    /// pass, so a write wave that moves the scope root does not strand it.
-    pub scope_pointer_name: IpnsName,
     /// The deadline of the link entry the holder last verified, or `None`
     /// before any verified read or for a link with none.
     pub deadline: Option<UnixMillis>,
@@ -289,10 +310,9 @@ impl fmt::Debug for HeldClaim {
 impl LinkHold {
     /// A hold on the link whose invite secret is `invite_secret`, before any
     /// verified read.
-    pub(crate) fn new(invite_secret: SecretBytes, scope_pointer_name: IpnsName) -> Self {
+    pub(crate) fn new(invite_secret: SecretBytes) -> Self {
         Self {
             invite_secret,
-            scope_pointer_name,
             deadline: None,
             claim: None,
         }
@@ -395,6 +415,17 @@ impl ReceivedSharesList {
         }
     }
 
+    /// Set the scope pointer name of the bookmark under `key`, returning the
+    /// name it held.
+    fn set_scope_pointer_name(
+        &mut self,
+        key: &BookmarkKey,
+        name: Option<IpnsName>,
+    ) -> Option<IpnsName> {
+        let at = self.position(key)?;
+        core::mem::replace(&mut self.entries[at].scope_pointer_name, name)
+    }
+
     /// Point the bookmark under `key` at the scope root its scope pointer
     /// names now.
     pub(crate) fn heal_root_name(&mut self, key: &BookmarkKey, scope_root_name: Vec<u8>) {
@@ -409,8 +440,17 @@ impl ReceivedSharesList {
     /// (blueprint/engine.md "self-healing bookmarks"). The returned
     /// [`Reconciled`] carries the pre-image [`revert`](Self::revert) needs if the
     /// durable persist then fails.
-    pub(crate) fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
-        match self.position(&share.key()) {
+    ///
+    /// A share with no scope pointer name keeps the name the bookmark holds,
+    /// so a post from an older owner build drops nothing (ADR 0074 D2).
+    pub(crate) fn reconcile(&mut self, mut share: ReceivedShare) -> Reconciled {
+        let position = self.position(&share.key());
+        if share.scope_pointer_name.is_none()
+            && let Some(i) = position
+        {
+            share.scope_pointer_name = self.entries[i].scope_pointer_name.clone();
+        }
+        match position {
             None => {
                 self.entries.push(share);
                 Reconciled::Added
@@ -604,14 +644,20 @@ pub(crate) fn encode_stored_list(
                 if let Some(deadline) = hold.deadline {
                     m.insert("linkDeadline", Value::Unsigned(deadline.0));
                 }
+                // The decoder refuses `linkSecret` without the name.
+                if share.scope_pointer_name.is_none() {
+                    return Err(Malformed::MissingField {
+                        field: "scopePointerName",
+                    }
+                    .into());
+                }
                 m.insert(
                     "linkSecret",
                     Value::Bytes(hold.invite_secret.as_bytes().to_vec()),
                 );
-                m.insert(
-                    "scopePointerName",
-                    Value::Text(hold.scope_pointer_name.as_str().to_owned()),
-                );
+            }
+            if let Some(name) = &share.scope_pointer_name {
+                m.insert("scopePointerName", Value::Text(name.as_str().to_owned()));
             }
             m.insert(
                 "permission",
@@ -708,6 +754,7 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             )?),
             scope_id: fixed::<16>(req(share, "scopeId")?, "scopeId")?,
             scope_root_name,
+            scope_pointer_name: scope_pointer_name(share)?,
         };
         let key = decoded.key();
         if entries.iter().any(|e| e.key() == key) {
@@ -724,12 +771,13 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
 /// The claim keys of one stored bookmark: all four or none.
 const CLAIM_FIELDS: [&str; 4] = ["claim", "claimKey", "claimNextPost", "claimPosts"];
 
-/// The optional link keys of one stored bookmark. `linkSecret` and
-/// `scopePointerName` come as a pair, and `linkDeadline` and the claim keys
-/// only with them; a bookmark without `linkSecret` is a personal one.
+/// The optional link keys of one stored bookmark. `linkSecret` comes only
+/// with `scopePointerName`, and `linkDeadline` and the claim keys only with
+/// `linkSecret`; a bookmark without `linkSecret` is a personal one, which
+/// may hold the name alone (ADR 0074 D1).
 fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecError> {
     let Some(secret) = share.get("linkSecret") else {
-        let stray = ["scopePointerName", "linkDeadline"]
+        let stray = ["linkDeadline"]
             .into_iter()
             .chain(CLAIM_FIELDS)
             .any(|field| share.get(field).is_some());
@@ -742,7 +790,7 @@ fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecEr
             Ok(None)
         };
     };
-    let scope_pointer_name = IpnsName::parse(req(share, "scopePointerName")?.as_text()?)?;
+    req(share, "scopePointerName")?;
     let deadline = share
         .get("linkDeadline")
         .map(|value| value.as_unsigned().map(UnixMillis))
@@ -751,7 +799,6 @@ fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecEr
     let bytes = Zeroizing::new(fixed::<32>(secret, "linkSecret")?);
     Ok(Some(LinkHold {
         invite_secret: SecretBytes::new(*bytes),
-        scope_pointer_name,
         deadline,
         claim,
     }))
@@ -1266,7 +1313,22 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
                 e.rejection().map(|r| &r.reason)
                 && sequence == floor
             {
-                if let Some(permission) = received.find(&bookmark_key).map(|s| s.permission) {
+                if let Some(held) = received.find(&bookmark_key) {
+                    let permission = held.permission;
+                    // The repost of ADR 0074 D2 lands here, as it publishes
+                    // nothing: it adds the name before the ack.
+                    if let Some(name) = pointer
+                        .scope_pointer_name
+                        .as_ref()
+                        .filter(|&name| held.scope_pointer_name.as_ref() != Some(name))
+                        .cloned()
+                    {
+                        let previous = received.set_scope_pointer_name(&bookmark_key, Some(name));
+                        if let Err(e) = store.persist(received).await {
+                            received.set_scope_pointer_name(&bookmark_key, previous);
+                            return Err(AcceptError::Persist(e));
+                        }
+                    }
                     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
                     return Ok(AcceptOutcome {
                         scope_id: candidate.envelope.scope,
@@ -1287,6 +1349,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         display_name: pointer.display_name.clone(),
         permission,
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
+        scope_pointer_name: pointer.scope_pointer_name.clone(),
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
     // A personal blob opened, so the link keys go (ADR 0024 D2).
@@ -1325,6 +1388,13 @@ pub(super) fn req<'a>(map: &'a Map, field: &'static str) -> Result<&'a Value, Co
         .ok_or_else(|| Malformed::MissingField { field }.into())
 }
 
+/// The optional `scopePointerName` of a share pointer or a stored bookmark.
+fn scope_pointer_name(map: &Map) -> Result<Option<IpnsName>, CodecError> {
+    map.get("scopePointerName")
+        .map(|name| IpnsName::parse(name.as_text()?))
+        .transpose()
+}
+
 /// A fixed-length byte field, or [`Malformed::InvalidFieldLength`].
 pub(super) fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u8; N], CodecError> {
     let b = v.as_bytes()?;
@@ -1350,6 +1420,7 @@ mod tests {
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "Shared Folder".to_string(),
             permission: Permission::Read,
+            scope_pointer_name: None,
         }
     }
 
@@ -1392,6 +1463,32 @@ mod tests {
         assert_eq!(decoded.encode(), bytes, "byte-stable");
     }
 
+    /// ADR 0074 D1: the name rides in the post, and a post with no name (an
+    /// older owner build) still decodes. An older decoder ignores the key.
+    #[test]
+    fn share_pointer_carries_the_scope_pointer_name_and_reads_without_it() {
+        let named = SharePointer {
+            scope_pointer_name: Some(a_name(0x5d)),
+            ..pointer()
+        };
+        let bytes = named.encode();
+        assert_eq!(SharePointer::decode(&bytes).expect("decodes"), named);
+        assert_ne!(bytes, pointer().encode(), "the name is in the bytes");
+        assert_eq!(
+            SharePointer::decode(&pointer().encode())
+                .expect("decodes")
+                .scope_pointer_name,
+            None
+        );
+
+        let mut m = decode(&bytes).unwrap().as_map().unwrap().clone();
+        m.insert("scopePointerName", Value::Text("not-a-name".into()));
+        assert!(
+            SharePointer::decode(&encode(&Value::Map(m)).unwrap()).is_err(),
+            "a name that is not an IPNS name is refused"
+        );
+    }
+
     #[test]
     fn share_pointer_rejects_bad_permission() {
         let mut m = decode(&pointer().encode())
@@ -1417,6 +1514,7 @@ mod tests {
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
+            scope_pointer_name: None,
         };
         assert!(matches!(list.reconcile(share.clone()), Reconciled::Added));
         assert!(
@@ -1424,6 +1522,30 @@ mod tests {
             "a byte-identical re-accept is a true no-op"
         );
         assert_eq!(list.len(), 1);
+    }
+
+    /// ADR 0074 D2: a post with the name adds it to a bookmark with none, and a
+    /// later post with no name keeps it.
+    #[test]
+    fn reconcile_adds_a_scope_pointer_name_and_keeps_it_over_a_post_without_one() {
+        let mut list = ReceivedSharesList::new();
+        let base = share(b"n", 0x5c);
+        list.reconcile(base.clone());
+        assert!(matches!(
+            list.reconcile(ReceivedShare {
+                scope_pointer_name: Some(a_name(0x5d)),
+                ..base.clone()
+            }),
+            Reconciled::Healed(_)
+        ));
+        assert!(
+            matches!(list.reconcile(base.clone()), Reconciled::Unchanged),
+            "a post with no name changes nothing"
+        );
+        assert_eq!(
+            list.find(&base.key()).unwrap().scope_pointer_name,
+            Some(a_name(0x5d))
+        );
     }
 
     #[test]
@@ -1436,6 +1558,7 @@ mod tests {
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
+            scope_pointer_name: None,
         };
         assert!(matches!(list.reconcile(base.clone()), Reconciled::Added));
 
@@ -1444,6 +1567,7 @@ mod tests {
         let healed = ReceivedShare {
             permission: Permission::Write,
             pointer_read_key: SecretBytes::new([0x9C; 32]),
+            scope_pointer_name: None,
             ..base
         };
         assert!(matches!(list.reconcile(healed), Reconciled::Healed(_)));
@@ -1466,6 +1590,7 @@ mod tests {
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
+            scope_pointer_name: None,
         };
         let key = base.key();
 
@@ -1480,6 +1605,7 @@ mod tests {
         let healed = list.reconcile(ReceivedShare {
             permission: Permission::Write,
             pointer_read_key: SecretBytes::new([0x9C; 32]),
+            scope_pointer_name: None,
             ..base
         });
         assert!(matches!(healed, Reconciled::Healed(_)));
@@ -1504,6 +1630,7 @@ mod tests {
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([key_byte; 32]),
+            scope_pointer_name: None,
         }
     }
 
@@ -1515,6 +1642,7 @@ mod tests {
             display_name: "s".into(),
             permission,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
+            scope_pointer_name: None,
         }
     }
 
@@ -1765,9 +1893,6 @@ mod tests {
         use cipherbox_core::suite::ed25519::Ed25519Signer;
         LinkHold {
             invite_secret: SecretBytes::new([0x4e; 32]),
-            scope_pointer_name: IpnsName::from_public_key(
-                &Ed25519Signer::from_seed([0x5d; 32]).verifying_key(),
-            ),
             deadline: Some(UnixMillis(1_700_000_000_000)),
             claim: Some(HeldClaim::first_post(
                 InviteClaim {
@@ -1784,11 +1909,19 @@ mod tests {
         }
     }
 
+    /// A bookmark a link hold reads, with the name the fragment carried.
+    fn held_share() -> ReceivedShare {
+        ReceivedShare {
+            scope_pointer_name: Some(a_name(0x5d)),
+            ..share(b"k51scoperoot", 0x8A)
+        }
+    }
+
     /// A hold the previous release wrote carries no claim keys, and loads.
     #[test]
     fn a_hold_without_claim_keys_loads_with_no_claim() {
         let mut list = ReceivedSharesList::new();
-        list.reconcile(share(b"k51scoperoot", 0x8A));
+        list.reconcile(held_share());
         let key = list.iter().next().expect("one bookmark").key();
         let mut previous = link_hold();
         previous.claim = None;
@@ -1802,7 +1935,7 @@ mod tests {
     #[test]
     fn a_hold_missing_one_claim_key_is_refused() {
         let mut list = ReceivedSharesList::new();
-        list.reconcile(share(b"k51scoperoot", 0x8A));
+        list.reconcile(held_share());
         let key = list.iter().next().expect("one bookmark").key();
         list.hold_link(key, link_hold());
         let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
@@ -1828,7 +1961,7 @@ mod tests {
     #[test]
     fn a_held_claim_past_its_bound_is_refused_at_both_ends() {
         let mut list = ReceivedSharesList::new();
-        list.reconcile(share(b"k51scoperoot", 0x8A));
+        list.reconcile(held_share());
         let key = list.iter().next().expect("one bookmark").key();
         let mut long = link_hold();
         if let Some(held) = long.claim.as_mut() {
@@ -1889,12 +2022,13 @@ mod tests {
     }
 
     /// ADR 0024 C1: the link keys are optional keys of a version 2 bookmark.
-    /// A bookmark without them is the frozen personal one; a held one round
-    /// trips, keys and deadline included.
+    /// A bookmark without them is the personal one; a held one round trips,
+    /// keys and deadline included. A dropped hold keeps the scope pointer name
+    /// (ADR 0074 D1).
     #[test]
     fn a_v2_bookmark_without_link_keys_loads_and_a_held_one_round_trips() {
         let mut list = ReceivedSharesList::new();
-        list.reconcile(share(b"k51scoperoot", 0x8A));
+        list.reconcile(held_share());
         let personal = decode_stored_list(&encode_stored_list(&list).expect("encodes"))
             .expect("a bookmark without link keys loads");
         let key = personal.iter().next().expect("one bookmark").key();
@@ -1919,27 +2053,23 @@ mod tests {
         );
     }
 
-    /// `linkSecret` and `scopePointerName` come as a pair.
+    /// `linkSecret` needs `scopePointerName`, and the other link keys need
+    /// `linkSecret`.
     #[test]
     fn a_link_hold_missing_half_its_pair_is_refused() {
         let mut list = ReceivedSharesList::new();
-        list.reconcile(share(b"k51scoperoot", 0x8A));
+        list.reconcile(held_share());
         let key = list.iter().next().expect("one bookmark").key();
         list.hold_link(key, link_hold());
         let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
         for dropped in ["linkSecret", "scopePointerName"] {
             let mut map = tree.as_map().unwrap().clone();
             let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
-            let mut entry = shares[0].as_map().unwrap().clone();
-            let kept: Vec<(String, Value)> = entry
-                .entries()
-                .iter()
-                .filter(|(field, _)| field != dropped)
-                .cloned()
-                .collect();
-            entry = Map::new();
-            for (field, value) in kept {
-                entry.insert(&field, value);
+            let mut entry = Map::new();
+            for (field, value) in shares[0].as_map().unwrap().entries() {
+                if field != dropped {
+                    entry.insert(field, value.clone());
+                }
             }
             map.insert("shares", Value::Array(vec![Value::Map(entry)]));
             assert!(
@@ -1947,6 +2077,36 @@ mod tests {
                 "a hold without {dropped} is refused"
             );
         }
+    }
+
+    /// ADR 0074 D1: a personal bookmark holds the name without link keys.
+    #[test]
+    fn a_personal_bookmark_holds_a_scope_pointer_name_without_link_keys() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(held_share());
+        let bytes = encode_stored_list(&list).expect("encodes");
+        let decoded = decode_stored_list(&bytes).expect("loads");
+        let key = held_share().key();
+        assert!(decoded.link_hold(&key).is_none());
+        assert_eq!(
+            decoded.find(&key).unwrap().scope_pointer_name,
+            held_share().scope_pointer_name
+        );
+        assert_eq!(encode_stored_list(&decoded).unwrap(), bytes, "byte-stable");
+    }
+
+    /// The encoder refuses a link hold with no name, which the decoder
+    /// refuses (AGENTS.md rule 8). It runs in the release `--lib` leg.
+    #[test]
+    fn a_link_hold_with_no_scope_pointer_name_is_refused_at_encode() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let key = list.iter().next().expect("one bookmark").key();
+        list.hold_link(key, link_hold());
+        assert!(matches!(
+            encode_stored_list(&list),
+            Err(ReceivedSharesCodecError::Codec(_))
+        ));
     }
 
     #[test]
@@ -1974,6 +2134,7 @@ mod tests {
             [0x11; IDENTITY_PUBLIC_LEN],
             "x".repeat(MAX_NODE_NAME_BYTES),
             Permission::Read,
+            a_name(0x5d),
         )
         .expect("a label at the bound builds");
         assert_eq!(at_the_bound.display_name.len(), MAX_NODE_NAME_BYTES);
@@ -1984,6 +2145,7 @@ mod tests {
                 [0x11; IDENTITY_PUBLIC_LEN],
                 "x".repeat(MAX_NODE_NAME_BYTES + 1),
                 Permission::Read,
+                a_name(0x5d),
             )
             .err()
             .map(|e| (e.field, e.limit)),
@@ -2082,6 +2244,7 @@ mod tests {
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0xAB; 32]),
+            scope_pointer_name: None,
         };
         let debug = format!("{share:?}");
         assert!(debug.contains("<redacted>"));
