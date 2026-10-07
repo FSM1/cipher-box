@@ -501,7 +501,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 Some(key)
             })
             .collect();
-        let (pointers, heals, personal_reads) = self
+        let (pointers, heals, pin_reads) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
         let pins = PinPass {
@@ -510,7 +510,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             profile,
             events: render.events,
         };
-        self.observe_pointer_pins(&received, &pointers, &personal_reads, render, &pins)
+        self.observe_pointer_pins(&received, &pin_reads, render, &pins)
             .await;
         let mut hold_changes: Vec<HoldChange> = Vec::new();
         for (key, root) in heals {
@@ -730,8 +730,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
     /// verdict, the scope root each vouched-for bookmark must move to, and
-    /// each personal bookmark's unanswered or absent read for the pin pass. A
-    /// refused re-point object is a trust verdict, reported here.
+    /// every scheduled read for the pin pass. A refused re-point object is a
+    /// trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
@@ -745,7 +745,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     ) {
         let mut verdicts = BTreeMap::new();
         let mut heals = Vec::new();
-        let mut personal_reads = BTreeMap::new();
+        let mut pin_reads = BTreeMap::new();
         for share in received.iter() {
             let key = share.key();
             let (Some(name), Some(contact), true) = (
@@ -782,6 +782,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     PointerVerdict::Rejected
                 }
             };
+            pin_reads.insert(key, verdict);
             // Only a link read waits for a vouched root (ADR 0024 D5). A
             // personal read uses the stored root when the pointer gives none.
             let personal = received.link_hold(&key).is_none();
@@ -791,12 +792,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     PointerVerdict::Absent | PointerVerdict::Unavailable
                 )
             {
-                personal_reads.insert(key, verdict);
                 continue;
             }
             verdicts.insert(key, verdict);
         }
-        (verdicts, heals, personal_reads)
+        (verdicts, heals, pin_reads)
     }
 
     /// Fold each named bookmark's pointer read into its hold. A pointer that no
@@ -811,19 +811,17 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     async fn observe_pointer_pins(
         &self,
         received: &ReceivedSharesList,
-        pointers: &BTreeMap<BookmarkKey, PointerVerdict>,
-        personal_reads: &BTreeMap<BookmarkKey, PointerVerdict>,
+        pin_reads: &BTreeMap<BookmarkKey, PointerVerdict>,
         render: &ScopeRender<'_>,
         pass: &PinPass<'_>,
     ) {
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            // A nameless bookmark follows no pointer, so it has no pin to read.
             let Some(name) = &share.scope_pointer_name else {
                 continue;
             };
-            let read = match pointers.get(&key).or_else(|| personal_reads.get(&key)) {
+            let read = match pin_reads.get(&key) {
                 Some(PointerVerdict::Unavailable) => {
                     match floor::write_epoch_floor(&self.sharer_floors(share), &share.scope_id)
                         .await
