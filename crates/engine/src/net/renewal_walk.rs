@@ -88,7 +88,7 @@ const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not
 /// Why the walk does not revive a lapsed name.
 const REVIVAL_REFUSED: &str = "the revival refused the record the recovery endpoint served";
 /// Why the walk renews every name as if no scope had owed work this pass.
-const OWED_UNREAD: &str =
+pub(crate) const OWED_UNREAD: &str =
     "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
 
 /// The most poll cadences the liveness loop waits for the session's first
@@ -1339,7 +1339,7 @@ fn cursor_to_store(
 
 /// Whether a refused registration can pass: the API was not reached, it
 /// answered 429 or 5xx, or the session's refresh failed.
-fn transient_registration(error: &ApiError) -> bool {
+pub(crate) fn transient_registration(error: &ApiError) -> bool {
     match error {
         ApiError::Transport(_) | ApiError::Unauthorized => true,
         ApiError::Status { status, .. } => *status == 429 || *status >= 500,
@@ -1348,7 +1348,7 @@ fn transient_registration(error: &ApiError) -> bool {
 }
 
 /// Whether a renewal's outcome can pass on a later pass.
-fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> bool {
+pub(crate) fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> bool {
     match outcome {
         Ok(Some(PublishOutcome::Unconfirmed { .. })) => true,
         Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {

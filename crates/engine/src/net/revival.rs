@@ -24,7 +24,9 @@ use super::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, RefusedRead, head_cid_from_value,
 };
 use super::register::register;
-use super::renewal_walk::{FloorRule, RenewalSeams, sign_admitted};
+use super::renewal_walk::{
+    FloorRule, RenewalSeams, sign_admitted, transient_registration, transient_renewal,
+};
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, load_bin_index};
@@ -200,6 +202,26 @@ pub(crate) enum ReviveError {
     Moved,
     /// The registration, the signature or the PUT failed.
     Publish(PublishError),
+}
+
+impl ReviveError {
+    /// Whether a later pass can pass where this one failed: a 429, an API or
+    /// fan-out that did not answer, a store error, or a PUT that did not land.
+    pub(crate) fn is_transient(&self) -> bool {
+        match self {
+            Self::Throttled | Self::Uncorroborated | Self::Unavailable | Self::FloorRead(_) => true,
+            Self::Recovery(error) => transient_registration(error),
+            Self::Publish(error) => transient_renewal(&Err(error.clone())),
+            Self::WrongSigner
+            | Self::Unrecoverable
+            | Self::Superseded { .. }
+            | Self::StaleSource { .. }
+            | Self::TrustViolation
+            | Self::PlaneMismatch
+            | Self::NotAtFloor
+            | Self::Moved => false,
+        }
+    }
 }
 
 /// The transport a plane read runs over in a revival: every endpoint serves

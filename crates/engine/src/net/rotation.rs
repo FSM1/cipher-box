@@ -6231,8 +6231,9 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     /// The session's recovery pace, which each revival waits for.
     pub pace: &'a RecoveryPace,
     /// The scopes whose owed rotation entry is within its bound, whose
-    /// pointer no revival signs (ADR 0063 D4).
-    pub owed: &'a BTreeSet<[u8; 16]>,
+    /// pointer no revival signs (ADR 0063 D4). `None` when the owed rotation
+    /// record does not read, so no pointer revives.
+    pub owed: Option<&'a BTreeSet<[u8; 16]>>,
 }
 
 /// Hold every scope pointer this owner session owns for renewal.
@@ -6370,9 +6371,14 @@ where
             Ok(consulted) => {
                 consulted_scopes.push(scope_id);
                 let consulted = match consulted {
-                    None if !pass.owed.contains(&scope_id) => {
-                        revive_scope_pointer(&pass, &consult, scope_id).await
-                    }
+                    None => match revive_scope_pointer(&pass, &consult, scope_id).await {
+                        Ok(revived) => revived,
+                        // A later pass can revive it: the latch stays open.
+                        Err(retryable) => {
+                            complete &= !retryable;
+                            None
+                        }
+                    },
                     consulted => consulted,
                 };
                 if let Some(consulted) = consulted {
@@ -6388,13 +6394,16 @@ where
 }
 
 /// Revive the lapsed pointer of the owned scope `scope_id` through
-/// `open_repoint` and the pointer bar, then consult it again. `None` when no
-/// revival signed, or the consult does not read it back.
+/// `open_repoint` and the pointer bar, then consult it again. Only a scope
+/// this device saw a pointer for revives: a scope that was never re-pointed
+/// holds no write-epoch floor and spends no recovery fetch. `Ok(None)` when
+/// there is nothing to revive or the consult does not read the revival back;
+/// `Err` with whether a later pass can revive it.
 async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
     pass: &ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
     consult: &PointerConsult<'_>,
     scope_id: [u8; 16],
-) -> Option<ConsultedPointer>
+) -> Result<Option<ConsultedPointer>, bool>
 where
     K: OwnerScopeKeys + OwnerPointerSign,
     T: RecordTransport + Clone + 'static,
@@ -6403,6 +6412,15 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
+    match floor::write_epoch_floor(pass.floors, &scope_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Ok(None),
+        Err(_) => return Err(true),
+    }
+    // The owed rotation work ends, or its record reads, on a later pass.
+    if pass.owed.is_none_or(|owed| owed.contains(&scope_id)) {
+        return Err(true);
+    }
     let name = pass.keys.pointer_name(&scope_id);
     let signer = pass.keys.pointer_signer(&scope_id);
     let read = ScopePointerRead {
@@ -6429,16 +6447,19 @@ where
     let result = revive(pass.api, &seams, pass.pace, &[request])
         .await
         .remove(0);
-    let signed = result.is_ok();
+    let retryable = match &result {
+        Ok(_) => None,
+        Err(error) => Some(error.is_transient()),
+    };
     emit_revival_failures(pass.events, vec![(name.as_str().to_owned(), result)]);
-    if !signed {
-        return None;
+    if let Some(retryable) = retryable {
+        return Err(retryable);
     }
-    consult
+    Ok(consult
         .run(pass.transport, pass.floors, &scope_id)
         .await
         .ok()
-        .flatten()
+        .flatten())
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -17119,7 +17140,7 @@ mod tests {
             on_access_misses: &harness.on_access_misses,
             publishing: &RefCell::default(),
             pace: &RecoveryPace::default(),
-            owed,
+            owed: Some(owed),
         }))
     }
 

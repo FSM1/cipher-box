@@ -14,17 +14,17 @@ use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
 use super::fanout::{FanoutRecord, TiedFetch, fanout_get_classified, fanout_get_tied_classified};
-use super::publish::Observed;
+use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
 use super::revival::{
     Admitted, PlaneRead, PlaneRefusal, RecoveryPace, ReviveError, ReviveRequest, Revived, revive,
 };
 use super::rotation::{PointerPipeline, publish_pointer_over};
-use crate::api::ApiClient;
+use crate::api::{ApiClient, ApiError};
 use crate::entropy::Entropy;
 use crate::gate::GateError;
-use crate::gate::floor::{self, PointerPlane, Strictness};
+use crate::gate::floor::{self, FloorRegression, PointerPlane, Strictness};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamResult};
@@ -284,7 +284,16 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
         .await
         {
             Ok(None) => Ok(Admitted::unbarred(name, recovered.sequence, bytes)),
-            Ok(Some(_)) => Err(PlaneRefusal::Rejected),
+            // The produce bar can sit above the vouched floor the cold start
+            // reads (ADR 0067 D4): a pointer only that bar refuses passes the
+            // gate, so the refusal is of the signature, not of the record.
+            Ok(Some(produce)) => {
+                match floor::vouched_regression(self.floors, &repoint, &self.scope_id).await {
+                    Ok(Some(_)) => Err(PlaneRefusal::Rejected),
+                    Ok(None) => Err(PlaneRefusal::Unsignable(below_bar(produce))),
+                    Err(_) => Err(PlaneRefusal::Unavailable),
+                }
+            }
             Err(_) => Err(PlaneRefusal::Unavailable),
         }
     }
@@ -295,6 +304,26 @@ impl<F: FloorStore> PlaneRead for VaultPointerRead<'_, F> {
             .await?
             .is_none())
     }
+}
+
+fn below_bar(regression: FloorRegression) -> PublishError {
+    let (floor, at, epoch) = match regression {
+        FloorRegression::ReadEpoch { floor, vouched } => (BarFloor::Read, floor, vouched),
+        FloorRegression::WriteEpoch { floor, vouched } => (BarFloor::Write, floor, vouched),
+    };
+    PublishError::BelowBar { floor, at, epoch }
+}
+
+/// What the session-start pass over the vault pointer chain found.
+pub(crate) struct ChainRevival {
+    /// Each revival the pass ran, by routing key.
+    pub(crate) revivals: Vec<(String, Result<Revived, ReviveError>)>,
+    /// `None` when the pass reached a chain end the cold start may read: the
+    /// recovery endpoint holds no record one index past the last, or the
+    /// fan-out did not answer, which the cold start reports itself. Else
+    /// whether a later pass can still reach that end; the cold start must not
+    /// adopt the prefix of a chain whose next index may only be lapsed.
+    pub(crate) unconfirmed: Option<bool>,
 }
 
 /// Revive each lapsed index of the vault pointer chain, from the durable index
@@ -308,7 +337,7 @@ pub(crate) async fn revive_vault_pointer_chain<T, H, C, F, Sch>(
     pace: &RecoveryPace,
     login_secret: &[u8],
     read: VaultPointerRead<'_, F>,
-) -> Vec<(String, Result<Revived, ReviveError>)>
+) -> ChainRevival
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -316,11 +345,15 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let mut revivals = Vec::new();
+    let mut pass = ChainRevival {
+        revivals: Vec::new(),
+        unconfirmed: None,
+    };
     // An index below the floor is abandoned, so its revival would re-sign a
     // superseded pointer.
     let Ok(floor) = floor::vault_pointer_index_floor(seams.floors, &read.scope_id).await else {
-        return revivals;
+        pass.unconfirmed = Some(true);
+        return pass;
     };
     let mut revived = None;
     let mut index = floor.unwrap_or(0);
@@ -336,18 +369,30 @@ where
                     plane: read,
                 };
                 let result = revive(api, seams, pace, &[request]).await.remove(0);
-                let signed = result.is_ok();
-                revivals.push((name.as_str().to_owned(), result));
-                if !signed {
-                    return revivals;
+                pass.unconfirmed = match &result {
+                    Ok(_) => None,
+                    Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
+                        pass.revivals.push((name.as_str().to_owned(), result));
+                        return pass;
+                    }
+                    Err(error) => Some(error.is_transient()),
+                };
+                pass.revivals.push((name.as_str().to_owned(), result));
+                if pass.unconfirmed.is_some() {
+                    return pass;
                 }
                 // The next read finds the record the endpoints now serve.
                 revived = Some(index);
             }
-            FanoutRecord::Absent | FanoutRecord::Unavailable(_) => return revivals,
+            // The endpoints still read the revived index `Absent`.
+            FanoutRecord::Absent => {
+                pass.unconfirmed = Some(true);
+                return pass;
+            }
+            FanoutRecord::Unavailable(_) => return pass,
         }
     }
-    revivals
+    pass
 }
 
 /// The standing re-point's sequence check on rule 6's axis: a record below the
@@ -458,10 +503,7 @@ mod tests {
         (world, device)
     }
 
-    fn revive_chain(
-        world: &FakeWorld,
-        device: &FakeDevice,
-    ) -> Vec<(String, Result<Revived, ReviveError>)> {
+    fn revive_chain(world: &FakeWorld, device: &FakeDevice) -> ChainRevival {
         let publishing = RefCell::default();
         let seams = RenewalSeams {
             transport: &device.record_store,
@@ -520,7 +562,14 @@ mod tests {
         }
         device.http.enqueue_response(answer(404, Vec::new()));
 
-        let revivals = revive_chain(&world, &device);
+        let ChainRevival {
+            revivals,
+            unconfirmed,
+        } = revive_chain(&world, &device);
+        assert_eq!(
+            unconfirmed, None,
+            "the probe one past the last index ends the chain"
+        );
 
         let names: Vec<String> = (0..3)
             .map(|index| vault_pointer_name(&SECRET, index).as_str().to_owned())
@@ -546,6 +595,21 @@ mod tests {
         assert!(served(&device, 2).is_none());
     }
 
+    /// A 429 after a revived index leaves the chain end unconfirmed, so the
+    /// cold start adopts no prefix and a later pass tries again.
+    #[test]
+    fn a_429_inside_the_chain_leaves_its_end_unconfirmed() {
+        let (world, device) = after_100_days();
+        recover(&device, pointer_record(0, 3));
+        device.http.enqueue_response(answer(429, Vec::new()));
+
+        let pass = revive_chain(&world, &device);
+
+        assert_eq!(pass.unconfirmed, Some(true), "a retryable verdict");
+        assert!(matches!(pass.revivals[1].1, Err(ReviveError::Throttled)));
+        assert!(served(&device, 0).is_some(), "index 0 revived");
+    }
+
     #[test]
     fn the_chain_revives_from_the_index_floor_and_reads_a_live_index() {
         let (world, device) = after_100_days();
@@ -564,7 +628,7 @@ mod tests {
         }
         device.http.enqueue_response(answer(404, Vec::new()));
 
-        let revivals = revive_chain(&world, &device);
+        let revivals = revive_chain(&world, &device).revivals;
 
         assert_eq!(
             recovered_names(&device),
