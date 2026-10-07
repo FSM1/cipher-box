@@ -12719,10 +12719,13 @@ fn a_fragment_with_an_altered_pointer_name_is_refused_at_the_preview_and_the_joi
     let fragment = altered.encode().expect("inside the bound");
     let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
 
-    assert!(matches!(
-        block_on(holder.preview_invite_link(&fragment)),
-        Err(EngineError::TrustViolation { .. })
-    ));
+    // The web host reads this exact message as a changed link.
+    let refusal = block_on(holder.preview_invite_link(&fragment)).expect_err("the preview refuses");
+    assert!(matches!(refusal, EngineError::TrustViolation { .. }));
+    assert_eq!(
+        refusal.to_string(),
+        "trust violation: invite-names-do-not-verify"
+    );
     assert!(matches!(
         join_link(&mut holder, &mut holder_tasks, fragment),
         Err(EngineError::TrustViolation { .. })

@@ -1895,6 +1895,10 @@ mod tests {
             .to_vec()
     }
 
+    fn grantee_pointer_name() -> IpnsName {
+        crate::sync::pointer::scope_pointer_name(&[0x77; 32], &GRANTEE_SCOPE)
+    }
+
     fn owner_pseudonym() -> Ed25519Signer {
         Ed25519Signer::from_seed([0x22; 32])
     }
@@ -2839,7 +2843,7 @@ mod tests {
                     &grantee,
                     &recipient,
                     &grantee.ipns_name(),
-                    &grantee.ipns_name(),
+                    &grantee_pointer_name(),
                 )
                 .await
                 .map(|()| outcome)
@@ -3091,6 +3095,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         let pointer = SharePointer::decode(&items[0].payload).unwrap();
         assert_eq!(pointer.scope_root_name, grantee_name());
+        assert_eq!(pointer.scope_pointer_name, Some(grantee_pointer_name()));
         assert_eq!(pointer.permission, Permission::Read);
         assert_eq!(
             pointer.sharer_identity_pk,
