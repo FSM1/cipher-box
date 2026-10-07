@@ -3806,14 +3806,12 @@ where
             .map_err(SweepResolveFailure::from)?;
         let observed =
             root_observed(&root, over_sequence).map_err(|_| SweepResolveFailure::VersionSkew)?;
-        if let Err(failure) = self
-            .open_write_seed_on_access(&mut root, scope.scope_id)
+        self.open_write_seed_on_access(&mut root, scope.scope_id)
             .await
-        {
-            return Err(self
-                .moved_from(scope.scope_id, &name)
-                .unwrap_or(failure.into()));
-        }
+            .map_err(|failure| {
+                self.moved_from(scope.scope_id, &name)
+                    .unwrap_or(failure.into())
+            })?;
         let GatedWriteBody {
             write_scope_seed,
             body: write_body,
@@ -8054,10 +8052,7 @@ mod tests {
         );
     }
 
-    /// A pointer that vouches another root proves a move of this root only
-    /// when the owner-signed re-point names this root as the one it left. Any
-    /// other pointer leaves the sweep's read unavailable, so the sweep never
-    /// walks a root that may not be the live one.
+    /// The sweep never walks a root that may not be the live one.
     #[test]
     fn a_pointer_that_vouches_another_root_moves_only_the_root_it_names_as_left() {
         let (child, child_ref, _) = one_level();

@@ -6651,7 +6651,7 @@ where {
     /// Spawn the idle-cadence sweep job (blueprint/engine.md "sweep"): each
     /// [`SyncTimingProfile::sweep_cadence`], one pass over every scope this vault
     /// owns that has left its genesis epoch and that no pass this session has
-    /// confirmed converged at the epoch it now sits at.
+    /// settled at the epoch it now sits at.
     ///
     /// Nothing about the wave is durable, so a restart starts with every such
     /// scope due: a cut whose own enqueued sweep failed, or that a restart cut
@@ -6671,7 +6671,7 @@ where {
         let write_seeds = self.state.scope_write_seeds.clone();
         let cadence = self.profile.sweep_cadence;
         self.seams.scheduler.spawn(Box::pin(async move {
-            let read_epoch_converged_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
+            let settled_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
             run_sweep_job(
                 &scheduler,
                 cadence,
@@ -6696,10 +6696,7 @@ where {
                                 .ok()
                                 .flatten(),
                         };
-                        let settled = read_epoch_converged_at
-                            .borrow()
-                            .get(&target.scope.scope_id)
-                            .copied();
+                        let settled = settled_at.borrow().get(&target.scope.scope_id).copied();
                         if epoch.is_some_and(|epoch| {
                             epoch > GENESIS_EPOCH && settled.is_none_or(|at| at < epoch)
                         }) {
@@ -6717,9 +6714,7 @@ where {
                     };
                     times.report(target.scope.scope_id, outcome, scheduler.now());
                     if let Some(epoch) = outcome.settled_epoch() {
-                        read_epoch_converged_at
-                            .borrow_mut()
-                            .insert(target.scope.scope_id, epoch);
+                        settled_at.borrow_mut().insert(target.scope.scope_id, epoch);
                     }
                 },
             )

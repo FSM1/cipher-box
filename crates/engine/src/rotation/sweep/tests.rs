@@ -827,8 +827,8 @@ fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualSche
     (seen, scheduler)
 }
 
-/// The idle job's round source: `net`'s one scope each round until it
-/// settles at the floor epoch, then none; `count` rounds in all.
+/// The idle job's round source: the one scope each round until `settled`
+/// holds an epoch, then none; `count` rounds in all.
 fn unsettled_rounds(
     count: usize,
     settled: &RefCell<Option<u64>>,
@@ -871,7 +871,7 @@ fn the_idle_job_settles_a_scope_whose_only_residual_is_settled() {
     assert_eq!(
         scheduler.now(),
         UnixMillis(4 * 30_000),
-        "one idle sleep per round and no in-pass retry sleep"
+        "one idle per round, plus the idle before the round that stops"
     );
 }
 
