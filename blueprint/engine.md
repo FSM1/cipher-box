@@ -206,9 +206,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   storage leaves the recovery record below the floor. The restart fork this
   leaves on the vault root, the bin index and the settings record (a
   confirmed `S + 1` lost before storage, an expired `S` served again, a drain
-  write or a save of another `S + 1`) is an accepted residual: ADR 0066
-  reports it and the later EOL wins. The drain's bin index record carries the
-  same base plus its change, so no entry is lost. After a bin index revival the session loads the bin
+  write or a save of another `S + 1`) is an accepted residual. On the vault
+  root, ADR 0066 reports it and the later EOL wins. The bin index and the
+  settings record resolve through `record_plane::resolve_record`, which ADR
+  0066 D1 excludes: the later EOL wins at the read and no event is sent. The
+  drain's bin index record carries the same base plus its change, so no entry
+  is lost, and a settings save signs above the observed and recovered
+  sequence. After a bin index revival the session loads the bin
   index through the gate and holds it. No revival signs a name in a scope that
   has an owed rotation entry (ADR 0063 D4). When the owed rotation record does
   not read, the session sends `renewalFailed` for it and revives no vault root
