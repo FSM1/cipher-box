@@ -51,8 +51,9 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
 }
 
 /// Evaluate the `all` row; a rotation run reads the rows of
-/// [`Thresholds::max_of_rows`] for its latency band instead. Throttling is reported but never breaches on its
-/// own; a run where nothing succeeded does, since it measured nothing.
+/// [`Thresholds::max_of_rows`] for its latency band instead. Throttling is
+/// reported but never breaches on its own; a run where nothing succeeded does,
+/// since it measured nothing.
 pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<String> {
     let Some(total) = summaries
         .iter()
@@ -133,6 +134,8 @@ mod tests {
     fn one_failed_rotation_sample_turns_the_run_red() {
         let bands = thresholds_for(Scenario::RotationWave, Target::Local);
         let mut run = sixteen_node_samples(734.0);
+        // One failure in 106 samples stays below the default 1% band, so only
+        // the 0% rotation band turns this run red.
         for _ in 0..80 {
             run.record(Sample::new("name-wave-node", Outcome::Ok, 35.0));
         }
