@@ -6564,9 +6564,7 @@ impl<T: SeamTypes> Engine<T> {
                     }
                 }
             }
-            None => {
-                let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
-            }
+            None => self.report_parked_unreadable(),
         }
 
         // A dead letter that parked no version is named by its notice alone,
@@ -6587,9 +6585,7 @@ impl<T: SeamTypes> Engine<T> {
                     }
                 }
             }
-            None => {
-                let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
-            }
+            None => self.report_parked_unreadable(),
         }
 
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
@@ -6624,6 +6620,12 @@ impl<T: SeamTypes> Engine<T> {
             }
         }
         Ok(pending)
+    }
+
+    fn report_parked_unreadable(&self) {
+        if !self.state.parked_unreadable_sent.replace(true) {
+            let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
+        }
     }
 
     /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
@@ -6971,6 +6973,7 @@ impl<T: SeamTypes> Engine<T> {
         *self.tick_loop_spawner.borrow_mut() = None;
         *self.state.placement.borrow_mut() = None;
         *self.state.settings_summary.borrow_mut() = None;
+        self.state.parked_unreadable_sent.set(false);
         // The settings and bin index loads enrol ahead of the gate, and every
         // held record carries its name's own signer, so a start that stops here
         // drops them at their terminal owner (security rule 7).

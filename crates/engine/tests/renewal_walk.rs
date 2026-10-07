@@ -1986,15 +1986,28 @@ fn a_throttled_chain_revival_stays_retryable_and_a_refresh_revives_it() {
 fn a_stalled_chain_start_surfaces_an_undecodable_queue_entry() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    written_then_left(&world, &blocks, |engine, tasks| {
-        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    let writer = world.device(b"the device that wrote");
+    let mut queued = Vec::new();
+    written_then_left_on(&world, &blocks, &writer, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "notes");
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: "pending".into(),
+            kind: NodeKind::Folder,
+        }))
+        .expect("a create stages");
+        queued = block_on(writer.staging_store.queued_ops()).expect("the queue reads");
+        vec![folder]
     });
+    assert!(!queued.is_empty(), "the create stays queued");
     let pointer = vault_pointer_name(&SECRET, 0);
     lapse_into_the_recovery_cache(&world, &blocks);
     blocks.throttle_recovery_once(pointer.as_str());
     world.scheduler.advance(DAY * 100);
 
     let device = world.device(b"a device after 100 days offline");
+    let pending: Vec<Vec<u8>> = queued.into_iter().map(|(_, op)| op).collect();
+    let valid = block_on(device.staging_store.enqueue_ops(&pending)).expect("enqueue");
     let op_id = block_on(device.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
     let (engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
     assert!(!engine.is_provisioned(), "the session adopts no root");
@@ -2005,11 +2018,52 @@ fn a_stalled_chain_start_surfaces_an_undecodable_queue_entry() {
         )),
         "the undecodable entry surfaces as a dead letter",
     );
+    let ids: Vec<_> = block_on(device.staging_store.queued_ops())
+        .expect("the queue reads")
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        ids, valid,
+        "only the dead-lettered op leaves the durable queue"
+    );
+}
+
+/// A start that revives the vault root runs the cold start twice, and an
+/// unreadable preserved set is reported once.
+#[test]
+fn a_root_revival_start_reports_an_unreadable_preserved_set_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let before = record_at(&world, &write_name(ROOT));
+    lapse_into_the_recovery_cache(&world, &blocks);
+    world.scheduler.advance(DAY * 100);
+
+    let device = world.device(b"a device after 100 days offline");
+    block_on(device.staging_store.put_staged_bytes(
+        b"cipherbox/preserved-dead-letters",
+        b"another build wrote this",
+    ))
+    .expect("the store holds it");
+    let (engine, mut events, _tasks) = boot(&world, &blocks, &device, 2);
     assert!(
-        block_on(device.staging_store.queued_ops())
-            .expect("the queue reads")
-            .is_empty(),
-        "the dead-lettered op leaves the durable queue",
+        engine.is_provisioned(),
+        "the session adopts the revived root"
+    );
+    assert_eq!(
+        record_at(&world, &write_name(ROOT)).sequence,
+        before.sequence + 1,
+        "the vault root revives at session start",
+    );
+    assert_eq!(
+        core::iter::from_fn(|| events.try_next())
+            .filter(|event| matches!(event, Event::ParkedWritesUnreadable))
+            .count(),
+        1,
+        "the unreadable preserved set is reported once",
     );
 }
 
