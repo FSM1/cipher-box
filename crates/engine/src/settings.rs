@@ -2828,32 +2828,43 @@ mod tests {
     }
 
     /// A save on a device with no floor signs above the higher of the record
-    /// the load verified and the recovery copy (ADR 0062 D4).
+    /// the load verified and the recovery copy (ADR 0062 D4). A 404 is no
+    /// copy, and a 500 refuses the save.
     #[test]
     fn a_save_with_no_floor_signs_above_the_higher_of_the_load_and_recovery() {
         use crate::testkit::account::{Blocks, serve_http};
 
         const SECRET: [u8; 32] = [7u8; 32];
-        for (observed, recovered, signed) in [(3, 10, 11), (12, 10, 13)] {
+        let recovered = |sequence| {
+            (
+                200,
+                IpnsRecord::create_v2(
+                    &kdf::settings_ipns_keypair(&SECRET),
+                    b"/ipfs/bafyrecovered",
+                    sequence,
+                    2_000_000_000,
+                    "2000-01-01T00:00:00Z",
+                )
+                .marshal(),
+            )
+        };
+        for (observed, (status, body), signed) in [
+            (3, recovered(10), Some(11)),
+            (12, recovered(10), Some(13)),
+            (3, (404, Vec::new()), Some(4)),
+            (3, (500, Vec::new()), None),
+        ] {
             let world = FakeWorld::new();
             let device = world.device(b"new");
             let blocks = Blocks::default();
             let name = settings_name(&SECRET);
-            let record = IpnsRecord::create_v2(
-                &kdf::settings_ipns_keypair(&SECRET),
-                b"/ipfs/bafyrecovered",
-                recovered,
-                2_000_000_000,
-                "2000-01-01T00:00:00Z",
-            )
-            .marshal();
             let served = blocks.clone();
             device.http.enqueue_derived(move |request| {
                 if request.url.contains("/recovery/") {
                     Ok(crate::seams::HttpResponse {
-                        status: 200,
+                        status,
                         headers: Vec::new(),
-                        body: record.into(),
+                        body: body.into(),
                     })
                 } else {
                     served.reply(request)
@@ -2866,7 +2877,7 @@ mod tests {
                 "http://api.test",
             );
 
-            block_on(publish_settings_above(
+            let outcome = block_on(publish_settings_above(
                 &device.record_store,
                 &api,
                 &device.floor_store,
@@ -2878,17 +2889,23 @@ mod tests {
                 &SECRET,
                 &VaultSettings::default(),
                 Some(observed),
-            ))
-            .expect("the save lands");
-
+            ));
+            let label = format!("observed {observed}, recovery status {status}");
+            match signed {
+                Some(_) => assert!(outcome.is_ok(), "{label}: the save lands"),
+                None => assert!(
+                    matches!(outcome, Err(SettingsPublishError::Recovery(_))),
+                    "{label}: the save is refused"
+                ),
+            }
             assert_eq!(
                 block_on(floor::sequence_floor(
                     &device.floor_store,
                     name.as_str().as_bytes()
                 ))
                 .unwrap(),
-                Some(signed),
-                "observed {observed}, recovered {recovered}"
+                signed,
+                "{label}"
             );
         }
     }
