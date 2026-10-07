@@ -2286,3 +2286,81 @@ fn an_unread_owed_record_revives_no_lapsed_child_in_the_walk() {
         "the next pass revives the file"
     );
 }
+
+/// ADR 0062 D3: only a gated load that resolves the bin index lifts the drain
+/// hold. While the start could not settle a lapsed bin index, a liveness pass
+/// that reads the record once raw, before it vanishes, keeps the hold, so a
+/// soft delete publishes nothing; the pass whose gated load resolves the
+/// record lifts it. A served record past its EOL is lapsed, so that pass
+/// revives it instead.
+#[test]
+fn only_a_gated_load_that_resolves_the_bin_index_lifts_the_hold() {
+    for expired in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        written_then_left(&world, &blocks, |engine, tasks| {
+            let binned = write_file(&world, engine, tasks, ROOT, "binned.txt");
+            block_on(engine.command(Command::Delete { node: binned })).expect("the delete stages");
+            tick(&world, engine, tasks);
+            vec![binned]
+        });
+        let bin = bin_name();
+        let before = record_at(&world, &bin);
+        let bytes = served_at(&world, &bin).expect("the bin index is published");
+        blocks.cache_for_recovery(
+            bin.as_str(),
+            world.record_store.lapse(bin.as_str()).unwrap(),
+        );
+        world
+            .scheduler
+            .advance(DAY * if expired { 100 } else { 30 });
+
+        // The start reads the bin index `Unavailable`, and so does the first
+        // liveness pass.
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .fail_get_at_for(&endpoints[0], bin.as_str());
+        let device = world.device(b"a later session");
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+        world.record_store.heal_get_for(bin.as_str());
+        let fresh = write_file(&world, &mut engine, &mut tasks, ROOT, "fresh.txt");
+        block_on(engine.command(Command::Delete { node: fresh })).expect("the delete stages");
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(served_at(&world, &bin), None, "the drain is held");
+
+        // The next liveness pass reads the record once, then it vanishes.
+        world.record_store.serve_gets_for_after(
+            bin.as_str(),
+            0,
+            endpoints.len(),
+            Some(bytes.clone()),
+        );
+        world.scheduler.advance(RE_PUT_INTERVAL);
+        tick(&world, &engine, &mut tasks);
+        tick(&world, &engine, &mut tasks);
+        if expired {
+            assert_eq!(
+                record_at(&world, &bin).sequence,
+                before.sequence + 2,
+                "the lapsed record revives, then the delete publishes its entry"
+            );
+            continue;
+        }
+        assert_eq!(served_at(&world, &bin), None, "a raw read lifts no hold");
+
+        for endpoint in &endpoints {
+            world
+                .record_store
+                .seed_record(endpoint, bin.as_str(), bytes.clone());
+        }
+        world.scheduler.advance(RE_PUT_INTERVAL);
+        tick(&world, &engine, &mut tasks);
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(
+            record_at(&world, &bin).sequence,
+            before.sequence + 1,
+            "a gated load resolves the record, and the delete publishes its entry"
+        );
+    }
+}

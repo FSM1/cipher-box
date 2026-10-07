@@ -120,7 +120,7 @@ refuses keeps the session dark with no trust violation, and one that both
 bars refuse is one trust violation; a 429 or an unavailable fan-out at the
 bin index revival publishes no genesis bin index, and the next start
 revives it at `S + 1`, holds it and renews it later; a soft delete waits
-while the bin index revival can still land, and the next liveness pass revives it and publishes the delete; and an owed rotation record
+while the bin index revival can still land, and the next liveness pass revives it and publishes the delete, while a raw read that then vanishes lifts no hold and only a gated load that resolves the record does; and an owed rotation record
 that does not read revives no vault root. At session start the settings record revives
 only on the device whose floor equals the recovered sequence, and the
 settings load after it reads the saved settings. In `tests/write_plane.rs` a
@@ -128,10 +128,10 @@ vault that only the API cache serves revives at session start, and a 429
 there leaves a retryable session that converges. `net::vault_pointer`
 revives the chain up to the probe one index past the last and never below
 the index floor, a 429 inside the chain or an unavailable index after a
-revived prefix leaves its end unconfirmed, and the produce bar alone gives
+found or revived index, in this pass or after an earlier one, leaves its end unconfirmed, and the produce bar alone gives
 no trust violation. `net::rotation` revives a lapsed owned scope pointer
-only in a scope the device holds a write-epoch floor for and that has no
-owed rotation entry, revives none while the owed rotation record does not
+only in a scope that has no owed rotation entry, spends one recovery fetch
+on a scope that was never re-pointed, revives none while the owed rotation record does not
 read (and reports that once for each pass), and a revival that a later pass can land or read back, or that
 another device supersedes, keeps the enrolment open.
 

@@ -78,9 +78,7 @@ release and never adopts the record; an unknown release refuses the save as a ne
 **D5 — A device with no floor revives a name from the corroborated recovery record, and the user
 sees it.** The shell shows a "restored from the server copy" state for such a vault. When another
 owner device later reads a revived record below its own floor, or at a lower read epoch, its gate
-reports a `TrustViolation`. Amended on 2026-10-07 by FSM1/cipher-box#2356: a scope pointer
-revives only on a device that holds a write-epoch floor for the scope; a device with no floor
-leaves the pointer to another owner device.
+reports a `TrustViolation`.
 
 ## Alternatives considered
 

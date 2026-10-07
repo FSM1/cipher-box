@@ -378,11 +378,17 @@ where
         return pass;
     };
     let mut revived = None;
+    // A found or revived index makes the chain non-empty, so an index after
+    // it that the fan-out does not answer for can hide a lapsed successor.
+    let mut found = false;
     let mut index = floor.unwrap_or(0);
     while index < MAX_VAULT_POINTER_PROBE {
         let name = vault_pointer_name(login_secret, index);
         match fanout_get_classified(seams.transport, &name).await {
-            FanoutRecord::Found(..) => index += 1,
+            FanoutRecord::Found(..) => {
+                found = true;
+                index += 1;
+            }
             FanoutRecord::Absent if revived != Some(index) => {
                 let signer = kdf::vault_pointer_index(login_secret, index);
                 let request = ReviveRequest {
@@ -410,10 +416,10 @@ where
                 pass.unconfirmed = Some(ChainStall::Retryable);
                 return pass;
             }
-            // After a revived prefix the cold read could find the next index
-            // `Absent` and adopt the prefix.
+            // The cold read could find the next index `Absent` and adopt the
+            // prefix.
             FanoutRecord::Unavailable(_) => {
-                if revived.is_some() {
+                if found {
                     pass.unconfirmed = Some(ChainStall::Retryable);
                 }
                 return pass;
@@ -658,6 +664,28 @@ mod tests {
         assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable));
         assert_eq!(pass.revivals.len(), 1, "only index 0 revived");
         assert!(served(&device, 0).is_some());
+    }
+
+    /// A pass after an earlier pass revived index 0 reads it `Found`; an index
+    /// after it that the fan-out does not answer for still leaves the chain
+    /// end unconfirmed.
+    #[test]
+    fn an_unavailable_index_after_a_found_one_leaves_its_end_unconfirmed() {
+        let (world, device) = after_100_days();
+        recover(&device, pointer_record(0, 3));
+        device.http.enqueue_response(answer(429, Vec::new()));
+        assert_eq!(
+            revive_chain(&world, &device).unconfirmed,
+            Some(ChainStall::Retryable)
+        );
+
+        device
+            .record_store
+            .fail_get_for(vault_pointer_name(&SECRET, 1).as_str());
+        let pass = revive_chain(&world, &device);
+
+        assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable));
+        assert!(pass.revivals.is_empty(), "index 0 reads `Found`");
     }
 
     /// The produce bar sits above the vouched floor the cold start reads (ADR

@@ -6409,10 +6409,9 @@ where
 }
 
 /// Revive the lapsed pointer of the owned scope `scope_id` through
-/// `open_repoint` and the pointer bar, then consult it again. Only a scope
-/// this device saw a pointer for revives: a scope that was never re-pointed
-/// holds no write-epoch floor and spends no recovery fetch. `Ok(None)` when
-/// there is nothing to revive; `Err` with whether a later pass can revive the
+/// `open_repoint` and the pointer bar, then consult it again. A device with
+/// no floor for the scope revives it too (ADR 0062 D5). `Ok(None)` when there
+/// is nothing to revive; `Err` with whether a later pass can revive the
 /// pointer or read it back. An owed rotation record that does not read is
 /// reported once for each pass, through `owed_unread_reported`.
 async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
@@ -6429,11 +6428,6 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    match floor::write_epoch_floor(pass.floors, &scope_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return Ok(None),
-        Err(_) => return Err(true),
-    }
     let name = pass.keys.pointer_name(&scope_id);
     // The owed rotation work ends, or its record reads, on a later pass.
     let Some(owed) = pass.owed else {
@@ -17636,10 +17630,9 @@ mod tests {
         );
     }
 
-    /// A scope with no pointer record holds no pointer. The enumeration asks
-    /// the recovery endpoint only for a scope whose write-epoch floor shows
-    /// that this device saw a pointer: here the vault root scope, staged with
-    /// that floor, and not the child scope.
+    /// A scope the owner never re-pointed has no pointer record to hold, so the
+    /// enumeration costs one paced recovery fetch and nothing else (ADR 0062
+    /// D5).
     #[test]
     fn a_scope_that_was_never_re_pointed_enrols_no_pointer() {
         let child = vault_root(CHILD_SCOPE, Vec::new());
@@ -17657,10 +17650,14 @@ mod tests {
                     .map(|(_, name)| name.to_owned())
             })
             .collect();
+        let child_pointer = OwnerSeeds.pointer_name(&CHILD_SCOPE);
         assert_eq!(
-            recovered,
-            [OwnerSeeds.pointer_name(&SCOPE).as_str().to_owned()],
-            "no recovery fetch for the child scope's pointer"
+            recovered
+                .iter()
+                .filter(|name| *name == child_pointer.as_str())
+                .count(),
+            1,
+            "one recovery fetch for the child scope's pointer"
         );
         assert!(
             harness

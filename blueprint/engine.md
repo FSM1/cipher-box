@@ -169,9 +169,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   seed, whose write floor opens the owner write blob that carries the root's
   signer, and then the cold start runs again; the settings record, only at
   its floor (D4), and then the settings load runs again and reports one
-  verdict; the bin index before its load; then each owned scope pointer that
-  the device holds a write-epoch floor for, when the hourly enrolment proves
-  its scope.
+  verdict; the bin index before its load; then each owned scope pointer, when
+  the hourly enrolment proves its scope, on a device with no floor for the
+  scope too (D5).
   When the chain revival does not confirm the end of the chain (a 429, a 5xx,
   a revived index that still reads `Absent`, or a fan-out that does not
   answer after a revived index), the session adopts no root,
@@ -182,8 +182,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   endpoint) skips the genesis publish for
   that start. While it can still land, the drain holds each bin index write
   that a load with no record would build on an empty index, and each hourly
-  liveness pass runs the bin index revival again under the shared pace. A
-  revival that lands, or a load that resolves the record, lifts the hold. A chain or scope pointer revival that another
+  liveness pass runs the bin index revival again under the shared pace. These
+  lift the hold: a revival that lands, whose gated load resolves the record; a
+  gated load, in the liveness pass or in the drain, that resolves a served
+  record; and a 404 at the recovery endpoint after every endpoint reads
+  `Absent`. A raw read lifts nothing, and a served record past its EOL counts
+  as lapsed. A chain or scope pointer revival that another
   device supersedes is retryable, and a scope pointer revival that a later
   pass can land or read back keeps the enrolment open. A lapsed vault pointer
   that only the produce bar refuses (ADR 0067 D4) is no trust violation: the
@@ -191,7 +195,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   The session-start revival and the walk share one recovery pace of 25
   fetches a minute (ADR 0062 consequence 2), so the anchor names revive in
   the first minute. The vacancy probe and the first-save fetch are outside
-  the pace. A revival holds nothing in `HeldRecords` and raises no floor
+  the pace. Each session spends one paced recovery fetch for each owned scope
+  that has no pointer record, which answers 404. A revival holds nothing in `HeldRecords` and raises no floor
   above `S`; the gated read that follows it admits the record at `S + 1` and
   raises the floor to it. After a bin index revival the session loads the bin
   index through the gate and holds it. No revival signs a name in a scope that
