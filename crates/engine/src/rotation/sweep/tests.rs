@@ -500,12 +500,11 @@ fn an_isolated_availability_stall_still_spends_the_drivers_passes() {
     );
 }
 
-/// A settled verdict is not worth another pass — no retry re-opens a node no
-/// seed reaches, a record the gate refused, or a record at a version this
-/// build cannot author — so the driver returns on the first pass with the
-/// node surfaced.
+/// A node left at the old epoch is worth another pass whatever the verdict:
+/// owed rotation work can re-seal it between passes. One that stays refused
+/// spends the passes and is surfaced.
 #[test]
-fn a_settled_isolation_does_not_spend_the_drivers_passes() {
+fn a_settled_isolation_spends_the_drivers_passes() {
     for reason in [
         SweepResolveFailure::Unreadable,
         SweepResolveFailure::Rejected,
@@ -514,9 +513,20 @@ fn a_settled_isolation_does_not_spend_the_drivers_passes() {
         let net = FakeNet::new(5, &[0x01])
             .node(0x01, 1, &[])
             .node_fault(0x01, reason);
-        let outcome = drive(&net, 3, 0).expect("the pass completes");
+        let outcome = drive(&net, 3, 2).expect("the residual is surfaced, not an error");
         assert_eq!(outcome.unreachable, vec![(id(0x01), reason)]);
     }
+}
+
+#[test]
+fn a_node_left_at_the_old_epoch_converges_on_a_later_pass() {
+    let net = FakeNet::new(5, &[0x01, 0x02])
+        .node(0x01, 1, &[])
+        .node(0x02, 1, &[])
+        .node_fault_until(0x02, 1, SweepResolveFailure::Unreadable);
+    let outcome = drive(&net, 3, 1).expect("the second pass converges");
+    assert_eq!(outcome.old_epoch_nodes(), 0);
+    assert!(outcome.converged.contains(&id(0x02)));
 }
 
 #[test]

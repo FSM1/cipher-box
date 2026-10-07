@@ -376,18 +376,12 @@ pub struct SweepOutcome {
 }
 
 impl SweepOutcome {
-    /// Whether re-running the idempotent pass could still convert something: a
-    /// lost race whose winner may not have advanced the epoch or repaired the
-    /// index, or a node the pass could not read for a reason a retry clears. A
-    /// node no seed opens and a record the gate refused are settled — another
-    /// pass answers identically.
+    /// Whether re-running the idempotent pass could still convert something: an
+    /// index repair that lost the CAS, or any node the pass left below the
+    /// scope epoch. A verdict that looks settled counts too: owed rotation work
+    /// can re-seal the node between passes, and the pass cap bounds the cost.
     pub(crate) fn worth_another_pass(&self) -> bool {
-        self.index_repair_lost_race
-            || !self.dropped_lost_race.is_empty()
-            || self
-                .unreachable
-                .iter()
-                .any(|(_, reason)| reason.is_retryable())
+        self.index_repair_lost_race || self.old_epoch_nodes() > 0
     }
 
     /// The interior nodes this outcome does not prove at
