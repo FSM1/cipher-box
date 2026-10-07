@@ -426,29 +426,6 @@ where
     revive(api, seams, pace, &[request]).await.remove(0)
 }
 
-/// Raise the sequence floor of `name` to the sequence a revival signed, once
-/// its publish is confirmed (ADR 0067 D2 (b)), for the bin index and the
-/// settings record only (blueprint/engine.md "Liveness"). After a restart, a
-/// load then refuses an older record at `S` rather than let a later write sign
-/// a second value at `S + 1`. A floor store error leaves the floor at `S`, as
-/// before the raise, and is not a failed revival: the record is published, the
-/// bin index hold reads the floor before it lifts, and the settings load after
-/// the revival raises it when it reads the record.
-pub(crate) async fn raise_to_revived<F: FloorStore>(
-    floors: &F,
-    name: &IpnsName,
-    result: &Result<Revived, ReviveError>,
-) {
-    if let Ok(Revived {
-        outcome: PublishOutcome::Published { sequence },
-        ..
-    }) = result
-    {
-        let _ =
-            floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), *sequence).await;
-    }
-}
-
 /// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
 pub(crate) async fn reads_absent<T: RecordTransport>(transport: &T, name: &IpnsName) -> bool {
     matches!(

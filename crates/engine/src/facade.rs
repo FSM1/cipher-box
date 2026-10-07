@@ -110,8 +110,8 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::revival::{
-    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead,
-    raise_to_revived, reads_absent, revive_name,
+    BinIndexRead, RecoveryPace, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent,
+    revive_name,
 };
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
@@ -4902,7 +4902,6 @@ where
         plane: BinIndexRead { ..*read },
     };
     let result = revive_name(api, seams, pace, request).await;
-    raise_to_revived(read.floors, keys.name(), &result).await;
     let revived_at = match &result {
         Ok(revived) => Ok(match revived.outcome {
             PublishOutcome::Published { sequence } | PublishOutcome::Unconfirmed { sequence } => {
@@ -6858,7 +6857,6 @@ impl<T: SeamTypes> Engine<T> {
             plane: read,
         };
         let result = revive_name(api, &seams, &self.state.recovery_pace, request).await;
-        raise_to_revived(&self.seams.floor_store, &name, &result).await;
         let signed = result.is_ok();
         emit_revival_failures(&self.events, [(name.as_str().to_owned(), result)]);
         signed

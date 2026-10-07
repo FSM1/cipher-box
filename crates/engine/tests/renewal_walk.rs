@@ -2433,12 +2433,11 @@ fn expired_bin_record(before: &VerifiedRecord) -> Vec<u8> {
     .marshal()
 }
 
-/// ADR 0066: a bin index revival that lands raises the sequence floor to the
-/// sequence it signed, though the gated load after it reads nothing. After a
-/// restart that reads the revived record once and then the older record at
-/// `S`, the drain refuses `S` and signs nothing at `S + 1` a second time. Only
-/// the floor assertion pins the raise: the start's served-sequence rule alone
-/// also keeps the drain from signing.
+/// ADR 0066: a bin index revival raises no floor, so when the gated load after
+/// it reads nothing the floor stays at `S`. After a restart that reads the
+/// revived record once and then the older record at `S`, the start's raw read
+/// does not reach the floor, its gated load resolves only `S`, and the drain
+/// signs nothing at `S + 1` a second time while that hold stands.
 #[test]
 fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
     let world = FakeWorld::new();
@@ -2462,8 +2461,8 @@ fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
                 .sequence_floor(bin.as_str().as_bytes())
         )
         .expect("the floor store answers"),
-        Some(before.sequence + 1),
-        "the confirmed revival raised the floor, with no gated load after it"
+        Some(before.sequence),
+        "a revival raises no floor above S"
     );
     drop((tasks, engine));
     drop(world.scheduler.take_spawned_tasks());
@@ -2482,6 +2481,6 @@ fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
     assert_eq!(
         served_at(&world, &bin),
         Some(revived),
-        "the drain signs nothing at S + 1 again"
+        "while the start rule holds, the drain signs nothing at S + 1 again"
     );
 }
