@@ -585,7 +585,12 @@ where
                     let mut admission = self.admit_root(scope).await;
                     let mut revival = None;
                     if matches!(admission, Err(ScopeRootAdmission::Gone)) {
+                        let rejected = pass.report.rejected.len();
                         revival = self.revive_root(pass, scope).await;
+                        // The recovery copy failed the root adopt.
+                        if pass.report.rejected.len() > rejected {
+                            pass.rejected_roots.insert(scope_id);
+                        }
                         if revival == Some(true) {
                             admission = self.admit_root(scope).await;
                         }
@@ -817,8 +822,8 @@ where
     /// it at the queued name, under the plane of its scope root. Whether the
     /// queue can drop it: the base no longer names it, the walk renews no name
     /// in its scope, the gate rejected its scope root, or the visit ended with
-    /// no transient failure. The queue retries a transient failure itself, so
-    /// it keeps no cursor back.
+    /// no transient failure. The queue retries a transient failure of the
+    /// folder's own visit itself, so that visit keeps no cursor back.
     async fn visit_lapsed(&self, pass: &mut Pass<'_>, folder: &LapsedFolder) -> bool {
         let named = self
             .guards

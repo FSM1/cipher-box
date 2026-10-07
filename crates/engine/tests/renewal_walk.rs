@@ -2123,6 +2123,65 @@ fn a_transient_queued_visit_keeps_no_cursor_back() {
     );
 }
 
+/// A scope root that the gate rejects drops the queued folders of its scope.
+/// While the root fails, the boundary walk fails too, so later passes wait and
+/// the walk sends one trust event. Once the root admits again, a read queues
+/// the folder again and the next pass revives it.
+#[test]
+fn a_rejected_scope_root_drops_its_queued_folders_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![create_folder(&world, engine, tasks, ROOT, "notes")]
+    });
+    let name = write_name(nodes[0]);
+    let lapsed = world.record_store.lapse(name.as_str()).expect("a record");
+    blocks.cache_for_recovery(name.as_str(), lapsed);
+
+    let device = world.device(b"a later session");
+    hold_the_cycle(&world, &device);
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+
+    let head_cid = core::str::from_utf8(&record_at(&world, &write_name(ROOT)).value)
+        .expect("utf8 value")
+        .strip_prefix("/ipfs/")
+        .expect("an /ipfs/ pointer")
+        .to_owned();
+    let head = blocks.get(&head_cid).expect("the head block");
+    blocks.replace(&head_cid, b"not an envelope".to_vec());
+    while events.try_next().is_some() {}
+    for _ in 0..2 {
+        world.scheduler.advance(Duration::from_secs(60 * 60));
+        tick(&world, &engine, &mut tasks);
+    }
+    let refused = core::iter::from_fn(|| events.try_next())
+        .filter(|event| {
+            matches!(event, Event::AttributableAbuse { description }
+                if description.ends_with(WALK_REFUSED))
+        })
+        .count();
+    assert_eq!(refused, 1, "the walk sends one trust event");
+
+    blocks.replace(&head_cid, head);
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    // The walk waits a poll for the boundary walk to read the root again.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(unserved(&world, &name), "the rejection dropped the entry");
+
+    block_on(engine.set_focus(Some(nodes[0]))).expect("the focus moves");
+    block_on(engine.set_focus(None)).expect("the focus moves");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !unserved(&world, &name),
+        "a read queues the folder again, and the pass revives it",
+    );
+}
+
 /// ADR 0062 D3 and D4 at session start: the settings record revives only on a
 /// device whose floor equals the recovered sequence, and the session loads
 /// the settings again. A new device takes the ADR 0034 ladder and signs
