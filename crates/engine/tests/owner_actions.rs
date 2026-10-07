@@ -3092,29 +3092,73 @@ fn a_version_restore_stays_kept_and_a_later_restore_stays() {
     );
 }
 
+/// Rename `node` on this device and run one pass.
+fn rename_on_this_device(fx: &mut GrantScenario, node: NodeId, new_name: &str) {
+    block_on(fx.engine.command(Command::Rename {
+        node,
+        new_name: new_name.into(),
+    }))
+    .expect("the rename stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// Restore the version `content_cid` of `node` on this device and run one
+/// pass.
+fn restore_version_on_this_device(fx: &mut GrantScenario, node: NodeId, content_cid: Vec<u8>) {
+    block_on(
+        fx.engine
+            .command(Command::RestoreVersion { node, content_cid }),
+    )
+    .expect("the restore queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// Delete `node` on this device and restore it from the bin, with one pass
+/// after each.
+fn delete_then_bin_restore(fx: &mut GrantScenario, node: NodeId) {
+    block_on(fx.engine.command(Command::Delete { node })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.command(Command::Restore { node, into: None })).expect("the restore stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// The live name of the folder `child` in the granted folder.
+fn live_child_folder(fx: &GrantScenario) -> IpnsName {
+    let (root, _) = live_scope(fx);
+    live_child(fx, &root, fx.folder, "child")
+}
+
+/// The live name of `doc.bin` in the folder `child`.
+fn live_child_doc(fx: &GrantScenario, child: NodeId) -> IpnsName {
+    live_child(fx, &live_child_folder(fx), child, "doc.bin")
+}
+
 /// A rename that lands in the old tree after the walk is not in the moved
 /// tree. The writer keeps the op and applies the rename again after the flip.
 #[test]
 fn a_rename_the_name_wave_did_not_carry_applies_again_after_the_flip() {
+    assert_a_rename_the_name_wave_did_not_carry_applies_again(false);
+}
+
+/// A rename that the name wave did not carry applies again after the flip,
+/// across a restart of this device when `restart` is set.
+fn assert_a_rename_the_name_wave_did_not_carry_applies_again(restart: bool) {
     let mut fx = GrantScenario::new();
     let (child, child_name) = write_granted_child(&mut fx);
     let doc = published_file(&mut fx, child, "doc.bin");
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
-        block_on(fx.engine.command(Command::Rename {
-            node: doc,
-            new_name: "renamed.bin".into(),
-        }))
-        .expect("the rename stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        rename_on_this_device(fx, doc, "renamed.bin");
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
     assert!(
         live_names(&fx, &moved_child, child).contains(&"doc.bin".to_owned()),
         "the moved tree does not carry the rename"
     );
 
+    if restart {
+        restart_owner(&mut fx);
+    }
     passes_after_the_flip(&mut fx);
 
     let names = live_names(&fx, &moved_child, child);
@@ -3187,20 +3231,9 @@ fn a_version_restore_the_name_wave_did_not_carry_applies_again_after_the_flip() 
     let history = live_versions(&fx, &doc_name, doc);
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
-        block_on(fx.engine.command(Command::RestoreVersion {
-            node: doc,
-            content_cid: history[1].clone(),
-        }))
-        .expect("the restore queues");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        restore_version_on_this_device(fx, doc, history[1].clone());
     });
-    let (root, _) = live_scope(&fx);
-    let moved_doc = live_child(
-        &fx,
-        &live_child(&fx, &root, fx.folder, "child"),
-        child,
-        "doc.bin",
-    );
+    let moved_doc = live_child_doc(&fx, child);
     assert_eq!(
         live_versions(&fx, &moved_doc, doc)[0],
         history[0],
@@ -3227,15 +3260,9 @@ fn a_create_then_a_rename_the_name_wave_did_not_carry_apply_again_after_the_flip
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
         let late = published_file(fx, child, "late.bin");
-        block_on(fx.engine.command(Command::Rename {
-            node: late,
-            new_name: "renamed.bin".into(),
-        }))
-        .expect("the rename stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        rename_on_this_device(fx, late, "renamed.bin");
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
     assert!(
         live_names(&fx, &moved_child, child).is_empty(),
         "the moved tree does not carry the create"
@@ -3265,20 +3292,9 @@ fn a_kept_restore_does_not_apply_over_a_head_published_after_its_check() {
     let history = live_versions(&fx, &doc_name, doc);
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
-        block_on(fx.engine.command(Command::RestoreVersion {
-            node: doc,
-            content_cid: history[1].clone(),
-        }))
-        .expect("the restore queues");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        restore_version_on_this_device(fx, doc, history[1].clone());
     });
-    let (root, _) = live_scope(&fx);
-    let moved_doc = live_child(
-        &fx,
-        &live_child(&fx, &root, fx.folder, "child"),
-        child,
-        "doc.bin",
-    );
+    let moved_doc = live_child_doc(&fx, child);
     let endpoints = fx.world.record_store.endpoints();
     let checked = fx
         .world
@@ -3325,8 +3341,7 @@ fn a_rename_then_a_delete_the_name_wave_did_not_carry_applies_only_the_delete() 
         block_on(fx.engine.command(Command::Delete { node: doc })).expect("the delete stages");
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
     assert_eq!(
         live_names(&fx, &moved_child, child),
         vec!["doc.bin".to_owned()],
@@ -3358,17 +3373,9 @@ fn a_delete_then_a_bin_restore_the_name_wave_did_not_carry_leave_the_file_live()
     let doc = published_file(&mut fx, child, "doc.bin");
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
-        block_on(fx.engine.command(Command::Delete { node: doc })).expect("the delete stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-        block_on(fx.engine.command(Command::Restore {
-            node: doc,
-            into: None,
-        }))
-        .expect("the restore stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        delete_then_bin_restore(fx, doc);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
 
     passes_after_the_flip(&mut fx);
 
@@ -3395,8 +3402,7 @@ fn a_create_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip(
         let old_name = live_child(fx, &child_name, child, "late.bin");
         edited = live_versions(fx, &old_name, late);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
     assert!(
         live_names(&fx, &moved_child, child).is_empty(),
         "the moved tree does not carry the create"
@@ -3437,13 +3443,7 @@ fn an_edit_then_an_edit_the_name_wave_did_not_carry_apply_again_after_the_flip()
         publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[3u8; 64]);
         edited = live_versions(fx, &doc_name, doc);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_doc = live_child(
-        &fx,
-        &live_child(&fx, &root, fx.folder, "child"),
-        child,
-        "doc.bin",
-    );
+    let moved_doc = live_child_doc(&fx, child);
     assert_eq!(
         live_versions(&fx, &moved_doc, doc),
         before,
@@ -3470,17 +3470,9 @@ fn a_create_a_delete_and_a_bin_restore_the_name_wave_did_not_carry_leave_the_fil
 
     cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
         let late = published_file(fx, child, "late.bin");
-        block_on(fx.engine.command(Command::Delete { node: late })).expect("the delete stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-        block_on(fx.engine.command(Command::Restore {
-            node: late,
-            into: None,
-        }))
-        .expect("the restore stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        delete_then_bin_restore(fx, late);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
     assert!(
         live_names(&fx, &moved_child, child).is_empty(),
         "the moved tree does not carry the create"
@@ -3511,22 +3503,11 @@ fn a_version_restore_then_an_edit_the_name_wave_did_not_carry_apply_again_after_
 
     let mut edited = Vec::new();
     cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
-        block_on(fx.engine.command(Command::RestoreVersion {
-            node: doc,
-            content_cid: history[1].clone(),
-        }))
-        .expect("the restore queues");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        restore_version_on_this_device(fx, doc, history[1].clone());
         publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[3u8; 64]);
         edited = live_versions(fx, &doc_name, doc);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_doc = live_child(
-        &fx,
-        &live_child(&fx, &root, fx.folder, "child"),
-        child,
-        "doc.bin",
-    );
+    let moved_doc = live_child_doc(&fx, child);
     assert_eq!(
         live_versions(&fx, &moved_doc, doc),
         history,
@@ -3572,8 +3553,7 @@ fn a_bin_restore_cancels_a_delete_that_became_kept_in_the_same_pass() {
         fx.world.record_store.heal_put_for(child_name.as_str());
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
 
     restart_owner(&mut fx);
     passes_after_the_flip(&mut fx);
@@ -3616,8 +3596,7 @@ fn a_stop_between_the_two_removals_of_a_restore_leaves_no_kept_delete() {
             .fail_remove_op_after(1);
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let moved_child = live_child_folder(&fx);
 
     fx.owner_device.staging_store.inner().heal_remove_op();
     restart_owner(&mut fx);
@@ -3649,15 +3628,16 @@ fn a_stop_between_the_two_removals_of_a_restore_leaves_no_kept_delete() {
 /// whole chain applies again and C stays.
 #[test]
 fn a_later_rename_back_to_the_name_before_a_chain_applies_the_whole_chain_again() {
+    assert_a_later_rename_back_applies_again(&["b", "c"]);
+}
+
+/// This device renames `child` through `chain`, and a later writer renames it
+/// back to `child`. After the flip the last name of the chain is live.
+fn assert_a_later_rename_back_applies_again(chain: &[&str]) {
     let mut fx = GrantScenario::new();
     let (child, _) = write_granted_child(&mut fx);
-    for name in ["b", "c"] {
-        block_on(fx.engine.command(Command::Rename {
-            node: child,
-            new_name: name.into(),
-        }))
-        .expect("the rename stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    for name in chain {
+        rename_on_this_device(&mut fx, child, name);
     }
     let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
     block_on(phone.command(Command::Rename {
@@ -3672,9 +3652,10 @@ fn a_later_rename_back_to_the_name_before_a_chain_applies_the_whole_chain_again(
 
     let (root, _) = live_scope(&fx);
     let names = live_names(&fx, &root, fx.folder);
+    let last = chain.last().expect("a chain names a rename").to_string();
     assert!(
-        names.contains(&"c".to_owned()) && !names.contains(&"child".to_owned()),
-        "the chain applied again over the later rename"
+        names.contains(&last) && !names.contains(&"child".to_owned()),
+        "the last rename applied again over the later rename"
     );
 }
 
@@ -3682,31 +3663,7 @@ fn a_later_rename_back_to_the_name_before_a_chain_applies_the_whole_chain_again(
 /// a kept rename looks like a lost rename, so the rename applies again.
 #[test]
 fn a_later_rename_back_to_the_name_before_reads_as_lost_and_the_rename_applies_again() {
-    let mut fx = GrantScenario::new();
-    let (child, _) = write_granted_child(&mut fx);
-    block_on(fx.engine.command(Command::Rename {
-        node: child,
-        new_name: "mine".into(),
-    }))
-    .expect("the rename stages");
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
-    block_on(phone.command(Command::Rename {
-        node: child,
-        new_name: "child".into(),
-    }))
-    .expect("the later rename stages");
-    tick(&fx.world, &phone, &mut phone_tasks);
-    cut_the_write_scope(&fx, &mut phone);
-
-    passes_after_the_flip(&mut fx);
-
-    let (root, _) = live_scope(&fx);
-    let names = live_names(&fx, &root, fx.folder);
-    assert!(
-        names.contains(&"mine".to_owned()) && !names.contains(&"child".to_owned()),
-        "the rename applied again over the later rename"
-    );
+    assert_a_later_rename_back_applies_again(&["mine"]);
 }
 
 /// A guard: a move out of a granted folder re-seals into another scope, so
@@ -3737,33 +3694,7 @@ fn a_move_out_of_its_scope_leaves_the_queue_at_publish() {
 /// restarted session reaches the same verdict: the rename applies again.
 #[test]
 fn a_kept_rename_keeps_its_result_across_a_restart() {
-    let mut fx = GrantScenario::new();
-    let (child, child_name) = write_granted_child(&mut fx);
-    let doc = published_file(&mut fx, child, "doc.bin");
-
-    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name], |fx| {
-        block_on(fx.engine.command(Command::Rename {
-            node: doc,
-            new_name: "renamed.bin".into(),
-        }))
-        .expect("the rename stages");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    });
-    let (root, _) = live_scope(&fx);
-    let moved_child = live_child(&fx, &root, fx.folder, "child");
-    assert!(
-        live_names(&fx, &moved_child, child).contains(&"doc.bin".to_owned()),
-        "the moved tree does not carry the rename"
-    );
-
-    restart_owner(&mut fx);
-    passes_after_the_flip(&mut fx);
-
-    let names = live_names(&fx, &moved_child, child);
-    assert!(
-        names.contains(&"renamed.bin".to_owned()) && !names.contains(&"doc.bin".to_owned()),
-        "the restarted session applied the rename again"
-    );
+    assert_a_rename_the_name_wave_did_not_carry_applies_again(true);
 }
 
 /// A lagging record opens under the seed its epoch ratchets to. A record that

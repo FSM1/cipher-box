@@ -496,14 +496,8 @@ pub(crate) async fn store_kept_notes<St: StagingStore>(
 pub(crate) fn keeps(kind: &OpKind) -> bool {
     matches!(
         kind,
-        OpKind::Create { .. }
-            | OpKind::Delete { .. }
-            | OpKind::UpdateContent { .. }
-            | OpKind::Rename { .. }
-            | OpKind::Move { .. }
-            | OpKind::Relink { .. }
-            | OpKind::RestoreVersion { .. }
-    )
+        OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
+    ) || needs_result(kind)
 }
 
 /// Whether a kept op of `kind` needs the result in its note: the live node
@@ -700,17 +694,17 @@ pub(crate) fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
     }
 }
 
-/// The verdict on one kept op at `now`. A new write epoch, or a scope root
-/// other than the one the op published under, is a flip. A flip waits for the
-/// read of the folder at its new name and does not expire.
+/// The verdict on one kept op at `now`. A flip ([`shows_a_flip`]) waits for
+/// the read of the folder at its new name and does not expire.
 pub(crate) fn kept_verdict(note: &KeptNote, place: KeptPlace, now: UnixMillis) -> KeptVerdict {
+    let flip = shows_a_flip(note, place);
     match place {
         KeptPlace::Keyless { .. } => return KeptVerdict::Recheck,
         KeptPlace::Writes {
             anchor_read_live: true,
             ..
-        } if shows_a_flip(note, place) => return KeptVerdict::Recheck,
-        _ if shows_a_flip(note, place) => return KeptVerdict::Stay,
+        } if flip => return KeptVerdict::Recheck,
+        _ if flip => return KeptVerdict::Stay,
         _ => {}
     }
     if now.0.saturating_sub(note.published_at.0) >= duration_millis(KEPT_OP_BOUND) {
@@ -1273,12 +1267,19 @@ mod tests {
             to: TO,
             to_name: text("b"),
         };
+        // A move that keeps its name reads by its parent.
+        let relink = KeptResult::Move {
+            from: FROM,
+            from_name: text("a"),
+            to: TO,
+            to_name: text("a"),
+        };
         let restore = KeptResult::RestoreVersion {
             before: vec![1; 4],
             after: vec![2; 4],
         };
         use KeptOutcome::{Landed, Lost, Overtaken};
-        let cases: [(&KeptResult, LiveValue<'_>, KeptOutcome); 14] = [
+        let cases: [(&KeptResult, LiveValue<'_>, KeptOutcome); 16] = [
             (&rename, LiveValue::Name("b"), Landed),
             (&rename, LiveValue::Name("a"), Lost),
             (&rename, LiveValue::Name("c"), Overtaken),
@@ -1289,6 +1290,8 @@ mod tests {
             (&moved, LiveValue::Place(FROM, "b"), Overtaken),
             (&moved, LiveValue::Place(OTHER, "b"), Overtaken),
             (&moved, LiveValue::Absent, Overtaken),
+            (&relink, LiveValue::Place(TO, "a"), Landed),
+            (&relink, LiveValue::Place(FROM, "a"), Lost),
             (&restore, LiveValue::Head(&[2; 4]), Landed),
             (&restore, LiveValue::Head(&[1; 4]), Lost),
             (&restore, LiveValue::Head(&[3; 4]), Overtaken),
@@ -1297,24 +1300,6 @@ mod tests {
         for (index, (result, live, outcome)) in cases.into_iter().enumerate() {
             assert_eq!(kept_outcome(result, live), outcome, "case {index}");
         }
-    }
-
-    #[test]
-    fn a_relink_that_keeps_its_name_reads_by_its_parent() {
-        let relink = KeptResult::Move {
-            from: NodeId([1; 16]),
-            from_name: text("a"),
-            to: NodeId([2; 16]),
-            to_name: text("a"),
-        };
-        assert_eq!(
-            kept_outcome(&relink, LiveValue::Place(NodeId([2; 16]), "a")),
-            KeptOutcome::Landed
-        );
-        assert_eq!(
-            kept_outcome(&relink, LiveValue::Place(NodeId([1; 16]), "a")),
-            KeptOutcome::Lost
-        );
     }
 
     #[test]

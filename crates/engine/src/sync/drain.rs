@@ -2802,7 +2802,7 @@ where
             self.release_hold_of(applied.op_id);
             // A published bin restore cancels its nearest earlier delete, also
             // one that became kept in this pass ([`overtaken_by_a_later_op`]).
-            // The delete leaves first: a restore left queued drops at its
+            // The delete leaves first: a restore left queued leaves at its
             // replay, and a kept delete left alone would bin the node again.
             if matches!(applied.op.kind, OpKind::Restore { .. })
                 && let Some((delete, _)) = queued
