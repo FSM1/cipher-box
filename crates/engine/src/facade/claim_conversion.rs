@@ -8,6 +8,8 @@
 //! implementation here under the same cut authority; they differ only in how
 //! they place a folder ([`ConversionSites`]).
 
+use core::time::Duration;
+
 use super::*;
 use crate::grants::conversion::{
     ConversionRecord, ConversionRefusal, EntryState, Hold, MAX_CLAIM_PAYLOAD_BYTES,
@@ -28,6 +30,13 @@ use crate::sync::owed_rotation::OwedCell;
 
 /// The refusal a record change answers while a conversion pass runs.
 pub(super) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
+
+/// How long an owner command waits for [`Running`] before it refuses. Longer
+/// than one tick pass under the production network budgets.
+const RUNNING_WAIT_BUDGET: Duration = Duration::from_secs(30);
+
+/// How often a waiting command tries [`Running`] again.
+const RUNNING_WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// The failure of an intake that left a claim on the mailbox because the
 /// conversion record is full.
@@ -222,6 +231,34 @@ impl<'a> Running<'a> {
     pub(super) fn take(flag: &'a Cell<bool>) -> Option<Self> {
         (!flag.replace(true)).then(|| Self(flag))
     }
+
+    /// The flag once it frees, or `None` while it stays held past `budget`.
+    pub(super) async fn wait(
+        flag: &'a Cell<bool>,
+        scheduler: &impl Scheduler,
+        budget: Duration,
+    ) -> Option<Self> {
+        let deadline = Some(scheduler.now().saturating_add(budget));
+        loop {
+            if let Some(running) = Self::take(flag) {
+                return Some(running);
+            }
+            if scheduler.now().reached(deadline) {
+                return None;
+            }
+            scheduler.sleep(RUNNING_WAIT_SLICE).await;
+        }
+    }
+}
+
+/// How a holder meets a [`Running`] flag that another holder has.
+#[derive(Clone, Copy)]
+pub(crate) enum OnRunning {
+    /// Refuse at once: the tick runs again on its next pass, and the dialog's
+    /// conversion only does early what the tick does anyway.
+    Refuse,
+    /// Wait up to [`RUNNING_WAIT_BUDGET`]: an owner command the host shows.
+    Wait,
 }
 
 impl Drop for Running<'_> {
@@ -369,10 +406,23 @@ where
             .map_err(EngineError::from_seam)
     }
 
+    /// [`Running`], met as `on_running` says.
+    async fn hold(&self, on_running: OnRunning) -> Option<Running<'_>> {
+        match on_running {
+            OnRunning::Refuse => Running::take(self.running),
+            OnRunning::Wait => {
+                Running::wait(self.running, self.scheduler, RUNNING_WAIT_BUDGET).await
+            }
+        }
+    }
+
     /// Hold the pass off and read the record, for a cut of a link. `None`
-    /// while a pass or another cut holds it.
-    pub(super) async fn hold_record(&self) -> Result<Option<HeldRecord<'_>>, EngineError> {
-        let Some(running) = Running::take(self.running) else {
+    /// when a pass or another cut holds it and `on_running` gives up.
+    pub(super) async fn hold_record(
+        &self,
+        on_running: OnRunning,
+    ) -> Result<Option<HeldRecord<'_>>, EngineError> {
+        let Some(running) = self.hold(on_running).await else {
             return Ok(None);
         };
         Ok(Some(HeldRecord {
@@ -534,8 +584,9 @@ where
         pointers: &PointerIndex,
         items: Vec<OwnedClaim>,
         only: Option<NodeId>,
+        on_running: OnRunning,
     ) -> PassOutcome {
-        let Some(_running) = Running::take(self.running) else {
+        let Some(_running) = self.hold(on_running).await else {
             return PassOutcome::unheld(EngineError::Seam {
                 message: CONVERSION_RUNNING.to_owned(),
             });
@@ -628,7 +679,7 @@ where
         pointers: &PointerIndex,
         retired: impl Fn(&AckedClaim) -> bool,
     ) -> Result<(), EngineError> {
-        let Some(_running) = Running::take(self.running) else {
+        let Some(_running) = self.hold(OnRunning::Wait).await else {
             return Err(EngineError::Seam {
                 message: CONVERSION_RUNNING.to_owned(),
             });
@@ -1281,6 +1332,9 @@ impl ConversionSites for TickSites<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::fakes::VirtualScheduler;
+    use core::pin::pin;
+    use core::task::{Context, Poll, Waker};
 
     /// A cut and a pass exclude each other, and the flag frees when the
     /// holder ends.
@@ -1296,5 +1350,45 @@ mod tests {
         drop(held);
         assert!(!running.get());
         assert!(Running::take(&running).is_some());
+    }
+
+    /// A waiter takes the flag on the first slice after the holder ends.
+    #[test]
+    fn a_waiter_takes_the_flag_once_the_holder_ends_inside_the_budget() {
+        let scheduler = VirtualScheduler::new();
+        let running = Cell::new(false);
+        let held = Running::take(&running).expect("the flag is free");
+        let mut waiter = pin!(Running::wait(&running, &scheduler, RUNNING_WAIT_BUDGET));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(waiter.as_mut().poll(&mut cx).is_pending());
+        scheduler.advance(RUNNING_WAIT_SLICE);
+        assert!(waiter.as_mut().poll(&mut cx).is_pending(), "still held");
+
+        drop(held);
+        scheduler.advance(RUNNING_WAIT_SLICE);
+        let Poll::Ready(Some(_waited)) = waiter.as_mut().poll(&mut cx) else {
+            panic!("the waiter holds the freed flag");
+        };
+        assert!(running.get());
+    }
+
+    /// A waiter gives up once the budget passes, and leaves the holder's flag.
+    #[test]
+    fn a_waiter_gives_up_past_the_budget() {
+        let scheduler = VirtualScheduler::new();
+        let running = Cell::new(false);
+        let _held = Running::take(&running).expect("the flag is free");
+        let mut waiter = pin!(Running::wait(&running, &scheduler, RUNNING_WAIT_BUDGET));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(waiter.as_mut().poll(&mut cx).is_pending());
+        scheduler.advance(RUNNING_WAIT_BUDGET - RUNNING_WAIT_SLICE);
+        assert!(
+            waiter.as_mut().poll(&mut cx).is_pending(),
+            "inside the budget"
+        );
+
+        scheduler.advance(RUNNING_WAIT_SLICE);
+        assert!(matches!(waiter.as_mut().poll(&mut cx), Poll::Ready(None)));
+        assert!(running.get());
     }
 }

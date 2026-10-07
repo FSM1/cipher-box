@@ -12833,12 +12833,30 @@ fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts
     assert_eq!(fx.link_entries(), 0, "and then the link was cut");
 }
 
-/// A grantee revoke takes the conversion lock only for a grantee a link
-/// admitted, so the sweep holding it blocks no revoke of a direct grantee.
-#[test]
-fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
-    let mut fx = GrantScenario::new();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+/// A slice of virtual time per round of [`drive_command`], at least the
+/// engine's wait slice for the conversion lock, so each round wakes a waiter.
+const LOCK_WAIT_ROUND: Duration = Duration::from_millis(100);
+
+/// Drive `command` with the spawned loops, a round of virtual time at a time,
+/// so a command that waits for the conversion lock settles once it frees.
+fn drive_command<F: Future>(world: &FakeWorld, command: F, tasks: &mut [BoxedTask]) -> F::Output {
+    const MAX_ROUNDS: usize = 64;
+    let mut command = pin!(command);
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..MAX_ROUNDS {
+        if let Poll::Ready(output) = command.as_mut().poll(&mut cx) {
+            return output;
+        }
+        poll_tasks_until_parked(tasks);
+        world.scheduler.advance(LOCK_WAIT_ROUND);
+    }
+    panic!("the command never settled");
+}
+
+/// Mint a link at a second folder and let the next link sweep park on a
+/// stalled read of it, so the sweep holds the conversion lock. Answers the
+/// folder.
+fn park_the_sweep_on_another_folder(fx: &mut GrantScenario) -> NodeId {
     let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
     assert!(matches!(
         block_on(fx.engine.command(Command::CreateInviteLink {
@@ -12860,23 +12878,109 @@ fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
         .scheduler
         .advance(fx.engine.profile().link_sweep_cadence);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(
-        block_on(fx.engine.command(Command::RevokeInviteLink {
-            node: other,
-            remove_grantees: false,
-            link_tag: None,
-        })),
-        Err(EngineError::Seam {
-            message: "a-conversion-pass-is-running".to_owned()
-        }),
-        "the sweep holds the lock"
-    );
+    other
+}
+
+/// A grantee revoke takes the conversion lock only for a grantee a link
+/// admitted, so the sweep holding it blocks no revoke of a direct grantee. A
+/// link revoke waits for the sweep, and lands once the sweep ends.
+#[test]
+fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let other = park_the_sweep_on_another_folder(&mut fx);
 
     assert_eq!(
         fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
         Ok(CommandOutcome::Done),
     );
     assert!(fx.granted_to().is_empty());
+
+    let mut revoke = pin!(fx.engine.command(Command::RevokeInviteLink {
+        node: other,
+        remove_grantees: false,
+        link_tag: None,
+    }));
+    assert!(
+        revoke
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending(),
+        "the link revoke waits while the sweep reads"
+    );
+    fx.world
+        .record_store
+        .release_gets_for(write_name(other).as_str());
+    assert_eq!(
+        drive_command(&fx.world, revoke, &mut fx._tasks),
+        Ok(CommandOutcome::Done),
+    );
+}
+
+/// The nightly shape: a grantee a link admitted is revoked while a tick pass
+/// holds the conversion lock on a stalled read. The revoke waits for the pass
+/// rather than refuse, and lands once the read answers.
+#[test]
+fn a_link_grantee_revoke_waits_for_the_pass_that_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]));
+    let other = park_the_sweep_on_another_folder(&mut fx);
+
+    {
+        let mut revoke = pin!(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(revoke.as_mut().poll(&mut cx).is_pending());
+        for _ in 0..3 {
+            fx.world.scheduler.advance(LOCK_WAIT_ROUND);
+            poll_tasks_until_parked(&mut fx._tasks);
+            assert!(
+                revoke.as_mut().poll(&mut cx).is_pending(),
+                "the revoke waits while the pass holds the lock"
+            );
+        }
+        fx.world
+            .record_store
+            .release_gets_for(write_name(other).as_str());
+        assert_eq!(
+            drive_command(&fx.world, revoke, &mut fx._tasks),
+            Ok(CommandOutcome::Done),
+        );
+    }
+    assert!(
+        !fx.granted_to().contains(&claimants[0]),
+        "the grantee is gone"
+    );
+    assert_eq!(fx.link_entries(), 0, "with the link that admitted it");
+}
+
+/// A link revoke whose wait for the conversion lock outlasts the budget
+/// answers the retryable refusal.
+#[test]
+fn a_link_revoke_refuses_a_pass_that_outlasts_the_wait() {
+    let mut fx = GrantScenario::new();
+    let _fragment = fx.mint_link();
+    park_the_sweep_on_another_folder(&mut fx);
+
+    let mut revoke = pin!(fx.engine.command(Command::RevokeInviteLink {
+        node: fx.folder,
+        remove_grantees: false,
+        link_tag: None,
+    }));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(revoke.as_mut().poll(&mut cx).is_pending(), "it waits");
+    fx.world.scheduler.advance(Duration::from_secs(30));
+    assert_eq!(
+        revoke.as_mut().poll(&mut cx),
+        Poll::Ready(Err(EngineError::Seam {
+            message: "a-conversion-pass-is-running".to_owned()
+        })),
+    );
 }
 
 /// Republish the vault root with `extra` added to its direct-child-scope

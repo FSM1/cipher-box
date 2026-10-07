@@ -188,7 +188,7 @@ Every row one revoke removes leaves in one cut set, with one cut-epoch step, one
 
 `Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk`, when one contact on this device binds that key, now or before.
 
-The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. The revoke of a direct grantee does not wait for a conversion.
+The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. When a link admitted the grantee and a pass holds the conversion lock, the revoke waits up to 30 s for it, and then refuses with `a-conversion-pass-is-running`. The revoke of a direct grantee does not wait for a conversion.
 
 ### Revoke a link
 
@@ -196,7 +196,7 @@ The cut also takes each committed link that the via-link reference of an atteste
 
 - `link_tag` names the link. With no tag, the engine cuts the only link, and refuses with `link-ambiguous` when the folder carries more than one.
 - With `remove_grantees`, the same cut also takes every committed personal row whose via-link reference names the link. It also takes a row with no attested label whose committed `recipientEncPk` names a contact that the link admitted, before and after a write wave. The contact book keys that link by its ephemeral identity key, which a wave does not move. The grantees who joined through the link keep access otherwise.
-- The engine runs a conversion pass first, and never cuts a link while a conversion entry for it is pending (ADR 0023 D4).
+- The engine runs a conversion pass first, and never cuts a link while a conversion entry for it is pending (ADR 0023 D4). When a pass holds the conversion lock, the revoke waits up to 30 s for it, and then refuses with `a-conversion-pass-is-running`.
 
 ### The revocation floor and the D3 clear
 

@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
 use crate::facade::claim_conversion::{
-    ConversionPass, CutAuthority, PointerIndex, TickSites, placed, scope_pointer_index,
+    ConversionPass, CutAuthority, OnRunning, PointerIndex, TickSites, placed, scope_pointer_index,
 };
 use crate::facade::{
     EngineError, Event, ForkSightings, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
@@ -1464,7 +1464,13 @@ where
         conversion.redrive_owed(&sites).await;
         state.owed_rotation_driven.set(true);
         let converted = conversion
-            .run(&sites, &pointers, claims.unwrap_or_default(), None)
+            .run(
+                &sites,
+                &pointers,
+                claims.unwrap_or_default(),
+                None,
+                OnRunning::Refuse,
+            )
             .await
             .into_result();
         if let Err(EngineError::TrustViolation { message }) = converted {
