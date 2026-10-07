@@ -90,5 +90,5 @@ pub use rotation::{
     PointerConsultArm, WriteWaveNet,
 };
 pub(crate) use vault_pointer::{
-    ChainRevival, VaultPointerRead, VaultPointerVoucher, VouchedRoot, revive_vault_pointer_chain,
+    ChainRevival, ChainStall, VaultPointerRead, VaultPointerVoucher, VouchedRoot, revive_vault_pointer_chain,
 };

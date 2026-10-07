@@ -70,6 +70,9 @@ pub struct InMemoryRecordStore {
     /// Records held back until a PUT lands
     /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
     deferred: Arc<Mutex<DeferredRecords>>,
+    /// Routing keys whose GET fails once a PUT under them lands
+    /// ([`fail_gets_after_put`](InMemoryRecordStore::fail_gets_after_put)).
+    failing_after_put: Arc<Mutex<HashSet<String>>>,
     /// Whether every PUT is acked and discarded
     /// ([`drop_puts`](InMemoryRecordStore::drop_puts)).
     dropping_puts: Arc<AtomicBool>,
@@ -108,6 +111,7 @@ impl InMemoryRecordStore {
             gets: Arc::new(Mutex::new(HashMap::new())),
             puts: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
+            failing_after_put: Arc::default(),
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
             stalling_keys: Arc::default(),
@@ -159,9 +163,26 @@ impl InMemoryRecordStore {
             .push((routing_key.to_owned(), record, endpoint));
     }
 
+    /// Refuse every GET under `routing_key` once a PUT under it lands: the
+    /// read after a publish fails.
+    pub fn fail_gets_after_put(&self, routing_key: &str) {
+        self.failing_after_put
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
+    }
+
     /// Install whatever [`seed_record_after_put`](Self::seed_record_after_put)
     /// filed under `routing_key`.
     fn release_deferred(&self, routing_key: &str) {
+        if self
+            .failing_after_put
+            .lock()
+            .expect("lock")
+            .remove(routing_key)
+        {
+            self.fail_get_for(routing_key);
+        }
         let released = self.deferred.lock().expect("lock").remove(routing_key);
         for (key, record, only) in released.unwrap_or_default() {
             for endpoint in &self.endpoints {

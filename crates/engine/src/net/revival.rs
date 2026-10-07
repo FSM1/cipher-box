@@ -224,6 +224,12 @@ impl ReviveError {
             | Self::Moved => false,
         }
     }
+
+    /// Whether a later pass can read or revive the name: a transient failure,
+    /// or another write that the next read finds.
+    pub(crate) fn is_retryable(&self) -> bool {
+        self.is_transient() || matches!(self, Self::Superseded { .. } | Self::Moved)
+    }
 }
 
 /// The transport a plane read runs over in a revival: every endpoint serves

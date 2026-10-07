@@ -320,6 +320,8 @@ pub(crate) struct SessionState {
     /// The session's one recovery pace, which the session-start revival and
     /// the renewal walk share (ADR 0062 consequence 2).
     pub(crate) recovery_pace: Rc<RecoveryPace>,
+    /// Whether a lapsed bin index can still revive (`DrainCells::bin_index_unsettled`).
+    pub(crate) bin_index_unsettled: Rc<Cell<bool>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](crate::facade::Engine::snapshot)
     /// classifies at read time off the same cell.
@@ -610,6 +612,7 @@ impl SessionState {
             pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
             publishing: Rc::new(RefCell::new(BTreeSet::new())),
             recovery_pace: Rc::new(RecoveryPace::default()),
+            bin_index_unsettled: Rc::default(),
             sync_status: Rc::new(RefCell::new(SyncStatus::default())),
             scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
             scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -678,6 +681,7 @@ impl SessionState {
             capture_proofs: &self.capture_proofs,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
+            bin_index_unsettled: &self.bin_index_unsettled,
         }
     }
 }

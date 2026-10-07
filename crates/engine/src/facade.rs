@@ -107,6 +107,7 @@ use crate::net::renewal_walk::{
     BinRoot, OWED_UNREAD, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
 };
 use crate::net::retire::{ReclaimStall, retire};
+use crate::net::fanout_get_classified;
 use crate::net::revival::{
     BinIndexRead, ReviveError, ReviveRequest, Revived, ScopeRootRead, reads_absent, revive_name,
 };
@@ -123,7 +124,9 @@ use crate::net::{
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
     run_liveness_loop,
 };
-use crate::net::{ChainRevival, VaultPointerRead, VaultPointerVoucher, revive_vault_pointer_chain};
+use crate::net::{
+    ChainRevival, ChainStall, FanoutRecord, VaultPointerRead, VaultPointerVoucher, revive_vault_pointer_chain,
+};
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
@@ -4854,8 +4857,8 @@ enum BinIndexRevival {
 }
 
 /// The scopes whose owed rotation entry is within its bound, whose names no
-/// renewal or revival signs (ADR 0063 D4). A caller reads a record that does
-/// not read as owing nothing and reports it, as the renewal walk does.
+/// renewal or revival signs (ADR 0063 D4). A record that does not read is an
+/// error: the caller reports it, as the renewal walk does, and revives nothing.
 async fn owed_scopes_within_bound<St: StagingStore>(
     staging: &St,
     enc_secret: &X25519Secret,
@@ -5776,9 +5779,9 @@ impl<T: SeamTypes> Engine<T> {
             None => self.cold_start_or_clear(root, first_run_name).await?,
             // A chain whose next index may only be lapsed adopts no prefix: the
             // session stays unprovisioned and a refresh revives it again.
-            Some(retryable) => {
+            Some(stall) => {
                 let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
-                    retryable,
+                    retryable: stall == ChainStall::Retryable,
                     detail: CHAIN_UNREVIVED.to_owned(),
                 });
                 self.unadopted_cold_start(root).await?
@@ -5796,6 +5799,9 @@ impl<T: SeamTypes> Engine<T> {
         };
         report_settings_verdict(&self.events, &settings);
         let bin_index = self.revive_bin_index(&api).await;
+        self.state
+            .bin_index_unsettled
+            .set(matches!(bin_index, BinIndexRevival::Unsettled));
         // An empty chain is an account that has never published: mint its genesis
         // vault before anything reads one (`sync/provision.rs`). Register-first
         // has no offline form, so the harness's no-API mode skips provisioning
@@ -5863,7 +5869,8 @@ impl<T: SeamTypes> Engine<T> {
                 BinIndexRevival::Unlapsed => self.publish_genesis_bin_index(&api).await,
                 BinIndexRevival::Revived => self.load_and_hold_bin_index().await,
                 // A lapsed bin index can still revive, so no genesis index
-                // publishes over it this start.
+                // publishes over it this start, and the drain holds its own
+                // bin index writes ([`DrainCells::bin_index_unsettled`]).
                 BinIndexRevival::Unsettled => {}
             }
         }
@@ -6560,13 +6567,13 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Revive each lapsed index of the vault pointer chain before the first-run
     /// probe and the cold start read it (ADR 0062 D3).
-    /// `None` when the cold start may read the chain, else whether a later
-    /// pass can still reach its end ([`ChainRevival::unconfirmed`]).
+    /// `None` when the cold start may read the chain, else why the pass did
+    /// not reach its end ([`ChainRevival::unconfirmed`]).
     async fn revive_vault_pointer_chain(
         &self,
         api: &ApiClient<T::Http, T::CredentialStore>,
         root_scope_id: [u8; 16],
-    ) -> Option<bool> {
+    ) -> Option<ChainStall> {
         let (Some(seams), Some(session)) = (self.revival_seams(), self.session.as_ref()) else {
             return None;
         };
@@ -6644,7 +6651,8 @@ impl<T: SeamTypes> Engine<T> {
             return false;
         }
         let name = &adopted.repoint.current_root;
-        let owed = owed_scopes_within_bound(
+        // Rotation debt that does not read is unknown debt: no revival.
+        let Ok(owed) = owed_scopes_within_bound(
             &self.seams.staging_store,
             session.enc_subkey(),
             &self.entropy,
@@ -6652,13 +6660,13 @@ impl<T: SeamTypes> Engine<T> {
             self.seams.scheduler.now(),
         )
         .await
-        .unwrap_or_else(|_| {
+        else {
             let _ = self.events.unbounded_send(Event::RenewalFailed {
                 routing_key: name.as_str().to_owned(),
                 detail: OWED_UNREAD.to_owned(),
             });
-            BTreeSet::new()
-        });
+            return false;
+        };
         if owed.contains(&root_scope_id) || !reads_absent(&self.record_transport, name).await {
             return false;
         }
@@ -6749,8 +6757,11 @@ impl<T: SeamTypes> Engine<T> {
             return BinIndexRevival::Unlapsed;
         };
         let keys = BinIndexKeys::derive(session.login_secret());
-        if !reads_absent(&self.record_transport, keys.name()).await {
-            return BinIndexRevival::Unlapsed;
+        match fanout_get_classified(&self.record_transport, keys.name()).await {
+            FanoutRecord::Found(..) => return BinIndexRevival::Unlapsed,
+            // An endpoint that does not answer can hold the lapsed record.
+            FanoutRecord::Unavailable(_) => return BinIndexRevival::Unsettled,
+            FanoutRecord::Absent => {}
         }
         let read = BinIndexRead {
             gateway: &self.gateway,
@@ -10539,12 +10550,13 @@ where {
     async fn provision_in_session(&self) -> Result<(), EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.state.snapshot.borrow().root;
-        if let Some(retryable) = self.revive_vault_pointer_chain(&api, root.0).await {
+        if let Some(stall) = self.revive_vault_pointer_chain(&api, root.0).await {
             let message = CHAIN_UNREVIVED.to_owned();
-            return Err(if retryable {
-                EngineError::RefreshFailed { message }
-            } else {
-                EngineError::TrustViolation { message }
+            return Err(match stall {
+                ChainStall::TrustViolation => EngineError::TrustViolation { message },
+                ChainStall::Retryable | ChainStall::Refused => {
+                    EngineError::RefreshFailed { message }
+                }
             });
         }
         let first_run_name = self.first_run_pointer_name(&api, root.0).await;

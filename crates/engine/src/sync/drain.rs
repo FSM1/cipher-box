@@ -1692,6 +1692,10 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
+    /// Set while a lapsed bin index can still revive (ADR 0062 D3): a load
+    /// that finds no record then holds the queue rather than publish an empty
+    /// index over the lapsed one. A load that resolves a record clears it.
+    pub(crate) bin_index_unsettled: &'a Cell<bool>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -5969,7 +5973,7 @@ where
     /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
         let observed = observed_at(self.cells.held, HeldKey::BinIndex);
-        let index = load_bin_index(
+        let load = load_bin_index(
             &self.seams.transport,
             &self.seams.gateway,
             &self.seams.http,
@@ -5980,8 +5984,14 @@ where
             self.inputs.bin_keys,
         )
         .await
-        .enrol(self.cells.held, observed)
-        .writable()
+        .enrol(self.cells.held, observed);
+        if self.cells.bin_index_unsettled.get()
+            && matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun))
+        {
+            return Err(Halt::HeldByBinIndex(BinIndexHoldCheck::UnprovenFirstRun));
+        }
+        let index = load
+            .writable()
         .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
@@ -5993,6 +6003,7 @@ where
             }
             halt
         })?;
+        self.cells.bin_index_unsettled.set(false);
         self.establish_bin_index(index.clone());
         Ok(index)
     }

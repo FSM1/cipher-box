@@ -321,10 +321,31 @@ pub(crate) struct ChainRevival {
     pub(crate) revivals: Vec<(String, Result<Revived, ReviveError>)>,
     /// `None` when the pass reached a chain end the cold start may read: the
     /// recovery endpoint holds no record one index past the last, or the
-    /// fan-out did not answer, which the cold start reports itself. Else
-    /// whether a later pass can still reach that end; the cold start must not
-    /// adopt the prefix of a chain whose next index may only be lapsed.
-    pub(crate) unconfirmed: Option<bool>,
+    /// fan-out did not answer before any revival, which the cold start reports
+    /// itself. Else why it did not; the cold start must not adopt the prefix
+    /// of a chain whose next index may only be lapsed.
+    pub(crate) unconfirmed: Option<ChainStall>,
+}
+
+/// Why the pass over the vault pointer chain did not confirm its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainStall {
+    /// A later pass can reach the end.
+    Retryable,
+    /// No later pass reaches it, and no record was refused.
+    Refused,
+    /// The read of the plane refused a recovered record.
+    TrustViolation,
+}
+
+impl ChainStall {
+    fn of(error: &ReviveError) -> Self {
+        match error {
+            ReviveError::TrustViolation => Self::TrustViolation,
+            error if error.is_retryable() => Self::Retryable,
+            _ => Self::Refused,
+        }
+    }
 }
 
 /// Revive each lapsed index of the vault pointer chain, from the durable index
@@ -353,7 +374,7 @@ where
     // An index below the floor is abandoned, so its revival would re-sign a
     // superseded pointer.
     let Ok(floor) = floor::vault_pointer_index_floor(seams.floors, &read.scope_id).await else {
-        pass.unconfirmed = Some(true);
+        pass.unconfirmed = Some(ChainStall::Retryable);
         return pass;
     };
     let mut revived = None;
@@ -375,7 +396,7 @@ where
                     Ok(_) | Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {
                         None
                     }
-                    Err(error) => Some(error.is_transient()),
+                    Err(error) => Some(ChainStall::of(error)),
                 };
                 pass.revivals.push((name.as_str().to_owned(), result));
                 if stop {
@@ -386,10 +407,17 @@ where
             }
             // The endpoints still read the revived index `Absent`.
             FanoutRecord::Absent => {
-                pass.unconfirmed = Some(true);
+                pass.unconfirmed = Some(ChainStall::Retryable);
                 return pass;
             }
-            FanoutRecord::Unavailable(_) => return pass,
+            // After a revived prefix the cold read could find the next index
+            // `Absent` and adopt the prefix.
+            FanoutRecord::Unavailable(_) => {
+                if revived.is_some() {
+                    pass.unconfirmed = Some(ChainStall::Retryable);
+                }
+                return pass;
+            }
         }
     }
     pass
@@ -605,9 +633,71 @@ mod tests {
 
         let pass = revive_chain(&world, &device);
 
-        assert_eq!(pass.unconfirmed, Some(true), "a retryable verdict");
+        assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable), "a retryable verdict");
         assert!(matches!(pass.revivals[1].1, Err(ReviveError::Throttled)));
         assert!(served(&device, 0).is_some(), "index 0 revived");
+    }
+
+    /// An index the fan-out does not answer for after a revived prefix leaves
+    /// the chain end unconfirmed: the cold read could find it `Absent` and
+    /// adopt the prefix.
+    #[test]
+    fn an_unavailable_index_after_a_revived_prefix_leaves_its_end_unconfirmed() {
+        let (world, device) = after_100_days();
+        recover(&device, pointer_record(0, 3));
+        device
+            .record_store
+            .fail_get_for(vault_pointer_name(&SECRET, 1).as_str());
+
+        let pass = revive_chain(&world, &device);
+
+        assert_eq!(pass.unconfirmed, Some(ChainStall::Retryable));
+        assert_eq!(pass.revivals.len(), 1, "only index 0 revived");
+        assert!(served(&device, 0).is_some());
+    }
+
+    /// The produce bar sits above the vouched floor the cold start reads (ADR
+    /// 0067 D4). A pointer only the produce bar refuses is no trust violation:
+    /// nothing signs it and no later pass does either. A pointer both bars
+    /// refuse is a trust violation.
+    #[test]
+    fn a_pointer_below_the_produce_bar_is_refused_and_below_both_bars_is_rejected() {
+        for vouched_below in [true, false] {
+            let (world, device) = after_100_days();
+            if vouched_below {
+                block_on(floor::raise_vouched_floor(&device.floor_store, &SCOPE, 1)).unwrap();
+            }
+            block_on(device.floor_store.raise_epoch_floor(&SCOPE, 2)).unwrap();
+            recover(&device, pointer_record(0, 3));
+
+            let pass = revive_chain(&world, &device);
+
+            assert!(served(&device, 0).is_none(), "nothing signs the pointer");
+            if vouched_below {
+                assert_eq!(pass.unconfirmed, Some(ChainStall::Refused));
+                assert!(matches!(
+                    pass.revivals[0].1,
+                    Err(ReviveError::Publish(PublishError::BelowBar { .. }))
+                ));
+            } else {
+                assert_eq!(pass.unconfirmed, Some(ChainStall::TrustViolation));
+                assert!(matches!(
+                    pass.revivals[0].1,
+                    Err(ReviveError::TrustViolation)
+                ));
+            }
+        }
+    }
+
+    /// Another device's revival of the index supersedes this one: a later pass
+    /// reads it, so the stall is retryable.
+    #[test]
+    fn a_superseded_index_revival_is_retryable() {
+        assert_eq!(
+            ChainStall::of(&ReviveError::Superseded { sequence: 4 }),
+            ChainStall::Retryable
+        );
+        assert_eq!(ChainStall::of(&ReviveError::Moved), ChainStall::Retryable);
     }
 
     #[test]

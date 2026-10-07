@@ -6407,8 +6407,8 @@ where
 /// `open_repoint` and the pointer bar, then consult it again. Only a scope
 /// this device saw a pointer for revives: a scope that was never re-pointed
 /// holds no write-epoch floor and spends no recovery fetch. `Ok(None)` when
-/// there is nothing to revive or the consult does not read the revival back;
-/// `Err` with whether a later pass can revive it.
+/// there is nothing to revive; `Err` with whether a later pass can revive the
+/// pointer or read it back.
 async fn revive_scope_pointer<K, T, H, C, F, Sch, E, S>(
     pass: &ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
     consult: &PointerConsult<'_>,
@@ -6455,16 +6455,17 @@ where
         plane: read,
     };
     let result = revive_name(pass.api, &seams, pass.pace, request).await;
-    let retryable = result.as_ref().err().map(ReviveError::is_transient);
+    let retryable = result.as_ref().err().map(ReviveError::is_retryable);
     emit_revival_failures(pass.events, [(name.as_str().to_owned(), result)]);
     if let Some(retryable) = retryable {
         return Err(retryable);
     }
-    Ok(consult
-        .run(pass.transport, pass.floors, &scope_id)
-        .await
-        .ok()
-        .flatten())
+    match consult.run(pass.transport, pass.floors, &scope_id).await {
+        Ok(Some(consulted)) => Ok(Some(consulted)),
+        // The revival signed: a later pass reads it back.
+        Ok(None) | Err(PointerConsultError::Unavailable) => Err(true),
+        Err(PointerConsultError::Rejected) => Err(false),
+    }
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -17204,6 +17205,110 @@ mod tests {
                 assert!(!held);
             }
         }
+    }
+
+    /// A revival that signs but that the consult does not read back keeps the
+    /// enrolment latch open: an unconfirmed PUT, and a read that fails after
+    /// the PUT. After the unconfirmed PUT the next pass holds the pointer.
+    #[test]
+    fn a_revived_pointer_the_consult_does_not_read_back_keeps_the_enrolment_open() {
+        for unconfirmed_put in [true, false] {
+            let (harness, _) = owner_session_over_a_clean_tree();
+            let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+            let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+            let recoverable = || {
+                harness
+                    .blocks
+                    .lock()
+                    .expect("lock")
+                    .insert(pointer.as_str().to_owned(), lapsed.clone());
+            };
+            let held = || {
+                harness
+                    .held
+                    .borrow()
+                    .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE))
+            };
+            recoverable();
+            if unconfirmed_put {
+                harness.store.drop_puts();
+            } else {
+                harness.store.fail_gets_after_put(pointer.as_str());
+            }
+            let walked = Cell::new(false);
+
+            run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+            assert!(!walked.get(), "the latch stays open");
+            assert!(!held());
+
+            if unconfirmed_put {
+                harness.store.keep_puts();
+                recoverable();
+                run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+                assert!(held(), "the next pass holds the pointer");
+                assert!(walked.get());
+            }
+        }
+    }
+
+    /// Another device revives the pointer while this pass revives it: the
+    /// revival stops as superseded, the latch stays open, and the next pass
+    /// holds the pointer the other device revived.
+    #[test]
+    fn a_superseded_pointer_revival_keeps_the_enrolment_open() {
+        let (harness, _) = owner_session_over_a_clean_tree();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let lapsed = harness.store.lapse(pointer.as_str()).expect("staged");
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(pointer.as_str().to_owned(), lapsed.clone());
+        let recovered = IpnsRecord::unmarshal(&lapsed)
+            .unwrap()
+            .verify(&pointer)
+            .unwrap();
+        let newer = IpnsRecord::create_v2(
+            &OwnerSeeds.pointer_signer(&CHILD_SCOPE),
+            &recovered.value,
+            recovered.sequence + 1,
+            2_000_000_000,
+            &crate::net::eol::eol_from(harness.world.scheduler.now()),
+        )
+        .marshal();
+        let endpoints = harness.store.endpoints();
+        for endpoint in &endpoints {
+            harness
+                .store
+                .seed_record(endpoint, pointer.as_str(), newer.clone());
+        }
+        // The consult reads the pointer `Absent`; the corroboration reads the
+        // other device's revival.
+        harness
+            .store
+            .serve_gets_for_after(pointer.as_str(), 0, endpoints.len(), None);
+        let walked = Cell::new(false);
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(!walked.get(), "the latch stays open");
+
+        run_enrolment_owing(&harness, &OwnerSeeds, &walked, &BTreeSet::new());
+        assert!(
+            harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
+            "the next pass holds the other device's pointer"
+        );
+        assert!(walked.get());
+        assert_eq!(
+            harness
+                .store
+                .record_at(&endpoints[0], pointer.as_str())
+                .as_deref(),
+            Some(newer.as_slice()),
+            "this device signed nothing over it"
+        );
     }
 
     /// A pointer revival that a later pass can still land keeps the session's
