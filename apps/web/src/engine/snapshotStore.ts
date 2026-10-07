@@ -88,6 +88,10 @@ const ROTATION_TRUST_STOP =
 const ROTATION_ABANDONED =
   'a change to who can open a shared folder could not be finished and was stopped - check the folder sharing and try again';
 
+/** A permission change landed, but the grantee was not told; a grant again tells them. */
+const SHARE_POINTER_NOT_POSTED =
+  'a permission change was saved, but the person was not told - share the folder with them again at the same permission';
+
 /** Another device started a write cut that has not finished; any owner device can finish it. */
 const WRITE_CUT_UNFINISHED =
   'a shared folder has a write-access change that another of your devices has not finished - finish it here, or open CipherBox on that device';
@@ -254,6 +258,8 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       }
     } else if (event.kind === 'rotationWorkAbandoned') {
       notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
+    } else if (event.kind === 'sharePointerNotPosted') {
+      notificationStore.warn(`unposted:${toHex(event.scopeRoot)}`, SHARE_POINTER_NOT_POSTED);
     } else if (event.kind === 'writeCutUnfinished') {
       const scope = toHex(event.scopeRoot);
       const key = `unfinished:${scope}`;

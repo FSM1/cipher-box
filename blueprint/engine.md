@@ -1424,7 +1424,9 @@ rebases and signs above.
   drops it (ADR 0065).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
-  duration" was wrong and is retired.
+  duration" was wrong and is retired. A grantee follows the pointer on the
+  received-shares refresh, so for a personal bookmark that interval is the
+  refresh interval (ADR 0074).
 - Revoked readers: stale interior metadata for a sweep-length window, never a
   live grant, never anything sealed after the cut.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
@@ -1605,6 +1607,10 @@ surviving committed grants uniformly in the republish it already does.
   tag only while no personal blob opens and `linkSecret` is held; the persist
   that records the first personal open deletes `linkSecret` and `linkDeadline`,
   keeps `scopePointerName`, and the link holder is then a grantee (ADR 0074 D1).
+  The join reads through the fragment's scope pointer name in all cases, but the
+  bookmark keeps that name only when the owner signature over the fragment
+  names verifies; with a bad signature the link works (ADR 0027 D5) and the
+  bookmark holds no name.
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies

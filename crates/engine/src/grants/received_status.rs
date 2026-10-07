@@ -681,8 +681,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
-    /// verdict, and the scope
-    /// root each vouched-for bookmark must move to. A refused re-point object
+    /// verdict, and the scope root each vouched-for bookmark must move to. A refused re-point object
     /// is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
@@ -698,8 +697,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut heals = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let (true, Some(contact), true) = (
-                share.scope_pointer_name.is_some(),
+            let (Some(name), Some(contact), true) = (
+                share.scope_pointer_name.as_ref(),
                 by_identity.get(&share.sharer_identity_pk),
                 scheduled.contains(&key),
             ) else {
@@ -709,6 +708,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 self.transport,
                 &self.sharer_floors(share),
                 share,
+                name,
                 &contact.identity_pk(),
             )
             .await

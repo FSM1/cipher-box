@@ -2405,6 +2405,18 @@ pub enum Event {
         /// Why the cut left it out.
         cause: DropCause,
     },
+    /// A permission change landed, but its share pointer post to the grantee
+    /// failed. The grantee may not follow the next write cut until the owner
+    /// grants again at the same permission, which posts it (ADR 0074 D2).
+    SharePointerNotPosted {
+        /// The scope root whose grantee did not get the post.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+    },
     /// The renewal walk met an owned scope root whose name its write seed does
     /// not derive: a write cut that did not finish. The device that owes it
     /// finishes it, or [`Command::RotateWriteNow`] on any owner device. Its
@@ -2607,6 +2619,10 @@ impl fmt::Debug for Event {
                 .field("scope_root", scope_root)
                 .field("node_id", node_id)
                 .field("cause", cause)
+                .finish(),
+            Self::SharePointerNotPosted { scope_root } => f
+                .debug_struct("SharePointerNotPosted")
+                .field("scope_root", scope_root)
                 .finish(),
             Self::WriteCutUnfinished { scope_root } => f
                 .debug_struct("WriteCutUnfinished")
@@ -9197,11 +9213,12 @@ where {
                         gated.net.fell_back(),
                     )
                     .await?;
-                // An owed cut moved nothing yet, so no root is there to name.
-                let Some(write) = report.and_then(|report| report.write) else {
-                    return Ok(());
-                };
-                write.new_root_name
+                // An owed cut landed the set with the row at read, and the
+                // grantee follows the pointer name to the root the wave moves to.
+                match report.and_then(|report| report.write) {
+                    Some(write) => write.new_root_name,
+                    None => parsed_scope_name(&gated.target.scope.ipns_name)?,
+                }
             }
             Permission::Write => {
                 if !gated.target.is_write_scope(&gated.current) {
@@ -9216,11 +9233,17 @@ where {
                 parsed_scope_name(&gated.target.scope.ipns_name)?
             }
         };
-        // Best effort: the change landed, and a same-permission grant posts
-        // again (ADR 0074 D2).
-        let _ = self
+        // The change landed, so a failed post is a notice: a same-permission
+        // grant posts again (ADR 0074 D2).
+        if self
             .post_pointer_to_row(node, identity_pk, &held, permission, &root)
-            .await;
+            .await
+            .is_err()
+        {
+            let _ = self
+                .events
+                .unbounded_send(Event::SharePointerNotPosted { scope_root: node });
+        }
         Ok(())
     }
 
@@ -9523,6 +9546,9 @@ where {
                 check: "invite-names-the-own-vault-root",
             });
         }
+        // The one check of the owner signature over the names. A failed one
+        // leaves the link working (ADR 0027 D5), with no display name and no
+        // scope pointer name in the bookmark (ADR 0074 D1 as amended).
         let names =
             fragment
                 .verified_names(&owner.identity_pk())
@@ -9530,10 +9556,7 @@ where {
                     owner_name: owner_name.to_owned(),
                     folder_name: folder_name.to_owned(),
                 });
-        let display_name = names
-            .as_ref()
-            .map_or_else(String::new, |names| names.folder_name.clone());
-        let (share, hold) = pending_link_bookmark(&fragment, &owner, display_name);
+        let (share, hold) = pending_link_bookmark(&fragment, &owner, names.as_ref());
         let seams = JoinSeams {
             transport: &self.record_transport,
             gateway: &self.gateway,
@@ -9762,6 +9785,7 @@ where {
         // one post no claim and record nothing.
         let link = LinkReader {
             share: &share,
+            pointer_name: &fragment.scope_pointer_name,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),
@@ -11446,13 +11470,13 @@ where {
         self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let LinkOpening {
+            fragment: opened,
             invitee,
             owner,
             names,
             share,
             hold,
             seams,
-            ..
         } = self.open_link_fragment(fragment)?;
         let received = self
             .received_share_store(session)
@@ -11461,6 +11485,7 @@ where {
             .map_err(EngineError::from_received_share_store)?;
         let link = LinkReader {
             share: &share,
+            pointer_name: &opened.scope_pointer_name,
             owner: &owner,
             invitee: &invitee,
             my_enc_secret: session.enc_subkey(),

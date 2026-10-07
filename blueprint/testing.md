@@ -301,9 +301,12 @@ scenario fails the meta-test):
   `a_personal_read_grantee_reads_the_moved_tree_after_a_write_cut`,
   `a_downgraded_writer_reads_the_moved_tree_after_its_downgrade`); a repost
   adds the name to a bookmark with none on the equal-floor short-circuit
-  (`tests/grants_mailbox.rs`); the share pointer and the stored list carry the
-  name, and the encoder refuses a link hold with no name (`grants::accept`).
-  The two `owner_actions` tests fail on the code before ADR 0074.
+  (`tests/grants_mailbox.rs`); an owed downgrade still posts the name
+  (`an_owed_downgrade_still_posts_the_pointer_name_to_the_writer`); a fragment
+  whose name a forwarder changed joins and keeps no name
+  (`a_fragment_with_an_altered_pointer_name_joins_and_keeps_no_name`); the
+  share pointer and the stored list carry the name (`grants::accept`). The two
+  read tests fail on the code before ADR 0074.
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root

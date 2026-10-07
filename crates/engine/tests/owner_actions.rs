@@ -12667,6 +12667,126 @@ fn stored_link_hold(fx: &GrantScenario) -> Option<LinkHold> {
         .cloned()
 }
 
+/// The scope pointer name the recipient's durable list keeps for the owner's
+/// folder.
+fn stored_pointer_name(fx: &GrantScenario) -> Option<IpnsName> {
+    let entropy = RefCell::new(SeededEntropy::new(41));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let list = block_on(
+        StagingReceivedShareStore::new(&fx.recipient_device.staging_store, &enc, &entropy).load(),
+    )
+    .expect("the list loads");
+    list.find(&(owner_identity().verifying_key().to_sec1(), fx.folder.0))
+        .and_then(|share| share.scope_pointer_name.clone())
+}
+
+/// ADR 0074 D1 as amended: a forwarder who changes the fragment's scope
+/// pointer name breaks the owner signature over the names. The forwarder
+/// serves a valid owner-signed re-point object at that name. The join still
+/// opens (ADR 0027 D5), but the bookmark keeps no name, and no later pass
+/// consults the forwarder's name.
+#[test]
+fn a_fragment_with_an_altered_pointer_name_joins_and_keeps_no_name() {
+    let mut fx = GrantScenario::new();
+    let mut altered = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
+    let owner_pointer = altered.scope_pointer_name.clone();
+    let forwarder = cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([0x6e; 32]);
+    let theirs = IpnsName::from_public_key(&forwarder.verifying_key());
+    let endpoints = fx.world.record_store.endpoints();
+    let bytes = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], owner_pointer.as_str())
+        .expect("the mint published the scope pointer");
+    let block = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(&owner_pointer))
+        .expect("the pointer record verifies")
+        .value;
+    let copied = IpnsRecord::create_v2(&forwarder, &block, 1, TTL_NANOS, EOL).marshal();
+    for endpoint in &endpoints {
+        fx.world
+            .record_store
+            .seed_record(endpoint, theirs.as_str(), copied.clone());
+    }
+    altered.scope_pointer_name = theirs.clone();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        join_link(
+            &mut holder,
+            &mut holder_tasks,
+            altered.encode().expect("inside the bound"),
+        ),
+        Ok(CommandOutcome::Done),
+        "a bad names signature leaves the link working"
+    );
+    assert!(stored_link_hold(&fx).is_some(), "the join holds the link");
+    assert_eq!(
+        stored_pointer_name(&fx),
+        None,
+        "an unverified name never enters the bookmark"
+    );
+    let consulted = fx.world.record_store.get_count(theirs.as_str());
+    settle(&fx, &holder, &mut holder_tasks);
+    assert_eq!(
+        fx.world.record_store.get_count(theirs.as_str()),
+        consulted,
+        "no pass follows the forwarder's name"
+    );
+}
+
+/// ADR 0074 D2: a downgrade whose wave stands owed still posts the share
+/// pointer, with the name, to the downgraded writer. The cut set landed with
+/// the row at read, and the name does not depend on the root the wave moves to.
+#[test]
+fn an_owed_downgrade_still_posts_the_pointer_name_to_the_writer() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    fx.world
+        .record_store
+        .serve_gets_for_after(granted.current_root.as_str(), 5, usize::MAX, None);
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave stands owed");
+    let pointers: Vec<SharePointer> = block_on(poll_verified(
+        &fx.recipient_device.mailbox,
+        &kdf::enc_subkey(&RECIPIENT_SECRET),
+        ENVELOPE_V,
+    ))
+    .expect("the inbox answers")
+    .iter()
+    .map(|item| SharePointer::decode(&item.payload).expect("the pointer decodes"))
+    .collect();
+    let downgrade = pointers
+        .iter()
+        .find(|pointer| pointer.permission == CorePermission::Read)
+        .expect("the downgrade posts a read pointer");
+    assert_eq!(
+        downgrade.scope_pointer_name,
+        Some(scope_pointer_name(
+            kdf::owner_pointer_seed(&SECRET).as_bytes(),
+            &fx.folder.0
+        ))
+    );
+}
+
 /// ADR 0024 D5: the pointer consult runs ahead of every write. A fragment
 /// whose owner code names another identity fails the re-point object's
 /// verify, so the join posts no claim, records no contact and bookmarks

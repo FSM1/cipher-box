@@ -647,13 +647,6 @@ pub(crate) fn encode_stored_list(
                 if let Some(deadline) = hold.deadline {
                     m.insert("linkDeadline", Value::Unsigned(deadline.0));
                 }
-                // The decoder refuses `linkSecret` without the name.
-                if share.scope_pointer_name.is_none() {
-                    return Err(Malformed::MissingField {
-                        field: "scopePointerName",
-                    }
-                    .into());
-                }
                 m.insert(
                     "linkSecret",
                     Value::Bytes(hold.invite_secret.as_bytes().to_vec()),
@@ -777,10 +770,9 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
 /// The claim keys of one stored bookmark: all four or none.
 const CLAIM_FIELDS: [&str; 4] = ["claim", "claimKey", "claimNextPost", "claimPosts"];
 
-/// The optional link keys of one stored bookmark. `linkSecret` comes only
-/// with `scopePointerName`, and `linkDeadline` and the claim keys only with
-/// `linkSecret`; a bookmark without `linkSecret` is a personal one, which
-/// may hold the name alone (ADR 0074 D1).
+/// The optional link keys of one stored bookmark. `linkDeadline` and the claim
+/// keys come only with `linkSecret`; a bookmark without `linkSecret` is a
+/// personal one. `scopePointerName` is optional on both kinds (ADR 0074 D1).
 fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecError> {
     let Some(secret) = share.get("linkSecret") else {
         let stray = ["linkDeadline"]
@@ -796,7 +788,6 @@ fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecEr
             Ok(None)
         };
     };
-    req(share, "scopePointerName")?;
     let deadline = share
         .get("linkDeadline")
         .map(|value| value.as_unsigned().map(UnixMillis))
@@ -2051,16 +2042,15 @@ mod tests {
         );
     }
 
-    /// `linkSecret` needs `scopePointerName`, and the other link keys need
-    /// `linkSecret`.
+    /// The other link keys need `linkSecret`.
     #[test]
-    fn a_link_hold_missing_half_its_pair_is_refused() {
+    fn a_link_hold_missing_its_secret_is_refused() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(held_share());
         let key = list.iter().next().expect("one bookmark").key();
         list.hold_link(key, link_hold());
         let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
-        for dropped in ["linkSecret", "scopePointerName"] {
+        for dropped in ["linkSecret"] {
             let mut map = tree.as_map().unwrap().clone();
             let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
             let mut entry = shares[0].as_map().unwrap().clone();
@@ -2098,18 +2088,19 @@ mod tests {
         assert_eq!(encode_stored_list(&decoded).unwrap(), bytes, "byte-stable");
     }
 
-    /// The encoder refuses a link hold with no name, which the decoder
-    /// refuses (AGENTS.md rule 8).
+    /// A link joined with a bad names signature holds no scope pointer name
+    /// (ADR 0074 D1 as amended), and its hold round trips.
     #[test]
-    fn a_link_hold_with_no_scope_pointer_name_is_refused_at_encode() {
+    fn a_link_hold_with_no_scope_pointer_name_round_trips() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share(b"k51scoperoot", 0x8A));
         let key = list.iter().next().expect("one bookmark").key();
         list.hold_link(key, link_hold());
-        assert!(matches!(
-            encode_stored_list(&list),
-            Err(ReceivedSharesCodecError::Codec(_))
-        ));
+        let bytes = encode_stored_list(&list).expect("encodes");
+        let decoded = decode_stored_list(&bytes).expect("loads");
+        assert!(decoded.link_hold(&key) == Some(&link_hold()));
+        assert_eq!(decoded.find(&key).unwrap().scope_pointer_name, None);
+        assert_eq!(encode_stored_list(&decoded).unwrap(), bytes, "byte-stable");
     }
 
     #[test]
