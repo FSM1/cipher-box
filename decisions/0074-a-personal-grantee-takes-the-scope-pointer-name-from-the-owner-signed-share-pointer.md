@@ -48,6 +48,9 @@ personal grantee, up or down, posts the share pointer to that grantee. So a
 downgraded writer gets the name at the cut that needs it. That is one post to
 one grantee. A write cut posts nothing to the other survivors.
 
+Amended on 2026-10-07 by FSM1/cipher-box#2361: a cut from the last copy keeps
+no row and posts nothing; the owner shares again, ADR 0068 D5.
+
 ## Alternatives considered
 
 - **The grant blob carries the name.** This changes the `crates/core` grant

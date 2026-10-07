@@ -7,7 +7,13 @@ import {
 import { displayName } from '../../vault/displayName';
 
 /** A preview read that did not answer. */
-export type PreviewFailure = 'untrusted' | 'unreadable';
+export type PreviewFailure = 'untrusted' | 'changed' | 'unreadable';
+
+/**
+ * The engine's check for a fragment whose owner signature over the names does
+ * not verify. It refuses the fragment before it reads the folder.
+ */
+const CHANGED_LINK_CHECK = 'invite-names-do-not-verify';
 
 /** What the page shows once the preview read settles (ADR 0028 D5). */
 export type PreviewOutcome =
@@ -32,9 +38,11 @@ export function previewOutcome(preview: InvitePreviewDescriptor): PreviewOutcome
  * it reads apart from a read that did not complete.
  */
 export function failedPreviewOutcome(failure: unknown): PreviewFailure {
-  return failure instanceof EngineRequestError && failure.code === 'trustViolation'
-    ? 'untrusted'
-    : 'unreadable';
+  if (!(failure instanceof EngineRequestError) || failure.code !== 'trustViolation') {
+    return 'unreadable';
+  }
+  // `<class>: <check>`, as `EngineError`'s `Display` renders it.
+  return failure.message.endsWith(`: ${CHANGED_LINK_CHECK}`) ? 'changed' : 'untrusted';
 }
 
 /**

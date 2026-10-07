@@ -1563,8 +1563,10 @@ surviving committed grants uniformly in the republish it already does.
   adds no row and runs no cut, and it posts the share pointer again, which is
   the owner's repair path for a bookmark with no scope pointer name. A
   permission change of a personal grantee, up or down, posts the share pointer
-  to that grantee, at the root the change leaves, once the cut set is durable;
-  a failed post leaves the change standing and sends `SharePointerNotPosted`,
+  to that grantee, at the root the change leaves, once the cut set is durable.
+  A cut from the last copy keeps no row and posts nothing; the owner shares
+  again (ADR 0068 D5).
+  A failed post leaves the change standing and sends `SharePointerNotPosted`,
   and a write cut posts nothing to the other survivors (ADR 0074 D2). A write grant on a folder that is not a write
   scope yet runs the write-scope cut first (ADR 0024 D4, ADR 0026 C4).
   `grant-target-already-names-a-scope` and

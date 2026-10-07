@@ -42,6 +42,14 @@ describe('failedPreviewOutcome', () => {
     );
   });
 
+  it('reads a fragment whose names signature fails as a changed link', () => {
+    expect(
+      failedPreviewOutcome(
+        new EngineRequestError('trust violation: invite-names-do-not-verify', 'trustViolation')
+      )
+    ).toBe('changed');
+  });
+
   it('reads every other failure as unreadable', () => {
     expect(failedPreviewOutcome(new EngineRequestError('down', 'contentUnavailable'))).toBe(
       'unreadable'

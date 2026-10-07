@@ -4298,9 +4298,10 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
 /// Why a link revoke waits: a conversion through the link is still pending.
 const LINK_CONVERSION_PENDING: &str = "link-has-a-pending-conversion";
 
-/// A fragment whose owner signature over the names does not verify.
-const INVITE_NAMES_DO_NOT_VERIFY: &str =
-    "the owner signature over the invite names does not verify";
+/// The check of a fragment whose owner signature over the names does not
+/// verify: a changed link, which a host reads apart from a folder that does
+/// not verify.
+const INVITE_NAMES_DO_NOT_VERIFY: &str = "invite-names-do-not-verify";
 
 /// The refusal of a link revoke whose inbox poll failed.
 const MAILBOX_UNAVAILABLE: &str = "mailbox-unavailable";
