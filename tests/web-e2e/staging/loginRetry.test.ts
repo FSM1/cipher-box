@@ -32,6 +32,10 @@ describe('devnetFault', () => {
       'node-busy',
     ],
     ['unable to assign key; all auth network nodes are currently busy - try again', 'node-busy'],
+    [
+      'undefined Unable to assign key, failed to fetch key assign result please try again',
+      'key-assign',
+    ],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });
