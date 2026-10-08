@@ -711,13 +711,13 @@ describe('broadcast transport ↔ leader relay', () => {
       lastSeenAt: '2026-08-27T11:00:00.000Z',
     };
     engine.respondDevices = () => Promise.resolve([row]);
-    engine.respondRegistrationChallenge = () => Promise.resolve(Uint8Array.of(9, 9));
+    engine.respondRegistrationChallenge = () => Promise.resolve(Uint8Array.of(9, 9).buffer);
 
     await expect(follower.read({ kind: 'devices' })).resolves.toEqual([row]);
     await expect(follower.read({ kind: 'pendingApprovals' })).resolves.toEqual([]);
     await expect(
       follower.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
-    ).resolves.toEqual(Uint8Array.of(9, 9));
+    ).resolves.toEqual(Uint8Array.of(9, 9).buffer);
 
     expect(engine.deviceReads).toBe(1);
     expect(engine.pendingApprovalReads).toBe(1);

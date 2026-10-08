@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest';
 import { ROOT_ID, view } from '../../engine/testFakes';
 import { EngineProvider } from '../../providers/EngineProvider';
+import { fakeRead } from '../../test/readFakes';
 import { UploadPanel } from './UploadPanel';
 
 const FOLDER = new Uint8Array(16).fill(7);
@@ -17,7 +18,7 @@ function uploadEngine() {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    snapshot: () => Promise.resolve(snapshot),
+    read: fakeRead({ snapshot: () => Promise.resolve(snapshot) }),
     setFocus: () => Promise.resolve(),
     beginWrite: vi.fn(() => Promise.resolve(1n)),
     pushChunk: vi.fn(() => Promise.resolve()),

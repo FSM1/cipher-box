@@ -109,10 +109,12 @@ async function fingerprintsOf(
 ): Promise<Map<string, string>> {
   const entries = await Promise.all(
     (view.state?.grants ?? []).map((grant) =>
-      facade.identityFingerprint(grant.recipientIdentityPublicKey).then(
-        (fingerprint): [string, string] => [toHex(grant.recipientIdentityPublicKey), fingerprint],
-        () => null
-      )
+      facade
+        .read({ kind: 'identityFingerprint', identityPublicKey: grant.recipientIdentityPublicKey })
+        .then(
+          (fingerprint): [string, string] => [toHex(grant.recipientIdentityPublicKey), fingerprint],
+          () => null
+        )
     )
   );
   return new Map(entries.filter((entry) => entry !== null));
@@ -134,7 +136,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const read = useCallback(
     async (facade: EngineFacade) => {
       const seq = ++startedSeq.current;
-      const view = await facade.sharing(target);
+      const view = await facade.read({ kind: 'sharing', scope: target });
       const fingerprints = await fingerprintsOf(facade, view);
       if (seq > publishedSeq.current) {
         publishedSeq.current = seq;

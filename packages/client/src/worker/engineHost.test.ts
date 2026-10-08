@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { byoSettings, emptySnapshot, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
-import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   DeviceRendezvousStep,
+  ReadAnswer,
+  ReadDescriptor,
   WriteTarget,
 } from './protocol.js';
 
@@ -58,9 +59,14 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
  * A host over a wasm whose every call succeeds and records its arguments, so
  * only the host's own field checks can refuse a request.
  */
+/** A host that no `start` has reached, so it has built no engine. */
+function unstarted(wasm: EngineWasm): EngineHost {
+  return new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+}
+
 /** A host whose engine is already built, as every call but `start` requires. */
 async function started(wasm: EngineWasm): Promise<EngineHost> {
-  const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+  const host = unstarted(wasm);
   await host.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
   return host;
 }
@@ -99,16 +105,6 @@ async function permissiveHost(): Promise<{ host: EngineHost; calls: unknown[][] 
       start = record('start');
       pushChunk = record('pushChunk');
       beginWrite = record('beginWrite');
-      snapshot = record('snapshot', emptySnapshot());
-      previewInviteLink = record('previewInviteLink', {
-        scope: new Uint8Array([9]),
-        names: null,
-        permission: null,
-        state: 'revoked',
-        joined: false,
-        listing: [],
-      });
-      download = record('download');
       openContentStream = record('openContentStream');
       readStream = record('readStream');
     },
@@ -159,15 +155,6 @@ describe('EngineHost', () => {
       profile: 'ci',
       apiBaseUrl: 'https://api.example.test',
       storageHeadroomBytes: 1024,
-    });
-  });
-
-  it('refuses every call until the engine has been started', async () => {
-    const { wasm } = recordingWasm();
-    const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
-
-    await expect(host.read({ kind: 'snapshot', folder: null })).rejects.toMatchObject({
-      code: 'notStarted',
     });
   });
 
@@ -329,61 +316,6 @@ describe('EngineHost request fields', () => {
     expect(calls).toEqual([]);
   });
 
-  it('lists the vault root for the one folder that is not bytes', async () => {
-    const { host, calls } = await permissiveHost();
-
-    await host.read({ kind: 'snapshot', folder: null });
-
-    expect(calls).toEqual([['snapshot', undefined]]);
-  });
-
-  it('refuses a snapshot of a folder that is not bytes', async () => {
-    const { host, calls } = await permissiveHost();
-
-    await expect(
-      host.read({ kind: 'snapshot', folder: 'root' as unknown as Uint8Array })
-    ).rejects.toThrow('invalid request field folder: string');
-    await expect(
-      host.read({ kind: 'snapshot', folder: undefined as unknown as Uint8Array })
-    ).rejects.toThrow('invalid request field folder: undefined');
-    expect(calls).toEqual([]);
-  });
-
-  it('previews the fragment verbatim and reads the preview back', async () => {
-    const { host, calls } = await permissiveHost();
-
-    await expect(host.read({ kind: 'invitePreview', fragment: 'abc-_' })).resolves.toEqual({
-      scope: new Uint8Array([9]),
-      names: null,
-      permission: null,
-      state: 'revoked',
-      joined: false,
-      listing: [],
-    });
-    expect(calls).toEqual([['previewInviteLink', 'abc-_']]);
-  });
-
-  it('refuses a preview fragment that is not text or is past the bound', async () => {
-    const { host, calls } = await permissiveHost();
-
-    await expect(
-      host.read({ kind: 'invitePreview', fragment: 7 as unknown as string })
-    ).rejects.toThrow('invalid request field fragment: number');
-    await expect(
-      host.read({ kind: 'invitePreview', fragment: 'x'.repeat(MAX_FRAGMENT_CHARS + 1) })
-    ).rejects.toThrow('invalid request field fragment');
-    expect(calls).toEqual([]);
-  });
-
-  it('refuses a download of a non-node', async () => {
-    const { host, calls } = await permissiveHost();
-
-    await expect(
-      host.read({ kind: 'download', node: 'sixteen bytes!!!' as unknown as Uint8Array })
-    ).rejects.toThrow('invalid request field node: string');
-    expect(calls).toEqual([]);
-  });
-
   it('refuses an openContentStream of a non-node', async () => {
     const { host, calls } = await permissiveHost();
 
@@ -490,85 +422,144 @@ describe('EngineHost commands', () => {
   });
 });
 
-/** The device-registry rows the read host answers with. */
-const DEVICE_ROW = {
-  id: '7c1e-uuid',
-  publicKey: 'ed25519hex',
-  label: 'Work laptop',
-  createdAt: '2026-08-27T10:00:00.000Z',
-  lastSeenAt: '2026-08-27T11:00:00.000Z',
-};
+type ReadPath = 'engine' | 'unstarted';
 
-const PENDING_ROW = {
-  requestId: 'req-1',
-  requesterDevicePublicKey: 'ed25519hex',
-  ephemeralPublicKey: '02beef',
-  comparisonValue: '482913',
-  createdAt: '2026-08-27T10:00:00.000Z',
-  expiresAt: '2026-08-27T10:05:00.000Z',
-};
-
-/** A host whose engine answers the three device reads with fixed rows. */
-function deviceReadHost(): Promise<{ host: EngineHost; challenged: string[] }> {
-  const challenged: string[] = [];
-  const wasm = {
-    EngineHandle: class {
-      start(): Promise<void> {
-        return Promise.resolve();
-      }
-
-      devices(): Promise<unknown[]> {
-        return Promise.resolve([DEVICE_ROW, { ...DEVICE_ROW, id: '9a2b-uuid', label: null }]);
-      }
-
-      pendingApprovals(): Promise<unknown[]> {
-        return Promise.resolve([PENDING_ROW]);
-      }
-
-      deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-        challenged.push(devicePublicKey);
-        return Promise.resolve(Uint8Array.of(9, 9));
-      }
-    },
-  } as unknown as EngineWasm;
-  return started(wasm).then((host) => ({ host, challenged }));
-}
-
-/** A wasm module whose rendezvous export records each step and answers `answer`. */
-function rendezvousWasm(answer: (step: { kind: string }) => unknown = rendezvousAnswer): {
+/**
+ * A wasm whose engine `read` and session-free `readUnstarted` record each read
+ * and answer with `value`, under the read's own kind.
+ */
+function readingWasm(value: (read: ReadDescriptor) => Promise<unknown>): {
   wasm: EngineWasm;
-  calls: unknown[];
+  reads: [ReadPath, ReadDescriptor][];
 } {
-  const calls: unknown[] = [];
+  const reads: [ReadPath, ReadDescriptor][] = [];
+  // Snapshotted at the call, because the host scrubs the step it was handed:
+  // recording the read itself would compare zeroes to zeroes.
+  const serve =
+    (path: ReadPath) =>
+    (read: ReadDescriptor): Promise<ReadAnswer> => {
+      reads.push([path, structuredClone(read)]);
+      return value(read).then((answer) => ({ kind: read.kind, value: answer }) as ReadAnswer);
+    };
   const wasm = {
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();
       }
+
+      read = serve('engine');
     },
-    // The step is snapshotted at the call, because the host scrubs the step it
-    // was handed: recording the step itself would compare zeroes to zeroes.
-    deviceRendezvous: (step: { kind: string }): unknown => {
-      calls.push(structuredClone(step));
-      return answer(step);
-    },
+    readUnstarted: serve('unstarted'),
   } as unknown as EngineWasm;
-  return { wasm, calls };
+  return { wasm, reads };
 }
 
-function rendezvousAnswer(step: { kind: string }): unknown {
-  switch (step.kind) {
+/** A started host over {@link readingWasm}. */
+async function startedReading(
+  value: (read: ReadDescriptor) => Promise<unknown>
+): Promise<{ host: EngineHost; reads: [ReadPath, ReadDescriptor][] }> {
+  const { wasm, reads } = readingWasm(value);
+  return { host: await started(wasm), reads };
+}
+
+describe('EngineHost reads', () => {
+  it('serves a read before start from the session-free reads', async () => {
+    const { wasm, reads } = readingWasm(() => Promise.resolve('e686 bdd6 b44e 05c4 4db0'));
+    const identityPublicKey = new Uint8Array(33).fill(2);
+
+    await expect(
+      unstarted(wasm).read({ kind: 'identityFingerprint', identityPublicKey })
+    ).resolves.toBe('e686 bdd6 b44e 05c4 4db0');
+    expect(reads).toEqual([['unstarted', { kind: 'identityFingerprint', identityPublicKey }]]);
+  });
+
+  it('refuses an engine read before start as the session-free reads refuse it', async () => {
+    const { wasm, reads } = readingWasm(() =>
+      Promise.reject(Object.assign(new Error('engine not started'), { code: 'notStarted' }))
+    );
+
+    await expect(unstarted(wasm).read({ kind: 'snapshot', folder: null })).rejects.toMatchObject({
+      code: 'notStarted',
+    });
+    expect(reads).toEqual([['unstarted', { kind: 'snapshot', folder: null }]]);
+  });
+
+  it('hands a read after start to the engine as it arrived', async () => {
+    const { host, reads } = await startedReading(() => Promise.resolve(emptySnapshot()));
+
+    await expect(host.read({ kind: 'snapshot', folder: null })).resolves.toEqual(emptySnapshot());
+    expect(reads).toEqual([['engine', { kind: 'snapshot', folder: null }]]);
+  });
+
+  it('previews the fragment verbatim and reads the preview back', async () => {
+    const preview = {
+      scope: new Uint8Array([9]),
+      names: null,
+      permission: null,
+      state: 'revoked',
+      joined: false,
+      listing: [],
+    };
+    const { host, reads } = await startedReading(() => Promise.resolve(preview));
+
+    await expect(host.read({ kind: 'invitePreview', fragment: 'abc-_' })).resolves.toEqual(preview);
+    expect(reads).toEqual([['engine', { kind: 'invitePreview', fragment: 'abc-_' }]]);
+  });
+
+  it.each([
+    ['download', { kind: 'download', node: new Uint8Array(16) }],
+    [
+      'downloadVersion',
+      { kind: 'downloadVersion', node: new Uint8Array(16), contentCid: Uint8Array.of(1) },
+    ],
+    ['deviceRegistrationChallenge', { kind: 'deviceRegistrationChallenge', devicePublicKey: 'k' }],
+  ] as [string, ReadDescriptor][])(
+    'answers a %s with a buffer of the same bytes',
+    async (_kind, read) => {
+      const { host } = await startedReading(() => Promise.resolve(Uint8Array.of(7, 8, 9)));
+
+      const answer = await host.read(read);
+
+      expect(answer).toBeInstanceOf(ArrayBuffer);
+      expect(new Uint8Array(answer as ArrayBuffer)).toEqual(Uint8Array.of(7, 8, 9));
+    }
+  );
+
+  it('answers a byte view with only the bytes it spans', async () => {
+    const { host } = await startedReading(() =>
+      Promise.resolve(Uint8Array.of(0, 1, 2, 3).subarray(1, 3))
+    );
+
+    const answer = await host.read({ kind: 'download', node: new Uint8Array(16) });
+
+    expect(new Uint8Array(answer)).toEqual(Uint8Array.of(1, 2));
+  });
+
+  it('refuses a snapshot carrying a permission this build does not know', async () => {
+    const { host } = await startedReading(() =>
+      Promise.resolve({ ...emptySnapshot(), permission: 'admin' })
+    );
+
+    await expect(host.read({ kind: 'snapshot', folder: null })).rejects.toThrow(
+      'unknown WASM permission: admin'
+    );
+  });
+});
+
+function rendezvousAnswer(read: ReadDescriptor): Promise<unknown> {
+  const step = read.kind === 'deviceRendezvous' ? read.step : null;
+  switch (step?.kind) {
     case 'open':
-      return {
+      return Promise.resolve({
         kind: 'opened',
         ephemeralPublicKey: '02beef',
         requestPayload: Uint8Array.of(1, 2),
         comparisonValue: '482913',
-      };
+      });
     case 'openFactor':
-      return { kind: 'factor', factorKey: Uint8Array.of(7, 7) };
+      return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
     default:
-      return { kind: 'response', sealedFactor: null, payload: Uint8Array.of(4) };
+      return Promise.resolve({ kind: 'response', sealedFactor: null, payload: Uint8Array.of(4) });
   }
 }
 
@@ -578,81 +569,6 @@ function rendezvousAnswer(step: { kind: string }): unknown {
  */
 const scalarBytes = (): Uint8Array => new Uint8Array(32).fill(5);
 const factorKeyBytes = (): Uint8Array => new Uint8Array(32).fill(6);
-
-describe('EngineHost device reads', () => {
-  it('reads the registry rows through, an unlabelled one included', async () => {
-    const { host } = await deviceReadHost();
-
-    await expect(host.read({ kind: 'devices' })).resolves.toEqual([
-      { ...DEVICE_ROW },
-      { ...DEVICE_ROW, id: '9a2b-uuid', label: null },
-    ]);
-  });
-
-  it('reads the pending rows through with the digits each screen must show', async () => {
-    const { host } = await deviceReadHost();
-
-    await expect(host.read({ kind: 'pendingApprovals' })).resolves.toEqual([PENDING_ROW]);
-  });
-
-  it('names the device key the registration challenge is issued for', async () => {
-    const { host, challenged } = await deviceReadHost();
-
-    await expect(
-      host.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
-    ).resolves.toEqual(Uint8Array.of(9, 9));
-    expect(challenged).toEqual(['ed25519hex']);
-  });
-
-  it('refuses a registration challenge for a key that is not a string', async () => {
-    const { host, challenged } = await deviceReadHost();
-
-    await expect(
-      host.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 42 as unknown as string })
-    ).rejects.toThrow('invalid request field devicePublicKey: number');
-    expect(challenged).toEqual([]);
-  });
-});
-
-/** A wasm module whose fingerprint free function records the key it was handed. */
-function fingerprintWasm(): { wasm: EngineWasm; keys: Uint8Array[] } {
-  const keys: Uint8Array[] = [];
-  const wasm = {
-    EngineHandle: class {
-      start(): Promise<void> {
-        return Promise.resolve();
-      }
-    },
-    identityFingerprint: (identityPublicKey: Uint8Array): string => {
-      keys.push(identityPublicKey);
-      return 'e686 bdd6 b44e 05c4 4db0';
-    },
-  } as unknown as EngineWasm;
-  return { wasm, keys };
-}
-
-describe('EngineHost identity fingerprint', () => {
-  it('hands the key bytes to the wasm export and answers with its string', async () => {
-    const { wasm, keys } = fingerprintWasm();
-    const host = await started(wasm);
-    const identityPublicKey = new Uint8Array(33).fill(2);
-
-    await expect(host.read({ kind: 'identityFingerprint', identityPublicKey })).resolves.toBe(
-      'e686 bdd6 b44e 05c4 4db0'
-    );
-    expect(keys).toEqual([identityPublicKey]);
-  });
-
-  it('refuses a key that is not bytes before the wasm export is reached', async () => {
-    const { wasm, keys } = fingerprintWasm();
-    const host = await started(wasm);
-
-    await expect(
-      host.read({ kind: 'identityFingerprint', identityPublicKey: '02ab' as unknown as Uint8Array })
-    ).rejects.toThrow('invalid request field identityPublicKey: string');
-    expect(keys).toEqual([]);
-  });
-});
 
 describe('EngineHost device rendezvous', () => {
   const approve = (): Extract<DeviceRendezvousStep, { kind: 'approve' }> => ({
@@ -668,8 +584,8 @@ describe('EngineHost device rendezvous', () => {
   // Security rule 7: the realm that holds a copy erases it. The caller keeps
   // and erases its own, and a transferred buffer is already detached.
   it('scrubs the rendezvous scalar, the seal scalar and the factor key it was handed', async () => {
-    const { wasm } = rendezvousWasm();
-    const host = await started(wasm);
+    const { wasm } = readingWasm(rendezvousAnswer);
+    const host = unstarted(wasm);
     const scalar = scalarBytes();
     const sealScalar = scalarBytes();
     const factorKey = factorKeyBytes();
@@ -703,11 +619,16 @@ describe('EngineHost device rendezvous', () => {
     expect(factorScalar).toEqual(zeros(factorScalar.length));
   });
 
-  it('scrubs the step when the wasm export refuses it', async () => {
-    const { wasm } = rendezvousWasm(() => {
-      throw new Error('the rendezvous step does not decode');
-    });
-    const host = await started(wasm);
+  it.each([
+    [
+      'throws',
+      (): Promise<unknown> => {
+        throw new Error('the rendezvous step does not decode');
+      },
+    ],
+    ['rejects', () => Promise.reject(new Error('the rendezvous step does not decode'))],
+  ])('scrubs the step when the wasm call %s', async (_case, value) => {
+    const { host } = await startedReading(value);
     const step = approve();
 
     await expect(host.read({ kind: 'deviceRendezvous', step })).rejects.toThrow(
@@ -717,21 +638,19 @@ describe('EngineHost device rendezvous', () => {
     expect(step.sealScalar).toEqual(new Uint8Array(32));
   });
 
-  it('hands the step to the wasm export and answers with its result', async () => {
-    const { wasm, calls } = rendezvousWasm();
-    const host = await started(wasm);
+  it('hands the step to the wasm and answers with its result', async () => {
+    const { host, reads } = await startedReading(rendezvousAnswer);
 
     await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).resolves.toEqual({
       kind: 'response',
       sealedFactor: null,
       payload: Uint8Array.of(4),
     });
-    expect(calls).toEqual([approve()]);
+    expect(reads).toEqual([['engine', { kind: 'deviceRendezvous', step: approve() }]]);
   });
 
   it('refuses a result kind this build does not know', async () => {
-    const { wasm } = rendezvousWasm(() => ({ kind: 'bogus' }));
-    const host = await started(wasm);
+    const { host } = await startedReading(() => Promise.resolve({ kind: 'bogus' }));
 
     await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).rejects.toThrow(
       'unknown WASM rendezvous result kind: bogus'

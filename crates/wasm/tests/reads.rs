@@ -1,0 +1,468 @@
+//! The read decode and the answer encode at the WASM boundary
+//! (wasm32-unknown-unknown, under wasm-bindgen-test-runner → Node.js): the
+//! shape tsify types for TS, the fail-closed refusals, and the zeroizing path
+//! of the two reads that carry a secret. That every `Read` variant has a serve
+//! arm is checked at compile time: the host's match has no wildcard arm.
+#![cfg(all(target_family = "wasm", target_os = "unknown"))]
+
+use cipherbox_engine::facade::{NodeId, SiweIntent};
+use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
+use cipherbox_wasm::boundary::{
+    decode_command, decode_read, decode_rendezvous_step, decode_write_target, encode_view,
+};
+use cipherbox_wasm::read::{Read, ReadAnswer};
+use cipherbox_wasm::read_unstarted;
+use cipherbox_wasm::rendezvous::DeviceRendezvousStep;
+use js_sys::{Function, Object, Reflect, Uint8Array};
+use tsify::Ts;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen_test::wasm_bindgen_test;
+use zeroize::Zeroizing;
+
+const FRAGMENT: &str = "ZnJhZ21lbnQtdGV4dA";
+
+fn object(fields: &[(&str, JsValue)]) -> JsValue {
+    let out = Object::new();
+    for (key, value) in fields {
+        Reflect::set(&out, &JsValue::from_str(key), value).expect("a plain object takes a field");
+    }
+    out.into()
+}
+
+fn bytes(value: &[u8]) -> JsValue {
+    Uint8Array::from(value).into()
+}
+
+fn text(value: &str) -> JsValue {
+    JsValue::from_str(value)
+}
+
+fn kind(value: &str) -> JsValue {
+    object(&[("kind", text(value))])
+}
+
+fn refused(read: &JsValue) -> bool {
+    decode_read(read).is_err()
+}
+
+fn get(value: &JsValue, key: &str) -> JsValue {
+    Reflect::get(value, &text(key)).unwrap()
+}
+
+/// A `bin` read that carries `value` in one extra field.
+fn bin_with(value: JsValue) -> JsValue {
+    object(&[("kind", text("bin")), ("x", value)])
+}
+
+/// A `deny` step that carries `value` in one extra field.
+fn deny_step_with(value: JsValue) -> JsValue {
+    object(&[
+        ("kind", text("deny")),
+        ("devicePublicKey", text("cd11")),
+        ("requestId", text("r")),
+        ("ephemeralPublicKey", text("02beef")),
+        ("x", value),
+    ])
+}
+
+/// Runs `source` and returns what it returns.
+fn built(source: &str) -> JsValue {
+    Function::new_no_args(source)
+        .call0(&JsValue::NULL)
+        .expect("the builder runs")
+}
+
+/// Splits what a builder returned into its `value` and its `seen` record.
+fn value_and_seen(built: JsValue) -> (JsValue, JsValue) {
+    (get(&built, "value"), get(&built, "seen"))
+}
+
+#[wasm_bindgen_test]
+fn a_read_decodes_from_its_generated_shape() {
+    let snapshot = object(&[("kind", text("snapshot")), ("folder", bytes(&[7; 16]))]);
+    assert!(matches!(
+        decode_read(&snapshot).unwrap(),
+        Read::Snapshot { folder: Some(node) } if node == NodeId([7; 16])
+    ));
+    let root = object(&[("kind", text("sharing")), ("scope", JsValue::NULL)]);
+    assert!(matches!(
+        decode_read(&root).unwrap(),
+        Read::Sharing { scope: None }
+    ));
+    assert!(matches!(decode_read(&kind("bin")).unwrap(), Read::Bin));
+    let siwe = object(&[("kind", text("siweChallenge")), ("intent", text("link"))]);
+    assert!(matches!(
+        decode_read(&siwe).unwrap(),
+        Read::SiweChallenge {
+            intent: SiweIntent::Link
+        }
+    ));
+    let version = object(&[
+        ("kind", text("downloadVersion")),
+        ("node", bytes(&[3; 16])),
+        ("contentCid", bytes(&[1, 2, 3])),
+    ]);
+    match decode_read(&version).unwrap() {
+        Read::DownloadVersion { node, content_cid } => {
+            assert_eq!(node, NodeId([3; 16]));
+            assert_eq!(content_cid, vec![1, 2, 3]);
+        }
+        _ => panic!("a version download decodes as one"),
+    }
+}
+
+#[wasm_bindgen_test]
+fn an_unknown_kind_or_field_is_refused() {
+    assert!(refused(&kind("noSuchRead")));
+    assert!(refused(&JsValue::NULL));
+    assert!(refused(&object(&[
+        ("kind", text("bin")),
+        ("folder", JsValue::NULL)
+    ])));
+    assert!(refused(&object(&[
+        ("kind", text("download")),
+        ("node", bytes(&[1; 16])),
+        ("extra", text("x")),
+    ])));
+}
+
+#[wasm_bindgen_test]
+fn a_field_of_the_wrong_type_is_refused() {
+    let short = object(&[("kind", text("download")), ("node", bytes(&[1; 15]))]);
+    assert!(refused(&short));
+    let named = object(&[
+        ("kind", text("fileVersions")),
+        ("node", text("sixteen-chars-id")),
+    ]);
+    assert!(refused(&named));
+    let missing = kind("snapshot");
+    assert!(refused(&missing));
+    let key = object(&[
+        ("kind", text("deviceRegistrationChallenge")),
+        ("devicePublicKey", JsValue::from_f64(7.0)),
+    ]);
+    assert!(refused(&key));
+    let pool = object(&[
+        ("kind", text("siweChallenge")),
+        ("intent", text("nonsense")),
+    ]);
+    assert!(refused(&pool));
+}
+
+#[wasm_bindgen_test]
+fn an_invite_fragment_reaches_its_zeroizing_slot_verbatim() {
+    let preview = object(&[
+        ("kind", text("invitePreview")),
+        ("fragment", text(FRAGMENT)),
+    ]);
+    match decode_read(&preview).unwrap() {
+        Read::InvitePreview { fragment } => assert_eq!(fragment.as_str(), FRAGMENT),
+        _ => panic!("a preview decodes as one"),
+    }
+}
+
+#[wasm_bindgen_test]
+fn an_invite_fragment_past_the_bound_or_not_text_is_refused() {
+    let long = "x".repeat(MAX_FRAGMENT_TEXT_LEN + 1);
+    assert!(refused(&object(&[
+        ("kind", text("invitePreview")),
+        ("fragment", text(&long)),
+    ])));
+    assert!(refused(&object(&[
+        ("kind", text("invitePreview")),
+        ("fragment", JsValue::from_f64(7.0)),
+    ])));
+}
+
+#[wasm_bindgen_test]
+fn a_rendezvous_read_takes_its_step_through_the_step_decode() {
+    let step = object(&[
+        ("kind", text("open")),
+        ("devicePublicKey", text("cd11")),
+        ("scalar", bytes(&[5; 32])),
+    ]);
+    let read = object(&[("kind", text("deviceRendezvous")), ("step", step.clone())]);
+    match decode_read(&read).unwrap() {
+        Read::DeviceRendezvous {
+            step: DeviceRendezvousStep::Open { scalar, .. },
+        } => assert_eq!(scalar.as_slice(), &[5; 32]),
+        _ => panic!("a rendezvous read decodes its open step"),
+    }
+    let beside = object(&[
+        ("kind", text("deviceRendezvous")),
+        ("step", step),
+        ("extra", text("x")),
+    ]);
+    assert!(refused(&beside));
+    assert!(refused(&kind("deviceRendezvous")));
+}
+
+#[wasm_bindgen_test]
+fn an_answer_crosses_under_the_kind_of_its_read() {
+    let download = encode_view(&ReadAnswer::Download(Zeroizing::new(vec![1, 2, 3]))).unwrap();
+    assert_eq!(get(&download, "kind"), text("download"));
+    let value = get(&download, "value");
+    let value = value
+        .dyn_into::<Uint8Array>()
+        .expect("a byte answer is a Uint8Array");
+    assert_eq!(value.to_vec(), vec![1, 2, 3]);
+
+    let nonce = encode_view(&ReadAnswer::SiweChallenge("n0nce".into())).unwrap();
+    assert_eq!(get(&nonce, "kind"), text("siweChallenge"));
+    assert_eq!(get(&nonce, "value"), text("n0nce"));
+}
+
+/// A SIWE nonce is minted for the pool the intent names, and for no other
+/// spelling.
+#[wasm_bindgen_test]
+fn a_siwe_read_names_its_pool_and_refuses_any_other() {
+    let siwe = |intent: JsValue| object(&[("kind", text("siweChallenge")), ("intent", intent)]);
+    assert!(matches!(
+        decode_read(&siwe(text("login"))).unwrap(),
+        Read::SiweChallenge {
+            intent: SiweIntent::Login
+        }
+    ));
+    for intent in [
+        text("Login"),
+        text("admin"),
+        JsValue::from_f64(0.0),
+        JsValue::UNDEFINED,
+    ] {
+        assert!(refused(&siwe(intent)));
+    }
+}
+
+/// Builds `(value, seen)`: `value` nests one object `depth` levels deep whose
+/// `leaf` getter sets `seen.read` when anything reads it.
+fn watched(depth: u32) -> (JsValue, JsValue) {
+    value_and_seen(
+        Function::new_with_args(
+            "depth",
+            "const seen = { read: false };
+         let value = { get leaf() { seen.read = true; return 1; } };
+         for (let i = 0; i < depth; i++) value = { inner: value };
+         return { value, seen };",
+        )
+        .call1(&JsValue::NULL, &JsValue::from(depth))
+        .expect("the builder runs"),
+    )
+}
+
+fn was_read(seen: &JsValue) -> bool {
+    get(seen, "read").is_truthy()
+}
+
+/// A port payload is untrusted, so a deep field is refused before the decode
+/// walks it, as a command is.
+#[wasm_bindgen_test]
+fn a_read_that_nests_too_deep_is_refused_unwalked() {
+    let (value, seen) = watched(16);
+    assert!(refused(&bin_with(value)));
+    assert!(!was_read(&seen));
+}
+
+#[wasm_bindgen_test]
+fn a_rendezvous_step_that_nests_too_deep_is_refused_unwalked() {
+    let (value, seen) = watched(16);
+    assert!(decode_rendezvous_step(&deny_step_with(value)).is_err());
+    assert!(!was_read(&seen));
+}
+
+#[wasm_bindgen_test]
+fn a_cyclic_read_is_refused() {
+    let cycle = Object::new();
+    Reflect::set(&cycle, &text("self"), &cycle).unwrap();
+    assert!(refused(&bin_with(cycle.into())));
+}
+
+#[wasm_bindgen_test]
+async fn a_read_that_needs_a_session_is_refused_before_one() {
+    let refusal = JsFuture::from(read_unstarted(Ts::new_unchecked(kind("bin"))))
+        .await
+        .expect_err("no session serves the bin");
+    assert_eq!(get(&refusal, "code"), text("notStarted"));
+}
+
+async fn fingerprint(key: &[u8]) -> Result<JsValue, String> {
+    let read = object(&[
+        ("kind", text("identityFingerprint")),
+        ("identityPublicKey", bytes(key)),
+    ]);
+    JsFuture::from(read_unstarted(Ts::new_unchecked(read)))
+        .await
+        .map_err(|error| {
+            String::from(
+                error
+                    .dyn_into::<js_sys::Error>()
+                    .expect("a refusal is an Error")
+                    .message(),
+            )
+        })
+}
+
+/// The core KAT's primary vector (`contact/fingerprint.json`).
+const IDENTITY_PK: &str = "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27";
+
+#[wasm_bindgen_test]
+async fn a_fingerprint_read_needs_no_session() {
+    let key: Vec<u8> = (0..IDENTITY_PK.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&IDENTITY_PK[at..at + 2], 16).unwrap())
+        .collect();
+    let answer = fingerprint(&key).await.expect("a session-free read");
+    assert_eq!(get(&answer, "kind"), text("identityFingerprint"));
+    assert_eq!(get(&answer, "value"), text("e686 bdd6 b44e 05c4 4db0"));
+    assert_eq!(
+        fingerprint(&[2; 32]).await.unwrap_err(),
+        "invalid identity public key"
+    );
+}
+
+/// Builds `(value, seen)`: `value` is one object with `keys` keys whose last
+/// key is a getter that sets `seen.read` when anything reads it.
+fn wide(keys: u32) -> (JsValue, JsValue) {
+    value_and_seen(
+        Function::new_with_args(
+            "keys",
+            "const seen = { read: false };
+         const value = {};
+         for (let i = 0; i < keys - 1; i++) value['k' + i] = i;
+         Object.defineProperty(value, 'last', {
+           enumerable: true,
+           get() { seen.read = true; return 1; },
+         });
+         return { value, seen };",
+        )
+        .call1(&JsValue::NULL, &JsValue::from(keys))
+        .expect("the builder runs"),
+    )
+}
+
+/// Builds `(value, seen)`: a graph 4 levels deep where each level holds 10
+/// references to one shared object below it, so a walk visits 10^4 values
+/// in a value a structured clone carries as 4 objects with 40 references.
+/// The top object's last key is a getter that sets `seen.read`.
+fn shared() -> (JsValue, JsValue) {
+    value_and_seen(built(
+        "const seen = { read: false };
+         let below = 0;
+         for (let level = 0; level < 4; level++) {
+           const next = {};
+           for (let i = 0; i < 10; i++) next['k' + i] = below;
+           below = next;
+         }
+         Object.defineProperty(below, 'last', {
+           enumerable: true,
+           get() { seen.read = true; return 1; },
+         });
+         return { value: below, seen };",
+    ))
+}
+
+/// One object past the key cap is refused before any of its values is read.
+#[wasm_bindgen_test]
+fn a_read_with_too_many_keys_is_refused_unread() {
+    let (value, seen) = wide(17);
+    assert!(refused(&bin_with(value)));
+    assert!(!was_read(&seen));
+}
+
+/// A shared graph passes every depth and key check, so the visit cap stops it
+/// before the walk reaches the top object's last key.
+#[wasm_bindgen_test]
+fn a_read_past_the_visit_cap_is_refused_unread() {
+    let (value, seen) = shared();
+    assert!(refused(&bin_with(value)));
+    assert!(!was_read(&seen));
+}
+
+#[wasm_bindgen_test]
+fn a_cyclic_write_target_is_refused() {
+    let target = object(&[("node", bytes(&[1; 16]))]);
+    Reflect::set(&target, &text("self"), &target).unwrap();
+    assert!(decode_write_target(target).is_err());
+}
+
+/// A `Map` has no own keys for the caps to count, and serde reads every
+/// entry, so the walk refuses it.
+#[wasm_bindgen_test]
+fn a_read_that_holds_a_self_containing_map_is_refused() {
+    let map = built("const m = new Map(); m.set('a', m); return m;");
+    assert!(refused(&bin_with(map)));
+}
+
+/// The untagged decode would read this `Map` as a valid version target, so
+/// the refusal comes from the walk alone.
+#[wasm_bindgen_test]
+fn a_write_target_that_is_a_map_is_refused() {
+    let map = built("return new Map([['node', new Uint8Array(16)]]);");
+    assert!(decode_write_target(map).is_err());
+}
+
+/// A `Set` or a `Map` field in a step is refused before serde reads it. Serde
+/// refuses the `Set` itself, so only the `Map` needs the walk.
+#[wasm_bindgen_test]
+fn a_rendezvous_step_with_a_set_or_map_field_is_refused() {
+    for field in [
+        "const s = new Set(); s.add(s); return s;",
+        "const m = new Map(); m.set('a', m); return m;",
+    ] {
+        assert!(decode_rendezvous_step(&deny_step_with(built(field))).is_err());
+    }
+}
+
+/// A structured clone keeps `__proto__` as an own key. A set of it on the copy
+/// would drop the field and let the decode accept a value it must refuse.
+#[wasm_bindgen_test]
+fn an_own_proto_key_is_refused() {
+    let read = built(r#"return structuredClone(JSON.parse('{"kind":"bin","__proto__":{}}'));"#);
+    assert!(refused(&read));
+    let read = built(r#"return structuredClone(JSON.parse('{"kind":"bin","__proto__":null}'));"#);
+    assert!(refused(&read));
+    let target = built(
+        r#"const t = JSON.parse('{"__proto__":{}}');
+           t.node = new Uint8Array(16);
+           return structuredClone(t);"#,
+    );
+    assert!(decode_write_target(target).is_err());
+    let step = built(
+        r#"const s = JSON.parse('{"__proto__":{}}');
+           s.kind = 'deny';
+           s.devicePublicKey = 'cd11';
+           s.requestId = 'r';
+           s.ephemeralPublicKey = '02beef';
+           return structuredClone(s);"#,
+    );
+    assert!(decode_rendezvous_step(&step).is_err());
+}
+
+/// An own `__proto__` key with a primitive value, which leaves the prototype
+/// as it is, is refused in each decode that takes a secret: the invite
+/// fragment of a read and of a claim, the identity token of a registration,
+/// and the provider bearer of a settings save.
+#[wasm_bindgen_test]
+fn an_own_proto_key_beside_a_secret_is_refused() {
+    let preview = built(
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"invitePreview","fragment":"abc","__proto__":1}'));"#,
+    );
+    assert!(refused(&preview));
+    for command in [
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"claimInviteLink","fragment":"abc","name":"","__proto__":1}'));"#,
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"registerDevice","publicKey":"ab","signature":"cd",' +
+             '"identityToken":"aGVhZGVy.cGF5bG9hZA.c2ln","label":"Laptop","__proto__":1}'));"#,
+        r#"const byo = JSON.parse(
+             '{"endpoint":"https://kubo.example","kind":"kubo","__proto__":1}');
+           byo.accessToken = new TextEncoder().encode('s3cret-token').buffer;
+           return structuredClone({
+             kind: 'saveVaultSettings',
+             settings: { pinMode: 'dual', byo, keepLatestVersions: 3, binRetentionDays: 30 },
+           });"#,
+    ] {
+        assert!(decode_command(&built(command)).is_err());
+    }
+}

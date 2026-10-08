@@ -138,7 +138,7 @@ test.describe('engine worker host', () => {
     expect(outcome.ok).toBe(true);
   });
 
-  test('the identity fingerprint export matches the core KAT', async ({ page }) => {
+  test('the identity fingerprint read matches the core KAT', async ({ page }) => {
     const outcome = await runBoundary(page, 'identityFingerprint');
     expect(outcome.error ?? '', 'identity fingerprint failure').toBe('');
     expect(outcome.ok).toBe(true);

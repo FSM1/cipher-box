@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REVOKE_AFTER_MS } from '../lib/saveBlob';
 import { EngineProvider } from '../providers/EngineProvider';
+import { fakeRead } from '../test/readFakes';
 import { trackSaves } from '../test/saveSpy';
 import { useFileDownload, type SaveOutcome, type SaveRequest } from './useFileDownload';
 
@@ -77,9 +78,8 @@ function fakeEngine(
   return {
     facade: {
       subscribe: () => () => undefined,
-      snapshot: () => new Promise<never>(() => undefined),
+      read: fakeRead({ snapshot: () => new Promise<never>(() => undefined), download }),
       setFocus: () => Promise.resolve(),
-      download: vi.fn(download),
     },
     reportFocus: () => undefined,
     dispose: () => Promise.resolve(),

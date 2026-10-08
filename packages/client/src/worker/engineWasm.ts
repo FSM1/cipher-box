@@ -13,7 +13,4 @@ export type WasmNodeId = Glue.NodeId;
 export type WasmEngineHandle = Glue.EngineHandle;
 
 /** The bindings of the wasm-bindgen module the worker uses. */
-export type EngineWasm = Pick<
-  typeof Glue,
-  'EngineHandle' | 'NodeId' | 'deviceRendezvous' | 'identityFingerprint'
->;
+export type EngineWasm = Pick<typeof Glue, 'EngineHandle' | 'NodeId' | 'readUnstarted'>;

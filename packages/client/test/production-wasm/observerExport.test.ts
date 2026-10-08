@@ -13,7 +13,7 @@ describe('the production engine module', () => {
   it('carries the engine exports and no record read', async () => {
     const glue = (await import(glueUrl.href)) as Record<string, unknown>;
 
-    expect(typeof glue.identityFingerprint).toBe('function');
+    expect(typeof glue.readUnstarted).toBe('function');
     expect(glue).not.toHaveProperty('readIpnsRecord');
     expect(glue).not.toHaveProperty('IpnsRecordReading');
     expect(glue).not.toHaveProperty('sampleEvents');

@@ -146,7 +146,7 @@ export function useFileDownload(): FileDownload {
       }
 
       try {
-        const bytes = await client.facade.download(node);
+        const bytes = await client.facade.read({ kind: 'download', node });
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveBlobToDisk(url, name);
         void deferRelease(() => URL.revokeObjectURL(url));

@@ -142,7 +142,10 @@ export function DeviceApprovalWait({ onUseRecoveryPhrase, onCancel }: DeviceAppr
       const cut = crypto.getRandomValues(new Uint8Array(32));
       scalar.current = cut;
       const devicePublicKey = await identity.publicKeyHex();
-      const started = await facade.deviceRendezvous({ kind: 'open', devicePublicKey, scalar: cut });
+      const started = await facade.read({
+        kind: 'deviceRendezvous',
+        step: { kind: 'open', devicePublicKey, scalar: cut },
+      });
       if (started.kind !== 'opened') throw new Error(UNEXPECTED);
       const signature = await identity.sign(Uint8Array.from(started.requestPayload));
       const { requestId, expiresAt } = await opened.open(
@@ -187,14 +190,17 @@ export function DeviceApprovalWait({ onUseRecoveryPhrase, onCancel }: DeviceAppr
       // Fail closed: opening the seal with anything but the scalar this
       // rendezvous was cut with would hand the engine a factor from nowhere.
       if (cut === null) throw new Error('this request no longer holds its half of the seal');
-      const opened = await facade.deviceRendezvous({
-        kind: 'openFactor',
-        sealedFactor: state.sealedFactor,
-        requestId: rendezvous.requestId,
-        requesterDevicePublicKey: rendezvous.devicePublicKey,
-        responderDevicePublicKey: state.responderDevicePublicKey,
-        responseSignature: state.responseSignature,
-        scalar: cut,
+      const opened = await facade.read({
+        kind: 'deviceRendezvous',
+        step: {
+          kind: 'openFactor',
+          sealedFactor: state.sealedFactor,
+          requestId: rendezvous.requestId,
+          requesterDevicePublicKey: rendezvous.devicePublicKey,
+          responderDevicePublicKey: state.responderDevicePublicKey,
+          responseSignature: state.responseSignature,
+          scalar: cut,
+        },
       });
       wipe();
       if (opened.kind !== 'factor') throw new Error(UNEXPECTED);

@@ -139,24 +139,26 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
     await facade.create(root, 'docs', 'folder');
     await facade.create(root, 'pending.txt', 'file');
 
-    const view = await facade.snapshot(root);
+    const view = await facade.read({ kind: 'snapshot', folder: root });
     const docs = view.children.find((child) => child.name === 'docs');
     const file = view.children.find((child) => child.name === 'pending.txt');
     if (!docs || !file) throw new Error('created children missing from the root snapshot');
 
-    const nested = await facade.snapshot(docs.id);
-    const rootless = await facade.snapshot(null);
+    const nested = await facade.read({ kind: 'snapshot', folder: docs.id });
+    const rootless = await facade.read({ kind: 'snapshot', folder: null });
 
     let unknownError = '';
     let unknownCode = '';
-    await facade.snapshot(new Uint8Array(16).fill(0x5a)).catch((error: unknown) => {
-      unknownError = message(error);
-      unknownCode = code(error);
-    });
+    await facade
+      .read({ kind: 'snapshot', folder: new Uint8Array(16).fill(0x5a) })
+      .catch((error: unknown) => {
+        unknownError = message(error);
+        unknownCode = code(error);
+      });
 
     let downloadError = '';
     let downloadCode = '';
-    await facade.download(file.id).catch((error: unknown) => {
+    await facade.read({ kind: 'download', node: file.id }).catch((error: unknown) => {
       downloadError = message(error);
       downloadCode = code(error);
     });

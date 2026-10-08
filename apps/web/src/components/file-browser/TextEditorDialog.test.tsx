@@ -2,6 +2,7 @@ import type { EngineClient } from '@cipherbox/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
+import { fakeRead } from '../../test/readFakes';
 import type { ListingRow } from '../../vault/listing';
 import { TextEditorDialog } from './TextEditorDialog';
 
@@ -35,9 +36,11 @@ function fakeClient() {
   const client = {
     facade: {
       subscribe: () => () => undefined,
-      snapshot: () => new Promise(() => undefined),
+      read: fakeRead({
+        snapshot: () => new Promise(() => undefined),
+        download: () => Promise.resolve(new TextEncoder().encode(LOADED).buffer),
+      }),
       setFocus: () => Promise.resolve(),
-      download: () => Promise.resolve(new TextEncoder().encode(LOADED)),
       beginWrite: (target: { node: Uint8Array; expectedVersion?: Uint8Array }) => {
         opened.push(target);
         return Promise.resolve(1n);

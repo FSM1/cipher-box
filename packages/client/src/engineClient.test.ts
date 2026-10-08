@@ -155,10 +155,9 @@ describe('EngineClient leadership + transport swap', () => {
 
     // The rendezvous is what brings the worker up on a leadership with no session.
     const rendezvous = idle.facade
-      .deviceRendezvous({
-        kind: 'open',
-        devicePublicKey: 'ed25519hex',
-        scalar: new Uint8Array(32).fill(5),
+      .read({
+        kind: 'deviceRendezvous',
+        step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar: new Uint8Array(32).fill(5) },
       })
       .catch((error: unknown) => error);
     await tick();
@@ -186,10 +185,9 @@ describe('EngineClient leadership + transport swap', () => {
 
     // ADR 0009: the requester runs the exchange before it can reconstruct a key,
     // so this read is what brings the worker up on a leadership with no session.
-    void idle.facade.deviceRendezvous({
-      kind: 'open',
-      devicePublicKey: 'ed25519hex',
-      scalar: new Uint8Array(32).fill(5),
+    void idle.facade.read({
+      kind: 'deviceRendezvous',
+      step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar: new Uint8Array(32).fill(5) },
     });
     await tick();
 
@@ -211,7 +209,7 @@ describe('EngineClient leadership + transport swap', () => {
 
     // The engine's own not-started code: nothing below the transport answered,
     // and no worker was spawned to answer.
-    await expect(idle.facade.bin()).rejects.toMatchObject({ code: 'notStarted' });
+    await expect(idle.facade.read({ kind: 'bin' })).rejects.toMatchObject({ code: 'notStarted' });
     expect(workers.length).toBe(0);
 
     await idle.dispose();

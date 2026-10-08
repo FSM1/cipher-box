@@ -48,6 +48,8 @@ import type {
   PreviewEntry,
   QueueHold,
   QuotaView,
+  Read,
+  ReadAnswer,
   ReceivedShareRow,
   ReclaimStall,
   ReclaimStallReason,
@@ -356,78 +358,25 @@ export type EventDescriptor = Event;
 /** One prior version of a file: the engine `VersionEntry`. */
 export type VersionEntryDescriptor = VersionEntry;
 
-/**
- * One read intent, as data. Every read the engine serves is one member of this
- * union, so a new read costs one member and one [`ReadResults`] entry rather
- * than a hand-threaded method at each layer of the rail.
- */
-export type ReadDescriptor =
-  | { kind: 'snapshot'; folder: Uint8Array | null }
-  | { kind: 'sharing'; scope: Uint8Array | null }
-  | { kind: 'receivedShares' }
-  | { kind: 'invitePreview'; fragment: string }
-  | { kind: 'bin' }
-  | { kind: 'vaultStorage' }
-  | { kind: 'authMethods' }
-  | { kind: 'devices' }
-  | { kind: 'deviceRegistrationChallenge'; devicePublicKey: string }
-  | { kind: 'pendingApprovals' }
-  | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
-  | { kind: 'identityFingerprint'; identityPublicKey: Uint8Array }
-  | { kind: 'siweChallenge'; intent: SiweIntent }
-  | { kind: 'download'; node: Uint8Array }
-  | { kind: 'fileVersions'; node: Uint8Array }
-  | { kind: 'downloadVersion'; node: Uint8Array; contentCid: Uint8Array };
+/** One read intent, as data: the engine `Read`. A new read is one variant there. */
+export type ReadDescriptor = Read;
 
-/** What each read kind answers with. */
-export interface ReadResults {
-  snapshot: SnapshotDescriptor;
-  sharing: SharingDescriptor;
-  receivedShares: ReceivedShareDescriptor[];
-  invitePreview: InvitePreviewDescriptor;
-  bin: BinDescriptor;
-  vaultStorage: VaultStorageDescriptor;
-  authMethods: AuthMethodDescriptor[];
-  devices: RegisteredDeviceDescriptor[];
-  deviceRegistrationChallenge: Uint8Array;
-  pendingApprovals: PendingApprovalDescriptor[];
-  deviceRendezvous: DeviceRendezvousResult;
-  identityFingerprint: string;
-  siweChallenge: string;
-  download: ArrayBuffer;
-  fileVersions: VersionEntryDescriptor[];
-  downloadVersion: ArrayBuffer;
-}
+/** What one read answered, under the read's `kind`: the engine `ReadAnswer`. */
+export type { ReadAnswer };
+
+/**
+ * A byte answer crosses the worker boundary as an `ArrayBuffer`, so every hop
+ * can transfer it rather than clone the plaintext.
+ */
+type Crossed<T> = T extends Uint8Array ? ArrayBuffer : T;
 
 /** The answer a given read descriptor resolves with. */
-export type ReadResult<D extends ReadDescriptor> = ReadResults[D['kind']];
+export type ReadResult<D extends ReadDescriptor> = Crossed<
+  Extract<ReadAnswer, { kind: D['kind'] }>['value']
+>;
 
 /** Any read answer, for the layers that carry one without naming its kind. */
-export type ReadResultValue = ReadResults[ReadDescriptor['kind']];
-
-/**
- * Every read kind this build serves. A relay reads a descriptor off an
- * untrusted port, so it refuses an unknown kind here rather than passing it
- * down the rail.
- */
-export const READ_KINDS: ReadonlySet<string> = new Set<ReadDescriptor['kind']>([
-  'snapshot',
-  'sharing',
-  'receivedShares',
-  'invitePreview',
-  'bin',
-  'vaultStorage',
-  'authMethods',
-  'devices',
-  'deviceRegistrationChallenge',
-  'pendingApprovals',
-  'deviceRendezvous',
-  'identityFingerprint',
-  'siweChallenge',
-  'download',
-  'fileVersions',
-  'downloadVersion',
-]);
+export type ReadResultValue = Crossed<ReadAnswer['value']>;
 
 /**
  * The secret buffers a read descriptor hands over for good, for the transfer
@@ -459,7 +408,7 @@ export type WorkerMessage =
   | { type: 'ready' }
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
-   * the matching [`ReadResults`] entry for a `read`, the outcome for `command`,
+   * the matching [`ReadResult`] for a `read`, the outcome for `command`,
    * the write handle for `beginWrite`, the durable op id for `commitWrite`, the
    * `OpenedStream` for `openContentStream`, and the plaintext `ArrayBuffer`
    * (transferred, not copied) for `readStream`.

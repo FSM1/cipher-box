@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installIntrospection } from './introspection';
+import { fakeRead } from '../test/readFakes';
 import { fakeEngine, flush, ROOT_ID, view } from './testFakes';
 
 describe('installIntrospection', () => {
@@ -75,7 +76,9 @@ describe('installIntrospection', () => {
     it('reads a node named in hex and hands its plaintext back the same way', async () => {
       const engine = fakeEngine();
       const download = vi.fn().mockResolvedValue(Uint8Array.of(0xde, 0xad, 0xbe, 0xef).buffer);
-      (engine.client.facade as unknown as { download: unknown }).download = download;
+      (engine.client.facade as unknown as { read: unknown }).read = fakeRead({
+        download: ({ node }) => download(node),
+      });
       installIntrospection(engine.client);
 
       const plaintext = await window.__CIPHERBOX_ENGINE__?.download('0102030405060708');
@@ -87,7 +90,9 @@ describe('installIntrospection', () => {
     it.each(['010', 'zz'])('refuses %s as a node id, before the engine is asked', async (bad) => {
       const engine = fakeEngine();
       const download = vi.fn();
-      (engine.client.facade as unknown as { download: unknown }).download = download;
+      (engine.client.facade as unknown as { read: unknown }).read = fakeRead({
+        download: ({ node }) => download(node),
+      });
       installIntrospection(engine.client);
 
       await expect(window.__CIPHERBOX_ENGINE__?.download(bad)).rejects.toThrow(TypeError);

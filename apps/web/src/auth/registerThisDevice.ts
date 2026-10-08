@@ -29,8 +29,11 @@ export async function registerThisDevice(
   const identityToken = session.identityToken();
   if (identityToken === null) throw new Error(SIGN_IN_TO_SAVE);
   const publicKey = await identity.publicKeyHex();
-  const challenge = await facade.deviceRegistrationChallenge(publicKey);
-  const signature = await identity.sign(Uint8Array.from(challenge));
+  const challenge = await facade.read({
+    kind: 'deviceRegistrationChallenge',
+    devicePublicKey: publicKey,
+  });
+  const signature = await identity.sign(new Uint8Array(challenge));
   try {
     await facade.registerDevice(publicKey, signature, identityToken, null);
   } catch (refusal) {

@@ -9,10 +9,9 @@ import { commandTransfer, wipeRendezvousSecrets } from './protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  ReadAnswer,
   ReadDescriptor,
   ReadResult,
   ReadResultValue,
@@ -24,9 +23,7 @@ import type { EngineWasm, WasmEngineHandle } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
-  bytes,
   count,
-  fragment,
   minted,
   nodeId,
   readAuthMethods,
@@ -62,7 +59,7 @@ export interface EngineHostLike {
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
-  /** Serves one read, resolving with what that kind answers ([`ReadResults`]). */
+  /** Serves one read, resolving with what that kind answers ([`ReadResult`]). */
   read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>>;
   /**
    * Opens a read stream pinned to the node's current head content version,
@@ -85,22 +82,26 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /**
- * Exhaustiveness bound: adding a read kind without a handler fails the build,
- * and an off-union kind is refused, not run.
+ * The check each answer whose enum values this build must know passes before
+ * it leaves the worker. An answer with no enum value needs none.
  */
-function unknownRead(read: never): Error {
-  return new Error(`unknown read kind: ${String((read as ReadDescriptor).kind)}`);
-}
+const ANSWER_CHECKS: {
+  [K in ReadAnswer['kind']]?: (value: Extract<ReadAnswer, { kind: K }>['value']) => unknown;
+} = {
+  snapshot: readSnapshot,
+  sharing: readSharing,
+  receivedShares: readReceivedShares,
+  invitePreview: readInvitePreview,
+  bin: readBin,
+  vaultStorage: readVaultStorage,
+  authMethods: readAuthMethods,
+  deviceRendezvous: readRendezvous,
+};
 
-/** Runs one rendezvous step against the pure wasm function, which decodes it. */
-function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRendezvousResult {
-  try {
-    return readRendezvous(wasm.deviceRendezvous(step));
-  } finally {
-    // This realm's copies are its own to erase (security rule 7). The caller
-    // keeps and erases its own, and a transferred buffer is already detached.
-    wipeRendezvousSecrets(step);
-  }
+/** The answer's value, checked, with plaintext bytes as a transferable buffer. */
+function crossed(answer: ReadAnswer): ReadResultValue {
+  (ANSWER_CHECKS[answer.kind] as ((value: unknown) => unknown) | undefined)?.(answer.value);
+  return answer.value instanceof Uint8Array ? ownedBuffer(answer.value) : answer.value;
 }
 
 /** A refusal carrying one of the engine's own stable codes, as the engine does. */
@@ -219,68 +220,19 @@ export class EngineHost implements EngineHostLike {
     await this.handle.abortWrite(minted(handle, 'handle'));
   }
 
-  /** The one place a read kind maps onto the wasm handle's own read methods. */
+  /**
+   * Hands the read to the engine, or before a start to the reads that need no
+   * session. The engine decodes the descriptor before the call returns, so
+   * this frame, the last owner of what it carried (AGENTS.md 7), scrubs it then.
+   */
   async read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
-    return (await this.serveRead(read)) as ReadResult<D>;
-  }
-
-  private async serveRead(read: ReadDescriptor): Promise<ReadResultValue> {
-    switch (read.kind) {
-      case 'snapshot':
-        return readSnapshot(
-          await this.handle.snapshot(
-            read.folder === null ? undefined : nodeId(this.wasm, read.folder, 'folder')
-          )
-        );
-      case 'sharing':
-        return readSharing(
-          await this.handle.sharing(
-            read.scope === null ? undefined : nodeId(this.wasm, read.scope, 'scope')
-          )
-        );
-      case 'receivedShares':
-        return readReceivedShares(await this.handle.receivedShares());
-      case 'invitePreview':
-        return readInvitePreview(
-          await this.handle.previewInviteLink(fragment(read.fragment, 'fragment'))
-        );
-      case 'bin':
-        return readBin(await this.handle.bin());
-      case 'vaultStorage':
-        return readVaultStorage(await this.handle.vaultStorage());
-      case 'authMethods':
-        return readAuthMethods(await this.handle.authMethods());
-      case 'devices':
-        return this.handle.devices();
-      case 'deviceRegistrationChallenge':
-        return this.handle.deviceRegistrationChallenge(
-          text(read.devicePublicKey, 'devicePublicKey')
-        );
-      case 'pendingApprovals':
-        return this.handle.pendingApprovals();
-      case 'deviceRendezvous':
-        return runRendezvous(this.wasm, read.step);
-      case 'identityFingerprint':
-        return this.wasm.identityFingerprint(bytes(read.identityPublicKey, 'identityPublicKey'));
-      case 'siweChallenge':
-        return this.handle.siweChallenge(read.intent);
-      case 'download':
-        return ownedBuffer(await this.handle.download(nodeId(this.wasm, read.node, 'node')));
-      case 'fileVersions':
-        return this.handle.fileVersions(nodeId(this.wasm, read.node, 'node'));
-      case 'downloadVersion':
-        return ownedBuffer(
-          await this.handle.downloadVersion(
-            nodeId(this.wasm, read.node, 'node'),
-            bytes(read.contentCid, 'contentCid')
-          )
-        );
-      default:
-        // A descriptor reaches this realm by transfer, so this frame is the
-        // last owner of whatever it carried (AGENTS.md 7).
-        wipeRendezvousSecrets((read as { step?: unknown }).step);
-        throw unknownRead(read);
+    let answer: Promise<ReadAnswer>;
+    try {
+      answer = this.engine ? this.engine.handle.read(read) : this.wasm.readUnstarted(read);
+    } finally {
+      wipeRendezvousSecrets((read as { step?: unknown }).step);
     }
+    return crossed(await answer) as ReadResult<D>;
   }
 
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {

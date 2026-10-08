@@ -194,7 +194,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     inFlight = id;
     const seq = stalenessSeq;
     void client.facade
-      .snapshot(focus ?? null)
+      .read({ kind: 'snapshot', folder: focus ?? null })
       .then(
         (view) => {
           if (id !== generation) return;

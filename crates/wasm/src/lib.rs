@@ -38,7 +38,13 @@ mod seams_bridge;
 mod host;
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use host::read_unstarted;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub mod boundary;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub mod read;
 
 // Test-only: the production artifact never pulls the engine test kit or these
 // bindings.
@@ -103,15 +109,6 @@ impl OpenedStream {
     }
 }
 
-/// The short fingerprint of a 33-byte compressed identity key, the value both
-/// hosts show beside a grantee name (ADR 0027 D7). Throws on bytes that are
-/// not an identity key.
-#[wasm_bindgen(js_name = identityFingerprint)]
-pub fn identity_fingerprint(identity_public_key: &[u8]) -> Result<String, JsError> {
-    cipherbox_engine::fingerprint_identity_key(identity_public_key)
-        .ok_or_else(|| JsError::new("invalid identity public key"))
-}
-
 /// A signed IPNS record's sequence and EOL, verified under the name it was
 /// fetched for.
 #[cfg(feature = "observer")]
@@ -164,10 +161,7 @@ pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordRead
 pub mod rendezvous {
     use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-    use tsify::Ts;
     use zeroize::Zeroizing;
-
-    use crate::boundary::{decode_rendezvous_step, encode_view};
 
     /// A scalar or a factor key the host handed in.
     pub type Secret = Zeroizing<Vec<u8>>;
@@ -319,13 +313,8 @@ pub mod rendezvous {
     }
 
     /// Runs one rendezvous step. Throws the check name of a malformed field or
-    /// a refused answer, and a refusal for a step that does not decode.
-    #[wasm_bindgen(js_name = deviceRendezvous, unchecked_return_type = "DeviceRendezvousResult")]
-    pub fn device_rendezvous(step: Ts<DeviceRendezvousStep>) -> Result<JsValue, JsError> {
-        encode_view(&run(decode_rendezvous_step(&step.js_value())?)?)
-    }
-
-    fn run(step: DeviceRendezvousStep) -> Result<DeviceRendezvousResult, JsError> {
+    /// a refused answer.
+    pub(crate) fn run(step: DeviceRendezvousStep) -> Result<DeviceRendezvousResult, JsError> {
         match step {
             DeviceRendezvousStep::Open {
                 device_public_key,

@@ -1,5 +1,5 @@
 /**
- * The engine as the adapter sees it: an event stream plus a `snapshot` the test
+ * The engine as the adapter sees it: an event stream plus a snapshot read the test
  * settles by hand, so pull ordering is observable rather than timing-dependent.
  */
 
@@ -8,9 +8,9 @@ import type {
   EventDescriptor,
   SnapshotDescriptor,
   Staleness,
-  VaultStorageDescriptor,
 } from '@cipherbox/client';
 import { FAKE_VAULT_STORAGE } from '../test/authFakes';
+import { fakeRead } from '../test/readFakes';
 
 /** The anchored root id a first-run vault reports. */
 export const ROOT_ID: Uint8Array = new Uint8Array(16);
@@ -74,11 +74,13 @@ export function fakeEngine() {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      snapshot(folder: Uint8Array | null) {
-        return new Promise<SnapshotDescriptor>((resolve, reject) => {
-          pulls.push({ folder, resolve, reject });
-        });
-      },
+      read: fakeRead({
+        snapshot: ({ folder }) =>
+          new Promise<SnapshotDescriptor>((resolve, reject) => {
+            pulls.push({ folder, resolve, reject });
+          }),
+        vaultStorage: () => Promise.resolve(FAKE_VAULT_STORAGE),
+      }),
       setFocus(node: Uint8Array | null) {
         focus.push(node);
         return new Promise<void>((resolve, reject) => {
@@ -89,9 +91,6 @@ export function fakeEngine() {
       manualRefresh() {
         refreshes += 1;
         return refuseRefresh === null ? Promise.resolve() : Promise.reject(refuseRefresh);
-      },
-      vaultStorage(): Promise<VaultStorageDescriptor> {
-        return Promise.resolve(FAKE_VAULT_STORAGE);
       },
       rotateWriteNow(node: Uint8Array) {
         writeCuts.push(node);

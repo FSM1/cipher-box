@@ -37,12 +37,7 @@ import { EngineRequestError, unknownHandle, type HandleKind } from './correlated
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import {
-  commandTransfer,
-  READ_KINDS,
-  rendezvousTransfer,
-  wipeRendezvousSecrets,
-} from './worker/protocol.js';
+import { commandTransfer, rendezvousTransfer, wipeRendezvousSecrets } from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -111,12 +106,6 @@ function wipeDropped(message: unknown): void {
  */
 function hasKind(payload: unknown): boolean {
   return typeof (payload as { kind?: unknown } | null | undefined)?.kind === 'string';
-}
-
-/** Whether an unvalidated port payload names a read this build serves. */
-function isServedRead(read: unknown): read is ReadDescriptor {
-  const kind = (read as { kind?: unknown } | null | undefined)?.kind;
-  return typeof kind === 'string' && READ_KINDS.has(kind);
 }
 
 /**
@@ -434,7 +423,7 @@ export class LeaderRelay {
     switch (message.type) {
       case 'cb:portRead': {
         const { read } = message as Extract<PortRequest, { type: 'cb:portRead' }>;
-        if (!isServedRead(read)) return this.refuse(entry, requestId, message);
+        if (!hasKind(read)) return this.refuse(entry, requestId, message);
         void this.answerPort(entry, requestId, () => this.readValue(read));
         return true;
       }

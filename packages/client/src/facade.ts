@@ -16,27 +16,16 @@ import type { EngineEventListener, EngineTransport } from './transport.js';
 import { KEEP_STORED_BEARER, MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   ApprovalDecision,
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   ForgottenResidual,
-  InvitePreviewDescriptor,
   NodeKind,
   OpenedStream,
-  PendingApprovalDescriptor,
-  VersionEntryDescriptor,
   Permission,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
   StreamHandle,
   VaultSettingsDescriptor,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -136,95 +125,17 @@ export class EngineFacade {
     return this.transport.subscribe(listener);
   }
 
-  /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return this.transport.read({ kind: 'snapshot', folder });
-  }
-
   /**
-   * Reads the vault's verified contact book and the grants `scope`'s own record
-   * commits — the vault root's for `null`.
+   * Serves one read and resolves with what that kind answers. A snapshot or a
+   * sharing read of `null` reads the vault root. An invite fragment is the
+   * whole bearer capability, as for [`claimInviteLink`], so an oversize one is
+   * refused here, before a structured clone copies it into another realm.
    */
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return this.transport.read({ kind: 'sharing', scope });
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return this.transport.read({ kind: 'receivedShares' });
-  }
-
-  /**
-   * Previews the link a URL fragment carries, before the join: the verified
-   * names, the permission conversion grants, the link state and a one-level
-   * listing. It posts nothing and persists nothing. The fragment is the whole
-   * bearer capability, as for [`claimInviteLink`].
-   */
-  previewInviteLink(fragment: string): Promise<InvitePreviewDescriptor> {
-    if (fragment.length > MAX_FRAGMENT_CHARS) {
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    if (read.kind === 'invitePreview' && read.fragment.length > MAX_FRAGMENT_CHARS) {
       return Promise.reject(new Error('that is not an invite link'));
     }
-    return this.transport.read({ kind: 'invitePreview', fragment });
-  }
-
-  /** The `/bin` route's whole read; an `origin` of `'defaults'` is the fallback, not a read. */
-  bin(): Promise<BinDescriptor> {
-    return this.transport.read({ kind: 'bin' });
-  }
-
-  /** The storage pane's whole read. */
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    return this.transport.read({ kind: 'vaultStorage' });
-  }
-
-  /** The login methods on this account, in the display form the API serves. */
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    return this.transport.read({ kind: 'authMethods' });
-  }
-
-  /** The device identity keys registered to this account (ADR 0009 D4). */
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return this.transport.read({ kind: 'devices' });
-  }
-
-  /** The bytes `devicePublicKey` signs to join this account's device registry. */
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.transport.read({ kind: 'deviceRegistrationChallenge', devicePublicKey });
-  }
-
-  /** The rendezvous rows this account is asked to approve, each with its digits. */
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return this.transport.read({ kind: 'pendingApprovals' });
-  }
-
-  /**
-   * Runs one step of the device-approval rendezvous (ADR 0009). Each step is a
-   * pure function of the transcript, so the caller drives the exchange itself.
-   */
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return this.transport.read({ kind: 'deviceRendezvous', step });
-  }
-
-  /** The short fingerprint the UI shows beside a grantee name (ADR 0027 D7). */
-  identityFingerprint(identityPublicKey: Uint8Array): Promise<string> {
-    return this.transport.read({ kind: 'identityFingerprint', identityPublicKey });
-  }
-
-  /** Downloads one file node's plaintext through the verified read pipeline. */
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    return this.transport.read({ kind: 'download', node });
-  }
-
-  /**
-   * One file's prior versions, newest first. The file's current content is not
-   * in the list; `contentCid` on the snapshot child names it.
-   */
-  fileVersions(node: Uint8Array): Promise<VersionEntryDescriptor[]> {
-    return this.transport.read({ kind: 'fileVersions', node });
-  }
-
-  /** Downloads one prior version's plaintext, named by its content root CID. */
-  downloadVersion(node: Uint8Array, contentCid: Uint8Array): Promise<ArrayBuffer> {
-    return this.transport.read({ kind: 'downloadVersion', node, contentCid });
+    return this.transport.read(read);
   }
 
   /**
@@ -502,11 +413,6 @@ export class EngineFacade {
       return Promise.reject(new Error('accessToken must be a transferable buffer'));
     }
     return this.command({ kind: 'saveVaultSettings', settings });
-  }
-
-  /** Issues the single-use nonce an EIP-4361 message must embed, for `intent`. */
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.transport.read({ kind: 'siweChallenge', intent });
   }
 
   /** Links a signed EIP-4361 message to the account this session already holds. */

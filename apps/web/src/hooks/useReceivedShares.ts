@@ -54,7 +54,7 @@ export function useReceivedShares(): ReceivedSharesRead {
       do {
         reads.again = false;
         landed = await runner.current('receivedShares', async (facade) =>
-          setShares(await facade.receivedShares())
+          setShares(await facade.read({ kind: 'receivedShares' }))
         );
       } while (reads.again && alive.current);
       reads.current = null;
