@@ -283,7 +283,9 @@ scenario fails the meta-test):
   another owned scope still renews; unit tests in
   `net::renewal_walk` fix the window edge at exactly one day, a keep-back
   time ahead of the clock, and one window for each cycle; a publish during the
-  registration wait makes the walk refuse; at one
+  registration wait makes the walk refuse; a tombstoned node that a folder
+  the device never opened links renews, and a parent copy that the base holds
+  newer does not link the node (`tests/renewal_walk.rs`, `net::retire`); at one
   sequence the later EOL wins in the resolve and in the last-known-good
   keeper, and at one EOL the higher signed `data` wins (`net::eol`,
   `net::fanout`, `net::last_known_good`). A same-sequence fork (ADR 0066): a

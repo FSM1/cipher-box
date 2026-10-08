@@ -32,7 +32,7 @@ use super::publish::{
     RefusedRead, SignatureGate, head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
-use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
+use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, retired_here};
 use super::revival::{
     ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
     revive_name, write_signer,
@@ -234,15 +234,20 @@ struct Plane {
     seed_stamp: Option<u64>,
 }
 
+/// A parent record the walk admitted, as `(node id, sequence)`.
+type AdmittedParent = ([u8; 16], u64);
+
 /// One folder on the walk's path, its children in node-id order.
 struct Frame {
     node_id: [u8; 16],
+    /// The sequence of the folder's record the walk admitted.
+    sequence: u64,
     children: Vec<ChildRef>,
     next: usize,
 }
 
 impl Frame {
-    fn of(node_id: [u8; 16], body: ReadBody) -> Self {
+    fn of(node_id: [u8; 16], sequence: u64, body: ReadBody) -> Self {
         let mut children = match body {
             ReadBody::Folder { children, .. } => children,
             _ => Vec::new(),
@@ -250,9 +255,14 @@ impl Frame {
         children.sort_by_key(|child| child.id);
         Self {
             node_id,
+            sequence,
             children,
             next: 0,
         }
+    }
+
+    fn admitted(&self) -> AdmittedParent {
+        (self.node_id, self.sequence)
     }
 
     fn resume_after(&mut self, last: Option<[u8; 16]>) {
@@ -672,12 +682,13 @@ where
         root: WalkRoot,
         still_running: &dyn Fn() -> bool,
     ) -> RootEnd {
-        let Some((plane, root_node, body)) = self.open_root(pass, root).await else {
+        let Some((plane, root_frame)) = self.open_root(pass, root).await else {
             return RootEnd::Finished;
         };
         let in_bin = matches!(root, WalkRoot::Bin(_));
+        let root_node = root_frame.node_id;
         pass.descended.insert(root_node);
-        let mut frames = vec![Frame::of(root_node, body)];
+        let mut frames = vec![root_frame];
         if pass.cursor.path.first() != Some(&root_node) {
             pass.cursor.path = vec![root_node];
             pass.cursor.last_child = None;
@@ -692,7 +703,8 @@ where
                 Some(child)
                     if child.kind == NodeKind::Folder && !pass.scope_roots.contains(&id) =>
                 {
-                    self.visit(pass, &plane, child, in_bin).await
+                    self.visit(pass, &plane, top.admitted(), child, in_bin)
+                        .await
                 }
                 _ => None,
             };
@@ -701,8 +713,8 @@ where
                 parent.resume_after(Some(id));
             }
             match reopened {
-                Some(body @ ReadBody::Folder { .. }) if pass.descended.insert(id) => {
-                    frames.push(Frame::of(id, body));
+                Some((body @ ReadBody::Folder { .. }, sequence)) if pass.descended.insert(id) => {
+                    frames.push(Frame::of(id, sequence, body));
                 }
                 _ => {
                     last = Some(id);
@@ -736,7 +748,9 @@ where
             if pass.scope_roots.contains(&child.id) {
                 continue;
             }
-            let Some(body) = self.visit(pass, &plane, &child, in_bin).await else {
+            let parent = top.admitted();
+            let Some((body, sequence)) = self.visit(pass, &plane, parent, &child, in_bin).await
+            else {
                 continue;
             };
             if child.kind != NodeKind::Folder
@@ -756,16 +770,12 @@ where
                     continue;
                 }
             }
-            frames.push(Frame::of(child.id, body));
+            frames.push(Frame::of(child.id, sequence, body));
         }
     }
 
     /// Admit a root's own record, and the plane its subtree is sealed under.
-    async fn open_root(
-        &self,
-        pass: &mut Pass<'_>,
-        root: WalkRoot,
-    ) -> Option<(Plane, [u8; 16], ReadBody)> {
+    async fn open_root(&self, pass: &mut Pass<'_>, root: WalkRoot) -> Option<(Plane, Frame)> {
         match root {
             WalkRoot::Scope(scope_id) => {
                 let material = self.material(pass, scope_id).await?;
@@ -781,9 +791,11 @@ where
                     admitted.observed.clone(),
                     admitted.fork,
                 );
-                self.consider(pass, scope_id, scope_id, &name, observed, fork)
+                let sequence = super::fork::verified(&name, observed_bytes(&observed))
+                    .map_or(0, |verified| verified.sequence);
+                self.consider(pass, scope_id, scope_id, None, &name, observed, fork)
                     .await;
-                Some((plane, scope_id, body))
+                Some((plane, Frame::of(scope_id, sequence, body)))
             }
             WalkRoot::Bin(node_id) => {
                 let keys = self.bin_keys?;
@@ -797,8 +809,8 @@ where
                     read_seed: keys.held_key(&node_id, bin.deleted_at),
                     seed_stamp: None,
                 };
-                let body = self.admit(pass, &plane, node_id, &name, true).await?;
-                Some((plane, node_id, body))
+                let (body, sequence) = self.admit(pass, &plane, node_id, None, &name, true).await?;
+                Some((plane, Frame::of(node_id, sequence, body)))
             }
             WalkRoot::Deferred { scope_id, node_id } => {
                 let name = pass
@@ -814,8 +826,10 @@ where
                     read_seed: admitted.read_scope_seed.clone(),
                     seed_stamp: Some(admitted.read_epoch),
                 };
-                let body = self.admit(pass, &plane, node_id, &name, false).await?;
-                Some((plane, node_id, body))
+                let (body, sequence) = self
+                    .admit(pass, &plane, node_id, None, &name, false)
+                    .await?;
+                Some((plane, Frame::of(node_id, sequence, body)))
             }
         }
     }
@@ -859,35 +873,39 @@ where
             Err(drop) => return drop,
         };
         let kept_back = core::mem::replace(&mut pass.kept_back, false);
-        self.admit(pass, &plane, folder.node_id, &folder.name, false)
+        self.admit(pass, &plane, folder.node_id, None, &folder.name, false)
             .await;
         !core::mem::replace(&mut pass.kept_back, kept_back)
     }
 
-    /// Visit one child a folder names.
+    /// Visit one child that the record of `parent` names.
     async fn visit(
         &self,
         pass: &mut Pass<'_>,
         plane: &Plane,
+        parent: AdmittedParent,
         child: &ChildRef,
         in_bin: bool,
-    ) -> Option<ReadBody> {
+    ) -> Option<(ReadBody, u64)> {
         let name = scope_name(&child.ipns_name).ok()?;
-        self.admit(pass, plane, child.id, &name, in_bin).await
+        self.admit(pass, plane, child.id, Some(parent), &name, in_bin)
+            .await
     }
 
     /// The gated child resolve of `node_id` at `name` (ADR 0061 D3 step 1),
     /// then the renewal decision on the record it admitted. A binned subtree
     /// can hold a scope root the boundary walk no longer names, which carries
     /// a grant section; anywhere else a grant section is a trust violation.
+    /// Returns the adopted body and its record sequence.
     async fn admit(
         &self,
         pass: &mut Pass<'_>,
         plane: &Plane,
         node_id: [u8; 16],
+        parent: Option<AdmittedParent>,
         name: &IpnsName,
         in_bin: bool,
-    ) -> Option<ReadBody> {
+    ) -> Option<(ReadBody, u64)> {
         let scope_root = self
             .material(pass, plane.scope_id)
             .await
@@ -923,7 +941,7 @@ where
         };
         let mut revival = None;
         if lapsed {
-            revival = self.revive_child(pass, plane, node_id, name).await;
+            revival = self.revive_child(pass, plane, node_id, parent, name).await;
             if revival == Some(true) {
                 resolved = resolve(ResolveMode::NoCache).await;
             }
@@ -941,9 +959,9 @@ where
                         .forked
                         .push((name.as_str().to_owned(), fork.sequence));
                 }
-                self.consider(pass, plane.scope_id, node_id, name, observed, fork)
+                self.consider(pass, plane.scope_id, node_id, parent, name, observed, fork)
                     .await;
-                Some(adopted.read_body)
+                Some((adopted.read_body, adopted.sequence))
             }
             // The revival reported why it did not sign.
             Ok(ChildRecord::Absent) if revival == Some(false) => None,
@@ -975,11 +993,7 @@ where
     /// Whether `observed` is a copy of a record past its EOL that no endpoint
     /// serves.
     async fn lapsed_copy(&self, name: &IpnsName, observed: &Result<Observed, RefusedRead>) -> bool {
-        let bytes = match observed {
-            Ok(observed) => observed.bytes(),
-            Err(refused) => refused.bytes.as_slice(),
-        };
-        super::fork::verified(name, bytes)
+        super::fork::verified(name, observed_bytes(observed))
             .is_some_and(|verified| eol::is_expired(self.scheduler.now(), &verified.validity))
             && reads_absent(self.transport, name).await
     }
@@ -992,13 +1006,14 @@ where
         pass: &mut Pass<'_>,
         plane: &Plane,
         node_id: [u8; 16],
+        parent: Option<AdmittedParent>,
         name: &IpnsName,
     ) -> Option<bool> {
         let material = pass.materials.get(&plane.scope_id)?.as_ref()?;
         let signer = material.signer_for(&node_id, name)?;
         let (scope_root, bar) = (material.name.clone(), material.admitted.bar);
         if !self
-            .may_sign(pass, plane.scope_id, node_id, name, None)
+            .may_sign(pass, plane.scope_id, node_id, parent, name, None)
             .await
         {
             return None;
@@ -1026,7 +1041,14 @@ where
     /// blob carries. `None` when the walk may not sign the name.
     async fn revive_root(&self, pass: &mut Pass<'_>, scope: &WalkScope) -> Option<bool> {
         if !self
-            .may_sign(pass, scope.scope_id, scope.scope_id, &scope.name, None)
+            .may_sign(
+                pass,
+                scope.scope_id,
+                scope.scope_id,
+                None,
+                &scope.name,
+                None,
+            )
             .await
         {
             return None;
@@ -1129,14 +1151,17 @@ where
     }
 
     /// Whether the walk may sign `name` for `node_id` (ADR 0061 D3 step 2): no
-    /// delete doomed it, no retire is pending, the drain is not publishing it,
-    /// and no retire is acknowledged above `sequence`. A revival passes `None`,
+    /// delete doomed it, no retire is pending, no tombstone retired it
+    /// ([`retired_here`] under `parent`, the record the walk reached it
+    /// through), the drain is not publishing it, and no retire is acknowledged
+    /// above `sequence`. A revival passes `None`,
     /// as it reads its sequence later, so any acknowledged retire refuses it.
     async fn may_sign(
         &self,
         pass: &mut Pass<'_>,
         material_scope: [u8; 16],
         node_id: [u8; 16],
+        parent: Option<AdmittedParent>,
         name: &IpnsName,
         sequence: Option<u64>,
     ) -> bool {
@@ -1158,7 +1183,7 @@ where
         }
         let ledger = StagingRetireLedger::new(self.staging, self.seal);
         match ledger.tombstoned(&pass.owner_tag, node_id).await {
-            Ok(true) if linked_nowhere(&self.guards.base.borrow(), node_id) => return false,
+            Ok(true) if retired_here(&self.guards.base.borrow(), node_id, parent) => return false,
             Ok(_) => {}
             Err(_) => {
                 pass.kept_back = true;
@@ -1183,20 +1208,21 @@ where
     /// the window and no other write can come between (ADR 0061 D3 step 2), and
     /// no served `fork` holds it back (ADR 0066 D3). A record the token refused
     /// is reported as a failed renewal instead.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one admitted record's full context"
+    )]
     async fn consider(
         &self,
         pass: &mut Pass<'_>,
         material_scope: [u8; 16],
         node_id: [u8; 16],
+        parent: Option<AdmittedParent>,
         name: &IpnsName,
         observed: Result<Observed, RefusedRead>,
         fork: Option<Fork>,
     ) {
-        let bytes = match &observed {
-            Ok(observed) => observed.bytes(),
-            Err(refused) => refused.bytes.as_slice(),
-        };
-        let Some(verified) = super::fork::verified(name, bytes) else {
+        let Some(verified) = super::fork::verified(name, observed_bytes(&observed)) else {
             return;
         };
         let sequence = verified.sequence;
@@ -1226,7 +1252,7 @@ where
         };
         let bar = material.admitted.bar;
         if !self
-            .may_sign(pass, material_scope, node_id, name, Some(sequence))
+            .may_sign(pass, material_scope, node_id, parent, name, Some(sequence))
             .await
         {
             return;
@@ -1436,6 +1462,14 @@ where
 }
 
 /// A held pass before its queued visits: it reports only `underived`.
+/// The record bytes the gate admitted, whether or not the token refused the read.
+fn observed_bytes(observed: &Result<Observed, RefusedRead>) -> &[u8] {
+    match observed {
+        Ok(observed) => observed.bytes(),
+        Err(refused) => refused.bytes.as_slice(),
+    }
+}
+
 fn held_report(underived: Vec<[u8; 16]>) -> WalkReport {
     WalkReport {
         underived,

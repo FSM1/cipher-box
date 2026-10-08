@@ -190,6 +190,25 @@ pub(crate) fn linked_nowhere(base: &Snapshot, node: [u8; 16]) -> bool {
     base.links_to(NodeId(node)).is_empty()
 }
 
+/// [`linked_nowhere`], unless `admitted_parent` links `node`: a parent record
+/// the walk admitted, as `(node id, sequence)`, that names the node and that
+/// the base holds at no newer sequence. The base is local to the device, so a
+/// parent this device never loaded links the node where the base cannot see.
+/// A folder the device never opened is held at the default sequence 1, which
+/// a first publish that already names the node also carries, so an equal
+/// sequence counts as linked: a leak, never a loss.
+pub(crate) fn retired_here(
+    base: &Snapshot,
+    node: [u8; 16],
+    admitted_parent: Option<([u8; 16], u64)>,
+) -> bool {
+    linked_nowhere(base, node)
+        && !admitted_parent.is_some_and(|(parent, sequence)| {
+            base.record_sequence(NodeId(parent))
+                .is_none_or(|held| held <= sequence)
+        })
+}
+
 /// The staging-key prefix under which a node's acknowledged sequence is held
 /// ([`StagingRetireLedger::acknowledged`]), one key per node. The key stays
 /// clear and says only that this owner had a PUT at this node's name that did
@@ -2618,6 +2637,39 @@ mod tests {
         assert!(
             !root_retire_ready(),
             "the old root lingers until both a durable re-point instant and a measured migration window land"
+        );
+    }
+
+    /// A parent record the walk admitted links the node unless the base holds
+    /// that parent at a newer sequence.
+    #[test]
+    fn an_admitted_parent_links_a_node_unless_the_base_holds_it_newer() {
+        use crate::facade::NodeKind;
+        use crate::sync::NodeMeta;
+
+        let (root, parent, node) = ([0; 16], [1; 16], [2; 16]);
+        let mut base = Snapshot::new(NodeId(root));
+        assert!(retired_here(&base, node, None), "no parent links the node");
+        assert!(
+            !retired_here(&base, node, Some((parent, 1))),
+            "the base does not hold the parent"
+        );
+        let mut held = NodeMeta::new(NodeId(parent), "parent", NodeKind::Folder);
+        held.record_sequence = 3;
+        base.upsert_node(held);
+        base.link(NodeId(root), NodeId(parent), 1);
+        assert!(
+            !retired_here(&base, node, Some((parent, 3))),
+            "the base holds the parent at the same sequence"
+        );
+        assert!(
+            retired_here(&base, node, Some((parent, 2))),
+            "the base holds the parent at a newer sequence"
+        );
+        base.link(NodeId(parent), NodeId(node), 1);
+        assert!(
+            !retired_here(&base, node, Some((parent, 2))),
+            "the base links the node"
         );
     }
 }
