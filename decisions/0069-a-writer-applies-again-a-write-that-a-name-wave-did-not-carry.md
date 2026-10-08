@@ -92,7 +92,7 @@ applies the delete again, and a node that is gone ends the op with no notice. A 
 parent no longer names took the node with it, so the op ends too, at once when a read of this
 session at the live parent name shows the old parent no longer names the folder. A base that does not hold the folder shows
 nothing, so with no such read the op waits for a pass that reads the folder, or leaves at T. A kept
-delete under a scope that this device can no longer write takes the keyless charge of D3, unless the pointer read of D3 shows its node gone, and
+delete under a scope that this device can no longer write leaves with no notice when the pointer read of D3 shows its node gone, and otherwise takes the keyless charge of D3 and
 dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold
 its folder. Proposed: a kept
 op that this device edits again leaves with no check, because the later op sets what the node shows. Amended on 2026-10-07: a later delete of this device expires every earlier op on its node once a flip shows, a later bin restore cancels that delete so the earlier ops stay, and no other later op expires an earlier op. A second
