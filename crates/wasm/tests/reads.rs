@@ -8,7 +8,7 @@
 use cipherbox_engine::facade::{NodeId, SiweIntent};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_wasm::boundary::{
-    decode_read, decode_rendezvous_step, decode_write_target, encode_view,
+    decode_command, decode_read, decode_rendezvous_step, decode_write_target, encode_view,
 };
 use cipherbox_wasm::read::{Read, ReadAnswer};
 use cipherbox_wasm::read_unstarted;
@@ -436,4 +436,21 @@ fn an_own_proto_key_is_refused() {
            return structuredClone(s);"#,
     );
     assert!(decode_rendezvous_step(&step).is_err());
+}
+
+/// A primitive `__proto__` value leaves the prototype as it is, so only the
+/// key refusal stops it. The secret-text decodes copy the value with a
+/// placeholder, and that copy dropped the key before the walk saw it.
+#[wasm_bindgen_test]
+fn an_own_proto_key_beside_a_secret_text_is_refused() {
+    let preview = built(
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"invitePreview","fragment":"abc","__proto__":1}'));"#,
+    );
+    assert!(refused(&preview));
+    let claim = built(
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"claimInviteLink","fragment":"abc","name":"","__proto__":1}'));"#,
+    );
+    assert!(decode_command(&claim).is_err());
 }

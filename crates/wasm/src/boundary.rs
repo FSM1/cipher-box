@@ -40,6 +40,9 @@ fn refused() -> JsError {
 /// Decodes one command. Refuses an unknown `kind`, an unknown field, and a
 /// field of the wrong type.
 pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
+    // Bounded first, as for a read: a placeholder copy drops an own
+    // `__proto__` key.
+    let command = &bounded_copy(command, false, refused)?;
     let kind = field(command, "kind");
     if kind == "claimInviteLink" {
         return decode_secret_text(
@@ -106,6 +109,9 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
 /// of the wrong type. The two secrets a read carries, an invite fragment and a
 /// rendezvous step's scalars, reach linear memory only in zeroizing buffers.
 pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
+    // Bounded first: the placeholder copy below writes each key with a set,
+    // which drops an own `__proto__` key the walk must see.
+    let read = &bounded_copy(read, false, read_refused)?;
     match field(read, "kind").as_string().as_deref() {
         Some("invitePreview") => decode_secret_text(
             read,
@@ -130,8 +136,7 @@ pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
 }
 
 fn decode_plain_read(read: &JsValue) -> Result<Read, JsError> {
-    serde_wasm_bindgen::from_value(bounded_copy(read, false, read_refused)?)
-        .map_err(|_| read_refused())
+    serde_wasm_bindgen::from_value(read.clone()).map_err(|_| read_refused())
 }
 
 fn read_refused() -> JsError {
