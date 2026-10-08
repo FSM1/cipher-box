@@ -106,6 +106,11 @@ fn a_field_of_the_wrong_type_is_refused() {
         ("devicePublicKey", JsValue::from_f64(7.0)),
     ]);
     assert!(refused(&key));
+    let pool = object(&[
+        ("kind", text("siweChallenge")),
+        ("intent", text("nonsense")),
+    ]);
+    assert!(refused(&pool));
 }
 
 #[wasm_bindgen_test]
