@@ -107,6 +107,20 @@ pub(crate) async fn held_scope_root<T: RecordTransport, F: FloorStore>(
     name: &IpnsName,
     owner: &EcdsaVerifier,
 ) -> Result<Option<IpnsName>, PointerConsultError> {
+    Ok(held_scope_pointer(transport, floors, share, name, owner)
+        .await?
+        .map(|(root, _)| root))
+}
+
+/// [`held_scope_root`], with the write-epoch floor in force once the consult
+/// ran.
+pub(crate) async fn held_scope_pointer<T: RecordTransport, F: FloorStore>(
+    transport: &T,
+    floors: &F,
+    share: &ReceivedShare,
+    name: &IpnsName,
+    owner: &EcdsaVerifier,
+) -> Result<Option<(IpnsName, u64)>, PointerConsultError> {
     let keys = HeldPointerKeys {
         name,
         read_key: &share.pointer_read_key,
@@ -118,7 +132,7 @@ pub(crate) async fn held_scope_root<T: RecordTransport, F: FloorStore>(
     }
     .run(transport, floors, &share.scope_id)
     .await?
-    .map(|consulted| consulted.current_root))
+    .map(|consulted| (consulted.current_root, consulted.write_floor)))
 }
 
 /// The owner-signed link entry at `tag`, or `None` when the commitment names

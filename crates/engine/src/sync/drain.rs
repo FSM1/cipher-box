@@ -1713,7 +1713,7 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) forks: &'a ForkSightings,
     pub(crate) grafted_claims: &'a RefCell<ClaimRecord>,
     pub(crate) bookmarked_scope_roots: &'a RefCell<BookmarkedScopeRoots>,
-    /// The folder chain, root first, that each kept op's noted folder sat under
+    /// The folder chain, root first, that each queued delete's folder sat under
     /// at its publish. In memory only: after a restart, a folder the base does
     /// not hold cannot be placed.
     pub(crate) kept_chains: &'a RefCell<BTreeMap<OpId, Vec<NodeId>>>,
@@ -2608,6 +2608,10 @@ where
         else {
             return (report, None);
         };
+        self.cells
+            .kept_chains
+            .borrow_mut()
+            .retain(|op_id, _| all_ids.contains(op_id));
         let queued = mine;
         if queued.is_empty() {
             self.release_hold();
@@ -2715,10 +2719,6 @@ where
         let mut moved = keyless_kept::MovedRoots::new();
         let mut decided = Vec::new();
         let mut end = pending.len();
-        self.cells
-            .kept_chains
-            .borrow_mut()
-            .retain(|op_id, _| kept.parent(*op_id).is_some());
         for (index, (op_id, op)) in pending.iter().enumerate() {
             if !kept.holds(*op_id, op) {
                 continue;
@@ -3465,15 +3465,6 @@ where
         );
         if noted.is_ok() && self.store_kept_notes(scope, &notes).await.is_ok() {
             self.kept_now.set(true);
-        }
-        if let Some(parent) = self.kept_parent.get() {
-            let base = self.cells.base.borrow();
-            if base.contains(parent) {
-                let mut chain = base.ancestors(parent);
-                chain.reverse();
-                chain.push(parent);
-                self.cells.kept_chains.borrow_mut().insert(op_id, chain);
-            }
         }
     }
 
@@ -4505,6 +4496,18 @@ where
             OpKind::Create { parent, .. } => Some(*parent),
             _ => self.cells.base.borrow().parent_of(applied.op.target),
         });
+        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, self.kept_parent.get()) {
+            let base = self.cells.base.borrow();
+            if base.contains(parent) {
+                let mut chain = base.ancestors(parent);
+                chain.reverse();
+                chain.push(parent);
+                self.cells
+                    .kept_chains
+                    .borrow_mut()
+                    .insert(applied.op_id, chain);
+            }
+        }
         self.kept_now.set(false);
         self.publish_op(scope, pass, applied, rebased).await?;
         let shortfall = mirror_shortfall(&self.mirror.borrow());
@@ -9171,7 +9174,9 @@ where
 
     /// Remove a resolved op from the durable queue.
     async fn dequeue_op(&self, op_id: OpId) -> Result<(), Halt> {
-        self.seams.staging.remove_op(op_id).await.map_err(seam)
+        self.seams.staging.remove_op(op_id).await.map_err(seam)?;
+        self.cells.kept_chains.borrow_mut().remove(&op_id);
+        Ok(())
     }
 
     /// Note one head block as orphaned.

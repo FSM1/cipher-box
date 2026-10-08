@@ -12,7 +12,7 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use super::{Drain, DrainScope, lists_version, place_in};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::grants::grafted::FloorNamespace;
-use crate::grants::link_read::held_scope_root;
+use crate::grants::link_read::held_scope_pointer;
 use crate::grants::received_status::grafted_root_name;
 use crate::grants::{ReceivedShareStore, StagingReceivedShareStore};
 use crate::net::{FolderRefresh, FolderRefreshReport, GraftedLeg, PointerConsultError};
@@ -30,6 +30,8 @@ use crate::sync::tick::ResolveMode;
 /// with what a read below it runs under.
 pub(super) struct MovedRoot {
     name: IpnsName,
+    /// The write-epoch floor the pointer consult left in force.
+    write_epoch: u64,
     namespace: FloorNamespace,
     seed: StampedSeed,
 }
@@ -68,6 +70,14 @@ where
         let Some(Some(moved)) = roots.get(&root) else {
             return false;
         };
+        // The cut set lands before the wave and its re-point: a pointer at
+        // no later write epoch than the op's can still name the old tree.
+        if kept
+            .write_epoch(op_id)
+            .is_none_or(|noted| moved.write_epoch <= noted)
+        {
+            return false;
+        }
         let floors = moved.namespace.view(&self.seams.floors);
         let scope_roots = self.cells.bookmarked_scope_roots.borrow().clone();
         let refresh = FolderRefresh {
@@ -119,19 +129,26 @@ where
         };
         let owner = EcdsaVerifier::from_sec1(&share.sharer_identity_pk)?;
         let pointer = share.scope_pointer_name.as_ref()?;
-        let name =
-            match held_scope_root(&self.seams.transport, &floors, share, pointer, &owner).await {
-                Ok(name) => name?,
-                Err(PointerConsultError::Rejected) => {
-                    emit_trust_violation(
-                        &self.seams.events,
-                        grafted_root_name(&share.display_name, root).as_str(),
-                        "the scope pointer's re-point object was refused",
-                    );
-                    return None;
-                }
-                Err(PointerConsultError::Unavailable) => return None,
-            };
+        let (name, write_epoch) = match held_scope_pointer(
+            &self.seams.transport,
+            &floors,
+            share,
+            pointer,
+            &owner,
+        )
+        .await
+        {
+            Ok(vouched) => vouched?,
+            Err(PointerConsultError::Rejected) => {
+                emit_trust_violation(
+                    &self.seams.events,
+                    grafted_root_name(&share.display_name, root).as_str(),
+                    "the scope pointer's re-point object was refused",
+                );
+                return None;
+            }
+            Err(PointerConsultError::Unavailable) => return None,
+        };
         let listed = self.cells.base.borrow().node(root)?.ipns_name.as_deref()
             == Some(name.as_str().as_bytes());
         if !listed {
@@ -146,6 +163,7 @@ where
         .await?;
         Some(MovedRoot {
             name,
+            write_epoch,
             namespace,
             seed,
         })
@@ -179,6 +197,16 @@ where
         };
         match &op.kind {
             OpKind::Delete { .. } => {
+                // A contested id leaves the base with no read of its own.
+                if self
+                    .cells
+                    .grafted_claims
+                    .borrow()
+                    .contested()
+                    .contains(&op.target.0)
+                {
+                    return None;
+                }
                 let parent = kept.parent(op_id)?;
                 let seen = self.cells.kept_chains.borrow().get(&op_id).cloned();
                 if parent != root
@@ -283,7 +311,13 @@ where
             {
                 let base = self.cells.base.borrow();
                 if !base.contains(node) {
-                    return Some(false);
+                    let contested = self
+                        .cells
+                        .grafted_claims
+                        .borrow()
+                        .contested()
+                        .contains(&node.0);
+                    return (!contested).then_some(false);
                 }
                 if !base
                     .links_ranked(node)

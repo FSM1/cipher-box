@@ -225,7 +225,9 @@ scenario fails the meta-test):
   also a late write that the wave did not carry; under the scope pointer
   read, a kept edit that the wave carried leaves with no notice, also one
   folder below the scope root, and so does a carried rename and a kept
-  delete whose folder the owner deleted after the wave, one that it lost
+  delete whose folder the owner deleted after the wave, and a carried
+  delete of a folder directly below the scope root; a kept edit stays while
+  the pointer names a root of no later write epoch than its own; one that it lost
   dead-letters with a notice,
   each rename and each version restore of a lost chain dead-letters, each
   after a read of the moved tree, and a bookmark with no scope pointer name

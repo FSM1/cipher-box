@@ -629,6 +629,11 @@ impl KeptOps {
         self.notes.notes.get(&op_id).and_then(|note| note.parent)
     }
 
+    /// The write epoch the note of `op_id` names.
+    pub(crate) fn write_epoch(&self, op_id: OpId) -> Option<u64> {
+        self.notes.notes.get(&op_id).map(|note| note.write_epoch)
+    }
+
     /// The scope root the note of `op_id` names.
     pub(crate) fn scope(&self, op_id: OpId) -> Option<NodeId> {
         self.notes.notes.get(&op_id).and_then(|note| note.scope)
