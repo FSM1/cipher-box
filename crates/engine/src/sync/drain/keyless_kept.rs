@@ -9,7 +9,7 @@ use std::collections::btree_map::Entry;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
-use super::{Drain, DrainScope, lists_version, place_in};
+use super::{Drain, DrainScope, chain_to, lists_version, place_in};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::grants::grafted::FloorNamespace;
 use crate::grants::link_read::held_scope_pointer;
@@ -232,19 +232,13 @@ where
                         let read = self.read_moved_folder(refresh, root, parent, seen.as_deref());
                         Some(!read.await?)
                     },
-                    || {
-                        self.cells
-                            .grafted_claims
-                            .borrow()
-                            .contested()
-                            .contains(&op.target.0)
-                    },
+                    || self.contested(op.target),
                     || linked(parent),
                 )
                 .await
             }
             OpKind::Create { parent, .. } => {
-                self.reads_moved_folder(refresh, root, *parent).await?;
+                self.read_listed_folder(refresh, root, *parent).await?;
                 linked(*parent).filter(|shown| *shown)
             }
             OpKind::UpdateContent { .. } | OpKind::RestoreVersion { .. } => {
@@ -252,7 +246,7 @@ where
                 // names the file here.
                 let folder = self.cells.base.borrow().parent_of(op.target)?;
                 if folder != root {
-                    self.reads_moved_folder(refresh, root, folder).await?;
+                    self.read_listed_folder(refresh, root, folder).await?;
                 }
                 linked(folder).filter(|shown| *shown)?;
                 let mut report = FolderRefreshReport::reconciled();
@@ -274,7 +268,7 @@ where
                     folders.push(*to);
                 }
                 for folder in folders {
-                    self.reads_moved_folder(refresh, root, folder).await?;
+                    self.read_listed_folder(refresh, root, folder).await?;
                 }
                 let place = place_in(&self.cells.base.borrow(), op.target);
                 Some(
@@ -287,8 +281,8 @@ where
     }
 
     /// [`Self::read_moved_folder`], where a folder the moved tree no longer
-    /// names cannot tell.
-    async fn reads_moved_folder(
+    /// lists cannot tell.
+    async fn read_listed_folder(
         &self,
         refresh: &MovedRefresh<'_, T, S, H, F>,
         root: NodeId,
@@ -319,14 +313,7 @@ where
         }
         let chain = {
             let base = self.cells.base.borrow();
-            let mut chain = if base.contains(folder) {
-                let mut chain = base.ancestors(folder);
-                chain.reverse();
-                chain.push(folder);
-                chain
-            } else {
-                seen?.to_vec()
-            };
+            let mut chain = chain_to(&base, folder).or_else(|| seen.map(<[NodeId]>::to_vec))?;
             let at = chain.iter().position(|node| *node == root)?;
             chain.drain(..=at);
             chain
@@ -336,13 +323,7 @@ where
             {
                 let base = self.cells.base.borrow();
                 if !base.contains(node) {
-                    let contested = self
-                        .cells
-                        .grafted_claims
-                        .borrow()
-                        .contested()
-                        .contains(&node.0);
-                    return (!contested).then_some(false);
+                    return (!self.contested(node)).then_some(false);
                 }
                 if !base
                     .links_ranked(node)
@@ -360,6 +341,14 @@ where
             above = node;
         }
         Some(true)
+    }
+
+    fn contested(&self, node: NodeId) -> bool {
+        self.cells
+            .grafted_claims
+            .borrow()
+            .contested()
+            .contains(&node.0)
     }
 }
 

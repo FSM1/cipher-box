@@ -4496,17 +4496,13 @@ where
             OpKind::Create { parent, .. } => Some(*parent),
             _ => self.cells.base.borrow().parent_of(applied.op.target),
         });
-        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, self.kept_parent.get()) {
-            let base = self.cells.base.borrow();
-            if base.contains(parent) {
-                let mut chain = base.ancestors(parent);
-                chain.reverse();
-                chain.push(parent);
-                self.cells
-                    .kept_chains
-                    .borrow_mut()
-                    .insert(applied.op_id, chain);
-            }
+        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, self.kept_parent.get())
+            && let Some(chain) = chain_to(&self.cells.base.borrow(), parent)
+        {
+            self.cells
+                .kept_chains
+                .borrow_mut()
+                .insert(applied.op_id, chain);
         }
         self.kept_now.set(false);
         self.publish_op(scope, pass, applied, rebased).await?;
@@ -9956,6 +9952,17 @@ fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
     versions
         .iter()
         .any(|version| version.content_cid == content.root_cid)
+}
+
+/// The folders from the root down to `folder`, root first, or `None` when
+/// `base` does not hold `folder`.
+fn chain_to(base: &Snapshot, folder: NodeId) -> Option<Vec<NodeId>> {
+    base.contains(folder).then(|| {
+        let mut chain = base.ancestors(folder);
+        chain.reverse();
+        chain.push(folder);
+        chain
+    })
 }
 
 /// The folder that holds `node` in `base`, and its name there.
