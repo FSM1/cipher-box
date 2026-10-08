@@ -405,13 +405,16 @@ fn a_read_that_holds_a_self_containing_map_is_refused() {
     assert!(refused(&object(&[("kind", text("bin")), ("x", map)])));
 }
 
+/// The untagged decode would read this `Map` as a valid version target, so
+/// the refusal comes from the walk alone.
 #[wasm_bindgen_test]
 fn a_write_target_that_is_a_map_is_refused() {
     let map = built("return new Map([['node', new Uint8Array(16)]]);");
     assert!(decode_write_target(map).is_err());
 }
 
-/// A `Set` or a `Map` field in a step is refused before serde reads it.
+/// A `Set` or a `Map` field in a step is refused before serde reads it. Serde
+/// refuses the `Set` itself, so only the `Map` needs the walk.
 #[wasm_bindgen_test]
 fn a_rendezvous_step_with_a_set_or_map_field_is_refused() {
     for field in [
@@ -427,4 +430,29 @@ fn a_rendezvous_step_with_a_set_or_map_field_is_refused() {
         ]);
         assert!(decode_rendezvous_step(&step).is_err());
     }
+}
+
+/// A structured clone keeps `__proto__` as an own key. A set of it on the copy
+/// would drop the field and let the decode accept a value it must refuse.
+#[wasm_bindgen_test]
+fn an_own_proto_key_is_refused() {
+    let read = built(r#"return structuredClone(JSON.parse('{"kind":"bin","__proto__":{}}'));"#);
+    assert!(refused(&read));
+    let read = built(r#"return structuredClone(JSON.parse('{"kind":"bin","__proto__":null}'));"#);
+    assert!(refused(&read));
+    let target = built(
+        r#"const t = JSON.parse('{"__proto__":{}}');
+           t.node = new Uint8Array(16);
+           return structuredClone(t);"#,
+    );
+    assert!(decode_write_target(target).is_err());
+    let step = built(
+        r#"const s = JSON.parse('{"__proto__":{}}');
+           s.kind = 'deny';
+           s.devicePublicKey = 'cd11';
+           s.requestId = 'r';
+           s.ephemeralPublicKey = '02beef';
+           return structuredClone(s);"#,
+    );
+    assert!(decode_rendezvous_step(&step).is_err());
 }

@@ -215,7 +215,8 @@ fn decode(command: &JsValue) -> Result<Command, JsError> {
 /// The bounds on a value the boundary decodes, which come over a port from
 /// another tab. A structured clone keeps cycles and shared references, so
 /// depth, width and total work each need a cap. The widest legitimate objects,
-/// a `respondToApproval` command and an `approve` rendezvous step, have 7 keys;
+/// a `respondToApproval` command and the `approve` and `openFactor` rendezvous
+/// steps, have 7 keys;
 /// the deepest field, `settings.byo.accessToken`, is at depth 3; a
 /// `saveVaultSettings` command, the largest value, makes 10 visits. Each cap
 /// leaves a margin over that.
@@ -226,10 +227,10 @@ const MAX_VALUE_KEYS: u32 = 16;
 const MAX_VALUE_VISITS: usize = 64;
 
 /// A copy of `value` that serde decodes in its place, built in one bounded
-/// walk that reads each value once. Refuses a value past a cap, an array, and
-/// an object whose prototype is not `Object.prototype`: a `Map`, a `Set` or a
-/// null-prototype object hides its entries from the caps, and no legitimate
-/// value holds one. With `tag_bigints`, each `bigint` becomes a [`BIGINT_TAG`]
+/// walk that reads each value once. Refuses a value past a cap, an array, an
+/// own `__proto__` key, and an object whose prototype is not
+/// `Object.prototype`. A `Map` or a `Set` hides its entries from the caps. A
+/// null-prototype object does not, but no legitimate value holds one. With `tag_bigints`, each `bigint` becomes a [`BIGINT_TAG`]
 /// object, so the command decode tells a `bigint` from a `number`; an object
 /// that already has the tag key is refused, so no tag reaches the decode but
 /// this one.
@@ -285,6 +286,11 @@ impl BoundedWalk {
         }
         let copy = Object::new();
         for key in keys.iter() {
+            // A set of `__proto__` on the copy would replace its prototype
+            // and drop the field the decode must refuse.
+            if key == "__proto__" {
+                return Err(());
+            }
             let inner = self.copy(&Reflect::get(value, &key).map_err(|_| ())?, depth + 1)?;
             Reflect::set(&copy, &key, &inner).map_err(|_| ())?;
         }
