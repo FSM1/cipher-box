@@ -4934,7 +4934,8 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 /// The same axis for the publish pipeline. A CID the API echoes back wrong, and
 /// the pipeline's own release-active encode refusals, are deterministic on the
 /// bytes this pass built — a retry re-uploads and re-charges a head block
-/// forever without converging.
+/// forever without converging. A size refusal retries, as in
+/// [`record_publish_verdict`].
 pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
@@ -4949,10 +4950,9 @@ pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishE
 pub(super) fn wave_publish_verdict(error: PublishError) -> WritePublishError {
     match error.verdict() {
         PublishVerdict::RegistryRefused => WritePublishError::RegistryFull,
-        PublishVerdict::Refused
-        | PublishVerdict::RefusedUnaddressed
-        | PublishVerdict::RefusedOversized => WritePublishError::Rejected,
-        PublishVerdict::NotLanded
+        PublishVerdict::Refused | PublishVerdict::RefusedUnaddressed => WritePublishError::Rejected,
+        PublishVerdict::RefusedOversized
+        | PublishVerdict::NotLanded
         | PublishVerdict::PutUnacknowledged
         | PublishVerdict::PutRefused => WritePublishError::NotLanded,
     }
@@ -11302,6 +11302,24 @@ mod tests {
             )),
             WritePublishError::NotLanded,
             "the name wave and provisioning retry it too",
+        );
+    }
+
+    #[test]
+    fn a_size_refusal_does_not_stop_a_write_wave_for_good() {
+        let oversized = || PublishError::RecordTooLarge { size: 1, limit: 0 };
+        assert_eq!(
+            publish_record_verdict(RecordPublishError::Publish(oversized())),
+            WritePublishError::NotLanded,
+        );
+        assert_eq!(
+            wave_publish_verdict(oversized()),
+            WritePublishError::NotLanded
+        );
+        assert_eq!(
+            rotation_publish_verdict(oversized()),
+            RotationPublishError::NotPublished,
+            "both publish verdicts class a size refusal as availability",
         );
     }
 
