@@ -22,7 +22,7 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['node-quorum', /unable to resolve enough promises/i],
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
   ['node-busy', /all auth network nodes are currently busy/i],
-  ['key-assign', /unable to assign key|failed to fetch key assign result/i],
+  ['key-assign', /failed to fetch key assign result/i],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {
