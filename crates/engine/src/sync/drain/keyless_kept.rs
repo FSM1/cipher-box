@@ -53,6 +53,18 @@ fn delete_decided(folder_gone: bool, contested: bool, linked: Option<bool>) -> O
     linked.map(|alive| !alive)
 }
 
+/// The verdict on a kept delete: `read` reads its folder in the moved tree
+/// and answers whether the folder is gone. The read can contest the node, so
+/// the contest and the link are read after it ([`delete_decided`]).
+async fn decide_delete(
+    read: impl Future<Output = Option<bool>>,
+    contested: impl FnOnce() -> bool,
+    linked: impl FnOnce() -> Option<bool>,
+) -> Option<bool> {
+    let folder_gone = read.await?;
+    delete_decided(folder_gone, contested(), linked())
+}
+
 type MovedRefresh<'r, T, S, H, F> = FolderRefresh<'r, T, S, H, SharerScopedFloorStore<'r, F>>;
 
 impl<T, H, C, F, S, St, Sch> Drain<'_, T, H, C, F, S, St, Sch>
@@ -212,18 +224,24 @@ where
             OpKind::Delete { .. } => {
                 let parent = kept.parent(op_id)?;
                 let seen = self.cells.kept_chains.borrow().get(&op_id).cloned();
-                let folder_gone = parent != root
-                    && !self
-                        .read_moved_folder(refresh, root, parent, seen.as_deref())
-                        .await?;
-                // The read can contest the id: checked after it.
-                let contested = self
-                    .cells
-                    .grafted_claims
-                    .borrow()
-                    .contested()
-                    .contains(&op.target.0);
-                delete_decided(folder_gone, contested, linked(parent))
+                decide_delete(
+                    async {
+                        if parent == root {
+                            return Some(false);
+                        }
+                        let read = self.read_moved_folder(refresh, root, parent, seen.as_deref());
+                        Some(!read.await?)
+                    },
+                    || {
+                        self.cells
+                            .grafted_claims
+                            .borrow()
+                            .contested()
+                            .contains(&op.target.0)
+                    },
+                    || linked(parent),
+                )
+                .await
             }
             OpKind::Create { parent, .. } => {
                 self.reads_moved_folder(refresh, root, *parent).await?;
@@ -347,7 +365,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::delete_decided;
+    use core::cell::Cell;
+
+    use super::{decide_delete, delete_decided};
+    use crate::testkit::block_on;
+
+    /// The folder read finds the node uncontested at its start and contests
+    /// it: the delete keeps the keyless charge, so it stays queued with no
+    /// notice.
+    #[test]
+    fn a_delete_whose_node_its_own_folder_read_contests_keeps_the_charge() {
+        let contested = Cell::new(false);
+        let decided = block_on(decide_delete(
+            async {
+                contested.set(true);
+                Some(false)
+            },
+            || contested.get(),
+            || Some(false),
+        ));
+        assert_eq!(decided, None);
+    }
 
     #[test]
     fn a_delete_whose_node_the_read_contested_decides_nothing() {
