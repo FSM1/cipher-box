@@ -189,7 +189,8 @@ all living in `packages/client` and running inside the engine worker realm:
   the snapshot — no blocking resolution pass, no kind-flip UX.
 - **Routes key on the stable node id** — never `ipnsName` (names rotate under
   write rotation) and no `'root'` sentinel; the root is just the vault
-  pointer's current root node.
+  pointer's current root node. A focus on no folder is a focus on the root,
+  and the engine applies that default, not the host.
 - **Staleness ladder rendering** (FSM1/cipher-box-next#33 D4): fresh → quiet reconciling
   indicator → stale badge ("last synced X ago") → offline banner. Trust
   violations and withheld-update escalations render as a distinct warning

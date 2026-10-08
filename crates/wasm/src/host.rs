@@ -223,14 +223,12 @@ impl EngineHandle {
         let engine = self.engine.clone();
         future_to_promise(async move {
             let outcome = match facade_command {
-                facade::Command::SetFocus { node } => {
-                    let engine = engine.read().await;
-                    let folder = focused_folder(node, engine.root());
-                    engine
-                        .set_focus(Some(folder))
-                        .await
-                        .map(|()| facade::CommandOutcome::Done)
-                }
+                facade::Command::SetFocus { node } => engine
+                    .read()
+                    .await
+                    .set_focus(node)
+                    .await
+                    .map(|()| facade::CommandOutcome::Done),
                 facade::Command::ManualRefresh => {
                     let filed = engine.read().await.file_forced_pass();
                     match filed {
@@ -710,13 +708,6 @@ fn engine_error(error: EngineError) -> JsValue {
     js.into()
 }
 
-/// A focus on no folder focuses the engine's current root, as `snapshot` reads
-/// it: a host asks for the root, it never names one (blueprint/web-client.md
-/// "UI state law").
-fn focused_folder(node: Option<facade::NodeId>, root: facade::NodeId) -> facade::NodeId {
-    node.unwrap_or(root)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1103,17 +1094,5 @@ mod tests {
             );
             assert!(message.contains("apiBaseUrl"), "{message}");
         }
-    }
-
-    #[wasm_bindgen_test]
-    fn a_focus_on_no_folder_focuses_the_engine_root() {
-        let root = EngineNodeId([4; 16]);
-        let folder = EngineNodeId([5; 16]);
-        assert_eq!(focused_folder(None, root), root);
-        assert_eq!(
-            focused_folder(Some(folder), root),
-            folder,
-            "a named folder stays the focus"
-        );
     }
 }

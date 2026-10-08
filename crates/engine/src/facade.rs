@@ -11055,10 +11055,14 @@ where {
     /// probe has no answer, reads nothing here; the next tick reads it. Each
     /// root is probed once per navigation.
     ///
+    /// A focus on no folder focuses the current root: a host asks for the
+    /// root, it never names one (blueprint/web-client.md "UI state law").
+    ///
     /// Shared-borrow, so a host can run its network legs beside the snapshot
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
     pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
         self.live_session()?;
+        let node = Some(node.unwrap_or_else(|| self.root()));
         self.state.focus.borrow_mut().open_folder = node;
         let probes = RootProbes::default();
         if let Some(folder) = node {
@@ -16758,6 +16762,22 @@ mod tests {
             .find(|child| child.name == name)
             .expect("the child is listed")
             .id
+    }
+
+    #[test]
+    fn a_focus_on_no_folder_focuses_the_root() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        block_on(engine.command(Command::SetFocus { node: None })).unwrap();
+        assert_eq!(engine.state.focus.borrow().open_folder, Some(root));
+
+        let folder = NodeId([5; 16]);
+        block_on(engine.command(Command::SetFocus { node: Some(folder) })).unwrap();
+        assert_eq!(
+            engine.state.focus.borrow().open_folder,
+            Some(folder),
+            "a named folder stays the focus"
+        );
     }
 
     fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
