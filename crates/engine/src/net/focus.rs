@@ -11,7 +11,7 @@
 use core::cell::RefCell;
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ChildRef, ReadBody};
+use cipherbox_core::seal::{ChildRef, ReadBody, Version};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
@@ -53,6 +53,18 @@ pub(crate) struct FolderRefreshReport {
 }
 
 impl FolderRefreshReport {
+    /// The report of a leg that has read nothing yet.
+    pub(crate) fn reconciled() -> Self {
+        Self {
+            changed: false,
+            verdict: RefreshVerdict::Reconciled,
+            unread: false,
+            departed: Vec::new(),
+            pins: Vec::new(),
+            lapsed: Vec::new(),
+        }
+    }
+
     fn fold(&mut self, verdict: RefreshVerdict) {
         self.verdict = self.verdict.worst(verdict);
         self.unread |= matches!(
@@ -137,77 +149,80 @@ where
     /// They arrive nearest-first; the merge runs root-ward, so a parent that
     /// dropped a child unlinks it before the pass would project into it.
     pub(crate) async fn run(&self, folders: &[NodeId]) -> FolderRefreshReport {
-        let mut report = FolderRefreshReport {
-            changed: false,
-            verdict: RefreshVerdict::Reconciled,
-            unread: false,
-            departed: Vec::new(),
-            pins: Vec::new(),
-            lapsed: Vec::new(),
-        };
+        let mut report = FolderRefreshReport::reconciled();
         for folder in folders.iter().rev() {
-            let Some((name, adopted, scope)) = self
-                .resolve_focused(*folder, NodeKind::Folder, &mut report)
-                .await
-            else {
-                continue;
-            };
-            let ReadBody::Folder {
-                modified_at,
-                children,
-                ..
-            } = &adopted.read_body
-            else {
-                // The parent's child ref said folder: a sealed file body is a
-                // kind transplant, fail-closed.
-                emit_trust_violation(
-                    self.events,
-                    name.as_str(),
-                    "sealed file body behind a folder child ref",
-                );
-                report.fold(RefreshVerdict::Rejected);
-                continue;
-            };
-            let split = match self.split(*folder, children) {
-                Ok(split) => split,
-                Err(over_full) => {
-                    emit_trust_violation(self.events, name.as_str(), over_full);
-                    report.fold(RefreshVerdict::Rejected);
-                    continue;
-                }
-            };
-            if split.as_ref().is_some_and(|split| split.names_own_tree) {
-                emit_trust_violation(
-                    self.events,
-                    name.as_str(),
-                    "child ref names a node this vault's own tree holds",
-                );
-            }
-            let (linkable, withheld) = match &split {
-                Some(split) => (split.linkable.as_slice(), split.withheld.as_slice()),
-                None => (children.as_slice(), NOTHING_WITHHELD),
-            };
-            let merged = merge_folder(
-                &mut self.base.borrow_mut(),
-                *folder,
-                linkable,
-                withheld,
-                adopted.sequence,
-                *modified_at,
-            );
-            report.changed |= merged.changed;
-            // A departure below a grafted root is the sharer's to bin: no pass
-            // of this vault adopts it, and holding it starves the bounded set.
-            if self.plane.is_none() {
-                report.departed.extend(merged.observed_unlinks(
-                    scope,
-                    *folder,
-                    name.as_str().as_bytes(),
-                    self.observed_at,
-                ));
-            }
+            self.read_folder(*folder, &mut report).await;
         }
         report
+    }
+
+    /// Merge one folder into the base. `true` only when its record passed the
+    /// gate on this read and the merge ran.
+    pub(crate) async fn read_folder(
+        &self,
+        folder: NodeId,
+        report: &mut FolderRefreshReport,
+    ) -> bool {
+        let Some((name, adopted, scope)) =
+            self.resolve_focused(folder, NodeKind::Folder, report).await
+        else {
+            return false;
+        };
+        let ReadBody::Folder {
+            modified_at,
+            children,
+            ..
+        } = &adopted.read_body
+        else {
+            // The parent's child ref said folder: a sealed file body is a
+            // kind transplant, fail-closed.
+            emit_trust_violation(
+                self.events,
+                name.as_str(),
+                "sealed file body behind a folder child ref",
+            );
+            report.fold(RefreshVerdict::Rejected);
+            return false;
+        };
+        let split = match self.split(folder, children) {
+            Ok(split) => split,
+            Err(over_full) => {
+                emit_trust_violation(self.events, name.as_str(), over_full);
+                report.fold(RefreshVerdict::Rejected);
+                return false;
+            }
+        };
+        if split.as_ref().is_some_and(|split| split.names_own_tree) {
+            emit_trust_violation(
+                self.events,
+                name.as_str(),
+                "child ref names a node this vault's own tree holds",
+            );
+        }
+        let (linkable, withheld) = match &split {
+            Some(split) => (split.linkable.as_slice(), split.withheld.as_slice()),
+            None => (children.as_slice(), NOTHING_WITHHELD),
+        };
+        let merged = merge_folder(
+            &mut self.base.borrow_mut(),
+            folder,
+            linkable,
+            withheld,
+            adopted.sequence,
+            *modified_at,
+        );
+        report.changed |= merged.changed;
+        // A departure below a grafted root is the sharer's to bin: no pass
+        // of this vault adopts it, and holding it starves the bounded set.
+        if self.plane.is_none() {
+            report.departed.extend(merged.observed_unlinks(
+                scope,
+                folder,
+                name.as_str().as_bytes(),
+                self.observed_at,
+            ));
+        }
+        true
     }
 
     /// How this leg's plane splits a foreign body's children
@@ -243,43 +258,41 @@ where
     /// Failure handling is the folder leg's, and a file that has published no
     /// version leaves the base untouched rather than projecting a zero.
     pub(crate) async fn run_files(&self, files: &[NodeId]) -> FolderRefreshReport {
-        let mut report = FolderRefreshReport {
-            changed: false,
-            verdict: RefreshVerdict::Reconciled,
-            unread: false,
-            departed: Vec::new(),
-            pins: Vec::new(),
-            lapsed: Vec::new(),
-        };
+        let mut report = FolderRefreshReport::reconciled();
         for file in files {
-            let Some((name, adopted, _)) = self
-                .resolve_focused(*file, NodeKind::File, &mut report)
-                .await
-            else {
-                continue;
-            };
-            let ReadBody::File { versions, .. } = &adopted.read_body else {
-                emit_trust_violation(
-                    self.events,
-                    name.as_str(),
-                    "sealed folder body behind a file child ref",
-                );
-                report.fold(RefreshVerdict::Rejected);
-                continue;
-            };
-            let Some(head) = versions.first() else {
-                continue;
-            };
+            self.read_file(*file, &mut report).await;
+        }
+        report
+    }
+
+    /// Fold one file's published head into the base, and answer its version
+    /// list, newest first.
+    pub(crate) async fn read_file(
+        &self,
+        file: NodeId,
+        report: &mut FolderRefreshReport,
+    ) -> Option<Vec<Version>> {
+        let (name, adopted, _) = self.resolve_focused(file, NodeKind::File, report).await?;
+        let ReadBody::File { versions, .. } = adopted.read_body else {
+            emit_trust_violation(
+                self.events,
+                name.as_str(),
+                "sealed folder body behind a file child ref",
+            );
+            report.fold(RefreshVerdict::Rejected);
+            return None;
+        };
+        if let Some(head) = versions.first() {
             report.changed |= project_child_version(
                 &mut self.base.borrow_mut(),
-                *file,
+                file,
                 head.size,
                 head.modified_at,
                 versions.len() as u64,
                 Some(&head.content_cid),
             );
         }
-        report
+        Some(versions)
     }
 
     /// Resolve one focused node's own record through the child gate, with the
@@ -997,5 +1010,55 @@ mod tests {
         assert!(!reported, "a lagging record is not abuse");
         assert_eq!(leg.verdict.get(), RefreshVerdict::Unreachable);
         assert!(leg.listing(FOLDER).is_empty());
+    }
+
+    /// A listing can name a child at a name that does not parse. The leg then
+    /// reads no record for it, and its report still reads as reconciled, so
+    /// only `read_folder` shows that the stale links below it were not read.
+    #[test]
+    fn a_folder_at_a_name_that_does_not_parse_reads_as_not_gated() {
+        let leg = FolderLeg::new(SCOPE_A, Vec::new());
+        leg.place(SCOPE_A, "shared", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        leg.place(DROPPED, "stale", Some(FOLDER));
+        leg.base
+            .borrow_mut()
+            .node_mut(NodeId(FOLDER))
+            .expect("the folder is placed")
+            .ipns_name = Some(b"not-a-name".to_vec());
+        let (events, _rx) = mpsc::unbounded();
+        let scope_roots = scope_roots();
+        let claims = RefCell::new(ClaimRecord::default());
+        let refresh = FolderRefresh {
+            transport: &leg.records,
+            snapshot_cache: &leg.snapshot_cache,
+            http: &leg.http,
+            floors: &leg.floors,
+            gateway: &leg.gateway,
+            base: &leg.base,
+            events: &events,
+            forks: &ForkSightings::default(),
+            scope_id: SCOPE_A,
+            scope_read_seed: &leg.read_seed,
+            seed_stamp: None,
+            owed_move: None,
+            scope_root_name: None,
+            plane: Some(GraftedLeg {
+                scope_roots: &scope_roots,
+                claims: &claims,
+            }),
+            mode: ResolveMode::NoCache,
+            observed_at: 0,
+        };
+
+        let report = block_on(refresh.run(&[NodeId(FOLDER)]));
+        assert_eq!(report.verdict, RefreshVerdict::Reconciled);
+        assert!(!report.unread, "the run reports nothing unread");
+        let mut report = FolderRefreshReport::reconciled();
+        assert!(
+            !block_on(refresh.read_folder(NodeId(FOLDER), &mut report)),
+            "the folder's record did not pass the gate on this read"
+        );
+        assert_eq!(leg.listing(FOLDER), vec!["stale".to_owned()]);
     }
 }

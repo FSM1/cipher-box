@@ -11,7 +11,7 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::content::CONTENT_CID_LEN;
-use cipherbox_core::seal::OwnerLocalKind;
+use cipherbox_core::seal::{OwnerLocalKind, Version};
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
@@ -574,6 +574,29 @@ pub(crate) fn kept_outcome(result: &KeptResult, live: LiveValue<'_>) -> KeptOutc
     }
 }
 
+/// The live value a rename or a move under `parent` is checked against:
+/// `place` is the folder that holds the node, and its name there.
+pub(crate) fn live_place<'a>(
+    result: &KeptResult,
+    parent: NodeId,
+    place: Option<&'a (NodeId, Zeroizing<String>)>,
+) -> LiveValue<'a> {
+    match (result, place) {
+        (KeptResult::Rename { .. }, Some((holder, name))) if *holder == parent => {
+            LiveValue::Name(name)
+        }
+        (KeptResult::Move { .. }, Some((holder, name))) => LiveValue::Place(*holder, name),
+        _ => LiveValue::Absent,
+    }
+}
+
+/// The live head of a file's version list, newest first.
+pub(crate) fn live_head(versions: &[Version]) -> LiveValue<'_> {
+    versions
+        .first()
+        .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid))
+}
+
 /// Whether `staging_key` holds an identity's published-op mark or kept-op notes.
 pub(crate) fn is_kept_op_key(staging_key: &[u8]) -> bool {
     staging_key.starts_with(PUBLISHED_OP_MARK_PREFIX)
@@ -604,6 +627,15 @@ impl KeptOps {
     /// The folder the note of `op_id` names.
     pub(crate) fn parent(&self, op_id: OpId) -> Option<NodeId> {
         self.notes.notes.get(&op_id).and_then(|note| note.parent)
+    }
+
+    /// The write epoch the note of `op_id` names, `None` for an unknown one.
+    pub(crate) fn write_epoch(&self, op_id: OpId) -> Option<u64> {
+        self.notes
+            .notes
+            .get(&op_id)
+            .map(|note| note.write_epoch)
+            .filter(|epoch| *epoch != UNKNOWN_WRITE_EPOCH)
     }
 
     /// The scope root the note of `op_id` names.
@@ -644,8 +676,9 @@ pub(crate) enum KeptPlace {
     },
     /// The op's scope, rooted at `root`, is a proved root that this device
     /// holds no write seed for: a revoke or a downgrade took it. The op does
-    /// not apply again: the pass takes it out before the rebase, and the valve
-    /// charges it on the keyless charge until it dead-letters (ADR 0069 D3).
+    /// not apply again: the pass takes it out before the rebase. One that the
+    /// moved tree decides leaves, and the valve charges any other on the
+    /// keyless charge until it dead-letters (ADR 0069 D3).
     Keyless { root: NodeId },
     /// This pass cannot check the op at `root`: the boundary walk did not
     /// prove it, a gate-refused one included, or another pass writes it.
@@ -882,6 +915,18 @@ mod tests {
             first,
             "a later sight keeps the first"
         );
+    }
+
+    #[test]
+    fn a_note_at_the_unknown_write_epoch_names_no_write_epoch() {
+        let mut notes = KeptNotes::default();
+        notes
+            .insert(OpId(1), note(UNKNOWN_WRITE_EPOCH))
+            .expect("the note fits");
+        notes.insert(OpId(2), note(4)).expect("the note fits");
+        let kept = KeptOps::new(None, notes);
+        assert_eq!(kept.write_epoch(OpId(1)), None);
+        assert_eq!(kept.write_epoch(OpId(2)), Some(4));
     }
 
     #[test]
