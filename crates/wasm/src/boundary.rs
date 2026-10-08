@@ -40,9 +40,7 @@ fn refused() -> JsError {
 /// Decodes one command. Refuses an unknown `kind`, an unknown field, and a
 /// field of the wrong type.
 pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
-    // Bounded first, as for a read: a placeholder copy drops an own
-    // `__proto__` key.
-    let command = &bounded_copy(command, false, refused)?;
+    let command = &bounded_copy(command, true, refused)?;
     let kind = field(command, "kind");
     if kind == "claimInviteLink" {
         return decode_secret_text(
@@ -109,8 +107,6 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
 /// of the wrong type. The two secrets a read carries, an invite fragment and a
 /// rendezvous step's scalars, reach linear memory only in zeroizing buffers.
 pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
-    // Bounded first: the placeholder copy below writes each key with a set,
-    // which drops an own `__proto__` key the walk must see.
     let read = &bounded_copy(read, false, read_refused)?;
     match field(read, "kind").as_string().as_deref() {
         Some("invitePreview") => decode_secret_text(
@@ -214,7 +210,7 @@ pub fn encode_view<T: Serialize + ?Sized>(view: &T) -> Result<JsValue, JsError> 
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {
-    serde_wasm_bindgen::from_value(bounded_copy(command, true, refused)?).map_err(|_| refused())
+    serde_wasm_bindgen::from_value(command.clone()).map_err(|_| refused())
 }
 
 /// The bounds on a value the boundary decodes, which come over a port from
@@ -237,7 +233,9 @@ const MAX_VALUE_VISITS: usize = 64;
 /// null-prototype object does not, but no legitimate value holds one. With
 /// `tag_bigints`, each `bigint` becomes a [`BIGINT_TAG`] object, so the command
 /// decode tells a `bigint` from a `number`; an object that already has the tag
-/// key is refused, so no tag reaches the decode but this one.
+/// key is refused, so no tag reaches the decode but this one. Each decode takes
+/// this copy before any other: a copy made with a set, as [`with_placeholder`]
+/// makes, drops an own `__proto__` key before the walk can see it.
 fn bounded_copy(
     value: &JsValue,
     tag_bigints: bool,

@@ -438,19 +438,31 @@ fn an_own_proto_key_is_refused() {
     assert!(decode_rendezvous_step(&step).is_err());
 }
 
-/// A primitive `__proto__` value leaves the prototype as it is, so only the
-/// key refusal stops it. The secret-text decodes copy the value with a
-/// placeholder, and that copy dropped the key before the walk saw it.
+/// An own `__proto__` key with a primitive value, which leaves the prototype
+/// as it is, is refused in each decode that takes a secret: the invite
+/// fragment of a read and of a claim, the identity token of a registration,
+/// and the provider bearer of a settings save.
 #[wasm_bindgen_test]
-fn an_own_proto_key_beside_a_secret_text_is_refused() {
+fn an_own_proto_key_beside_a_secret_is_refused() {
     let preview = built(
         r#"return structuredClone(JSON.parse(
              '{"kind":"invitePreview","fragment":"abc","__proto__":1}'));"#,
     );
     assert!(refused(&preview));
-    let claim = built(
+    for command in [
         r#"return structuredClone(JSON.parse(
              '{"kind":"claimInviteLink","fragment":"abc","name":"","__proto__":1}'));"#,
-    );
-    assert!(decode_command(&claim).is_err());
+        r#"return structuredClone(JSON.parse(
+             '{"kind":"registerDevice","publicKey":"ab","signature":"cd",' +
+             '"identityToken":"aGVhZGVy.cGF5bG9hZA.c2ln","label":"Laptop","__proto__":1}'));"#,
+        r#"const byo = JSON.parse(
+             '{"endpoint":"https://kubo.example","kind":"kubo","__proto__":1}');
+           byo.accessToken = new TextEncoder().encode('s3cret-token').buffer;
+           return structuredClone({
+             kind: 'saveVaultSettings',
+             settings: { pinMode: 'dual', byo, keepLatestVersions: 3, binRetentionDays: 30 },
+           });"#,
+    ] {
+        assert!(decode_command(&built(command)).is_err());
+    }
 }
