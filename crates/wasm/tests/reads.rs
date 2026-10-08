@@ -46,6 +46,38 @@ fn refused(read: &JsValue) -> bool {
     decode_read(read).is_err()
 }
 
+fn get(value: &JsValue, key: &str) -> JsValue {
+    Reflect::get(value, &text(key)).unwrap()
+}
+
+/// A `bin` read that carries `value` in one extra field.
+fn bin_with(value: JsValue) -> JsValue {
+    object(&[("kind", text("bin")), ("x", value)])
+}
+
+/// A `deny` step that carries `value` in one extra field.
+fn deny_step_with(value: JsValue) -> JsValue {
+    object(&[
+        ("kind", text("deny")),
+        ("devicePublicKey", text("cd11")),
+        ("requestId", text("r")),
+        ("ephemeralPublicKey", text("02beef")),
+        ("x", value),
+    ])
+}
+
+/// Runs `source` and returns what it returns.
+fn built(source: &str) -> JsValue {
+    Function::new_no_args(source)
+        .call0(&JsValue::NULL)
+        .expect("the builder runs")
+}
+
+/// Splits what a builder returned into its `value` and its `seen` record.
+fn value_and_seen(built: JsValue) -> (JsValue, JsValue) {
+    (get(&built, "value"), get(&built, "seen"))
+}
+
 #[wasm_bindgen_test]
 fn a_read_decodes_from_its_generated_shape() {
     let snapshot = object(&[("kind", text("snapshot")), ("folder", bytes(&[7; 16]))]);
@@ -169,22 +201,16 @@ fn a_rendezvous_read_takes_its_step_through_the_step_decode() {
 #[wasm_bindgen_test]
 fn an_answer_crosses_under_the_kind_of_its_read() {
     let download = encode_view(&ReadAnswer::Download(Zeroizing::new(vec![1, 2, 3]))).unwrap();
-    assert_eq!(
-        Reflect::get(&download, &text("kind")).unwrap(),
-        text("download")
-    );
-    let value = Reflect::get(&download, &text("value")).unwrap();
+    assert_eq!(get(&download, "kind"), text("download"));
+    let value = get(&download, "value");
     let value = value
         .dyn_into::<Uint8Array>()
         .expect("a byte answer is a Uint8Array");
     assert_eq!(value.to_vec(), vec![1, 2, 3]);
 
     let nonce = encode_view(&ReadAnswer::SiweChallenge("n0nce".into())).unwrap();
-    assert_eq!(
-        Reflect::get(&nonce, &text("kind")).unwrap(),
-        text("siweChallenge")
-    );
-    assert_eq!(Reflect::get(&nonce, &text("value")).unwrap(), text("n0nce"));
+    assert_eq!(get(&nonce, "kind"), text("siweChallenge"));
+    assert_eq!(get(&nonce, "value"), text("n0nce"));
 }
 
 /// A SIWE nonce is minted for the pool the intent names, and for no other
@@ -211,23 +237,21 @@ fn a_siwe_read_names_its_pool_and_refuses_any_other() {
 /// Builds `(value, seen)`: `value` nests one object `depth` levels deep whose
 /// `leaf` getter sets `seen.read` when anything reads it.
 fn watched(depth: u32) -> (JsValue, JsValue) {
-    let built = Function::new_with_args(
-        "depth",
-        "const seen = { read: false };
+    value_and_seen(
+        Function::new_with_args(
+            "depth",
+            "const seen = { read: false };
          let value = { get leaf() { seen.read = true; return 1; } };
          for (let i = 0; i < depth; i++) value = { inner: value };
          return { value, seen };",
-    )
-    .call1(&JsValue::NULL, &JsValue::from(depth))
-    .expect("the builder runs");
-    (
-        Reflect::get(&built, &text("value")).unwrap(),
-        Reflect::get(&built, &text("seen")).unwrap(),
+        )
+        .call1(&JsValue::NULL, &JsValue::from(depth))
+        .expect("the builder runs"),
     )
 }
 
 fn was_read(seen: &JsValue) -> bool {
-    Reflect::get(seen, &text("read")).unwrap().is_truthy()
+    get(seen, "read").is_truthy()
 }
 
 /// A port payload is untrusted, so a deep field is refused before the decode
@@ -235,34 +259,22 @@ fn was_read(seen: &JsValue) -> bool {
 #[wasm_bindgen_test]
 fn a_read_that_nests_too_deep_is_refused_unwalked() {
     let (value, seen) = watched(16);
-    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(refused(&bin_with(value)));
     assert!(!was_read(&seen));
 }
 
 #[wasm_bindgen_test]
 fn a_rendezvous_step_that_nests_too_deep_is_refused_unwalked() {
     let (value, seen) = watched(16);
-    let step = object(&[
-        ("kind", text("deny")),
-        ("devicePublicKey", text("cd11")),
-        ("requestId", text("r")),
-        ("ephemeralPublicKey", text("02beef")),
-        ("x", value),
-    ]);
-    assert!(decode_rendezvous_step(&step).is_err());
+    assert!(decode_rendezvous_step(&deny_step_with(value)).is_err());
     assert!(!was_read(&seen));
 }
 
-/// A structured clone keeps cycles, so a cyclic field is refused rather than
-/// walked without end.
 #[wasm_bindgen_test]
 fn a_cyclic_read_is_refused() {
     let cycle = Object::new();
     Reflect::set(&cycle, &text("self"), &cycle).unwrap();
-    assert!(refused(&object(&[
-        ("kind", text("bin")),
-        ("x", cycle.into())
-    ])));
+    assert!(refused(&bin_with(cycle.into())));
 }
 
 #[wasm_bindgen_test]
@@ -270,10 +282,7 @@ async fn a_read_that_needs_a_session_is_refused_before_one() {
     let refusal = JsFuture::from(read_unstarted(Ts::new_unchecked(kind("bin"))))
         .await
         .expect_err("no session serves the bin");
-    assert_eq!(
-        Reflect::get(&refusal, &text("code")).unwrap(),
-        text("notStarted")
-    );
+    assert_eq!(get(&refusal, "code"), text("notStarted"));
 }
 
 async fn fingerprint(key: &[u8]) -> Result<JsValue, String> {
@@ -303,14 +312,8 @@ async fn a_fingerprint_read_needs_no_session() {
         .map(|at| u8::from_str_radix(&IDENTITY_PK[at..at + 2], 16).unwrap())
         .collect();
     let answer = fingerprint(&key).await.expect("a session-free read");
-    assert_eq!(
-        Reflect::get(&answer, &text("kind")).unwrap(),
-        text("identityFingerprint")
-    );
-    assert_eq!(
-        Reflect::get(&answer, &text("value")).unwrap(),
-        text("e686 bdd6 b44e 05c4 4db0")
-    );
+    assert_eq!(get(&answer, "kind"), text("identityFingerprint"));
+    assert_eq!(get(&answer, "value"), text("e686 bdd6 b44e 05c4 4db0"));
     assert_eq!(
         fingerprint(&[2; 32]).await.unwrap_err(),
         "invalid identity public key"
@@ -320,9 +323,10 @@ async fn a_fingerprint_read_needs_no_session() {
 /// Builds `(value, seen)`: `value` is one object with `keys` keys whose last
 /// key is a getter that sets `seen.read` when anything reads it.
 fn wide(keys: u32) -> (JsValue, JsValue) {
-    let built = Function::new_with_args(
-        "keys",
-        "const seen = { read: false };
+    value_and_seen(
+        Function::new_with_args(
+            "keys",
+            "const seen = { read: false };
          const value = {};
          for (let i = 0; i < keys - 1; i++) value['k' + i] = i;
          Object.defineProperty(value, 'last', {
@@ -330,12 +334,9 @@ fn wide(keys: u32) -> (JsValue, JsValue) {
            get() { seen.read = true; return 1; },
          });
          return { value, seen };",
-    )
-    .call1(&JsValue::NULL, &JsValue::from(keys))
-    .expect("the builder runs");
-    (
-        Reflect::get(&built, &text("value")).unwrap(),
-        Reflect::get(&built, &text("seen")).unwrap(),
+        )
+        .call1(&JsValue::NULL, &JsValue::from(keys))
+        .expect("the builder runs"),
     )
 }
 
@@ -344,7 +345,7 @@ fn wide(keys: u32) -> (JsValue, JsValue) {
 /// in a value a structured clone carries as 4 objects with 40 references.
 /// The top object's last key is a getter that sets `seen.read`.
 fn shared() -> (JsValue, JsValue) {
-    let built = Function::new_no_args(
+    value_and_seen(built(
         "const seen = { read: false };
          let below = 0;
          for (let level = 0; level < 4; level++) {
@@ -357,20 +358,14 @@ fn shared() -> (JsValue, JsValue) {
            get() { seen.read = true; return 1; },
          });
          return { value: below, seen };",
-    )
-    .call0(&JsValue::NULL)
-    .expect("the builder runs");
-    (
-        Reflect::get(&built, &text("value")).unwrap(),
-        Reflect::get(&built, &text("seen")).unwrap(),
-    )
+    ))
 }
 
 /// One object past the key cap is refused before any of its values is read.
 #[wasm_bindgen_test]
 fn a_read_with_too_many_keys_is_refused_unread() {
     let (value, seen) = wide(17);
-    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(refused(&bin_with(value)));
     assert!(!was_read(&seen));
 }
 
@@ -379,7 +374,7 @@ fn a_read_with_too_many_keys_is_refused_unread() {
 #[wasm_bindgen_test]
 fn a_read_past_the_visit_cap_is_refused_unread() {
     let (value, seen) = shared();
-    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(refused(&bin_with(value)));
     assert!(!was_read(&seen));
 }
 
@@ -390,19 +385,12 @@ fn a_cyclic_write_target_is_refused() {
     assert!(decode_write_target(target).is_err());
 }
 
-/// Runs `source` and returns what it returns.
-fn built(source: &str) -> JsValue {
-    Function::new_no_args(source)
-        .call0(&JsValue::NULL)
-        .expect("the builder runs")
-}
-
 /// A `Map` has no own keys for the caps to count, and serde reads every
 /// entry, so the walk refuses it.
 #[wasm_bindgen_test]
 fn a_read_that_holds_a_self_containing_map_is_refused() {
     let map = built("const m = new Map(); m.set('a', m); return m;");
-    assert!(refused(&object(&[("kind", text("bin")), ("x", map)])));
+    assert!(refused(&bin_with(map)));
 }
 
 /// The untagged decode would read this `Map` as a valid version target, so
@@ -421,14 +409,7 @@ fn a_rendezvous_step_with_a_set_or_map_field_is_refused() {
         "const s = new Set(); s.add(s); return s;",
         "const m = new Map(); m.set('a', m); return m;",
     ] {
-        let step = object(&[
-            ("kind", text("deny")),
-            ("devicePublicKey", text("cd11")),
-            ("requestId", text("r")),
-            ("ephemeralPublicKey", text("02beef")),
-            ("x", built(field)),
-        ]);
-        assert!(decode_rendezvous_step(&step).is_err());
+        assert!(decode_rendezvous_step(&deny_step_with(built(field))).is_err());
     }
 }
 

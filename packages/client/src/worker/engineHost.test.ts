@@ -60,8 +60,12 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
  * only the host's own field checks can refuse a request.
  */
 /** A host whose engine is already built, as every call but `start` requires. */
+function unstarted(wasm: EngineWasm): EngineHost {
+  return new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+}
+
 async function started(wasm: EngineWasm): Promise<EngineHost> {
-  const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+  const host = unstarted(wasm);
   await host.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
   return host;
 }
@@ -449,8 +453,12 @@ function readingWasm(value: (read: ReadDescriptor) => Promise<unknown>): {
   return { wasm, reads };
 }
 
-function unstarted(wasm: EngineWasm): EngineHost {
-  return new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+/** A started host over [`readingWasm`]. */
+async function startedReading(
+  value: (read: ReadDescriptor) => Promise<unknown>
+): Promise<{ host: EngineHost; reads: [ReadPath, ReadDescriptor][] }> {
+  const { wasm, reads } = readingWasm(value);
+  return { host: await started(wasm), reads };
 }
 
 describe('EngineHost reads', () => {
@@ -476,8 +484,7 @@ describe('EngineHost reads', () => {
   });
 
   it('hands a read after start to the engine as it arrived', async () => {
-    const { wasm, reads } = readingWasm(() => Promise.resolve(emptySnapshot()));
-    const host = await started(wasm);
+    const { host, reads } = await startedReading(() => Promise.resolve(emptySnapshot()));
 
     await expect(host.read({ kind: 'snapshot', folder: null })).resolves.toEqual(emptySnapshot());
     expect(reads).toEqual([['engine', { kind: 'snapshot', folder: null }]]);
@@ -492,8 +499,7 @@ describe('EngineHost reads', () => {
       joined: false,
       listing: [],
     };
-    const { wasm, reads } = readingWasm(() => Promise.resolve(preview));
-    const host = await started(wasm);
+    const { host, reads } = await startedReading(() => Promise.resolve(preview));
 
     await expect(host.read({ kind: 'invitePreview', fragment: 'abc-_' })).resolves.toEqual(preview);
     expect(reads).toEqual([['engine', { kind: 'invitePreview', fragment: 'abc-_' }]]);
@@ -509,8 +515,7 @@ describe('EngineHost reads', () => {
   ] as [string, ReadDescriptor][])(
     'answers a %s with a buffer of the same bytes',
     async (_kind, read) => {
-      const { wasm } = readingWasm(() => Promise.resolve(Uint8Array.of(7, 8, 9)));
-      const host = await started(wasm);
+      const { host } = await startedReading(() => Promise.resolve(Uint8Array.of(7, 8, 9)));
 
       const answer = await host.read(read);
 
@@ -520,8 +525,9 @@ describe('EngineHost reads', () => {
   );
 
   it('answers a byte view with only the bytes it spans', async () => {
-    const { wasm } = readingWasm(() => Promise.resolve(Uint8Array.of(0, 1, 2, 3).subarray(1, 3)));
-    const host = await started(wasm);
+    const { host } = await startedReading(() =>
+      Promise.resolve(Uint8Array.of(0, 1, 2, 3).subarray(1, 3))
+    );
 
     const answer = await host.read({ kind: 'download', node: new Uint8Array(16) });
 
@@ -529,10 +535,9 @@ describe('EngineHost reads', () => {
   });
 
   it('refuses a snapshot carrying a permission this build does not know', async () => {
-    const { wasm } = readingWasm(() =>
+    const { host } = await startedReading(() =>
       Promise.resolve({ ...emptySnapshot(), permission: 'admin' })
     );
-    const host = await started(wasm);
 
     await expect(host.read({ kind: 'snapshot', folder: null })).rejects.toThrow(
       'unknown WASM permission: admin'
@@ -622,8 +627,7 @@ describe('EngineHost device rendezvous', () => {
     ],
     ['rejects', () => Promise.reject(new Error('the rendezvous step does not decode'))],
   ])('scrubs the step when the wasm call %s', async (_case, value) => {
-    const { wasm } = readingWasm(value);
-    const host = await started(wasm);
+    const { host } = await startedReading(value);
     const step = approve();
 
     await expect(host.read({ kind: 'deviceRendezvous', step })).rejects.toThrow(
@@ -634,8 +638,7 @@ describe('EngineHost device rendezvous', () => {
   });
 
   it('hands the step to the wasm and answers with its result', async () => {
-    const { wasm, reads } = readingWasm(rendezvousAnswer);
-    const host = await started(wasm);
+    const { host, reads } = await startedReading(rendezvousAnswer);
 
     await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).resolves.toEqual({
       kind: 'response',
@@ -646,8 +649,7 @@ describe('EngineHost device rendezvous', () => {
   });
 
   it('refuses a result kind this build does not know', async () => {
-    const { wasm } = readingWasm(() => Promise.resolve({ kind: 'bogus' }));
-    const host = await started(wasm);
+    const { host } = await startedReading(() => Promise.resolve({ kind: 'bogus' }));
 
     await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).rejects.toThrow(
       'unknown WASM rendezvous result kind: bogus'

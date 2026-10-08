@@ -11,18 +11,24 @@ vi.mock('./worker/protocol.js', async (importOriginal) => {
   return actual;
 });
 
+/** A leader relay over a fake engine, and one follower that reaches it. */
+function relayedFollower(): { engine: FakeEngineTransport; follower: BroadcastTransport } {
+  const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
+  const engine = new FakeEngineTransport();
+  new LeaderRelay(bus.channel(), engine, ports.courier('leader'), bus.locks);
+  const follower = new BroadcastTransport(
+    bus.channel(),
+    'follower-1',
+    ports.courier('follower-1'),
+    bus.locks
+  );
+  return { engine, follower };
+}
+
 describe('leader relay rendezvous wipe', () => {
   it('erases every listed secret field of the step it served', async () => {
-    const bus = new FakeBus();
-    const ports = new FakeCourierNetwork();
-    const engine = new FakeEngineTransport();
-    new LeaderRelay(bus.channel(), engine, ports.courier('leader'), bus.locks);
-    const follower = new BroadcastTransport(
-      bus.channel(),
-      'follower-1',
-      ports.courier('follower-1'),
-      bus.locks
-    );
+    const { engine, follower } = relayedFollower();
     let relayHeld: unknown = null;
     engine.respondRendezvous = (step) => {
       relayHeld = (step as unknown as Record<string, unknown>).laterSecret;
@@ -48,9 +54,7 @@ describe('leader relay rendezvous wipe', () => {
 
 describe('leader relay reads', () => {
   it('serves a follower any read kind and leaves the refusal of an unknown one to the engine', async () => {
-    const bus = new FakeBus();
-    const ports = new FakeCourierNetwork();
-    const engine = new FakeEngineTransport();
+    const { engine, follower } = relayedFollower();
     const served: unknown[] = [];
     vi.spyOn(engine, 'read').mockImplementation((read) => {
       served.push(read.kind);
@@ -58,13 +62,6 @@ describe('leader relay reads', () => {
         ? (Promise.resolve('later answer') as never)
         : Promise.reject(new Error('the read does not decode'));
     });
-    new LeaderRelay(bus.channel(), engine, ports.courier('leader'), bus.locks);
-    const follower = new BroadcastTransport(
-      bus.channel(),
-      'follower-1',
-      ports.courier('follower-1'),
-      bus.locks
-    );
     const laterRead = { kind: 'laterRead' } as unknown as ReadDescriptor;
     const unknownRead = { kind: 'noSuchRead' } as unknown as ReadDescriptor;
 
