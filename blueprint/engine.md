@@ -2185,7 +2185,8 @@ process; web wraps it via `crates/wasm` bindings inside a dedicated worker,
 with the RPC facade and tab leadership owned by `packages/client`
 (FSM1/cipher-box-next#28 D3/D4). The engine's contract is only this: one live instance is the single
 writer, and every trust decision already happened below the facade — hosts
-render, they never decide.
+render, they never decide. A command's defaults live in its arm, such as the
+root that `SetFocus` with no node focuses.
 
 ## Open edges
 

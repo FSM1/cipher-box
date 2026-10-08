@@ -1770,8 +1770,8 @@ pub enum Command {
     },
 
     // --- focus and refresh ---
-    /// Set the open folder driving the focus window; `None` when no folder
-    /// is open.
+    /// Set the open folder driving the focus window; `None` focuses the
+    /// current root (blueprint/web-client.md "UI state law").
     SetFocus {
         /// The open folder, if any.
         #[cfg_attr(
@@ -11059,12 +11059,11 @@ where {
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
     pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
         self.live_session()?;
-        self.state.focus.borrow_mut().open_folder = node;
+        let folder = node.unwrap_or_else(|| self.root());
+        self.state.focus.borrow_mut().open_folder = Some(folder);
         let probes = RootProbes::default();
-        if let Some(folder) = node {
-            self.locate_folder(folder, &probes).await;
-        }
-        self.refresh_focus_on_access(self.seams.scheduler.now(), node, &probes)
+        self.locate_folder(folder, &probes).await;
+        self.refresh_focus_on_access(self.seams.scheduler.now(), Some(folder), &probes)
             .await;
         Ok(())
     }
@@ -16758,6 +16757,22 @@ mod tests {
             .find(|child| child.name == name)
             .expect("the child is listed")
             .id
+    }
+
+    #[test]
+    fn a_focus_on_no_folder_focuses_the_root() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        block_on(engine.command(Command::SetFocus { node: None })).unwrap();
+        assert_eq!(engine.state.focus.borrow().open_folder, Some(root));
+
+        let folder = NodeId([5; 16]);
+        block_on(engine.command(Command::SetFocus { node: Some(folder) })).unwrap();
+        assert_eq!(
+            engine.state.focus.borrow().open_folder,
+            Some(folder),
+            "a named folder stays the focus"
+        );
     }
 
     fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
