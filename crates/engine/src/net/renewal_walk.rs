@@ -32,7 +32,7 @@ use super::publish::{
     RefusedRead, SignatureGate, head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
-use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, retired_here};
+use super::retire::{Acknowledged, AdmittedParent, OrphanHeads, StagingRetireLedger, retired_here};
 use super::revival::{
     ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
     revive_name, write_signer,
@@ -233,9 +233,6 @@ struct Plane {
     /// `None` for a held key, which binds no epoch.
     seed_stamp: Option<u64>,
 }
-
-/// A parent record the walk admitted, as `(node id, sequence)`.
-type AdmittedParent = ([u8; 16], u64);
 
 /// One folder on the walk's path, its children in node-id order.
 struct Frame {

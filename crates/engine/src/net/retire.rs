@@ -190,17 +190,19 @@ pub(crate) fn linked_nowhere(base: &Snapshot, node: [u8; 16]) -> bool {
     base.links_to(NodeId(node)).is_empty()
 }
 
-/// [`linked_nowhere`], unless `admitted_parent` links `node`: a parent record
-/// the walk admitted, as `(node id, sequence)`, that names the node and that
-/// the base holds at no newer sequence. The base is local to the device, so a
-/// parent this device never loaded links the node where the base cannot see.
-/// A folder the device never opened is held at the default sequence 1, which
-/// a first publish that already names the node also carries, so an equal
-/// sequence counts as linked: a leak, never a loss.
+/// A parent record the walk admitted, as `(node id, sequence)`.
+pub(crate) type AdmittedParent = ([u8; 16], u64);
+
+/// [`linked_nowhere`], unless `admitted_parent` links `node`: it names the
+/// node, and the base holds it at no newer sequence. The base is local to the
+/// device, so a parent this device never loaded links the node where the base
+/// cannot see. A folder the device never opened is held at the default
+/// sequence 1, which a first publish that already names the node also
+/// carries, so an equal sequence counts as linked: a leak, never a loss.
 pub(crate) fn retired_here(
     base: &Snapshot,
     node: [u8; 16],
-    admitted_parent: Option<([u8; 16], u64)>,
+    admitted_parent: Option<AdmittedParent>,
 ) -> bool {
     linked_nowhere(base, node)
         && !admitted_parent.is_some_and(|(parent, sequence)| {
