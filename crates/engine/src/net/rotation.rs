@@ -935,9 +935,8 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// and an empty head CID is this build's own release-active refusal to sign
 /// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
 /// pass authored, so a retry re-authors and re-charges a head block forever
-/// without converging. Everything else, including a body this pass built too
-/// large, stays retryable: those inputs are attacker-influenced, and a permanent
-/// verdict on them would let anyone who can grow a record block the rotation.
+/// without converging. Everything else stays retryable, a size refusal included
+/// ([`PublishVerdict::RefusedOversized`]).
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
@@ -1643,15 +1642,7 @@ where
         },
     )
     .await
-    .map_err(|error| match error.verdict() {
-        PublishVerdict::RegistryRefused => PointerPublishFailure::RegistryFull,
-        PublishVerdict::Refused
-        | PublishVerdict::RefusedUnaddressed
-        | PublishVerdict::RefusedOversized => PointerPublishFailure::Rejected,
-        PublishVerdict::NotLanded
-        | PublishVerdict::PutUnacknowledged
-        | PublishVerdict::PutRefused => PointerPublishFailure::NotLanded,
-    })?;
+    .map_err(pointer_publish_verdict)?;
     match receipt.outcome {
         PublishOutcome::Published { sequence } => {
             let name = observed.name().as_str().as_bytes();
@@ -1662,6 +1653,19 @@ where
         }
         PublishOutcome::LostRace { .. } => Err(PointerPublishFailure::LostRace),
         PublishOutcome::Unconfirmed { .. } => Err(PointerPublishFailure::NotLanded),
+    }
+}
+
+fn pointer_publish_verdict(error: PublishError) -> PointerPublishFailure {
+    match error.verdict() {
+        PublishVerdict::RegistryRefused => PointerPublishFailure::RegistryFull,
+        PublishVerdict::Refused | PublishVerdict::RefusedUnaddressed => {
+            PointerPublishFailure::Rejected
+        }
+        PublishVerdict::RefusedOversized
+        | PublishVerdict::NotLanded
+        | PublishVerdict::PutUnacknowledged
+        | PublishVerdict::PutRefused => PointerPublishFailure::NotLanded,
     }
 }
 
@@ -4934,8 +4938,8 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 /// The same axis for the publish pipeline. A CID the API echoes back wrong, and
 /// the pipeline's own release-active encode refusals, are deterministic on the
 /// bytes this pass built — a retry re-uploads and re-charges a head block
-/// forever without converging. A size refusal retries, as in
-/// [`record_publish_verdict`].
+/// forever without converging. A size refusal retries
+/// ([`PublishVerdict::RefusedOversized`]).
 pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
@@ -11267,8 +11271,7 @@ mod tests {
     #[test]
     fn a_rotation_publish_refusal_this_pass_authored_is_never_retried() {
         // A mis-echoed CID and an empty head CID are verdicts on what this pass
-        // authored, so a retry re-authors them and refuses again. A size refusal
-        // is attacker-influenced and stays retryable (rule 6 axis).
+        // authored, so a retry re-authors them and refuses again.
         for deterministic in [
             RecordPublishError::HeadCidMismatch {
                 expected: "bafy-ours".to_owned(),
@@ -11287,7 +11290,7 @@ mod tests {
                 limit: 0,
             }))
             .is_retryable(),
-            "a size refusal on an attacker-influenced record stays retryable",
+            "a size refusal stays retryable",
         );
         assert_eq!(
             record_publish_verdict(RecordPublishError::Placement(
@@ -11308,18 +11311,21 @@ mod tests {
     #[test]
     fn a_size_refusal_does_not_stop_a_write_wave_for_good() {
         let oversized = || PublishError::RecordTooLarge { size: 1, limit: 0 };
-        assert_eq!(
-            publish_record_verdict(RecordPublishError::Publish(oversized())),
-            WritePublishError::NotLanded,
+        let error = publish_record_verdict(RecordPublishError::Publish(oversized()));
+        assert_eq!(error, WritePublishError::NotLanded);
+        assert!(
+            crate::rotation::rotate_write::WriteRotateError::Publish {
+                stage: "republish",
+                node_id: [0; 16],
+                error,
+            }
+            .is_retryable(),
+            "a size refusal leaves the write wave to retry",
         );
         assert_eq!(
-            wave_publish_verdict(oversized()),
-            WritePublishError::NotLanded
-        );
-        assert_eq!(
-            rotation_publish_verdict(oversized()),
-            RotationPublishError::NotPublished,
-            "both publish verdicts class a size refusal as availability",
+            pointer_publish_verdict(oversized()),
+            PointerPublishFailure::NotLanded,
+            "the re-point publish classes it the same way",
         );
     }
 

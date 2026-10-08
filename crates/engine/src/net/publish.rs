@@ -424,8 +424,8 @@ pub enum PublishVerdict {
     Refused,
     /// [`Self::Refused`], reached before the request addressed any head block.
     RefusedUnaddressed,
-    /// [`Self::Refused`] for size: the record is over the cap, and its size
-    /// follows a body a committed writer can grow.
+    /// The engine refused a record over the byte cap before the PUT. The
+    /// refusal names no party, so it is a retry, not a trust class.
     RefusedOversized,
     /// Stopped before the PUT; a retry may land.
     NotLanded,
