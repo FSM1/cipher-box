@@ -1771,7 +1771,7 @@ pub enum Command {
 
     // --- focus and refresh ---
     /// Set the open folder driving the focus window; `None` focuses the
-    /// current root.
+    /// current root (blueprint/web-client.md "UI state law").
     SetFocus {
         /// The open folder, if any.
         #[cfg_attr(
@@ -11054,9 +11054,6 @@ where {
     /// record or one below it ([`Self::scope_root_moved`]), or whose root
     /// probe has no answer, reads nothing here; the next tick reads it. Each
     /// root is probed once per navigation.
-    ///
-    /// A focus on no folder focuses the current root: a host asks for the
-    /// root, it never names one (blueprint/web-client.md "UI state law").
     ///
     /// Shared-borrow, so a host can run its network legs beside the snapshot
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
