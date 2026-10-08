@@ -27,6 +27,8 @@ const DATABASES = ['floors', SNAPSHOT_CACHE, STAGING] as const;
 const STAGED_DIRECTORY = 'staging-staged';
 const OPS_STORE = 'ops';
 const TEMP_PREFIX = '.cbtmp.';
+/** The kept ops one {@link mintAndSignOut} leaves queued: the create and the rename. */
+const KEPT = 2;
 
 /** One account's containers on this origin, read off the public storage surface. */
 interface AccountStores {
@@ -125,9 +127,9 @@ function reclaimed(stores: AccountStores): AccountStores {
 }
 
 /**
- * Mints a link on `folder` as `login`, and signs out over a drained queue. The
- * rename takes the kept create out of the queue (ADR 0069 D2), so only
- * owner-local records hold the account's staging.
+ * Mints a link on `folder` as `login`, and signs out. A create and a rename are
+ * kept ops, which stay queued until a flip or the bound (ADR 0069 D2, D5), so
+ * the queue holds {@link KEPT} ops at the sign-out.
  */
 async function mintAndSignOut(device: Device, login: Login, folder: string): Promise<URL> {
   const page = await device.page();
@@ -135,7 +137,7 @@ async function mintAndSignOut(device: Device, login: Login, folder: string): Pro
   const files = new FilesPage(page);
   await files.rename(DRAFT, folder);
   await files.published();
-  await storesUntil(page, login.accountId, (stores) => expect(stores.queued).toBe(0));
+  await storesUntil(page, login.accountId, (stores) => expect(stores.queued).toBe(KEPT));
   await files.signOut();
   await expect(page).toHaveURL(/\/$/);
   return link;
@@ -156,7 +158,7 @@ test('@full owner-local state survives an account switch, and a forget erases on
     expect(stores.databases).toEqual(DATABASES);
     expect(stores.stagedDirectory).toBe(true);
     expect(stores.staged).toBeGreaterThan(0);
-    expect(stores.queued).toBe(0);
+    expect(stores.queued).toBe(KEPT);
   });
 
   const bBefore =
@@ -166,6 +168,7 @@ test('@full owner-local state survives an account switch, and a forget erases on
       return storesUntil(page, b.accountId, (stores) => {
         expect(stores.databases).toEqual(DATABASES);
         expect(stores.staged).toBeGreaterThan(0);
+        expect(stores.queued).toBe(KEPT);
       });
     });
 
