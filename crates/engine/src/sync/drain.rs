@@ -111,8 +111,9 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_op::{
-    KeptNote, KeptNotes, KeptOps, KeptPlace, KeptVerdict, is_kept, keeps, kept_verdict,
-    load_kept_notes, store_kept_notes,
+    KeptNote, KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue,
+    is_kept, keeps, kept_outcome, kept_verdict, load_kept_notes, needs_result, shows_a_flip,
+    store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -1790,6 +1791,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The folder that op writes under, from the base before its publish, for
     /// its kept-op note.
     kept_parent: Cell<Option<NodeId>>,
+    /// The result that op made, for the note of a kind that needs one
+    /// ([`needs_result`]).
+    kept_result: RefCell<Option<KeptResult>>,
     /// Whether that op's note or the published-op mark landed, so the op stays
     /// queued as a kept op.
     kept_now: Cell<bool>,
@@ -1822,6 +1826,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             mirror: RefCell::default(),
             keeps_op: Cell::new(false),
             kept_parent: Cell::new(None),
+            kept_result: RefCell::new(None),
             kept_now: Cell::new(false),
         }
     }
@@ -2795,6 +2800,27 @@ where
                 return Err(halt);
             }
             self.release_hold_of(applied.op_id);
+            // A published bin restore cancels its nearest earlier delete, also
+            // one that became kept in this pass ([`overtaken_by_a_later_op`]).
+            // The delete leaves first: a restore left queued leaves at its
+            // replay, and a kept delete left alone would bin the node again.
+            if matches!(applied.op.kind, OpKind::Restore { .. })
+                && let Some((delete, _)) = queued
+                    .iter()
+                    .take_while(|(op_id, _)| *op_id != applied.op_id)
+                    .filter(|(_, op)| {
+                        op.target == applied.op.target && matches!(op.kind, OpKind::Delete { .. })
+                    })
+                    .last()
+            {
+                self.dequeue_op(*delete).await?;
+                let mut notes = self.kept_notes(scope).await?;
+                notes.remove(*delete);
+                self.store_kept_notes(scope, &notes).await?;
+                if !report.dropped.contains(delete) && !report.completed.contains(delete) {
+                    report.dropped.push(*delete);
+                }
+            }
             // An op that is not kept leaves at its publish ([`keeps`]).
             if !self.kept_now.get() {
                 self.dequeue_op(applied.op_id).await?;
@@ -3110,11 +3136,7 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
-        let last_on: BTreeMap<NodeId, OpId> = scan
-            .mine
-            .iter()
-            .map(|(op_id, op)| (op.target, *op_id))
-            .collect();
+        let overtaken = overtaken_by_a_later_op(&scan.mine);
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.dequeue_op(op_id).await?;
@@ -3155,9 +3177,14 @@ where
                                 .await?;
                         }
                     }
-                    // A later op of this device on the same node decides what
-                    // that node shows, so a check of this one would undo it.
-                    if gone || last_on.get(&op.target) != Some(&op_id) {
+                    // ADR 0069 D6 ([`overtaken_by_a_later_op`]).
+                    let later = overtaken.get(&op_id).copied();
+                    if gone
+                        || later == Some(Overtaken::ByRestore)
+                        || (later == Some(Overtaken::ByDelete) && shows_a_flip(&note, place))
+                        // With no result, a check cannot tell a later write.
+                        || (needs_result(&op.kind) && note.result.is_none())
+                    {
                         KeptVerdict::Expired
                     } else {
                         kept_verdict(&note, place, now)
@@ -3394,12 +3421,19 @@ where
                 write_epoch,
                 published_at: self.seams.scheduler.now(),
                 parent: self.kept_parent.get(),
-                result: None,
+                result: self.kept_result.take(),
             },
         );
         if noted.is_ok() && self.store_kept_notes(scope, &notes).await.is_ok() {
             self.kept_now.set(true);
         }
+    }
+
+    /// Record the result of the op this pass publishes now, which makes a kind
+    /// that needs one a kept op ([`needs_result`]).
+    fn keep_result(&self, result: KeptResult) {
+        self.kept_result.replace(Some(result));
+        self.keeps_op.set(true);
     }
 
     // -----------------------------------------------------------------------
@@ -3431,9 +3465,16 @@ where
             .open_pass(scope, &resolved)
             .await
             .map_err(at_head(queued))?;
-        let mut landed = self
+        let mut landed: BTreeMap<OpId, DropReason> = self
             .read_kept_parents(scope, &mut pass, queued, kept)
-            .await?;
+            .await?
+            .into_iter()
+            .map(|op_id| (op_id, DropReason::AlreadySatisfied))
+            .collect();
+        landed.extend(
+            self.read_kept_places(scope, &mut pass, queued, kept)
+                .await?,
+        );
         landed.extend(self.read_kept_heads(scope, &mut pass, queued, kept).await?);
         if landed.is_empty() {
             return self
@@ -3443,18 +3484,14 @@ where
         }
         let rest: Vec<(OpId, Op)> = queued
             .iter()
-            .filter(|(op_id, _)| !landed.contains(op_id))
+            .filter(|(op_id, _)| !landed.contains_key(op_id))
             .cloned()
             .collect();
         let (pass, mut rebased) = self
             .rebase_on_pass(scope, pass, &others, &rest)
             .await
             .map_err(at_head(&rest))?;
-        rebased.dropped.extend(
-            landed
-                .into_iter()
-                .map(|op_id| (op_id, DropReason::AlreadySatisfied)),
-        );
+        rebased.dropped.extend(landed);
         Ok((pass, rebased))
     }
 
@@ -3506,7 +3543,7 @@ where
         for (op_id, op) in queued {
             // Only a noted op names a parent, and a note makes the op kept.
             let parent = kept.parent(*op_id);
-            if !reads_kept_parent(op, parent) {
+            if !matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -3527,6 +3564,100 @@ where
             }
         }
         Ok(gone)
+    }
+
+    /// Read at their live names the folders that each kept rename or move
+    /// under a flip names, and compare the node there with the result of the
+    /// op ([`kept_outcome`]). A landed op leaves as satisfied, and an
+    /// overtaken one leaves so the later write stays. A lost op joins the
+    /// rebase and applies again. An earlier op of this device that the rebase
+    /// applies again, a create the base lacks or a lost rename or move, sets
+    /// the place that the next op on its node is compared with.
+    async fn read_kept_places(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        queued: &[(OpId, Op)],
+        kept: &KeptOps,
+    ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
+        let mut leaving = BTreeMap::new();
+        let mut created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
+        let mut replayed: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
+        for (op_id, op) in queued {
+            if let OpKind::Create { parent, name, .. } = &op.kind {
+                created.insert(op.target, (*parent, Zeroizing::new(name.clone())));
+            }
+            let parent = kept.parent(*op_id);
+            let Some(result) = kept.result(*op_id) else {
+                continue;
+            };
+            if matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+                continue;
+            }
+            let at = |halt| HeadHalt {
+                halt,
+                at: Some(*op_id),
+            };
+            let (KeptPlace::Writes { .. }, Some(parent)) = (
+                self.kept_place(scope, op, parent, kept.scope(*op_id))
+                    .await
+                    .map_err(at)?,
+                parent,
+            ) else {
+                continue;
+            };
+            // The source first: the read of the destination then unlinks a
+            // node that the source still holds.
+            let mut folders = vec![parent];
+            if let KeptResult::Move { to, .. } = result
+                && *to != parent
+            {
+                folders.push(*to);
+            }
+            for folder in folders {
+                if self.cells.base.borrow().contains(folder) {
+                    self.read_live_folder(scope, pass, folder)
+                        .await
+                        .map_err(at)?;
+                }
+            }
+            let place = {
+                let base = self.cells.base.borrow();
+                let live = base
+                    .parent_of(op.target)
+                    .zip(base.node(op.target))
+                    .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())));
+                replayed
+                    .get(&op.target)
+                    .cloned()
+                    .or(live)
+                    .or_else(|| created.get(&op.target).cloned())
+            };
+            let live = match (result, &place) {
+                (KeptResult::Rename { .. }, Some((holder, name))) if *holder == parent => {
+                    LiveValue::Name(name)
+                }
+                (KeptResult::Move { .. }, Some((holder, name))) => LiveValue::Place(*holder, name),
+                _ => LiveValue::Absent,
+            };
+            match kept_outcome(result, live) {
+                KeptOutcome::Landed => {
+                    leaving.insert(*op_id, DropReason::AlreadySatisfied);
+                }
+                KeptOutcome::Overtaken => {
+                    leaving.insert(*op_id, DropReason::TargetAdvanced);
+                }
+                KeptOutcome::Lost => {
+                    let after = match result {
+                        KeptResult::Rename { after, .. } => (parent, after.clone()),
+                        KeptResult::Move { to, to_name, .. } => (*to, to_name.clone()),
+                        KeptResult::RestoreVersion { .. } => continue,
+                    };
+                    replayed.insert(op.target, after);
+                }
+            }
+        }
+        Ok(leaving)
     }
 
     /// Load `folder`, which the base holds, into the pass at its live name,
@@ -3565,10 +3696,21 @@ where
         pass: &mut Pass,
         queued: &[(OpId, Op)],
         kept: &KeptOps,
-    ) -> Result<BTreeSet<OpId>, HeadHalt> {
-        let mut landed = BTreeSet::new();
+    ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
+        let mut landed = BTreeMap::new();
+        // The head that an edit or a restore of this device, which the rebase
+        // applies again, sets for the next op on its file.
+        let mut replayed: BTreeMap<NodeId, Vec<u8>> = BTreeMap::new();
         for (op_id, op) in queued {
-            if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept.holds(*op_id, op) {
+            let restored = match op.kind {
+                OpKind::UpdateContent { .. } => None,
+                OpKind::RestoreVersion { .. } => match kept.result(*op_id) {
+                    Some(result) => Some(result),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if !kept.holds(*op_id, op) {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -3596,12 +3738,35 @@ where
             let ReadBody::File { versions, .. } = &loaded.body else {
                 return Err(at(Halt::Unclassified));
             };
-            if let Some(content) = op.staged_content()
-                && versions
+            if let Some(result) = restored {
+                let live = match replayed.get(&op.target) {
+                    Some(head) => LiveValue::Head(head),
+                    None => versions
+                        .first()
+                        .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid)),
+                };
+                match kept_outcome(result, live) {
+                    KeptOutcome::Landed => {
+                        landed.insert(*op_id, DropReason::AlreadySatisfied);
+                    }
+                    KeptOutcome::Overtaken => {
+                        landed.insert(*op_id, DropReason::TargetAdvanced);
+                    }
+                    KeptOutcome::Lost => {
+                        if let KeptResult::RestoreVersion { after, .. } = result {
+                            replayed.insert(op.target, after.clone());
+                        }
+                    }
+                }
+            } else if let Some(content) = op.staged_content() {
+                if versions
                     .iter()
                     .any(|version| version.content_cid == content.root_cid)
-            {
-                landed.insert(*op_id);
+                {
+                    landed.insert(*op_id, DropReason::AlreadySatisfied);
+                } else {
+                    replayed.insert(op.target, content.root_cid.clone());
+                }
             }
             if let Some(head) = versions.first() {
                 project_child_version(
@@ -4302,7 +4467,11 @@ where
         rebased: &Snapshot,
     ) -> Result<(), Halt> {
         self.mirror.take();
-        self.keeps_op.set(keeps(&applied.op.kind));
+        // A kind that needs a result stays kept only once its publish records
+        // one ([`Self::keep_result`]).
+        self.keeps_op
+            .set(keeps(&applied.op.kind) && !needs_result(&applied.op.kind));
+        self.kept_result.replace(None);
         self.kept_parent.set(match &applied.op.kind {
             OpKind::Create { parent, .. } => Some(*parent),
             _ => self.cells.base.borrow().parent_of(applied.op.target),
@@ -6765,6 +6934,25 @@ where
             .find(|child| child.id == target.0)
             .cloned()
             .ok_or(Halt::Unclassified)?;
+        // Only a ref move inside one scope stays a kept op: a re-sealed
+        // crossing leaves at publish.
+        if authority == Authority::Relink && needs_result(&applied.op.kind) {
+            let before = Zeroizing::new(moved.name.clone());
+            let after = Zeroizing::new(
+                new_name
+                    .as_ref()
+                    .map_or_else(|| moved.name.clone(), |name| name.to_string()),
+            );
+            self.keep_result(match applied.op.kind {
+                OpKind::Rename { .. } => KeptResult::Rename { before, after },
+                _ => KeptResult::Move {
+                    from: source,
+                    from_name: before,
+                    to: dest,
+                    to_name: after,
+                },
+            });
+        }
         if let Some(new_name) = new_name {
             moved.rename(new_name.to_string());
         }
@@ -7603,6 +7791,19 @@ where
         if at == 0 {
             return Ok(());
         }
+        // A kept restore applies again only over the head its check read as
+        // the one before it: a head published since is a later write, which
+        // stays.
+        let notes = self.kept_notes(scope).await?;
+        if let Some(KeptResult::RestoreVersion { before, .. }) = notes.result(applied.op_id)
+            && versions[0].content_cid != *before
+        {
+            return Ok(());
+        }
+        self.keep_result(KeptResult::RestoreVersion {
+            before: versions[0].content_cid.clone(),
+            after: content_cid.to_vec(),
+        });
         // A rotate rather than a remove-and-insert, so no version's content key
         // is moved out of the list it is owned by.
         versions[..=at].rotate_right(1);
@@ -9698,22 +9899,73 @@ fn paint_folder(
 }
 
 /// The node a kept op writes under: the parent of a create, the destination
-/// of a restore, the folder a delete unlinked its node from when its note
-/// names it, and else the node itself.
+/// of a restore, the folder its note names for a delete, a rename or a move,
+/// and else the node itself.
 fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
     match (&op.kind, parent) {
         (OpKind::Create { parent, .. }, _) => *parent,
         (OpKind::Restore { into, .. }, _) => *into,
-        (OpKind::Delete { .. }, Some(parent)) => parent,
+        (
+            OpKind::Delete { .. }
+            | OpKind::Rename { .. }
+            | OpKind::Move { .. }
+            | OpKind::Relink { .. },
+            Some(parent),
+        ) => parent,
         _ => op.target,
     }
 }
 
-/// Whether the drain reads the anchor of a kept op itself: the folder a
-/// delete unlinked its node from, which a flip moved to a new name
-/// ([`Drain::read_kept_parents`]).
+/// How a later op of this device on the same node decides an earlier op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overtaken {
+    /// A later delete removes the node.
+    ByDelete,
+    /// A later bin restore cancels this delete.
+    ByRestore,
+}
+
+/// The ops of `queue` that a later op of this device on the same node
+/// decides: a later delete expires every earlier op on its node once a
+/// flip shows, a later bin restore cancels that delete so the earlier
+/// ops stay, and no other later op expires an earlier op (ADR 0069 D6). A
+/// cancelled delete leaves at once; before a flip, a bin restore can still
+/// cancel a delete, so the ops under it wait. A restore that publishes
+/// cancels its delete durably ([`Drain::publish_queue`]).
+fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
+    let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
+    let mut overtaken = BTreeMap::new();
+    for (op_id, op) in queue.iter().rev() {
+        let (deleted, restoring) = later.entry(op.target).or_default();
+        let delete = matches!(op.kind, OpKind::Delete { .. });
+        if *deleted {
+            overtaken.insert(*op_id, Overtaken::ByDelete);
+        } else if delete && *restoring {
+            overtaken.insert(*op_id, Overtaken::ByRestore);
+        }
+        if delete && !*deleted {
+            *deleted = !*restoring;
+            *restoring = false;
+        }
+        if matches!(op.kind, OpKind::Restore { .. }) && !*deleted {
+            *restoring = true;
+        }
+    }
+    overtaken
+}
+
+/// Whether the drain reads the anchor of a kept op itself: the folder its
+/// note names for a delete, a rename or a move, which a flip moved to a new
+/// name ([`Drain::read_kept_parents`], [`Drain::read_kept_places`]).
 fn reads_kept_parent(op: &Op, parent: Option<NodeId>) -> bool {
-    parent.is_some() && matches!(op.kind, OpKind::Delete { .. })
+    parent.is_some()
+        && matches!(
+            op.kind,
+            OpKind::Delete { .. }
+                | OpKind::Rename { .. }
+                | OpKind::Move { .. }
+                | OpKind::Relink { .. }
+        )
 }
 
 /// The queue replayed onto `base`.
@@ -12307,6 +12559,57 @@ mod tests {
 
         assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
         assert!(report.dropped.is_empty());
+    }
+
+    /// A kept rename whose note records its result waits past a cut for a
+    /// pass that can check it. One with no result, as a version 1 note holds,
+    /// leaves at once with no second apply.
+    #[test]
+    fn a_kept_rename_with_no_result_in_its_note_leaves_with_no_apply() {
+        for (recorded, waits) in [(true, true), (false, false)] {
+            let mut harness = grafted_harness();
+            let root = NodeId([0x61; 16]);
+            harness.known_scope_roots.push(root);
+            let op = Op::rename(NodeId([0x62; 16]), "after", 1, UnixMillis(0));
+            let op_id = harness.queue_an_op(&op);
+            let mut notes = KeptNotes::default();
+            notes
+                .insert(
+                    op_id,
+                    KeptNote {
+                        scope: Some(root),
+                        write_epoch: 2,
+                        published_at: harness.seams.scheduler.now(),
+                        parent: Some(NodeId([0x63; 16])),
+                        result: recorded.then(|| KeptResult::Rename {
+                            before: Zeroizing::new("before".to_owned()),
+                            after: Zeroizing::new("after".to_owned()),
+                        }),
+                    },
+                )
+                .expect("the note is in bounds");
+            let drain = harness.drain();
+            let scope = harness.scope();
+            block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
+            block_on(floor::advance_write_epoch_on_sight(
+                &FloorNamespace::Own.view(&harness.seams.floors),
+                &root.0,
+                3,
+            ))
+            .expect("the floor rises");
+            let mut report = DrainReport::default();
+
+            let queue = block_on(drain.queued_ops(&scope, &mut report)).expect("the queue reads");
+
+            assert!(queue.mine.is_empty(), "no second apply");
+            if waits {
+                assert_eq!(queue.kept, vec![op_id], "the rename waits past the cut");
+                assert!(report.dropped.is_empty());
+            } else {
+                assert!(queue.kept.is_empty());
+                assert_eq!(report.dropped, vec![op_id], "the rename left");
+            }
+        }
     }
 
     /// An own pass looks up a granted root's write floor in its sharer's

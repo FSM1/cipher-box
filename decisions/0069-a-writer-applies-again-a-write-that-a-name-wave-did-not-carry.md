@@ -37,6 +37,12 @@ after the flip. Amended on 2026-10-03: D7 replaces the overlay clause. Amended o
 create, a delete and a content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
 other kind leaves the queue at its publish, as before this ADR: the live tree cannot show if a later
 writer overtook it, so a second apply could undo the later write (FSM1/cipher-box#2285).
+Amended on 2026-10-06 (owner ruling on FSM1/cipher-box#2285, option B): a rename, a move inside one
+scope and a version restore also stay kept ops. The note records the result of each: the name
+before and after, the parent and name before and after, or the head content CID before and the
+restored one. After a flip, a live node that shows the result or another value ends the op with no
+apply, and one that shows the value before applies the op again. A move that re-seals into another
+scope still leaves at its publish.
 
 **D3 — When a pass sees a new write epoch on the op's write scope, the writer reads the new tree
 and, if it holds the new write seed, applies the op again under that seed.** An owner device gets
@@ -88,7 +94,7 @@ nothing, so with no such read the op waits for a pass that reads the folder, or 
 delete under a scope that this device can no longer write takes the keyless charge of D3 and
 dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold
 its folder. Proposed: a kept
-op that this device edits again leaves with no check, because the later op sets what the node shows. A second
+op that this device edits again leaves with no check, because the later op sets what the node shows. Amended on 2026-10-07: a later delete of this device expires every earlier op on its node once a flip shows, a later bin restore cancels that delete so the earlier ops stay, and no other later op expires an earlier op. A second
 apply that cannot land leaves with no retire and no notice, because its version landed once.
 
 **D7 — A kept op is not pending.** The pending-op overlay, the pending flags, the staged-content

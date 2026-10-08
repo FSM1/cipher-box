@@ -17,6 +17,7 @@ struct Inner {
     fail_staged_removals_under: Option<Vec<u8>>,
     fail_staged_writes_at: Option<Vec<u8>>,
     fail_remove_op: bool,
+    remove_op_budget: Option<usize>,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
     destructive_write_budget: Option<Arm>,
@@ -42,6 +43,7 @@ impl Default for Inner {
             fail_staged_removals_under: None,
             fail_staged_writes_at: None,
             fail_remove_op: false,
+            remove_op_budget: None,
             enqueue_budget: None,
             staged_write_budget: None,
             destructive_write_budget: None,
@@ -128,6 +130,19 @@ impl InMemoryStagingStore {
     /// dead-letter send leaves the op queued for the next boot.
     pub fn fail_remove_op(&self) {
         self.inner.lock().expect("lock").fail_remove_op = true;
+    }
+
+    /// Lets the next `allowed` `remove_op` calls through and fails every one
+    /// after, so a test can stop between two removals.
+    pub fn fail_remove_op_after(&self, allowed: usize) {
+        self.inner.lock().expect("lock").remove_op_budget = Some(allowed);
+    }
+
+    /// Ends [`Self::fail_remove_op`] and [`Self::fail_remove_op_after`].
+    pub fn heal_remove_op(&self) {
+        let mut inner = self.inner.lock().expect("lock");
+        inner.fail_remove_op = false;
+        inner.remove_op_budget = None;
     }
 
     /// Lets the next `budget` enqueued entries through and fails every one
@@ -323,8 +338,11 @@ impl StagingStore for InMemoryStagingStore {
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
-        if inner.fail_remove_op {
+        if inner.fail_remove_op || inner.remove_op_budget == Some(0) {
             return Err(SeamError::new("remove_op unavailable"));
+        }
+        if let Some(budget) = inner.remove_op_budget.as_mut() {
+            *budget -= 1;
         }
         inner.ops.retain(|(id, _)| *id != op_id);
         Ok(())
