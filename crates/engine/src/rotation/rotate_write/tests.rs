@@ -1137,7 +1137,7 @@ fn a_crash_before_the_root_publishes_has_no_seed_to_recover() {
     let current_root = old_name_of(&SCOPE);
 
     let crashing = FakePublisher::failing_after(state.clone(), 2);
-    block_on(async {
+    let crash = block_on(async {
         let mut e = SeededEntropy::new(41);
         rotate_scope_write(
             &mut e,
@@ -1148,6 +1148,17 @@ fn a_crash_before_the_root_publishes_has_no_seed_to_recover() {
         .await
     })
     .expect_err("the wave crashes before the root republish");
+    assert!(
+        matches!(
+            crash,
+            WriteRotateError::Publish {
+                stage: "republish",
+                error: WritePublishError::NotLanded,
+                ..
+            }
+        ) && crash.is_retryable(),
+        "a republish that did not land reaches the caller as a retry",
+    );
     assert!(
         state.published_root.borrow().is_none(),
         "no moved root published, so nothing carries the seed"
