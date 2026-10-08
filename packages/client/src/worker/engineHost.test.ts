@@ -59,11 +59,12 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
  * A host over a wasm whose every call succeeds and records its arguments, so
  * only the host's own field checks can refuse a request.
  */
-/** A host whose engine is already built, as every call but `start` requires. */
+/** A host that no `start` has reached, so it has built no engine. */
 function unstarted(wasm: EngineWasm): EngineHost {
   return new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
 }
 
+/** A host whose engine is already built, as every call but `start` requires. */
 async function started(wasm: EngineWasm): Promise<EngineHost> {
   const host = unstarted(wasm);
   await host.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
@@ -453,7 +454,7 @@ function readingWasm(value: (read: ReadDescriptor) => Promise<unknown>): {
   return { wasm, reads };
 }
 
-/** A started host over [`readingWasm`]. */
+/** A started host over {@link readingWasm}. */
 async function startedReading(
   value: (read: ReadDescriptor) => Promise<unknown>
 ): Promise<{ host: EngineHost; reads: [ReadPath, ReadDescriptor][] }> {
