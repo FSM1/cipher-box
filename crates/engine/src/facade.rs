@@ -1770,8 +1770,8 @@ pub enum Command {
     },
 
     // --- focus and refresh ---
-    /// Set the open folder driving the focus window; `None` when no folder
-    /// is open.
+    /// Set the open folder driving the focus window; `None` focuses the
+    /// current root.
     SetFocus {
         /// The open folder, if any.
         #[cfg_attr(
@@ -11062,13 +11062,11 @@ where {
     /// reads that paint the cached view (blueprint/engine.md "Resolve").
     pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
         self.live_session()?;
-        let node = Some(node.unwrap_or_else(|| self.root()));
-        self.state.focus.borrow_mut().open_folder = node;
+        let folder = node.unwrap_or_else(|| self.root());
+        self.state.focus.borrow_mut().open_folder = Some(folder);
         let probes = RootProbes::default();
-        if let Some(folder) = node {
-            self.locate_folder(folder, &probes).await;
-        }
-        self.refresh_focus_on_access(self.seams.scheduler.now(), node, &probes)
+        self.locate_folder(folder, &probes).await;
+        self.refresh_focus_on_access(self.seams.scheduler.now(), Some(folder), &probes)
             .await;
         Ok(())
     }
