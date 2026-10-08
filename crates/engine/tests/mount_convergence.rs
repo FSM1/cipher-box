@@ -2669,11 +2669,16 @@ fn a_kept_edit_stays_while_the_pointer_names_its_own_write_epoch() {
         .record_store
         .serve_gets_for_after(pointer.as_str(), 0, 10_000, Some(before));
     let _ = events_so_far(&mut events_r);
-    tick_n(&world, &engine_r, &mut tasks_r, 16);
+    tick_n(&world, &engine_r, &mut tasks_r, 3);
 
+    assert!(holds_the_edit(), "the edit stays on the keyless charge");
+    let events = events_so_far(&mut events_r);
     assert!(
-        holds_the_edit() || dead_letter_events(&mut events_r).len() == 1,
-        "the edit stays, or dead-letters with a notice"
+        !events.iter().any(|event| matches!(
+            event,
+            Event::DeadLetter { .. } | Event::AttributableAbuse { .. }
+        )),
+        "with no notice and no trust violation"
     );
 }
 

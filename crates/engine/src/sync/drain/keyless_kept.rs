@@ -40,6 +40,19 @@ pub(super) struct MovedRoot {
 /// whose moved tree this device cannot read.
 pub(super) type MovedRoots = BTreeMap<NodeId, Option<MovedRoot>>;
 
+/// Whether a kept delete leaves: its folder is gone from the moved tree, or
+/// the folder no longer links its node. A contested id leaves the base with
+/// no read of its own, so it decides nothing.
+fn delete_decided(folder_gone: bool, contested: bool, linked: Option<bool>) -> Option<bool> {
+    if contested {
+        return None;
+    }
+    if folder_gone {
+        return Some(true);
+    }
+    linked.map(|alive| !alive)
+}
+
 type MovedRefresh<'r, T, S, H, F> = FolderRefresh<'r, T, S, H, SharerScopedFloorStore<'r, F>>;
 
 impl<T, H, C, F, S, St, Sch> Drain<'_, T, H, C, F, S, St, Sch>
@@ -197,26 +210,20 @@ where
         };
         match &op.kind {
             OpKind::Delete { .. } => {
-                // A contested id leaves the base with no read of its own.
-                if self
+                let parent = kept.parent(op_id)?;
+                let seen = self.cells.kept_chains.borrow().get(&op_id).cloned();
+                let folder_gone = parent != root
+                    && !self
+                        .read_moved_folder(refresh, root, parent, seen.as_deref())
+                        .await?;
+                // The read can contest the id: checked after it.
+                let contested = self
                     .cells
                     .grafted_claims
                     .borrow()
                     .contested()
-                    .contains(&op.target.0)
-                {
-                    return None;
-                }
-                let parent = kept.parent(op_id)?;
-                let seen = self.cells.kept_chains.borrow().get(&op_id).cloned();
-                if parent != root
-                    && !self
-                        .read_moved_folder(refresh, root, parent, seen.as_deref())
-                        .await?
-                {
-                    return Some(true);
-                }
-                linked(parent).map(|alive| !alive)
+                    .contains(&op.target.0);
+                delete_decided(folder_gone, contested, linked(parent))
             }
             OpKind::Create { parent, .. } => {
                 self.reads_moved_folder(refresh, root, *parent).await?;
@@ -335,5 +342,20 @@ where
             above = node;
         }
         Some(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::delete_decided;
+
+    #[test]
+    fn a_delete_whose_node_the_read_contested_decides_nothing() {
+        assert_eq!(delete_decided(true, true, None), None);
+        assert_eq!(delete_decided(false, true, Some(false)), None);
+        assert_eq!(delete_decided(true, false, None), Some(true));
+        assert_eq!(delete_decided(false, false, Some(false)), Some(true));
+        assert_eq!(delete_decided(false, false, Some(true)), Some(false));
+        assert_eq!(delete_decided(false, false, None), None);
     }
 }

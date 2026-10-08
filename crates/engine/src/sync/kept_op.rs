@@ -629,9 +629,13 @@ impl KeptOps {
         self.notes.notes.get(&op_id).and_then(|note| note.parent)
     }
 
-    /// The write epoch the note of `op_id` names.
+    /// The write epoch the note of `op_id` names, `None` for an unknown one.
     pub(crate) fn write_epoch(&self, op_id: OpId) -> Option<u64> {
-        self.notes.notes.get(&op_id).map(|note| note.write_epoch)
+        self.notes
+            .notes
+            .get(&op_id)
+            .map(|note| note.write_epoch)
+            .filter(|epoch| *epoch != UNKNOWN_WRITE_EPOCH)
     }
 
     /// The scope root the note of `op_id` names.
@@ -911,6 +915,18 @@ mod tests {
             first,
             "a later sight keeps the first"
         );
+    }
+
+    #[test]
+    fn a_note_at_the_unknown_write_epoch_names_no_write_epoch() {
+        let mut notes = KeptNotes::default();
+        notes
+            .insert(OpId(1), note(UNKNOWN_WRITE_EPOCH))
+            .expect("the note fits");
+        notes.insert(OpId(2), note(4)).expect("the note fits");
+        let kept = KeptOps::new(None, notes);
+        assert_eq!(kept.write_epoch(OpId(1)), None);
+        assert_eq!(kept.write_epoch(OpId(2)), Some(4));
     }
 
     #[test]
