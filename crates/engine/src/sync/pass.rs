@@ -34,7 +34,7 @@ use crate::grants::grafted::{
 };
 use crate::grants::inbox::{OwnedClaim, ShareInbox};
 use crate::grants::link_read::repost_held_claims;
-use crate::grants::received_status::{ReceivedShareStatus, ScopeRender};
+use crate::grants::received_status::{PointerFollow, ReceivedShareStatus, ScopeRender};
 use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
 use crate::net::rotation::ScopeWritePlane;
@@ -377,6 +377,7 @@ where
             return PassReport::STOPPED;
         };
         self.consult_scope_pointers(state, &mut pass).await;
+        let followed = self.follow_received_pointers(state, &pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
         pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
@@ -401,7 +402,7 @@ where
         self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
             .await;
         self.repost_claims(state, &pass).await;
-        self.refresh_received_shares(state, &pass).await;
+        self.refresh_received_shares(state, &pass, followed).await;
         PassReport {
             verdict,
             stop: false,
@@ -1520,10 +1521,48 @@ where
         .await;
     }
 
+    /// The received-share pointer follow, ahead of the seed-floor refresh and
+    /// the drain ([`ReceivedShareStatus::follow_pointers`]).
+    async fn follow_received_pointers(&self, state: &SessionState, pass: &Pass) -> PointerFollow {
+        self.received_status(state, pass)
+            .follow_pointers(
+                &self.seams.staging,
+                &self.seams.entropy,
+                &state.received_verdicts,
+                &self.scope_render(state),
+                pass.now,
+                &self.seams.profile,
+            )
+            .await
+    }
+
     /// The received-share status refresh. Last, after the drain: the
     /// grantee's own read leg is the slowest in the pass, and a host refresh
     /// waits on nothing it reports.
-    async fn refresh_received_shares(&self, state: &SessionState, pass: &Pass) {
+    async fn refresh_received_shares(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        followed: PointerFollow,
+    ) {
+        self.received_status(state, pass)
+            .refresh(
+                &self.seams.staging,
+                &self.seams.entropy,
+                &state.received_verdicts,
+                &self.scope_render(state),
+                &self.seams.profile,
+                followed,
+            )
+            .await;
+    }
+
+    /// The received-share legs' seams for this pass.
+    fn received_status<'s>(
+        &'s self,
+        state: &'s SessionState,
+        pass: &'s Pass,
+    ) -> ReceivedShareStatus<'s, T, H, F> {
         ReceivedShareStatus {
             transport: &self.seams.transport,
             gateway: &self.seams.gateway,
@@ -1535,28 +1574,24 @@ where
             mode: pass.mode,
             root_reconciled: pass.root_reconciled,
         }
-        .refresh(
-            &self.seams.staging,
-            &self.seams.entropy,
-            &state.received_verdicts,
-            &ScopeRender {
-                base: &state.snapshot,
-                read_seeds: &state.scope_read_seeds,
-                write_seeds: &state.scope_write_seeds,
-                own_root: &self.root_id,
-                own_descendants: &state.descendant_scope_roots,
-                grafted_sharers: &state.grafted_sharers,
-                scope_roots: &state.bookmarked_scope_roots,
-                permissions: &state.bookmarked_permissions,
-                claims: &state.grafted_claims,
-                pointer_pins: &state.pointer_pins,
-                root_sequences: &state.root_sequences,
-                events: &self.seams.events,
-            },
-            pass.now,
-            &self.seams.profile,
-        )
-        .await;
+    }
+
+    /// The session cells the received-share legs render into.
+    fn scope_render<'s>(&'s self, state: &'s SessionState) -> ScopeRender<'s> {
+        ScopeRender {
+            base: &state.snapshot,
+            read_seeds: &state.scope_read_seeds,
+            write_seeds: &state.scope_write_seeds,
+            own_root: &self.root_id,
+            own_descendants: &state.descendant_scope_roots,
+            grafted_sharers: &state.grafted_sharers,
+            scope_roots: &state.bookmarked_scope_roots,
+            permissions: &state.bookmarked_permissions,
+            claims: &state.grafted_claims,
+            pointer_pins: &state.pointer_pins,
+            root_sequences: &state.root_sequences,
+            events: &self.seams.events,
+        }
     }
 }
 

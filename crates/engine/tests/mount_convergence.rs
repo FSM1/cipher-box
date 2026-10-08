@@ -27,6 +27,7 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::rotation::published_override_seed;
 use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
 use cipherbox_engine::sync::SessionRole;
+use cipherbox_engine::sync::kept_op::KEPT_OP_BOUND;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
@@ -2517,4 +2518,164 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
     );
     let status = block_on(engine_r.status()).expect("the session status reads");
     assert_eq!(status.dead_letters.len(), 1, "and the member can name it");
+}
+
+/// A surviving write grantee's create lands in the old tree after the name
+/// wave of an owner write cut read the folder. The grantee sees the cut as a
+/// flip in its sharer's floor namespace, so the kept create waits past the
+/// bound and applies again at the moved tree (ADR 0069 D3, D5).
+#[test]
+fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_bound() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+    let (mut engine_r, mut events_r, mut tasks_r) =
+        recipient_on_with_the_share(&world, &blocks, &recipient);
+    block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
+        .expect("the grantee opens the folder");
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    let endpoints = world.record_store.endpoints();
+    let walked: std::collections::BTreeMap<String, Vec<u8>> = world
+        .record_store
+        .routing_keys(&endpoints[0])
+        .into_iter()
+        .filter_map(|key| {
+            let record = world.record_store.record_at(&endpoints[0], &key)?;
+            Some((key, record))
+        })
+        .collect();
+    block_on(engine_r.command(Command::Create {
+        parent: child,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the grantee's create stages");
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    assert_eq!(queued(&recipient), 0, "the create published");
+    let written: Vec<(String, Vec<u8>)> = walked
+        .into_iter()
+        .filter(|(key, record)| {
+            world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
+        })
+        .collect();
+    assert!(!written.is_empty(), "the create moved a folder record");
+
+    for (key, record) in &written {
+        world
+            .record_store
+            .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
+    }
+    assert_eq!(
+        block_on(engine_t.command(Command::RotateWriteNow { node: shared })),
+        Ok(CommandOutcome::Done)
+    );
+    for (key, _) in &written {
+        world.record_store.serve_gets_for_after(key, 0, 0, None);
+    }
+    block_on(engine_t.command(Command::SetFocus { node: Some(child) }))
+        .expect("the owner opens the folder");
+    tick_n(&world, &engine_t, &mut tasks_t, 4);
+    assert!(
+        !listed_names(&engine_t, child).contains(&"late".to_owned()),
+        "the moved tree does not carry the create"
+    );
+    let _ = events_so_far(&mut events_r);
+
+    world.scheduler.advance(KEPT_OP_BOUND);
+    tick_n(&world, &engine_r, &mut tasks_r, 10);
+    tick_n(&world, &engine_t, &mut tasks_t, 4);
+
+    assert!(
+        dead_letter_events(&mut events_r).is_empty(),
+        "the create does not dead-letter"
+    );
+    assert!(
+        listed_names(&engine_t, child).contains(&"late".to_owned()),
+        "the create applied again at the moved tree"
+    );
+}
+
+/// A surviving write grantee's kept create, under a root that an owner write
+/// cut moved to names the grantee cannot read. The walk does not prove the
+/// root, so the kept create waits past the bound with no notice (ADR 0069 D5).
+#[test]
+fn a_surviving_grantees_kept_write_under_an_unproved_root_waits_past_the_bound() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+    let (mut engine_r, mut events_r, mut tasks_r) =
+        recipient_on_with_the_share(&world, &blocks, &recipient);
+    block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
+        .expect("the grantee opens the folder");
+    block_on(engine_r.command(Command::Create {
+        parent: child,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the grantee's create stages");
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    assert_eq!(queued(&recipient), 0, "the create published");
+    let holds_the_create = || {
+        let raw =
+            block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
+        !decode_queue(
+            &RecordReader::new(&kdf::enc_subkey(&RECIPIENT_SECRET)),
+            &raw,
+        )
+        .mine
+        .is_empty()
+    };
+    assert!(holds_the_create(), "the queue keeps the create");
+
+    let endpoints = world.record_store.endpoints();
+    let before = world.record_store.routing_keys(&endpoints[0]);
+    assert_eq!(
+        block_on(engine_t.command(Command::RotateWriteNow { node: shared })),
+        Ok(CommandOutcome::Done)
+    );
+    let moved: Vec<String> = world
+        .record_store
+        .routing_keys(&endpoints[0])
+        .into_iter()
+        .filter(|key| !before.contains(key))
+        .collect();
+    assert!(!moved.is_empty(), "the cut moved the folder to new names");
+    for key in &moved {
+        world.record_store.lapse(key);
+    }
+    let _ = events_so_far(&mut events_r);
+
+    world.scheduler.advance(KEPT_OP_BOUND);
+    tick_n(&world, &engine_r, &mut tasks_r, 6);
+
+    assert!(holds_the_create(), "the create waits past the bound");
+    let events = events_so_far(&mut events_r);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::DeadLetter { .. })),
+        "with no notice"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "and no trust violation: an unproved root is an availability outcome"
+    );
 }

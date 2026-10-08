@@ -476,7 +476,9 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
 
 - (a) an owner-signed field bound to the scope: the cold seed at boot
   (`cold_seed_checked`), a pointer `writeEpoch` on sight
-  (`PointerConsult::run`), the verified cut epoch (`record_cut_epoch_floor`,
+  (`PointerConsult::run`; a grantee consults each bookmark's scope pointer
+  ahead of the drain, and the raise lands in the sharer's namespace), the
+  verified cut epoch (`record_cut_epoch_floor`,
   ADR 0014), and the clear in `effective_revoked_recipients` (ADR 0025 D3);
 - (b) a value this owner device authored, after its publish lands: the
   read-epoch floor of a cut (`complete_cut`, `rekey_one`; from `flat_root_cut`,
