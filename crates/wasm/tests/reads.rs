@@ -341,8 +341,8 @@ fn wide(keys: u32) -> (JsValue, JsValue) {
 
 /// Builds `(value, seen)`: a graph 4 levels deep where each level holds 10
 /// references to one shared object below it, so a walk visits 10^4 values
-/// in a value a structured clone carries in 40 objects. The top object's
-/// last key is a getter that sets `seen.read`.
+/// in a value a structured clone carries as 4 objects with 40 references.
+/// The top object's last key is a getter that sets `seen.read`.
 fn shared() -> (JsValue, JsValue) {
     let built = Function::new_no_args(
         "const seen = { read: false };
@@ -388,4 +388,43 @@ fn a_cyclic_write_target_is_refused() {
     let target = object(&[("node", bytes(&[1; 16]))]);
     Reflect::set(&target, &text("self"), &target).unwrap();
     assert!(decode_write_target(target).is_err());
+}
+
+/// Runs `source` and returns what it returns.
+fn built(source: &str) -> JsValue {
+    Function::new_no_args(source)
+        .call0(&JsValue::NULL)
+        .expect("the builder runs")
+}
+
+/// A `Map` has no own keys for the caps to count, and serde reads every
+/// entry, so the walk refuses it.
+#[wasm_bindgen_test]
+fn a_read_that_holds_a_self_containing_map_is_refused() {
+    let map = built("const m = new Map(); m.set('a', m); return m;");
+    assert!(refused(&object(&[("kind", text("bin")), ("x", map)])));
+}
+
+#[wasm_bindgen_test]
+fn a_write_target_that_is_a_map_is_refused() {
+    let map = built("return new Map([['node', new Uint8Array(16)]]);");
+    assert!(decode_write_target(map).is_err());
+}
+
+/// A `Set` or a `Map` field in a step is refused before serde reads it.
+#[wasm_bindgen_test]
+fn a_rendezvous_step_with_a_set_or_map_field_is_refused() {
+    for field in [
+        "const s = new Set(); s.add(s); return s;",
+        "const m = new Map(); m.set('a', m); return m;",
+    ] {
+        let step = object(&[
+            ("kind", text("deny")),
+            ("devicePublicKey", text("cd11")),
+            ("requestId", text("r")),
+            ("ephemeralPublicKey", text("02beef")),
+            ("x", built(field)),
+        ]);
+        assert!(decode_rendezvous_step(&step).is_err());
+    }
 }
