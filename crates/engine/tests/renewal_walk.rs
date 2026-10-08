@@ -1583,6 +1583,28 @@ fn a_tombstoned_node_the_base_links_nowhere_is_not_renewed() {
     );
 }
 
+/// A tombstoned node that a folder this device never opened links is live
+/// there: the base links it nowhere, but the folder record the walk admitted
+/// does, so the walk renews the node's record.
+#[test]
+fn a_tombstoned_node_a_folder_the_device_never_opened_links_still_renews() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "moved-to");
+        vec![write_file(&world, engine, tasks, folder, "moved.txt")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, nodes[0]);
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
 #[test]
 fn a_walk_reports_and_does_not_renew_a_child_at_a_foreign_envelope_version() {
     use cipherbox_core::seal::{encode_envelope, seal_read_body};
