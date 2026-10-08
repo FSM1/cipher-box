@@ -935,8 +935,9 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// and an empty head CID is this build's own release-active refusal to sign
 /// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
 /// pass authored, so a retry re-authors and re-charges a head block forever
-/// without converging. Everything else stays retryable, a size refusal included
-/// ([`PublishVerdict::RefusedOversized`]).
+/// without converging. Everything else stays retryable. This includes a size
+/// refusal ([`PublishVerdict::RefusedOversized`]): another party can grow the
+/// record, so a permanent verdict lets that party block the rotation.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
@@ -4938,8 +4939,8 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 /// The same axis for the publish pipeline. A CID the API echoes back wrong, and
 /// the pipeline's own release-active encode refusals, are deterministic on the
 /// bytes this pass built — a retry re-uploads and re-charges a head block
-/// forever without converging. A size refusal retries
-/// ([`PublishVerdict::RefusedOversized`]).
+/// forever without converging. A size refusal retries, as in
+/// [`record_publish_verdict`].
 pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
@@ -11326,6 +11327,10 @@ mod tests {
             pointer_publish_verdict(oversized()),
             PointerPublishFailure::NotLanded,
             "the re-point publish classes it the same way",
+        );
+        assert!(
+            RotationPublishError::from(pointer_publish_verdict(oversized())).is_retryable(),
+            "a size refusal leaves the re-point to retry",
         );
     }
 
