@@ -17,11 +17,11 @@
  *   await would read a detached view as '' and store the entry under the wrong
  *   name, so the read-back under the real key here would miss — the fix stores
  *   it correctly.
- * - `identityFingerprint`: the wasm export answers the core KAT
+ * - `identityFingerprint`: the session-free read answers the core KAT
  *   (`crates/core/kat/vectors/contact/fingerprint.json`) and refuses a key that
  *   is not 33 bytes.
  */
-import init, { identityFingerprint, sampleEvents, type Event } from './pkg/cipherbox_wasm.js';
+import init, { readUnstarted, sampleEvents, type Event } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 import fingerprintVectors from '../../../../crates/core/kat/vectors/contact/fingerprint.json?raw';
 
@@ -107,13 +107,16 @@ const FINGERPRINT_KAT = JSON.parse(fingerprintVectors) as FingerprintVector[];
 async function runIdentityFingerprint(): Promise<void> {
   await init({ module_or_path: wasmUrl });
   if (FINGERPRINT_KAT.length === 0) throw new Error('no fingerprint vectors');
+  const fingerprintOf = async (identityPublicKey: Uint8Array): Promise<unknown> =>
+    (await readUnstarted({ kind: 'identityFingerprint', identityPublicKey })).value;
   for (const { name, identityPk, fingerprint } of FINGERPRINT_KAT) {
-    const got = identityFingerprint(unhex(identityPk));
-    if (got !== fingerprint) throw new Error(`fingerprint ${name}: ${got} != ${fingerprint}`);
+    const got = await fingerprintOf(unhex(identityPk));
+    if (got !== fingerprint)
+      throw new Error(`fingerprint ${name}: ${String(got)} != ${fingerprint}`);
   }
   let refused = false;
   try {
-    identityFingerprint(new Uint8Array(32).fill(2));
+    await fingerprintOf(new Uint8Array(32).fill(2));
   } catch {
     refused = true;
   }

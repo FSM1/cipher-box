@@ -7,11 +7,14 @@
 
 use cipherbox_engine::facade::{NodeId, SiweIntent};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
-use cipherbox_wasm::boundary::{decode_read, encode_view};
+use cipherbox_wasm::boundary::{decode_read, decode_rendezvous_step, encode_view};
 use cipherbox_wasm::read::{Read, ReadAnswer};
+use cipherbox_wasm::read_unstarted;
 use cipherbox_wasm::rendezvous::DeviceRendezvousStep;
-use js_sys::{Object, Reflect, Uint8Array};
+use js_sys::{Function, Object, Reflect, Uint8Array};
+use tsify::Ts;
 use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::wasm_bindgen_test;
 use zeroize::Zeroizing;
 
@@ -169,7 +172,10 @@ fn an_answer_crosses_under_the_kind_of_its_read() {
         text("download")
     );
     let value = Reflect::get(&download, &text("value")).unwrap();
-    assert_eq!(value.unchecked_into::<Uint8Array>().to_vec(), vec![1, 2, 3]);
+    let value = value
+        .dyn_into::<Uint8Array>()
+        .expect("a byte answer is a Uint8Array");
+    assert_eq!(value.to_vec(), vec![1, 2, 3]);
 
     let nonce = encode_view(&ReadAnswer::SiweChallenge("n0nce".into())).unwrap();
     assert_eq!(
@@ -177,4 +183,108 @@ fn an_answer_crosses_under_the_kind_of_its_read() {
         text("siweChallenge")
     );
     assert_eq!(Reflect::get(&nonce, &text("value")).unwrap(), text("n0nce"));
+}
+
+/// A SIWE nonce is minted for the pool the intent names, and for no other
+/// spelling.
+#[wasm_bindgen_test]
+fn a_siwe_read_names_its_pool_and_refuses_any_other() {
+    let siwe = |intent: JsValue| object(&[("kind", text("siweChallenge")), ("intent", intent)]);
+    assert!(matches!(
+        decode_read(&siwe(text("login"))).unwrap(),
+        Read::SiweChallenge {
+            intent: SiweIntent::Login
+        }
+    ));
+    for intent in [
+        text("Login"),
+        text("admin"),
+        JsValue::from_f64(0.0),
+        JsValue::UNDEFINED,
+    ] {
+        assert!(refused(&siwe(intent)));
+    }
+}
+
+/// Builds `(value, seen)`: `value` nests one object `depth` levels deep whose
+/// `leaf` getter sets `seen.read` when anything reads it.
+fn watched(depth: u32) -> (JsValue, JsValue) {
+    let built = Function::new_with_args(
+        "depth",
+        "const seen = { read: false };
+         let value = { get leaf() { seen.read = true; return 1; } };
+         for (let i = 0; i < depth; i++) value = { inner: value };
+         return { value, seen };",
+    )
+    .call1(&JsValue::NULL, &JsValue::from(depth))
+    .expect("the builder runs");
+    (
+        Reflect::get(&built, &text("value")).unwrap(),
+        Reflect::get(&built, &text("seen")).unwrap(),
+    )
+}
+
+fn was_read(seen: &JsValue) -> bool {
+    Reflect::get(seen, &text("read")).unwrap().is_truthy()
+}
+
+/// A port payload is untrusted, so a deep field is refused before the decode
+/// walks it, as a command is.
+#[wasm_bindgen_test]
+fn a_read_that_nests_too_deep_is_refused_unwalked() {
+    let (value, seen) = watched(16);
+    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(!was_read(&seen));
+}
+
+#[wasm_bindgen_test]
+fn a_rendezvous_step_that_nests_too_deep_is_refused_unwalked() {
+    let (value, seen) = watched(16);
+    let step = object(&[
+        ("kind", text("deny")),
+        ("devicePublicKey", text("cd11")),
+        ("requestId", text("r")),
+        ("ephemeralPublicKey", text("02beef")),
+        ("x", value),
+    ]);
+    assert!(decode_rendezvous_step(&step).is_err());
+    assert!(!was_read(&seen));
+}
+
+/// A structured clone keeps cycles, so a cyclic field is refused rather than
+/// walked without end.
+#[wasm_bindgen_test]
+fn a_cyclic_read_is_refused() {
+    let cycle = Object::new();
+    Reflect::set(&cycle, &text("self"), &cycle).unwrap();
+    assert!(refused(&object(&[
+        ("kind", text("bin")),
+        ("x", cycle.into())
+    ])));
+}
+
+#[wasm_bindgen_test]
+async fn a_read_that_needs_a_session_is_refused_before_one() {
+    let refusal = JsFuture::from(read_unstarted(Ts::new_unchecked(kind("bin"))))
+        .await
+        .expect_err("no session serves the bin");
+    assert_eq!(
+        Reflect::get(&refusal, &text("code")).unwrap(),
+        text("notStarted")
+    );
+}
+
+#[wasm_bindgen_test]
+async fn a_fingerprint_read_needs_no_session() {
+    let key = object(&[
+        ("kind", text("identityFingerprint")),
+        ("identityPublicKey", bytes(&[2; 32])),
+    ]);
+    let refusal = JsFuture::from(read_unstarted(Ts::new_unchecked(key)))
+        .await
+        .expect_err("a 32-byte key is no identity key");
+    assert_eq!(
+        String::from(refusal.unchecked_into::<js_sys::Error>().message()),
+        "invalid identity public key"
+    );
 }

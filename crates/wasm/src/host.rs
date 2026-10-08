@@ -41,7 +41,7 @@ use crate::seams_bridge::{
     JsStagingStoreSeam, RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{NodeId, OpenedStream, identity_fingerprint, rendezvous};
+use crate::{NodeId, OpenedStream, rendezvous};
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
 const MAX_SAFE_SIZE: u64 = (1u64 << 53) - 1;
@@ -521,7 +521,10 @@ async fn serve(read: Read, engine: Option<&SharedEngine>) -> Result<ReadAnswer, 
         Read::DeviceRendezvous { step } => ReadAnswer::DeviceRendezvous(rendezvous::run(step)?),
         Read::IdentityFingerprint {
             identity_public_key,
-        } => ReadAnswer::IdentityFingerprint(identity_fingerprint(&identity_public_key)?),
+        } => ReadAnswer::IdentityFingerprint(
+            cipherbox_engine::fingerprint_identity_key(&identity_public_key)
+                .ok_or_else(|| JsError::new("invalid identity public key"))?,
+        ),
         Read::SiweChallenge { intent } => ReadAnswer::SiweChallenge(
             started(engine)
                 .await?

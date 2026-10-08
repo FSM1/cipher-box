@@ -5,10 +5,12 @@
 
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_wasm::boundary::{decode_rendezvous_step, take_rendezvous_secrets};
-use cipherbox_wasm::rendezvous::{DeviceRendezvousStep, Secret, device_rendezvous};
+use cipherbox_wasm::read_unstarted;
+use cipherbox_wasm::rendezvous::{DeviceRendezvousStep, Secret};
 use js_sys::{Object, Reflect, Uint8Array};
 use tsify::Ts;
 use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 const REQUESTER: &str = "cd11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
@@ -39,13 +41,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn run(step: &JsValue) -> Result<JsValue, String> {
-    device_rendezvous(Ts::new_unchecked(step.clone())).map_err(|error| {
-        JsValue::from(error)
-            .unchecked_into::<js_sys::Error>()
-            .message()
-            .into()
-    })
+/// Runs one step as the worker does before any session: a `deviceRendezvous`
+/// read through `readUnstarted`.
+async fn run(step: &JsValue) -> Result<JsValue, String> {
+    let read = object(&[("kind", text("deviceRendezvous")), ("step", step.clone())]);
+    let answer = JsFuture::from(read_unstarted(Ts::new_unchecked(read)))
+        .await
+        .map_err(|error| String::from(error.unchecked_into::<js_sys::Error>().message()))?;
+    assert_eq!(get(&answer, "kind"), "deviceRendezvous");
+    Ok(get(&answer, "value"))
 }
 
 fn open(scalar: &[u8]) -> JsValue {
@@ -71,9 +75,9 @@ fn approve(approver: &str, ephemeral: &str, factor_key: JsValue) -> JsValue {
 /// Open, approve, sign, open the factor: each step crosses as the generated
 /// shape, and the requester ends holding the factor the approver sealed.
 #[wasm_bindgen_test]
-fn a_signed_approval_hands_the_requester_its_factor() {
+async fn a_signed_approval_hands_the_requester_its_factor() {
     let scalar = [4u8; 32];
-    let opened = run(&open(&scalar)).expect("open");
+    let opened = run(&open(&scalar)).await.expect("open");
     assert_eq!(get(&opened, "kind"), "opened");
     assert!(get(&opened, "requestPayload").is_instance_of::<Uint8Array>());
     assert!(get(&opened, "comparisonValue").is_string());
@@ -83,7 +87,9 @@ fn a_signed_approval_hands_the_requester_its_factor() {
 
     let signer = Ed25519Signer::from_seed([21u8; 32]);
     let approver = hex(&signer.verifying_key().to_bytes());
-    let answer = run(&approve(&approver, &ephemeral, bytes(FACTOR))).expect("approve");
+    let answer = run(&approve(&approver, &ephemeral, bytes(FACTOR)))
+        .await
+        .expect("approve");
     assert_eq!(get(&answer, "kind"), "response");
     let sealed = get(&answer, "sealedFactor");
     let payload = get(&answer, "payload")
@@ -100,6 +106,7 @@ fn a_signed_approval_hands_the_requester_its_factor() {
         ("responseSignature", text(&signature)),
         ("scalar", bytes(&scalar)),
     ]))
+    .await
     .expect("open the factor");
     assert_eq!(get(&factor, "kind"), "factor");
     assert_eq!(
@@ -111,14 +118,15 @@ fn a_signed_approval_hands_the_requester_its_factor() {
 }
 
 #[wasm_bindgen_test]
-fn a_denial_seals_nothing() {
-    let opened = run(&open(&[4u8; 32])).expect("open");
+async fn a_denial_seals_nothing() {
+    let opened = run(&open(&[4u8; 32])).await.expect("open");
     let denied = run(&object(&[
         ("kind", text("deny")),
         ("devicePublicKey", text(REQUESTER)),
         ("requestId", text(REQUEST)),
         ("ephemeralPublicKey", get(&opened, "ephemeralPublicKey")),
     ]))
+    .await
     .expect("deny");
     assert_eq!(get(&denied, "kind"), "response");
     assert!(get(&denied, "sealedFactor").is_null());
@@ -150,37 +158,35 @@ fn the_decoded_step_holds_the_secrets_the_caller_sent() {
 }
 
 #[wasm_bindgen_test]
-fn a_step_off_the_generated_shape_is_refused() {
-    let refused = |step: JsValue| {
+async fn a_step_off_the_generated_shape_is_refused() {
+    for step in [
+        JsValue::NULL,
+        text("open"),
+        object(&[("kind", text("bogus"))]),
+        object(&[
+            ("kind", text("open")),
+            ("devicePublicKey", JsValue::from(42)),
+            ("scalar", bytes(&[4u8; 32])),
+        ]),
+        object(&[
+            ("kind", text("open")),
+            ("devicePublicKey", text(REQUESTER)),
+            ("scalar", text("thirty-two bytes")),
+        ]),
+        object(&[("kind", text("open")), ("devicePublicKey", text(REQUESTER))]),
+        object(&[
+            ("kind", text("open")),
+            ("devicePublicKey", text(REQUESTER)),
+            ("scalar", bytes(&[4u8; 32])),
+            ("label", text("an unknown field")),
+        ]),
+        approve(REQUESTER, "02beef", JsValue::from(42)),
+    ] {
         assert_eq!(
-            run(&step).unwrap_err(),
+            run(&step).await.unwrap_err(),
             "the rendezvous step does not decode"
-        )
-    };
-    refused(JsValue::NULL);
-    refused(text("open"));
-    refused(object(&[("kind", text("bogus"))]));
-    refused(object(&[
-        ("kind", text("open")),
-        ("devicePublicKey", JsValue::from(42)),
-        ("scalar", bytes(&[4u8; 32])),
-    ]));
-    refused(object(&[
-        ("kind", text("open")),
-        ("devicePublicKey", text(REQUESTER)),
-        ("scalar", text("thirty-two bytes")),
-    ]));
-    refused(object(&[
-        ("kind", text("open")),
-        ("devicePublicKey", text(REQUESTER)),
-    ]));
-    refused(object(&[
-        ("kind", text("open")),
-        ("devicePublicKey", text(REQUESTER)),
-        ("scalar", bytes(&[4u8; 32])),
-        ("label", text("an unknown field")),
-    ]));
-    refused(approve(REQUESTER, "02beef", JsValue::from(42)));
+        );
+    }
 }
 
 /// A secret field that skipped the placeholder would sit in serde's unwiped
@@ -199,9 +205,9 @@ fn a_secret_that_reaches_serde_unplaced_is_refused() {
 }
 
 #[wasm_bindgen_test]
-fn a_scalar_of_the_wrong_length_is_refused() {
+async fn a_scalar_of_the_wrong_length_is_refused() {
     assert_eq!(
-        run(&open(&[4u8; 31])).unwrap_err(),
+        run(&open(&[4u8; 31])).await.unwrap_err(),
         "a rendezvous scalar is 32 bytes"
     );
 }

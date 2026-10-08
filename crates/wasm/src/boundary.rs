@@ -14,7 +14,7 @@ use crate::read::Read;
 use crate::rendezvous::{DeviceRendezvousStep, Secret};
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
-use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent, WriteTarget};
+use cipherbox_engine::facade::{Command, CommandOutcome, Event, WriteTarget};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
@@ -130,16 +130,12 @@ pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
 }
 
 fn decode_plain_read(read: &JsValue) -> Result<Read, JsError> {
+    check_bounded(read, 0, read_refused)?;
     serde_wasm_bindgen::from_value(read.clone()).map_err(|_| read_refused())
 }
 
 fn read_refused() -> JsError {
     JsError::new("the read does not decode")
-}
-
-/// Decodes the intent a SIWE nonce is minted for.
-pub fn decode_siwe_intent(intent: JsValue) -> Result<SiweIntent, JsError> {
-    serde_wasm_bindgen::from_value(intent).map_err(|_| JsError::new("unknown siwe intent"))
 }
 
 /// Decodes where a streaming write lands. Refuses a target that names both a
@@ -156,6 +152,7 @@ pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, Js
     if !step.is_object() {
         return Err(rendezvous_refused());
     }
+    check_bounded(step, 0, rendezvous_refused)?;
     // An absent secret stays absent, so serde refuses it as a missing field.
     let placeheld: Vec<String> = Object::keys(step.unchecked_ref::<Object>())
         .iter()
@@ -215,10 +212,29 @@ fn decode(command: &JsValue) -> Result<Command, JsError> {
     serde_wasm_bindgen::from_value(tag_bigints(command, 0)?).map_err(|_| refused())
 }
 
-/// How deep [`tag_bigints`] walks. The deepest command field,
-/// `settings.byo.accessToken`, is at depth 3; a structured clone keeps cycles,
-/// so the walk needs a bound.
-const MAX_COMMAND_DEPTH: usize = 8;
+/// How deep [`tag_bigints`] and [`check_bounded`] walk. The deepest field a
+/// command or a read carries, `settings.byo.accessToken`, is at depth 3; a
+/// structured clone keeps cycles, so the walk needs a bound.
+const MAX_VALUE_DEPTH: usize = 8;
+
+/// Refuses a value that nests past [`MAX_VALUE_DEPTH`] or holds an array,
+/// before serde buffers it whole. No read or rendezvous field is an array.
+fn check_bounded(value: &JsValue, depth: usize, refusal: fn() -> JsError) -> Result<(), JsError> {
+    if Array::is_array(value) {
+        return Err(refusal());
+    }
+    if !value.is_object() || is_bytes(value) {
+        return Ok(());
+    }
+    if depth >= MAX_VALUE_DEPTH {
+        return Err(refusal());
+    }
+    for key in Object::keys(value.unchecked_ref::<Object>()).iter() {
+        let inner = Reflect::get(value, &key).map_err(|_| refusal())?;
+        check_bounded(&inner, depth + 1, refusal)?;
+    }
+    Ok(())
+}
 
 /// A copy of `value` with each `bigint` in its plain objects replaced by a
 /// [`BIGINT_TAG`] object, so the decode tells a `bigint` from a `number`.
@@ -242,7 +258,7 @@ fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
     if !value.is_object() || is_bytes(value) {
         return Ok(value.clone());
     }
-    if depth >= MAX_COMMAND_DEPTH {
+    if depth >= MAX_VALUE_DEPTH {
         return Err(JsError::new("the command nests too deep"));
     }
     let object = value.unchecked_ref::<Object>();
