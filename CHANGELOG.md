@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.13.0](https://github.com/FSM1/cipher-box/compare/v2.12.4...v2.13.0) (2026-10-08)
+
+
+### Features
+
+* **engine:** keep a rename, a move and a version restore as kept ops ([#2376](https://github.com/FSM1/cipher-box/issues/2376)) ([1b0be42](https://github.com/FSM1/cipher-box/commit/1b0be42111b713c739341d45c7adbdabda154656))
+* **engine:** let any owner device finish a stalled write cut ([#2322](https://github.com/FSM1/cipher-box/issues/2322)) ([69b0f39](https://github.com/FSM1/cipher-box/commit/69b0f39583a1ee5fb9668ba74288d42361990b8b))
+* **engine:** report the name wave and the sweep convergence as engine events ([#2346](https://github.com/FSM1/cipher-box/issues/2346)) ([6de952d](https://github.com/FSM1/cipher-box/commit/6de952df3cbfd632adf0d0ea537d96bc860e8c5d))
+* **engine:** show a vault restored from the server copy ([#2374](https://github.com/FSM1/cipher-box/issues/2374)) ([519c585](https://github.com/FSM1/cipher-box/commit/519c5856c69cdbda964a3f4744318e9ea793bb13))
+
+
+### Bug Fixes
+
+* **engine:** a personal grantee follows the scope pointer after a write cut ([#2361](https://github.com/FSM1/cipher-box/issues/2361)) ([5293f95](https://github.com/FSM1/cipher-box/commit/5293f95d302f8d2f9cdf8d3ec5c66e89f151c68b))
+* **engine:** a write grantee follows the scope pointer ahead of the drain ([#2384](https://github.com/FSM1/cipher-box/issues/2384)) ([1a0faab](https://github.com/FSM1/cipher-box/commit/1a0faaba09740b47a79ce31381a74b8ba627d948))
+* **engine:** apply the below-floor rule at the record plane and the grant reads ([#2324](https://github.com/FSM1/cipher-box/issues/2324)) ([76fa604](https://github.com/FSM1/cipher-box/commit/76fa60466e59eb318a0524bd53d7512e1f190647))
+* **engine:** bind the navigation probe to the held root record ([#2371](https://github.com/FSM1/cipher-box/issues/2371)) ([6d334d2](https://github.com/FSM1/cipher-box/commit/6d334d29ec207ab9c1546b35071954067e7dfdbd))
+* **engine:** give a kept op the no-notice exit on a charged halt and report a newer-release hold ([#2325](https://github.com/FSM1/cipher-box/issues/2325)) ([dbc8d04](https://github.com/FSM1/cipher-box/commit/dbc8d04d131f7d716efc139678266e8b4b24f1b8))
+* **engine:** hold a kept delete under a cut root for one read of its parent folder ([#2354](https://github.com/FSM1/cipher-box/issues/2354)) ([250eb10](https://github.com/FSM1/cipher-box/commit/250eb10fdc411c2128572aa2076e8e5e8da7abcf))
+* **engine:** hold the vault head for renewal only when the raised floor equals its sequence ([#2345](https://github.com/FSM1/cipher-box/issues/2345)) ([71d0b4c](https://github.com/FSM1/cipher-box/commit/71d0b4c9273d568fe389250f7f0a17aca5206be1))
+* **engine:** let the sweep follow a root that a write cut moved ([#2360](https://github.com/FSM1/cipher-box/issues/2360)) ([b5c3a8f](https://github.com/FSM1/cipher-box/commit/b5c3a8f88c42743b829598d581a8a8afaedb104e))
+* **engine:** open a withheld-update pin for a personal bookmark that has a pointer name ([#2368](https://github.com/FSM1/cipher-box/issues/2368)) ([b709879](https://github.com/FSM1/cipher-box/commit/b709879463447877233335985a1afafc415458c7))
+* **engine:** owe the scope-exit cut on a dropped move whose source became a scope root ([#2351](https://github.com/FSM1/cipher-box/issues/2351)) ([e6009eb](https://github.com/FSM1/cipher-box/commit/e6009eb20cbacce452f6d9f9dd460582c23587d3))
+* **engine:** paint the last-known-good root at a dark cold start and memoize the kept-op filter ([#2344](https://github.com/FSM1/cipher-box/issues/2344)) ([8474b78](https://github.com/FSM1/cipher-box/commit/8474b78fe69f7f50dd126754fa89e9714978e72a))
+* **engine:** prove a moved capture before the drop and share one capture walk per tick ([#2326](https://github.com/FSM1/cipher-box/issues/2326)) ([88d0661](https://github.com/FSM1/cipher-box/commit/88d0661d4f20ac36ef562e2585a6f0c268df0d59))
+* **engine:** read the withheld pin by the bookmark pointer name ([#2364](https://github.com/FSM1/cipher-box/issues/2364)) ([5b2abf8](https://github.com/FSM1/cipher-box/commit/5b2abf8f972389b41f070ca9708a2983c1455129))
+* **engine:** renew a held record only through the walk signature path ([#2321](https://github.com/FSM1/cipher-box/issues/2321)) ([9c66c6c](https://github.com/FSM1/cipher-box/commit/9c66c6c5bd5a8837d433f7465d17070cbe5a3770))
+* **engine:** renew a tombstoned node that an unloaded parent links ([#2380](https://github.com/FSM1/cipher-box/issues/2380)) ([4a826a6](https://github.com/FSM1/cipher-box/commit/4a826a61fa2fffc941cacb9a8a1c510ab1b17ae8))
+* **engine:** retry a size refusal in the write wave ([#2378](https://github.com/FSM1/cipher-box/issues/2378)) ([ff2b738](https://github.com/FSM1/cipher-box/commit/ff2b738dc0720903868569d38cd65a436946f1fb))
+* **engine:** revive a folder that a read finds lapsed before the walk cursor ([#2373](https://github.com/FSM1/cipher-box/issues/2373)) ([917912b](https://github.com/FSM1/cipher-box/commit/917912ba81f7498fed2b8644d75e1f7e03c318ea))
+* **engine:** revive a lapsed name only through the read of its plane ([#2347](https://github.com/FSM1/cipher-box/issues/2347)) ([c4d6587](https://github.com/FSM1/cipher-box/commit/c4d6587d30d3d299b3f786f4a4219ef77894311f))
+* **engine:** revive lapsed names at session start and in the renewal walk ([#2356](https://github.com/FSM1/cipher-box/issues/2356)) ([95cdaf5](https://github.com/FSM1/cipher-box/commit/95cdaf5e451d66ef7f6dae4a1d433d4a9d3e42c0))
+* **engine:** revive the settings record only at its floor ([#2355](https://github.com/FSM1/cipher-box/issues/2355)) ([41766cc](https://github.com/FSM1/cipher-box/commit/41766cc16d56ada904cb1e8047e5ac691516b432))
+* **engine:** send the last-copy event only on a verified copy and back off the background re-PUT ([#2323](https://github.com/FSM1/cipher-box/issues/2323)) ([dd26d9e](https://github.com/FSM1/cipher-box/commit/dd26d9ee54f5eb324f64ac91eedd40c346ef4bbf))
+* **engine:** send the withheld-update escalation from the shared-scope reads ([#2348](https://github.com/FSM1/cipher-box/issues/2348)) ([6a64279](https://github.com/FSM1/cipher-box/commit/6a6427946c087e2ce713533cc1f601dd4c80ce9c))
+* **engine:** skip a scope whose root is served below the held record ([#2377](https://github.com/FSM1/cipher-box/issues/2377)) ([72fee73](https://github.com/FSM1/cipher-box/commit/72fee73124bc76813421efac6ee59e61187b10f0))
+* **engine:** skip the navigation reads when a scope root moved after the last walk ([#2350](https://github.com/FSM1/cipher-box/issues/2350)) ([867ac09](https://github.com/FSM1/cipher-box/commit/867ac099d16c3541b5a4a84a4a6a767aecc13422))
+* **engine:** the drain tells a carried kept op from a lost one under a keyless scope ([#2383](https://github.com/FSM1/cipher-box/issues/2383)) ([cd2e75c](https://github.com/FSM1/cipher-box/commit/cd2e75caec79133839de577e770f1d33e90df9e3))
+* **engine:** wait for a running conversion pass before an owner command refuses ([#2375](https://github.com/FSM1/cipher-box/issues/2375)) ([30a4edc](https://github.com/FSM1/cipher-box/commit/30a4edcb8e53b6f700b6a3710fd3043edc52a2b9))
+
+
+### Performance Improvements
+
+* **load:** measure the name wave and the sweep convergence ([#2363](https://github.com/FSM1/cipher-box/issues/2363)) ([6d76e43](https://github.com/FSM1/cipher-box/commit/6d76e431e72f2cf8b3902d6d4b410515bbc0639c))
+
 ## [2.12.4](https://github.com/FSM1/cipher-box/compare/v2.12.3...v2.12.4) (2026-10-05)
 
 
