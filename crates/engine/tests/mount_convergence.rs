@@ -2277,7 +2277,7 @@ fn kept_ops_through_a_downgrade(
     case: DowngradeCase,
     nested: bool,
     act: impl FnOnce(&World<'_>, &mut Engine<FakeSeamTypes>, &mut Vec<BoxedTask>, NodeId),
-    owner_sees: impl FnOnce(&Engine<FakeSeamTypes>, NodeId, NodeId),
+    owner_sees: impl FnOnce(&World<'_>, &mut Engine<FakeSeamTypes>, &mut Vec<BoxedTask>, NodeId, NodeId),
 ) -> AfterTheDowngrade {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
@@ -2386,7 +2386,7 @@ fn kept_ops_through_a_downgrade(
     block_on(engine_t.command(Command::SetFocus { node: Some(parent) }))
         .expect("the owner opens the folder");
     tick_n(&world, &engine_t, &mut tasks_t, 2);
-    owner_sees(&engine_t, parent, file);
+    owner_sees(&World(&world), &mut engine_t, &mut tasks_t, parent, file);
 
     let gets_before = moved_gets(&world, &before_the_wave, shared);
     let _ = events_so_far(&mut events_r);
@@ -2484,8 +2484,10 @@ fn edit(
 }
 
 /// The owner reads the grantee's edit exactly when the wave carried it.
-fn edit_carried(carried: bool) -> impl FnOnce(&Engine<FakeSeamTypes>, NodeId, NodeId) {
-    move |engine, _, file| {
+fn edit_carried(
+    carried: bool,
+) -> impl FnOnce(&World<'_>, &mut Engine<FakeSeamTypes>, &mut Vec<BoxedTask>, NodeId, NodeId) {
+    move |_, engine, _, _, file| {
         assert_eq!(
             block_on(engine.read_content(file)).map_err(|e| e.to_string()) == Ok(vec![3u8; 70]),
             carried,
@@ -2535,6 +2537,54 @@ fn a_downgraded_grantees_lost_kept_edit_dead_letters_after_the_read() {
     assert!(after.moved_reads > 0, "after a read of the moved tree");
 }
 
+/// A rename that the wave carried leaves with no notice after the read of the
+/// moved tree shows its result.
+#[test]
+fn a_downgraded_grantees_carried_kept_rename_leaves_with_no_notice() {
+    let after = kept_ops_through_a_downgrade(
+        DowngradeCase::Carried,
+        true,
+        |world, engine, tasks, file| {
+            block_on(engine.command(Command::Rename {
+                node: file,
+                new_name: "b.bin".into(),
+            }))
+            .expect("the rename stages");
+            tick_n(world.0, engine, tasks, 2);
+        },
+        |_, engine, _, parent, _| {
+            assert_eq!(
+                listed_names(engine, parent),
+                vec!["b.bin".to_owned()],
+                "the moved tree carries the rename"
+            );
+        },
+    );
+    assert_eq!(after.notices, 0, "no notice");
+    assert!(after.moved_reads > 0, "after a read of the moved tree");
+}
+
+/// A kept delete whose folder the owner deletes after the wave. A read of the
+/// moved tree drops the folder from the base, so the delete leaves with no
+/// notice (ADR 0069 D6).
+#[test]
+fn a_downgraded_grantees_kept_delete_whose_folder_went_leaves_with_no_notice() {
+    let after = kept_ops_through_a_downgrade(
+        DowngradeCase::Carried,
+        true,
+        |world, engine, tasks, file| {
+            block_on(engine.command(Command::Delete { node: file })).expect("the delete stages");
+            tick_n(world.0, engine, tasks, 2);
+        },
+        |world, engine, tasks, parent, _| {
+            block_on(engine.command(Command::Delete { node: parent }))
+                .expect("the owner deletes the folder");
+            tick_n(world.0, engine, tasks, 4);
+        },
+    );
+    assert_eq!(after.notices, 0, "no notice");
+}
+
 /// Two renames of one file that the wave lost. The moved tree shows the name
 /// before both, which is the result of neither, so each dead-letters with a
 /// notice: only the op's own result decides it under a keyless scope.
@@ -2553,7 +2603,7 @@ fn a_downgraded_grantees_lost_rename_chain_dead_letters_each_rename() {
                 tick_n(world.0, engine, tasks, 2);
             }
         },
-        |engine, parent, _| {
+        |_, engine, _, parent, _| {
             assert_eq!(
                 listed_names(engine, parent),
                 vec!["doc.bin".to_owned()],
@@ -2586,7 +2636,7 @@ fn a_downgraded_grantees_lost_restore_chain_dead_letters_each_restore() {
                 tick_n(world.0, engine, tasks, 2);
             }
         },
-        |engine, _, file| {
+        |_, engine, _, _, file| {
             assert_eq!(
                 block_on(engine.read_content(file)).map_err(|e| e.to_string()),
                 Ok(THIRD_BODY.to_vec()),

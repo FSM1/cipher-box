@@ -1713,6 +1713,10 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) forks: &'a ForkSightings,
     pub(crate) grafted_claims: &'a RefCell<ClaimRecord>,
     pub(crate) bookmarked_scope_roots: &'a RefCell<BookmarkedScopeRoots>,
+    /// The folder chain, root first, that each kept op's noted folder sat under
+    /// at its publish. In memory only: after a restart, a folder the base does
+    /// not hold cannot be placed.
+    pub(crate) kept_chains: &'a RefCell<BTreeMap<OpId, Vec<NodeId>>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2711,6 +2715,10 @@ where
         let mut moved = keyless_kept::MovedRoots::new();
         let mut decided = Vec::new();
         let mut end = pending.len();
+        self.cells
+            .kept_chains
+            .borrow_mut()
+            .retain(|op_id, _| kept.parent(*op_id).is_some());
         for (index, (op_id, op)) in pending.iter().enumerate() {
             if !kept.holds(*op_id, op) {
                 continue;
@@ -3457,6 +3465,15 @@ where
         );
         if noted.is_ok() && self.store_kept_notes(scope, &notes).await.is_ok() {
             self.kept_now.set(true);
+        }
+        if let Some(parent) = self.kept_parent.get() {
+            let base = self.cells.base.borrow();
+            if base.contains(parent) {
+                let mut chain = base.ancestors(parent);
+                chain.reverse();
+                chain.push(parent);
+                self.cells.kept_chains.borrow_mut().insert(op_id, chain);
+            }
         }
     }
 

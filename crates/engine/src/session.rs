@@ -549,6 +549,8 @@ pub(crate) struct SessionState {
     pub(crate) byo_reconciled: Rc<Cell<bool>>,
     /// The same-sequence forks this session's reads reported.
     pub(crate) fork_sightings: Rc<ForkSightings>,
+    /// [`DrainCells::kept_chains`](crate::sync::drain::DrainCells::kept_chains).
+    pub(crate) kept_chains: Rc<RefCell<BTreeMap<crate::seams::OpId, Vec<NodeId>>>>,
     /// The names this session reported restored from the server copy.
     pub(crate) restored_copies: Rc<RestoredCopies>,
 }
@@ -803,6 +805,7 @@ impl SessionState {
             capture_proofs: Rc::default(),
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
+            kept_chains: Rc::default(),
             restored_copies: Rc::new(RestoredCopies::default()),
         }
     }
@@ -832,6 +835,7 @@ impl SessionState {
             forks: &self.fork_sightings,
             grafted_claims: &self.grafted_claims,
             bookmarked_scope_roots: &self.bookmarked_scope_roots,
+            kept_chains: &self.kept_chains,
         }
     }
 }

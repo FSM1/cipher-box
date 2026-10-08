@@ -224,7 +224,9 @@ scenario fails the meta-test):
   grantee dead-letters on its device with a notice, a kept delete included,
   also a late write that the wave did not carry; under the scope pointer
   read, a kept edit that the wave carried leaves with no notice, also one
-  folder below the scope root, one that it lost dead-letters with a notice,
+  folder below the scope root, and so does a carried rename and a kept
+  delete whose folder the owner deleted after the wave, one that it lost
+  dead-letters with a notice,
   each rename and each version restore of a lost chain dead-letters, each
   after a read of the moved tree, and a bookmark with no scope pointer name
   keeps the keyless charge with no read (ADR 0069 D3,

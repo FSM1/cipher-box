@@ -52,7 +52,7 @@ ops, and the per-op rebase rules apply unchanged. A revoked or downgraded party 
 seed, so its op does not apply again and takes the dead-letter path of "Sync core". Amended on
 2026-10-03: that dead letter is not landed. Its kept op reads the old tree and leaves with no notice
 (FSM1/cipher-box#2272). Amended on 2026-10-05: the dead letter landed.
-Amended on 2026-10-08: a party whose bookmark holds the scope pointer name reads the moved tree under the pointer read key, and a kept op that the tree already decides leaves with no notice; only a lost op, or one under a bookmark with no pointer name, dead-letters.
+Amended on 2026-10-08: when the bookmark holds the scope pointer name, the drain first reads the moved tree under the pointer read key, and a kept op whose own result the tree shows, or a kept delete whose node the tree lacks, leaves with no notice.
 
 Amended on 2026-10-03: the owner ruled the three Residuals: the kept op, T = 7 days, and an
 amendment of this ADR in place. D4 to D7 record the rulings. Each sentence that starts with
@@ -92,7 +92,7 @@ applies the delete again, and a node that is gone ends the op with no notice. A 
 parent no longer names took the node with it, so the op ends too, at once when a read of this
 session at the live parent name shows the old parent no longer names the folder. A base that does not hold the folder shows
 nothing, so with no such read the op waits for a pass that reads the folder, or leaves at T. A kept
-delete under a scope that this device can no longer write takes the keyless charge of D3 and
+delete under a scope that this device can no longer write takes the keyless charge of D3, unless the pointer read of D3 shows its node gone, and
 dead-letters with a notice, as a kept create and a kept edit do, also when the base does not hold
 its folder. Proposed: a kept
 op that this device edits again leaves with no check, because the later op sets what the node shows. Amended on 2026-10-07: a later delete of this device expires every earlier op on its node once a flip shows, a later bin restore cancels that delete so the earlier ops stay, and no other later op expires an earlier op. A second

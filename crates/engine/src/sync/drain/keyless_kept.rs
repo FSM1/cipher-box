@@ -180,7 +180,12 @@ where
         match &op.kind {
             OpKind::Delete { .. } => {
                 let parent = kept.parent(op_id)?;
-                if !self.read_moved_folder(refresh, root, parent).await? {
+                let seen = self.cells.kept_chains.borrow().get(&op_id).cloned();
+                if parent != root
+                    && !self
+                        .read_moved_folder(refresh, root, parent, seen.as_deref())
+                        .await?
+                {
                     return Some(true);
                 }
                 linked(parent).map(|alive| !alive)
@@ -190,8 +195,12 @@ where
                 linked(*parent).filter(|shown| *shown)
             }
             OpKind::UpdateContent { .. } | OpKind::RestoreVersion { .. } => {
+                // The file's own record shows the op, so a root listing only
+                // names the file here.
                 let folder = self.cells.base.borrow().parent_of(op.target)?;
-                self.reads_moved_folder(refresh, root, folder).await?;
+                if folder != root {
+                    self.reads_moved_folder(refresh, root, folder).await?;
+                }
                 linked(folder).filter(|shown| *shown)?;
                 let mut report = FolderRefreshReport::reconciled();
                 let versions = refresh.read_file(op.target, &mut report).await?;
@@ -232,43 +241,56 @@ where
         root: NodeId,
         folder: NodeId,
     ) -> Option<()> {
-        self.read_moved_folder(refresh, root, folder)
+        self.read_moved_folder(refresh, root, folder, None)
             .await?
             .then_some(())
     }
 
     /// Read `folder` and each folder between it and `root` in the moved tree,
     /// root first. Each name comes from the listing just read, so no read
-    /// lands on the old tree. `Some(false)` when a listing no longer names the
-    /// next folder, and `None` when a folder's record does not pass the gate
-    /// on this read or the base cannot place the folder below `root`.
+    /// lands on the old tree. A folder the base no longer holds is placed by
+    /// the chain this session saw it under ([`DrainCells::kept_chains`]).
+    /// `Some(false)` when the healed root listing or a listing just read no
+    /// longer names the next folder, and `None` when a folder's record does
+    /// not pass the gate on this read, the folder cannot be placed below
+    /// `root`, or `folder` is `root`, whose listing no read of this pass gated.
     async fn read_moved_folder(
         &self,
         refresh: &MovedRefresh<'_, T, S, H, F>,
         root: NodeId,
         folder: NodeId,
+        seen: Option<&[NodeId]>,
     ) -> Option<bool> {
         if folder == root {
-            return Some(true);
+            return None;
         }
         let chain = {
-            let mut chain = self.cells.base.borrow().ancestors(folder);
+            let base = self.cells.base.borrow();
+            let mut chain = if base.contains(folder) {
+                let mut chain = base.ancestors(folder);
+                chain.reverse();
+                chain.push(folder);
+                chain
+            } else {
+                seen?.to_vec()
+            };
             let at = chain.iter().position(|node| *node == root)?;
-            chain.truncate(at);
-            chain.reverse();
-            chain.push(folder);
+            chain.drain(..=at);
             chain
         };
         let mut above = root;
         for node in chain {
             {
                 let base = self.cells.base.borrow();
+                if !base.contains(node) {
+                    return Some(false);
+                }
                 if !base
                     .links_ranked(node)
                     .iter()
                     .any(|link| link.parent == above)
                 {
-                    return (!base.contains(node)).then_some(false);
+                    return None;
                 }
             }
             let mut report = FolderRefreshReport::reconciled();
