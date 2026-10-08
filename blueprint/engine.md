@@ -1077,10 +1077,11 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one record at that name, by its signed `data`: the record the walk or graft
   gated, or this device's own confirmed publish when its base was the held
   record. When the served root is above the held record, or is another record
-  at its sequence (a same-sequence fork), or sits below the sequence floor (a
-  replay), or the probe or the floor store has no answer, it reads nothing for
-  that scope and the next tick reads. The floor bars a replay only: a gated
-  read outside a walk raises it.
+  at its sequence (a same-sequence fork), or is below the held record (an
+  availability outcome, which sends no abuse event), or sits below the
+  sequence floor (a replay), or the probe or the floor store has no answer, it
+  reads nothing for that scope and the next tick reads. The floor bars a
+  replay only: a gated read outside a walk raises it.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is
