@@ -622,7 +622,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// The refresh, with no pointer follow ahead of it.
     #[cfg(test)]
-    pub(crate) async fn follow_and_refresh<St, E>(
+    async fn follow_and_refresh<St, E>(
         &self,
         staging: &St,
         entropy: &RefCell<E>,
@@ -4534,30 +4534,12 @@ mod tests {
         /// seed cached for the old root, before a drain reads either.
         #[test]
         fn the_pointer_follow_heals_the_root_and_drops_the_old_write_seed() {
-            let fx = RenderedScope::new(Vec::new());
-            join(&fx);
-            let mut rendered = NodeMeta::new(NodeId(SCOPE), "photos-folder", NodeKind::Folder);
-            rendered.ipns_name = Some(old_root_name().as_str().as_bytes().to_vec());
-            fx.base.borrow_mut().upsert_node(rendered);
-            crate::scope_seeds::deposit_seed(
-                &fx.write_seeds,
-                SCOPE,
-                Zeroizing::new([0x77; 32]),
-                Some(1),
-                FloorNamespace::GrantedBy(ContactLabel::of(
-                    &label_seed(),
-                    &sharer_signer().verifying_key().to_sec1(),
-                )),
-            );
-            serve_pointer(&fx, &sharer_signer(), 1);
+            let fx = moved_pointer_over_a_graft();
 
             fx.follow_pointers(0);
 
             assert_eq!(
-                fx.base
-                    .borrow()
-                    .node(NodeId(SCOPE))
-                    .and_then(|meta| meta.ipns_name.clone()),
+                rendered_root_name(&fx),
                 Some(scope_root_name().as_str().as_bytes().to_vec()),
                 "the render node moves to the vouched root"
             );
@@ -4605,19 +4587,18 @@ mod tests {
             }
         }
 
-        /// The pointer follow leaves the own node at its name and keeps the
-        /// own seed.
-        fn assert_the_own_scope_stays(fx: &RenderedScope) {
-            fx.follow_pointers(0);
-            assert_the_own_scope_kept(fx);
+        /// The name the render node at `SCOPE` carries.
+        fn rendered_root_name(fx: &RenderedScope) -> Option<Vec<u8>> {
+            fx.base
+                .borrow()
+                .node(NodeId(SCOPE))
+                .and_then(|meta| meta.ipns_name.clone())
         }
 
+        /// The own node keeps its name, and the own seed stays.
         fn assert_the_own_scope_kept(fx: &RenderedScope) {
             assert_eq!(
-                fx.base
-                    .borrow()
-                    .node(NodeId(SCOPE))
-                    .and_then(|meta| meta.ipns_name.clone()),
+                rendered_root_name(fx),
                 Some(old_root_name().as_str().as_bytes().to_vec()),
                 "the own node keeps its name"
             );
@@ -4636,10 +4617,7 @@ mod tests {
             fx.follow_pointers(0);
 
             assert_eq!(
-                fx.base
-                    .borrow()
-                    .node(NodeId(SCOPE))
-                    .and_then(|meta| meta.ipns_name.clone()),
+                rendered_root_name(&fx),
                 Some(scope_root_name().as_str().as_bytes().to_vec()),
                 "the graft moves to the vouched root"
             );
@@ -4721,10 +4699,7 @@ mod tests {
             fx.follow_pointers(1_000);
 
             assert_eq!(
-                fx.base
-                    .borrow()
-                    .node(NodeId(SCOPE))
-                    .and_then(|meta| meta.ipns_name.clone()),
+                rendered_root_name(&fx),
                 Some(scope_root_name().as_str().as_bytes().to_vec()),
                 "the next pass moves the graft"
             );
@@ -4760,7 +4735,9 @@ mod tests {
             let fx = moved_pointer_over_an_own_scope();
             fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
 
-            assert_the_own_scope_stays(&fx);
+            fx.follow_pointers(0);
+
+            assert_the_own_scope_kept(&fx);
         }
 
         /// Two sharers that claim one scope id answer for neither, so a moved
@@ -4775,7 +4752,9 @@ mod tests {
             list.reconcile(second_claim());
             fx.persist(&list).expect("the second bookmark persists");
 
-            assert_the_own_scope_stays(&fx);
+            fx.follow_pointers(0);
+
+            assert_the_own_scope_kept(&fx);
         }
 
         /// ADR 0024 D2: the holder prefers its personal tag, and the pass that
