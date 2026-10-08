@@ -1,15 +1,14 @@
 //! The production engine host: constructs the one engine instance over the
-//! browser seams and exposes `start` / `command` / `snapshot` / `sharing` /
-//! `siweChallenge` / `download` / `nextEvent` to the worker.
+//! browser seams and exposes `start` / `command` / `read` / the write and
+//! stream handles / `nextEvent` to the worker.
 //!
 //! Loaded inside `packages/client`'s dedicated engine worker (never the UI
 //! realm). The single engine sits behind an async RwLock: `start`/`command`
-//! take the write lock and serialize, while the reads (`snapshot`, `sharing`,
-//! `siweChallenge`, `download`) share the read lock — a long download never
-//! blocks a snapshot. A focus change and a manual refresh take the read lock
-//! alone, so a snapshot reads the cached view beside their network legs.
-//! `nextEvent`
-//! reads the independent event stream and runs concurrently with a command.
+//! take the write lock and serialize, while every `read` shares the read lock
+//! — a long download never blocks a snapshot. A focus change and a manual
+//! refresh take the read lock alone, so a snapshot reads the cached view
+//! beside their network legs. `nextEvent` reads the independent event stream
+//! and runs concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login
 //! secret enters once through `start` (copied into the engine's `Zeroizing`
@@ -19,12 +18,12 @@
 
 use std::rc::Rc;
 
-use async_lock::{Mutex, RwLock};
+use async_lock::{Mutex, RwLock, RwLockReadGuard};
 use cipherbox_engine::facade::{self, ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
     ContentProfile, GatewayConfig, OsEntropy, OverBudgetCause, OwnerScopedFloorStore,
-    QueueGenerationStore, SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy,
-    StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
+    QueueGenerationStore, SeamSet, SeamTypes, StoragePlatform, StoragePolicy, StreamHandle,
+    SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use tsify::Ts;
@@ -33,16 +32,16 @@ use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
 use crate::boundary::{
-    decode_command, decode_siwe_intent, decode_write_target, encode_event, encode_outcome,
-    encode_view,
+    decode_command, decode_read, decode_write_target, encode_event, encode_outcome, encode_view,
 };
+use crate::read::{Read, ReadAnswer};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
     JsStagingStoreSeam, RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{NodeId, OpenedStream};
+use crate::{NodeId, OpenedStream, identity_fingerprint, rendezvous};
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
 const MAX_SAFE_SIZE: u64 = (1u64 << 53) - 1;
@@ -327,239 +326,12 @@ impl EngineHandle {
         })
     }
 
-    /// Reads a key-free [`SnapshotView`] for a UI paint: of `folder`, or of the
-    /// engine's own current root when `folder` is absent — a host asks for the
-    /// root, it never names one (blueprint/web-client.md "UI state law").
-    /// Resolves with the view; rejects with the engine error.
-    #[wasm_bindgen(unchecked_return_type = "Promise<SnapshotView>")]
-    pub fn snapshot(&self, folder: Option<NodeId>) -> Promise {
-        let engine = self.engine.clone();
-        let folder = folder.map(|node| node.facade());
-        future_to_promise(async move {
-            let engine = engine.read().await;
-            let folder = folder.unwrap_or_else(|| engine.root());
-            let view = engine.snapshot(folder).await.map_err(engine_error)?;
-            Ok(encode_view(&view)?)
-        })
-    }
-
-    /// Reads a key-free [`SharingView`] for a sharing UI: this vault's verified
-    /// contact book, and the grants `scopeRoot`'s own record commits — of the
-    /// engine's current root when `scopeRoot` is absent, as `snapshot` does.
-    /// Resolves with the view; rejects with the engine error.
-    #[wasm_bindgen(unchecked_return_type = "Promise<SharingView>")]
-    pub fn sharing(&self, scope_root: Option<NodeId>) -> Promise {
-        let engine = self.engine.clone();
-        let scope_root = scope_root.map(|node| node.facade());
-        future_to_promise(async move {
-            let engine = engine.read().await;
-            let scope_root = scope_root.unwrap_or_else(|| engine.root());
-            let view = engine.sharing(scope_root).await.map_err(engine_error)?;
-            Ok(encode_view(&view)?)
-        })
-    }
-
-    /// Reads this vault's accepted shares for a `/shared` route: the durable
-    /// received-share list, each row carrying the engine's own resolution
-    /// verdict. Resolves with the rows; rejects with the engine error.
-    #[wasm_bindgen(js_name = receivedShares, unchecked_return_type = "Promise<ReceivedShareRow[]>")]
-    pub fn received_shares(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let rows = engine
-                .read()
-                .await
-                .received_shares()
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&rows)?)
-        })
-    }
-
-    /// Previews the invite link `fragment` names before the join (ADR 0028
-    /// D3). Posts nothing and persists nothing. Resolves with an
-    /// `InvitePreview`; rejects with the engine error.
-    #[wasm_bindgen(js_name = previewInviteLink, unchecked_return_type = "Promise<InvitePreview>")]
-    pub fn preview_invite_link(&self, fragment: String) -> Promise {
-        let engine = self.engine.clone();
-        let fragment = Zeroizing::new(fragment);
-        future_to_promise(async move {
-            let preview = engine
-                .read()
-                .await
-                .preview_invite_link(&fragment)
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&preview)?)
-        })
-    }
-
-    /// Reads the owner's bin for a `/bin` route: one key-free row per
-    /// soft-deleted node, plus the rung the index load reached. Resolves with
-    /// the view; rejects with the engine error.
-    #[wasm_bindgen(unchecked_return_type = "Promise<BinView>")]
-    pub fn bin(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let view = engine.read().await.bin().await.map_err(engine_error)?;
-            Ok(encode_view(&view)?)
-        })
-    }
-
-    #[wasm_bindgen(js_name = vaultStorage, unchecked_return_type = "Promise<VaultStorageView>")]
-    pub fn vault_storage(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let view = engine
-                .read()
-                .await
-                .vault_storage()
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&view)?)
-        })
-    }
-
-    #[wasm_bindgen(js_name = authMethods, unchecked_return_type = "Promise<AuthMethod[]>")]
-    pub fn auth_methods(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let rows = engine
-                .read()
-                .await
-                .auth_methods()
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&rows)?)
-        })
-    }
-
-    /// The device identity keys registered to this account. Resolves with an
-    /// array of `RegisteredDevice`.
-    #[wasm_bindgen(js_name = devices, unchecked_return_type = "Promise<RegisteredDevice[]>")]
-    pub fn devices(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let rows = engine.read().await.devices().await.map_err(engine_error)?;
-            Ok(encode_view(&rows)?)
-        })
-    }
-
-    /// The bytes this device signs to join the account registry. The account id
-    /// comes from the engine's own session.
-    #[wasm_bindgen(
-        js_name = deviceRegistrationChallenge,
-        unchecked_return_type = "Promise<Uint8Array>"
-    )]
-    pub fn device_registration_challenge(&self, device_public_key: String) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let payload = engine
-                .read()
-                .await
-                .device_registration_challenge(&device_public_key)
-                .await
-                .map_err(engine_error)?;
-            Ok(js_sys::Uint8Array::from(payload.as_slice()).into())
-        })
-    }
-
-    /// What this account is asked to approve. Resolves with an array of
-    /// `PendingApproval`, each carrying its comparison value.
-    #[wasm_bindgen(js_name = pendingApprovals, unchecked_return_type = "Promise<PendingApprovalView[]>")]
-    pub fn pending_approvals(&self) -> Promise {
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let rows = engine
-                .read()
-                .await
-                .pending_approvals()
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&rows)?)
-        })
-    }
-
-    /// Issues the single-use nonce an EIP-4361 message must embed, for the
-    /// named intent (`"login"` or `"link"`). Resolves with the nonce as a
-    /// string; rejects with the engine error, or with a refusal when the intent
-    /// names no pool.
-    #[wasm_bindgen(js_name = siweChallenge, unchecked_return_type = "Promise<string>")]
-    pub fn siwe_challenge(&self, intent: Ts<SiweIntent>) -> Promise {
-        let intent = match decode_siwe_intent(intent.js_value()) {
-            Ok(intent) => intent,
-            Err(refusal) => return Promise::reject(&refusal.into()),
-        };
-        let engine = self.engine.clone();
-        future_to_promise(async move {
-            let nonce = engine
-                .read()
-                .await
-                .siwe_challenge(intent)
-                .await
-                .map_err(engine_error)?;
-            Ok(JsValue::from_str(&nonce))
-        })
-    }
-
-    /// Downloads and decrypts one file node's content through the verified
-    /// read pipeline. Resolves with the plaintext bytes as a `Uint8Array`;
-    /// rejects with the engine error.
-    #[wasm_bindgen(unchecked_return_type = "Promise<Uint8Array>")]
-    pub fn download(&self, node: &NodeId) -> Promise {
-        let engine = self.engine.clone();
-        let node = node.facade();
-        future_to_promise(async move {
-            let bytes = engine
-                .read()
-                .await
-                .read_content(node)
-                .await
-                .map_err(engine_error)?;
-            // Terminal owner of the Rust-side plaintext: the copy crosses into
-            // the JS heap here, so this buffer is wiped rather than freed.
-            let bytes = Zeroizing::new(bytes);
-            Ok(Uint8Array::from(bytes.as_slice()).into())
-        })
-    }
-
-    /// Lists one file's prior versions, newest first. The head is the file's
-    /// current content and is not in the list. Resolves with an array of
-    /// `VersionEntry`; rejects with the engine error.
-    #[wasm_bindgen(js_name = fileVersions, unchecked_return_type = "Promise<VersionEntry[]>")]
-    pub fn file_versions(&self, node: &NodeId) -> Promise {
-        let engine = self.engine.clone();
-        let node = node.facade();
-        future_to_promise(async move {
-            let rows = engine
-                .read()
-                .await
-                .file_versions(node)
-                .await
-                .map_err(engine_error)?;
-            Ok(encode_view(&rows)?)
-        })
-    }
-
-    /// Downloads and decrypts one prior version of a file, named by its content
-    /// root CID. Resolves with the plaintext bytes as a `Uint8Array`; rejects
-    /// with the engine error.
-    #[wasm_bindgen(js_name = downloadVersion, unchecked_return_type = "Promise<Uint8Array>")]
-    pub fn download_version(&self, node: &NodeId, content_cid: Vec<u8>) -> Promise {
-        let engine = self.engine.clone();
-        let node = node.facade();
-        future_to_promise(async move {
-            let bytes = engine
-                .read()
-                .await
-                .read_version_content(node, &content_cid)
-                .await
-                .map_err(engine_error)?;
-            // Terminal owner of the Rust-side plaintext: the copy crosses into
-            // the JS heap here, so this buffer is wiped rather than freed.
-            let bytes = Zeroizing::new(bytes);
-            Ok(Uint8Array::from(bytes.as_slice()).into())
-        })
+    /// Serves one read under the read lock, so a long download never blocks a
+    /// snapshot. Resolves with the answer under the read's `kind`; rejects with
+    /// the decode refusal or the engine error.
+    #[wasm_bindgen(unchecked_return_type = "Promise<ReadAnswer>")]
+    pub fn read(&self, read: Ts<Read>) -> Promise {
+        answer(read, Some(self.engine.clone()))
     }
 
     /// Opens a ranged-read stream over a file node, pinning the head version for
@@ -652,6 +424,133 @@ impl EngineHandle {
             })
         })
     }
+}
+
+/// Serves one read before any session exists: the reads that need none answer,
+/// and every other read refuses with `notStarted`.
+#[wasm_bindgen(js_name = readUnstarted, unchecked_return_type = "Promise<ReadAnswer>")]
+pub fn read_unstarted(read: Ts<Read>) -> Promise {
+    answer(read, None)
+}
+
+type SharedEngine = Rc<RwLock<Engine<WebSeamTypes>>>;
+
+/// Decodes `read` before the promise exists, so the caller may wipe what it
+/// handed over as soon as the call returns.
+fn answer(read: Ts<Read>, engine: Option<SharedEngine>) -> Promise {
+    let read = match decode_read(&read.js_value()) {
+        Ok(read) => read,
+        Err(refusal) => return Promise::reject(&refusal.into()),
+    };
+    future_to_promise(async move { Ok(encode_view(&serve(read, engine.as_ref()).await?)?) })
+}
+
+async fn started(
+    engine: Option<&SharedEngine>,
+) -> Result<RwLockReadGuard<'_, Engine<WebSeamTypes>>, JsValue> {
+    match engine {
+        Some(engine) => Ok(engine.read().await),
+        None => Err(engine_error(EngineError::NotStarted)),
+    }
+}
+
+async fn serve(read: Read, engine: Option<&SharedEngine>) -> Result<ReadAnswer, JsValue> {
+    Ok(match read {
+        Read::Snapshot { folder } => {
+            let engine = started(engine).await?;
+            let folder = folder.unwrap_or_else(|| engine.root());
+            ReadAnswer::Snapshot(engine.snapshot(folder).await.map_err(engine_error)?)
+        }
+        Read::Sharing { scope } => {
+            let engine = started(engine).await?;
+            let scope = scope.unwrap_or_else(|| engine.root());
+            ReadAnswer::Sharing(engine.sharing(scope).await.map_err(engine_error)?)
+        }
+        Read::ReceivedShares => ReadAnswer::ReceivedShares(
+            started(engine)
+                .await?
+                .received_shares()
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::InvitePreview { fragment } => ReadAnswer::InvitePreview(
+            started(engine)
+                .await?
+                .preview_invite_link(&fragment)
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::Bin => ReadAnswer::Bin(started(engine).await?.bin().await.map_err(engine_error)?),
+        Read::VaultStorage => ReadAnswer::VaultStorage(
+            started(engine)
+                .await?
+                .vault_storage()
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::AuthMethods => ReadAnswer::AuthMethods(
+            started(engine)
+                .await?
+                .auth_methods()
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::Devices => ReadAnswer::Devices(
+            started(engine)
+                .await?
+                .devices()
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::DeviceRegistrationChallenge { device_public_key } => {
+            ReadAnswer::DeviceRegistrationChallenge(
+                started(engine)
+                    .await?
+                    .device_registration_challenge(&device_public_key)
+                    .await
+                    .map_err(engine_error)?,
+            )
+        }
+        Read::PendingApprovals => ReadAnswer::PendingApprovals(
+            started(engine)
+                .await?
+                .pending_approvals()
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::DeviceRendezvous { step } => ReadAnswer::DeviceRendezvous(rendezvous::run(step)?),
+        Read::IdentityFingerprint {
+            identity_public_key,
+        } => ReadAnswer::IdentityFingerprint(identity_fingerprint(&identity_public_key)?),
+        Read::SiweChallenge { intent } => ReadAnswer::SiweChallenge(
+            started(engine)
+                .await?
+                .siwe_challenge(intent)
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::Download { node } => ReadAnswer::Download(Zeroizing::new(
+            started(engine)
+                .await?
+                .read_content(node)
+                .await
+                .map_err(engine_error)?,
+        )),
+        Read::FileVersions { node } => ReadAnswer::FileVersions(
+            started(engine)
+                .await?
+                .file_versions(node)
+                .await
+                .map_err(engine_error)?,
+        ),
+        Read::DownloadVersion { node, content_cid } => ReadAnswer::DownloadVersion(Zeroizing::new(
+            started(engine)
+                .await?
+                .read_version_content(node, &content_cid)
+                .await
+                .map_err(engine_error)?,
+        )),
+    })
 }
 
 /// Renders an engine error as a rejection value: a `js_sys::Error` whose

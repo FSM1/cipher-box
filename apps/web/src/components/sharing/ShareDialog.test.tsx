@@ -14,6 +14,7 @@ import { JOINED_NOTICE_MS } from '../../hooks/useSharingActions';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { storedOwnerName, storeOwnerName } from '../../sharing/ownerName';
 import { sharingStore } from '../../stores/sharing.store';
+import { fakeRead } from '../../test/readFakes';
 import type { ListingRow } from '../../vault/listing';
 import { ShareDialog } from './ShareDialog';
 
@@ -142,13 +143,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     );
 
   const listeners = new Set<(event: EventDescriptor) => void>();
-  const facade = {
-    subscribe: (listener: (event: EventDescriptor) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    snapshot: () => new Promise<never>(() => undefined),
-    setFocus: () => Promise.resolve(),
+  const reads = {
     sharing: vi.fn(
       (scope: Uint8Array): Promise<SharingDescriptor> =>
         answer('sharing', {
@@ -178,6 +173,21 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     identityFingerprint: vi.fn((identityPublicKey: Uint8Array) =>
       Promise.resolve(fingerprint(seedOf(identityPublicKey)))
     ),
+  };
+  const facade = {
+    subscribe: (listener: (event: EventDescriptor) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    read: fakeRead({
+      snapshot: () => new Promise<never>(() => undefined),
+      sharing: ({ scope }) =>
+        scope === null
+          ? Promise.reject(new Error('no root sharing read here'))
+          : reads.sharing(scope),
+      identityFingerprint: ({ identityPublicKey }) => reads.identityFingerprint(identityPublicKey),
+    }),
+    setFocus: () => Promise.resolve(),
     importContact: vi.fn((code: Uint8Array) => {
       const seed = code[0] ?? 1;
       return answer('importContact', { kind: 'contactImported' as const }).then((outcome) => {
@@ -267,7 +277,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
   } as unknown as EngineClient;
 
   const emit = (event: EventDescriptor) => listeners.forEach((listener) => listener(event));
-  return { client, facade, emit };
+  return { client, facade, reads, emit };
 }
 
 /** Renders the dialog and lets its opening read land. */
@@ -1089,11 +1099,11 @@ describe('the joined notice', () => {
 
   it('re-reads the folder so the joiner shows in the table', async () => {
     const engine = await share();
-    const reads = engine.facade.sharing.mock.calls.length;
+    const reads = engine.reads.sharing.mock.calls.length;
 
     await act(async () => engine.emit(joined(DOCS, 'Ada')));
 
-    expect(engine.facade.sharing.mock.calls.length).toBe(reads + 1);
+    expect(engine.reads.sharing.mock.calls.length).toBe(reads + 1);
   });
 
   it('says nothing for a join on another folder', async () => {

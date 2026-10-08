@@ -527,8 +527,8 @@ export class FakeEngineTransport implements EngineTransport {
   respondAuthMethods: () => Promise<AuthMethodDescriptor[]> = () => Promise.resolve([]);
   respondDevices: () => Promise<RegisteredDeviceDescriptor[]> = () => Promise.resolve([]);
   respondPendingApprovals: () => Promise<PendingApprovalDescriptor[]> = () => Promise.resolve([]);
-  respondRegistrationChallenge: () => Promise<Uint8Array> = () =>
-    Promise.resolve(new Uint8Array(0));
+  respondRegistrationChallenge: () => Promise<ArrayBuffer> = () =>
+    Promise.resolve(new ArrayBuffer(0));
   respondRendezvous: (step: DeviceRendezvousStep) => Promise<DeviceRendezvousResult> = () =>
     Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(0) });
   respondIdentityFingerprint: (identityPublicKey: Uint8Array) => Promise<string> = () =>
@@ -645,6 +645,9 @@ export class FakeEngineTransport implements EngineTransport {
       case 'downloadVersion':
         this.versionDownloads.push({ node: read.node, contentCid: read.contentCid });
         return this.respondDownloadVersion(read.node, read.contentCid);
+      default:
+        // As the engine's own decode refuses a kind it does not serve.
+        return Promise.reject(new Error('the read does not decode'));
     }
   }
 

@@ -40,7 +40,7 @@ export function useBin(): BinRead {
   const reload = useCallback(() => {
     const mine = ++generation.current;
     return run('bin', async (facade) => {
-      const view = await facade.bin();
+      const view = await facade.read({ kind: 'bin' });
       if (mine === generation.current) setBin(view);
     });
   }, [run]);

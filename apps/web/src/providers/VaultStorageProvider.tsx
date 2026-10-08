@@ -45,7 +45,7 @@ export function VaultStorageProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(() => {
     const ticket = (latest.current += 1);
     return run('vaultStorage', async (facade) => {
-      const read = await facade.vaultStorage();
+      const read = await facade.read({ kind: 'vaultStorage' });
       if (ticket === latest.current) setStorage(read);
     });
   }, [run]);

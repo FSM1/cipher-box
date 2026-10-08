@@ -40,6 +40,9 @@ mod host;
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub mod boundary;
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub mod read;
+
 // Test-only: the production artifact never pulls the engine test kit or these
 // bindings.
 #[cfg(all(feature = "conformance", target_family = "wasm", target_os = "unknown"))]
@@ -325,7 +328,7 @@ pub mod rendezvous {
         encode_view(&run(decode_rendezvous_step(&step.js_value())?)?)
     }
 
-    fn run(step: DeviceRendezvousStep) -> Result<DeviceRendezvousResult, JsError> {
+    pub(crate) fn run(step: DeviceRendezvousStep) -> Result<DeviceRendezvousResult, JsError> {
         match step {
             DeviceRendezvousStep::Open {
                 device_public_key,

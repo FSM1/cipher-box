@@ -13,6 +13,7 @@ import type {
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
+import { fakeRead } from './readFakes';
 
 const DONE: CommandOutcomeDescriptor = { kind: 'done' };
 
@@ -39,12 +40,21 @@ export function versionEngine({
     return refusals[call] === undefined ? Promise.resolve(value) : Promise.reject(refusals[call]);
   };
 
+  const reads = {
+    fileVersions: vi.fn((_node: Uint8Array) => answer('fileVersions', [...held])),
+    downloadVersion: vi.fn((_node: Uint8Array, _contentCid: Uint8Array) =>
+      answer('downloadVersion', new ArrayBuffer(4))
+    ),
+  };
+
   const facade = {
     subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
-    snapshot: () => new Promise<never>(() => undefined),
+    read: fakeRead({
+      snapshot: () => new Promise<never>(() => undefined),
+      fileVersions: ({ node }) => reads.fileVersions(node),
+      downloadVersion: ({ node, contentCid }) => reads.downloadVersion(node, contentCid),
+    }),
     setFocus: () => Promise.resolve(),
-    fileVersions: vi.fn(() => answer('fileVersions', [...held])),
-    downloadVersion: vi.fn(() => answer('downloadVersion', new ArrayBuffer(4))),
     restoreVersion: vi.fn((_node: Uint8Array, contentCid: Uint8Array) => {
       // A restore swaps the head in: the named version leaves the prior list.
       if (refusals.restoreVersion === undefined) drop(held, contentCid);
@@ -62,7 +72,7 @@ export function versionEngine({
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
 
-  return { client, facade };
+  return { client, facade, reads };
 }
 
 /** One prior version the engine holds. */

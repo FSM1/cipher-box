@@ -84,7 +84,7 @@ export function InvitePage() {
   useEffect(() => {
     if (account === null || client === null || fragment === '') return;
     let current = true;
-    client.facade.previewInviteLink(fragment).then(
+    client.facade.read({ kind: 'invitePreview', fragment }).then(
       (read) => current && setPreview({ account, fragment, outcome: 'read', preview: read }),
       (failure: unknown) =>
         current && setPreview({ account, fragment, outcome: failedPreviewOutcome(failure) })

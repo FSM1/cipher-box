@@ -64,7 +64,7 @@ describe('the version history', () => {
     const engine = openDetails({ entries: [OLDER, OLDEST] });
 
     await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
-    expect(engine.facade.fileVersions).toHaveBeenCalledWith(NODE);
+    expect(engine.reads.fileVersions).toHaveBeenCalledWith(NODE);
     expect(screen.getByTestId(`version-${OLDER_CID}`)).toBeDefined();
     expect(screen.getByTestId(`version-${OLDEST_CID}`)).toBeDefined();
     expect(screen.getByTestId(`version-${OLDER_CID}`).textContent).toContain('2 KB');
@@ -73,7 +73,7 @@ describe('the version history', () => {
   it('renders no history section for a file the engine holds no prior version of', async () => {
     const engine = openDetails();
 
-    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledOnce());
+    await waitFor(() => expect(engine.reads.fileVersions).toHaveBeenCalledOnce());
     expect(screen.queryByTestId('version-history')).toBeNull();
   });
 
@@ -86,7 +86,7 @@ describe('the version history', () => {
       fireEvent.click(control('download', OLDEST_CID));
 
       await waitFor(() =>
-        expect(engine.facade.downloadVersion).toHaveBeenCalledWith(NODE, OLDEST.contentCid)
+        expect(engine.reads.downloadVersion).toHaveBeenCalledWith(NODE, OLDEST.contentCid)
       );
       await waitFor(() => expect(saves.clicked).toHaveLength(1));
       expect(saves.clicked[0].download).toBe('notes.txt');
@@ -119,7 +119,7 @@ describe('the version history', () => {
     fireEvent.click(screen.getByTestId('version-restore-confirm'));
 
     await waitFor(() => expect(screen.queryByTestId(`version-${OLDER_CID}`)).toBeNull());
-    expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2);
+    expect(engine.reads.fileVersions).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('version-restore-dialog')).toBeNull();
     expect(screen.getByTestId(`version-${OLDEST_CID}`)).toBeDefined();
   });
@@ -138,7 +138,7 @@ describe('the version history', () => {
     await waitFor(() =>
       expect(engine.facade.deleteVersion).toHaveBeenCalledWith(NODE, OLDEST.contentCid)
     );
-    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(engine.reads.fileVersions).toHaveBeenCalledTimes(2));
   });
 
   it('holds the confirmation up and reports the refusal the engine answered with', async () => {
@@ -157,7 +157,7 @@ describe('the version history', () => {
       )
     );
     expect(screen.getByTestId('version-delete-dialog')).toBeDefined();
-    expect(engine.facade.fileVersions).toHaveBeenCalledOnce();
+    expect(engine.reads.fileVersions).toHaveBeenCalledOnce();
   });
 
   it('refuses to dismiss the details dialog while a version command is in flight', async () => {
@@ -202,10 +202,10 @@ describe('the version history', () => {
 
     fireEvent.click(control('delete', OLDEST_CID));
     // The re-read never settles, so the write is still the dialog's to own.
-    engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
+    engine.reads.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
     fireEvent.click(screen.getByTestId('version-delete-confirm'));
 
-    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(engine.reads.fileVersions).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId('version-delete-confirm').hasAttribute('disabled')).toBe(true);
 
     fireEvent.click(screen.getByTestId('version-delete-confirm'));
@@ -218,7 +218,7 @@ describe('the version history', () => {
 
     // The next node's read never settles, so only a cleared list can hide the
     // entries the previous node answered with.
-    engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
+    engine.reads.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
     engine.view.rerender(
       <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
@@ -325,8 +325,8 @@ describe('the version history', () => {
     engine.view.rerender(
       <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
-    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
-    expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE);
+    await waitFor(() => expect(engine.reads.fileVersions).toHaveBeenCalledTimes(2));
+    expect(engine.reads.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE);
 
     // The read the new node asked for stays the last one. A re-read for the node
     // the write named would land the previous node's list on this one.
@@ -335,7 +335,7 @@ describe('the version history', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2);
+    expect(engine.reads.fileVersions).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a new confirmation when a write from an earlier display of the node lands', async () => {
@@ -358,7 +358,7 @@ describe('the version history', () => {
     engine.view.rerender(
       <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
-    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE));
+    await waitFor(() => expect(engine.reads.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE));
     engine.view.rerender(
       <DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />
     );

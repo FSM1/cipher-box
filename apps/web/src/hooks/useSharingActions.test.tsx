@@ -12,6 +12,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
 import { sharingFor, sharingStore, type GrantRow } from '../stores/sharing.store';
+import { fakeRead } from '../test/readFakes';
 import {
   SNAPSHOT_REREAD_GAP_MS,
   useSharingActions,
@@ -90,14 +91,8 @@ function sharingEngine(
   const names: SharingGrantDescriptor['granteeName'][] = [];
   const links: SharingInviteLinkDescriptor[] = [...held];
   const listeners = new Set<(event: EventDescriptor) => void>();
-  const facade = {
-    subscribe: (listener: (event: EventDescriptor) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    snapshot: () => new Promise<never>(() => undefined),
-    setFocus: () => Promise.resolve(),
-    sharing: vi.fn(() =>
+  const reads = {
+    sharing: vi.fn((_scope: Uint8Array) =>
       answer(
         'read',
         view(
@@ -107,6 +102,22 @@ function sharingEngine(
         )
       )
     ),
+    identityFingerprint: vi.fn((_identityPublicKey: Uint8Array) => Promise.resolve(FINGERPRINT)),
+  };
+  const facade = {
+    subscribe: (listener: (event: EventDescriptor) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    read: fakeRead({
+      snapshot: () => new Promise<never>(() => undefined),
+      sharing: ({ scope }) =>
+        scope === null
+          ? Promise.reject(new Error('no root sharing read here'))
+          : reads.sharing(scope),
+      identityFingerprint: ({ identityPublicKey }) => reads.identityFingerprint(identityPublicKey),
+    }),
+    setFocus: () => Promise.resolve(),
     importContact: vi.fn(() =>
       answer('importContact', {
         kind: 'contactImported' as const,
@@ -130,7 +141,6 @@ function sharingEngine(
       if (refusals.renameGrantee === undefined) names.splice(0, 1, { name, source: 'owner' });
       return answer('renameGrantee', { kind: 'done' as const });
     }),
-    identityFingerprint: vi.fn(() => Promise.resolve(FINGERPRINT)),
     createInviteLink: vi.fn(() => {
       if (refusals.createInviteLink === undefined) links.push({ ...MINTED });
       return answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: FRAGMENT });
@@ -156,7 +166,7 @@ function sharingEngine(
   } as unknown as EngineClient;
 
   const emit = (event: EventDescriptor) => listeners.forEach((listener) => listener(event));
-  return { client, facade, links, emit };
+  return { client, facade, reads, links, emit };
 }
 
 function mount(client: EngineClient) {
@@ -175,7 +185,7 @@ describe('reading', () => {
 
     await expect(result.current.open()).resolves.toBe(true);
 
-    expect(engine.facade.sharing).toHaveBeenCalledWith(DOCS);
+    expect(engine.reads.sharing).toHaveBeenCalledWith(DOCS);
     expect(sharingStore.getState().contacts).toEqual([CONTACT]);
     expect(grantsFor(DOCS_KEY)).toEqual([]);
   });
@@ -234,7 +244,7 @@ describe('reading', () => {
     engine.emit({ kind: 'snapshotUpdated' });
 
     await waitFor(() => expect(pendingClaims()).toBe(2));
-    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+    expect(engine.reads.sharing).toHaveBeenCalledTimes(2);
   });
 
   it('re-reads on a snapshot update where the scope carries no link yet', async () => {
@@ -248,7 +258,7 @@ describe('reading', () => {
     await waitFor(() =>
       expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toHaveLength(1)
     );
-    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+    expect(engine.reads.sharing).toHaveBeenCalledTimes(2);
   });
 
   it('starts one re-read at once and one trailing read for a burst inside the gap', async () => {
@@ -260,13 +270,13 @@ describe('reading', () => {
 
       for (let i = 0; i < 3; i++) engine.emit({ kind: 'snapshotUpdated' });
       await vi.advanceTimersByTimeAsync(0);
-      expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+      expect(engine.reads.sharing).toHaveBeenCalledTimes(2);
 
       await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS);
-      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+      expect(engine.reads.sharing).toHaveBeenCalledTimes(3);
 
       await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS * 5);
-      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+      expect(engine.reads.sharing).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
@@ -277,7 +287,7 @@ describe('reading', () => {
     const { result } = mount(engine.client);
     await result.current.grant(CONTACT, 'write');
     let finishStale: (stale: SharingDescriptor) => void = () => undefined;
-    engine.facade.sharing.mockImplementationOnce(
+    engine.reads.sharing.mockImplementationOnce(
       () => new Promise<SharingDescriptor>((settle) => (finishStale = settle))
     );
 
@@ -288,7 +298,7 @@ describe('reading', () => {
     finishStale(view(['write'], NO_LINKS));
     await new Promise((settle) => setTimeout(settle, 0));
 
-    expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    expect(engine.reads.sharing).toHaveBeenCalledTimes(3);
     expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
   });
 
@@ -297,7 +307,7 @@ describe('reading', () => {
     const { result } = mount(engine.client);
     await result.current.grant(CONTACT, 'write');
     let finishCommand: (current: SharingDescriptor) => void = () => undefined;
-    engine.facade.sharing
+    engine.reads.sharing
       .mockImplementationOnce(
         () => new Promise<SharingDescriptor>((settle) => (finishCommand = settle))
       )
@@ -306,9 +316,9 @@ describe('reading', () => {
       );
 
     const changed = result.current.changePermission(CONTACT, 'read');
-    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(engine.reads.sharing).toHaveBeenCalledTimes(2));
     engine.emit({ kind: 'granteeJoined', scopeRoot: DOCS, name: 'Ada', fingerprint: FINGERPRINT });
-    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(engine.reads.sharing).toHaveBeenCalledTimes(3));
 
     finishCommand(view(['read'], NO_LINKS));
 
@@ -318,7 +328,7 @@ describe('reading', () => {
 
   it('reads a row with no fingerprint where the engine forms none for its key', async () => {
     const engine = sharingEngine();
-    engine.facade.identityFingerprint.mockImplementation(() =>
+    engine.reads.identityFingerprint.mockImplementation(() =>
       Promise.reject(new EngineRequestError('invalid identity public key'))
     );
     const { result } = mount(engine.client);
@@ -357,7 +367,7 @@ describe('contact import', () => {
 
     await expect(result.current.importContact(CODE)).resolves.toBe(false);
 
-    expect(engine.facade.sharing).not.toHaveBeenCalled();
+    expect(engine.reads.sharing).not.toHaveBeenCalled();
     expect(sharingStore.getState().contacts).toEqual([]);
     await waitFor(() => expect(result.current.error).toBe('contact binding did not verify'));
   });

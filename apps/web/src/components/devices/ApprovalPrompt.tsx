@@ -84,7 +84,7 @@ export function ApprovalPrompt() {
     const carriesThisDevice = async (): Promise<boolean> => {
       mine ??= (await session?.deviceIdentity()?.publicKeyHex()) ?? null;
       if (mine === null) return false;
-      return (await facade.devices()).some((row) => row.publicKey === mine);
+      return (await facade.read({ kind: 'devices' })).some((row) => row.publicKey === mine);
     };
     // Read until it holds, so a registration made in this session needs no
     // reload, and again whenever a row would be raised.
@@ -94,7 +94,7 @@ export function ApprovalPrompt() {
         registered = await carriesThisDevice();
         if (!registered) return false;
       }
-      const rows = await facade.pendingApprovals();
+      const rows = await facade.read({ kind: 'pendingApprovals' });
       if (rows.length > 0) registered = await carriesThisDevice();
       const raised = registered && rows.length > 0;
       if (live) setPending(registered ? rows : []);
@@ -178,7 +178,7 @@ export function ApprovalPrompt() {
         let sealed;
         try {
           const chosen = await step(row, decision, devicePublicKey);
-          sealed = await facade.deviceRendezvous(chosen);
+          sealed = await facade.read({ kind: 'deviceRendezvous', step: chosen });
         } finally {
           wipe();
         }

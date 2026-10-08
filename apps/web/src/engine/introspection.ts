@@ -176,11 +176,13 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
       );
     },
     async snapshot() {
-      const view = await client.facade.snapshot(null);
+      const view = await client.facade.read({ kind: 'snapshot', folder: null });
       return { view: plain(view) as Plain<SnapshotDescriptor>, settled: settled(view) };
     },
     async download(nodeHex) {
-      return toHex(new Uint8Array(await client.facade.download(fromHex(nodeHex))));
+      return toHex(
+        new Uint8Array(await client.facade.read({ kind: 'download', node: fromHex(nodeHex) }))
+      );
     },
     async refresh() {
       await client.facade.manualRefresh();
@@ -206,8 +208,11 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
     async register(subject, identityToken) {
       const identity = identityOf(subject);
       const publicKey = await identity.publicKeyHex();
-      const challenge = await facade.deviceRegistrationChallenge(publicKey);
-      const signature = await identity.sign(Uint8Array.from(challenge));
+      const challenge = await facade.read({
+        kind: 'deviceRegistrationChallenge',
+        devicePublicKey: publicKey,
+      });
+      const signature = await identity.sign(new Uint8Array(challenge));
       await facade.registerDevice(publicKey, signature, identityToken, null);
     },
 
@@ -219,7 +224,10 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       // caller that never learns the ephemeral key can call no `forget`.
       let opened;
       try {
-        const cut = await facade.deviceRendezvous({ kind: 'open', devicePublicKey, scalar });
+        const cut = await facade.read({
+          kind: 'deviceRendezvous',
+          step: { kind: 'open', devicePublicKey, scalar },
+        });
         if (cut.kind !== 'opened') throw new Error('the engine did not open a rendezvous');
         opened = {
           devicePublicKey,
@@ -235,7 +243,7 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       return opened;
     },
 
-    pending: () => facade.pendingApprovals(),
+    pending: () => facade.read({ kind: 'pendingApprovals' }),
 
     async answer(subject, row, decision) {
       const identity = identityOf(subject);
@@ -250,24 +258,26 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
         // Named before the step, because the step transfers these bytes to the
         // worker and leaves this realm holding a detached buffer.
         if (factorKey !== null) minted = await digest(factorKey);
-        answered = await facade.deviceRendezvous(
-          factorKey === null
-            ? {
-                kind: 'deny',
-                devicePublicKey,
-                requestId: row.requestId,
-                ephemeralPublicKey: row.ephemeralPublicKey,
-              }
-            : {
-                kind: 'approve',
-                devicePublicKey,
-                requestId: row.requestId,
-                requesterDevicePublicKey: row.requesterDevicePublicKey,
-                ephemeralPublicKey: row.ephemeralPublicKey,
-                sealScalar,
-                factorKey,
-              }
-        );
+        answered = await facade.read({
+          kind: 'deviceRendezvous',
+          step:
+            factorKey === null
+              ? {
+                  kind: 'deny',
+                  devicePublicKey,
+                  requestId: row.requestId,
+                  ephemeralPublicKey: row.ephemeralPublicKey,
+                }
+              : {
+                  kind: 'approve',
+                  devicePublicKey,
+                  requestId: row.requestId,
+                  requesterDevicePublicKey: row.requesterDevicePublicKey,
+                  ephemeralPublicKey: row.ephemeralPublicKey,
+                  sealScalar,
+                  factorKey,
+                },
+        });
       } finally {
         erase(sealScalar);
         if (factorKey !== null) erase(factorKey);
@@ -296,14 +306,17 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       if (cut === undefined) throw new Error('this tab cut no rendezvous at that key');
       let opened;
       try {
-        opened = await facade.deviceRendezvous({
-          kind: 'openFactor',
-          sealedFactor,
-          requestId,
-          requesterDevicePublicKey: cut.devicePublicKey,
-          responderDevicePublicKey,
-          responseSignature,
-          scalar: cut.scalar,
+        opened = await facade.read({
+          kind: 'deviceRendezvous',
+          step: {
+            kind: 'openFactor',
+            sealedFactor,
+            requestId,
+            requesterDevicePublicKey: cut.devicePublicKey,
+            responderDevicePublicKey,
+            responseSignature,
+            scalar: cut.scalar,
+          },
         });
       } finally {
         erase(cut.scalar);

@@ -72,7 +72,7 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
     case 'devices':
       return [];
     case 'deviceRegistrationChallenge':
-      return Uint8Array.of(1, 2, 3);
+      return Uint8Array.of(1, 2, 3).buffer;
     case 'pendingApprovals':
       return [];
     case 'deviceRendezvous':
@@ -622,11 +622,11 @@ describe('EngineFacade', () => {
     const folder = new Uint8Array(16).fill(2);
     const node = new Uint8Array(16).fill(3);
 
-    const view = await facade.snapshot(folder);
+    const view = await facade.read({ kind: 'snapshot', folder });
     expect(view.folder).toBe(folder);
     expect(transport.readIntents).toEqual([{ kind: 'snapshot', folder }]);
 
-    const content = await facade.download(node);
+    const content = await facade.read({ kind: 'download', node });
     expect([...new Uint8Array(content)]).toEqual([1, 2, 3]);
     expect(transport.readIntents.at(-1)).toEqual({ kind: 'download', node });
   });
@@ -636,10 +636,10 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
     const scope = new Uint8Array(16).fill(4);
 
-    const view = await facade.sharing(scope);
+    const view = await facade.read({ kind: 'sharing', scope });
     expect(view.scope).toBe(scope);
 
-    await facade.sharing(null);
+    await facade.read({ kind: 'sharing', scope: null });
     expect(transport.readIntents).toEqual([
       { kind: 'sharing', scope },
       { kind: 'sharing', scope: null },
@@ -649,7 +649,7 @@ describe('EngineFacade', () => {
   it('forwards an invite preview read with the fragment verbatim', async () => {
     const transport = new FakeTransport();
 
-    await new EngineFacade(transport).previewInviteLink('abc-_');
+    await new EngineFacade(transport).read({ kind: 'invitePreview', fragment: 'abc-_' });
     expect(transport.readIntents).toEqual([{ kind: 'invitePreview', fragment: 'abc-_' }]);
   });
 
@@ -657,7 +657,10 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
 
     await expect(
-      new EngineFacade(transport).previewInviteLink('x'.repeat(MAX_FRAGMENT_CHARS + 1))
+      new EngineFacade(transport).read({
+        kind: 'invitePreview',
+        fragment: 'x'.repeat(MAX_FRAGMENT_CHARS + 1),
+      })
     ).rejects.toThrow('that is not an invite link');
     expect(transport.readIntents).toEqual([]);
   });
@@ -666,7 +669,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await facade.receivedShares();
+    await facade.read({ kind: 'receivedShares' });
     expect(transport.readIntents).toEqual([{ kind: 'receivedShares' }]);
   });
 
@@ -674,7 +677,9 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
+    await expect(facade.read({ kind: 'siweChallenge', intent: 'link' })).resolves.toBe(
+      FAKE_SIWE_NONCE
+    );
     expect(transport.readIntents).toEqual([{ kind: 'siweChallenge', intent: 'link' }]);
   });
 
@@ -682,7 +687,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.bin()).resolves.toEqual(emptyBin());
+    await expect(facade.read({ kind: 'bin' })).resolves.toEqual(emptyBin());
     expect(transport.readIntents).toEqual([{ kind: 'bin' }]);
   });
 
@@ -690,7 +695,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.vaultStorage()).resolves.toEqual(emptyVaultStorage());
+    await expect(facade.read({ kind: 'vaultStorage' })).resolves.toEqual(emptyVaultStorage());
     expect(transport.readIntents).toEqual([{ kind: 'vaultStorage' }]);
   });
 
@@ -698,7 +703,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.authMethods()).resolves.toEqual([]);
+    await expect(facade.read({ kind: 'authMethods' })).resolves.toEqual([]);
     expect(transport.readIntents).toEqual([{ kind: 'authMethods' }]);
   });
 
@@ -722,23 +727,27 @@ describe('EngineFacade', () => {
   it('forwards a devices read', async () => {
     const transport = new FakeTransport();
 
-    await expect(new EngineFacade(transport).devices()).resolves.toEqual([]);
+    await expect(new EngineFacade(transport).read({ kind: 'devices' })).resolves.toEqual([]);
     expect(transport.readIntents).toEqual([{ kind: 'devices' }]);
   });
 
   it('forwards a pending-approvals read', async () => {
     const transport = new FakeTransport();
 
-    await expect(new EngineFacade(transport).pendingApprovals()).resolves.toEqual([]);
+    await expect(new EngineFacade(transport).read({ kind: 'pendingApprovals' })).resolves.toEqual(
+      []
+    );
     expect(transport.readIntents).toEqual([{ kind: 'pendingApprovals' }]);
   });
 
   it('names the device key a registration challenge is issued for', async () => {
     const transport = new FakeTransport();
 
-    await expect(
-      new EngineFacade(transport).deviceRegistrationChallenge('ed25519hex')
-    ).resolves.toEqual(Uint8Array.of(1, 2, 3));
+    const challenge = await new EngineFacade(transport).read({
+      kind: 'deviceRegistrationChallenge',
+      devicePublicKey: 'ed25519hex',
+    });
+    expect(new Uint8Array(challenge)).toEqual(Uint8Array.of(1, 2, 3));
     expect(transport.readIntents).toEqual([
       { kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' },
     ]);
@@ -749,10 +758,9 @@ describe('EngineFacade', () => {
     const scalar = new Uint8Array(32).fill(5);
 
     await expect(
-      new EngineFacade(transport).deviceRendezvous({
-        kind: 'open',
-        devicePublicKey: 'ed25519hex',
-        scalar,
+      new EngineFacade(transport).read({
+        kind: 'deviceRendezvous',
+        step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar },
       })
     ).resolves.toEqual({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
     expect(transport.readIntents).toEqual([
@@ -764,9 +772,9 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const identityPublicKey = new Uint8Array(33).fill(2);
 
-    await expect(new EngineFacade(transport).identityFingerprint(identityPublicKey)).resolves.toBe(
-      'e686 bdd6 b44e 05c4 4db0'
-    );
+    await expect(
+      new EngineFacade(transport).read({ kind: 'identityFingerprint', identityPublicKey })
+    ).resolves.toBe('e686 bdd6 b44e 05c4 4db0');
     expect(transport.readIntents).toEqual([{ kind: 'identityFingerprint', identityPublicKey }]);
   });
 

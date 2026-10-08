@@ -48,7 +48,7 @@ export function useDevices(): DevicesRead {
   const { busy, error, run } = useCommandRunner<'devices' | 'registerDevice' | 'revokeDevice'>();
 
   const read = useCallback(async (facade: EngineFacade) => {
-    const listed = await facade.devices();
+    const listed = await facade.read({ kind: 'devices' });
     setDevices(listed);
     return listed;
   }, []);

@@ -55,7 +55,7 @@ export function useFolderPicker(
     setError(null);
     client.facade
       .setFocus(cursor)
-      .then(() => client.facade.snapshot(cursor))
+      .then(() => client.facade.read({ kind: 'snapshot', folder: cursor }))
       .then(
         (view) => {
           if (live) setListing(view);

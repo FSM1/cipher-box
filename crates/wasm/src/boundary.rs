@@ -10,6 +10,7 @@
 //! (AGENTS.md rule 7). A refusal names no field value: a value can be a name
 //! the member typed.
 
+use crate::read::Read;
 use crate::rendezvous::{DeviceRendezvousStep, Secret};
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
@@ -41,12 +42,16 @@ fn refused() -> JsError {
 pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
     let kind = field(command, "kind");
     if kind == "claimInviteLink" {
-        return decode_secret_text(command, "fragment", MAX_FRAGMENT_TEXT_LEN, |decoded| {
-            match decoded {
+        return decode_secret_text(
+            command,
+            "fragment",
+            MAX_FRAGMENT_TEXT_LEN,
+            decode,
+            |decoded| match decoded {
                 Command::ClaimInviteLink { fragment, .. } => Some(fragment),
                 _ => None,
-            }
-        });
+            },
+        );
     }
     if kind == "registerDevice" {
         // A char is at most two UTF-16 units; the engine checks the char count.
@@ -54,6 +59,7 @@ pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
             command,
             "identityToken",
             2 * MAX_IDENTITY_TOKEN_CHARS,
+            decode,
             |decoded| match decoded {
                 Command::RegisterDevice { identity_token, .. } => Some(identity_token),
                 _ => None,
@@ -94,6 +100,41 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
         .serialize(&SERIALIZER)
         .map(Ts::new_unchecked)
         .map_err(|_| JsError::new("the event does not encode"))
+}
+
+/// Decodes one read. Refuses an unknown `kind`, an unknown field, and a field
+/// of the wrong type. The two secrets a read carries, an invite fragment and a
+/// rendezvous step's scalars, reach linear memory only in zeroizing buffers.
+pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
+    match field(read, "kind").as_string().as_deref() {
+        Some("invitePreview") => decode_secret_text(
+            read,
+            "fragment",
+            MAX_FRAGMENT_TEXT_LEN,
+            decode_plain_read,
+            |decoded| match decoded {
+                Read::InvitePreview { fragment } => Some(fragment),
+                _ => None,
+            },
+        )
+        .map_err(|_| read_refused()),
+        Some("deviceRendezvous") => {
+            let step = field(read, "step");
+            if step.is_undefined() || Object::keys(read.unchecked_ref::<Object>()).length() != 2 {
+                return Err(read_refused());
+            }
+            decode_rendezvous_step(&step).map(|step| Read::DeviceRendezvous { step })
+        }
+        _ => decode_plain_read(read),
+    }
+}
+
+fn decode_plain_read(read: &JsValue) -> Result<Read, JsError> {
+    serde_wasm_bindgen::from_value(read.clone()).map_err(|_| read_refused())
+}
+
+fn read_refused() -> JsError {
+    JsError::new("the read does not decode")
 }
 
 /// Decodes the intent a SIWE nonce is minted for.
@@ -246,16 +287,17 @@ fn with_placeholder(
     Ok(copy.into())
 }
 
-/// Decodes `command` with the empty placeholder at `key`, then takes the text
+/// Decodes `value` with the empty placeholder at `key`, then takes the text
 /// at `key` into the zeroizing slot that `slot_of` names.
-fn decode_secret_text(
-    command: &JsValue,
+fn decode_secret_text<T>(
+    value: &JsValue,
     key: &str,
     max_units: usize,
-    slot_of: fn(&mut Command) -> Option<&mut Zeroizing<String>>,
-) -> Result<Command, JsError> {
-    let secret = field(command, key);
-    let mut decoded = decode(&with_placeholder(command, &[key], &"".into())?)?;
+    decode: fn(&JsValue) -> Result<T, JsError>,
+    slot_of: fn(&mut T) -> Option<&mut Zeroizing<String>>,
+) -> Result<T, JsError> {
+    let secret = field(value, key);
+    let mut decoded = decode(&with_placeholder(value, &[key], &"".into())?)?;
     let slot = slot_of(&mut decoded).ok_or_else(refused)?;
     *slot = take_text(&secret, max_units)?;
     Ok(decoded)

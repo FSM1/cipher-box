@@ -13,6 +13,7 @@ import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { VaultStorageProvider } from '../../providers/VaultStorageProvider';
 import { FAKE_VAULT_STORAGE } from '../../test/authFakes';
+import { fakeRead } from '../../test/readFakes';
 import { trackSaves } from '../../test/saveSpy';
 import { FileBrowser } from './FileBrowser';
 
@@ -76,27 +77,33 @@ function fakeEngine(
 ) {
   const listeners = new Set<(event: EventDescriptor) => void>();
   const pulls: { folder: Uint8Array | null; resolve: (view: SnapshotDescriptor) => void }[] = [];
+  const reads = {
+    snapshot: vi.fn((folder: Uint8Array | null) => {
+      return new Promise<SnapshotDescriptor>((resolve) => {
+        pulls.push({ folder, resolve });
+      });
+    }),
+    download: vi.fn((_node: Uint8Array) => download()),
+  };
   const facade = {
     subscribe(listener: (event: EventDescriptor) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    snapshot: vi.fn((folder: Uint8Array | null) => {
-      return new Promise<SnapshotDescriptor>((resolve) => {
-        pulls.push({ folder, resolve });
-      });
+    read: fakeRead({
+      snapshot: ({ folder }) => reads.snapshot(folder),
+      download: ({ node }) => reads.download(node),
+      vaultStorage: () => Promise.resolve(FAKE_VAULT_STORAGE),
     }),
     setFocus: vi.fn((_node: Uint8Array | null) => Promise.resolve()),
     create: vi.fn(() => Promise.resolve()),
     rename: vi.fn(() => Promise.resolve()),
     relink: vi.fn(() => Promise.resolve()),
     delete: vi.fn(() => Promise.resolve()),
-    download: vi.fn(download),
     beginWrite: vi.fn((_target: { node: Uint8Array }, _size: number) => Promise.resolve(9n)),
     pushChunk: vi.fn((_handle: bigint, _chunk: ArrayBuffer) => Promise.resolve()),
     commitWrite: vi.fn(() => Promise.resolve(1n)),
     abortWrite: vi.fn(() => Promise.resolve()),
-    vaultStorage: vi.fn(() => Promise.resolve(FAKE_VAULT_STORAGE)),
   };
   const client = {
     facade,
@@ -109,6 +116,7 @@ function fakeEngine(
   return {
     client,
     facade,
+    reads,
     pulls,
     emit: (event: EventDescriptor) => {
       for (const listener of listeners) listener(event);
@@ -375,7 +383,7 @@ describe('the vault browser write path', () => {
     openRowMenu('notes.txt');
     chooseMenuItem('move to...');
     await settlePickerRead(engine, listing());
-    engine.facade.snapshot.mockClear();
+    engine.reads.snapshot.mockClear();
 
     // Leaving before the child's listing lands has no ancestry to read, and
     // reading none as "the vault root" would strand the walk at the top.
@@ -385,8 +393,8 @@ describe('the vault browser write path', () => {
       for (let hop = 0; hop < 5; hop += 1) await Promise.resolve();
     });
 
-    expect(engine.facade.snapshot).toHaveBeenLastCalledWith(ROOT);
-    expect(engine.facade.snapshot).not.toHaveBeenCalledWith(null);
+    expect(engine.reads.snapshot).toHaveBeenLastCalledWith(ROOT);
+    expect(engine.reads.snapshot).not.toHaveBeenCalledWith(null);
   });
 
   it('refuses to dismiss a dialog while its command is in flight', async () => {
@@ -507,8 +515,8 @@ describe('the vault browser selection', () => {
     fireEvent.click(screen.getByTestId('select-all'));
     fireEvent.click(screen.getByTestId('selection-download'));
 
-    await waitFor(() => expect(engine.facade.download).toHaveBeenCalledTimes(2));
-    expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
+    await waitFor(() => expect(engine.reads.download).toHaveBeenCalledTimes(2));
+    expect(engine.reads.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
   });
 
   it('runs one batch download at a time, however often the button is clicked', async () => {
@@ -533,7 +541,7 @@ describe('the vault browser selection', () => {
       expect((screen.getByTestId(`selection-${action}`) as HTMLButtonElement).disabled).toBe(true);
     }
     fireEvent.click(screen.getByTestId('selection-download'));
-    expect(engine.facade.download.mock.calls).toEqual([[NOTE]]);
+    expect(engine.reads.download.mock.calls).toEqual([[NOTE]]);
     expect(bar).toBeDefined();
 
     await act(async () => {
@@ -549,7 +557,7 @@ describe('the vault browser selection', () => {
     await waitFor(() =>
       expect((screen.getByTestId('selection-download') as HTMLButtonElement).disabled).toBe(false)
     );
-    expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
+    expect(engine.reads.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
   });
 
   it('retires only the nodes a partly refused batch was accepted for', async () => {
@@ -653,7 +661,7 @@ describe('the vault browser read path over the facade', () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(engine.facade.download).toHaveBeenCalledWith(NOTE);
+      expect(engine.reads.download).toHaveBeenCalledWith(NOTE);
       expect(created).toHaveLength(1);
       expect(created[0].type).toBe('application/octet-stream');
       expect(created[0].size).toBe(5);
@@ -682,7 +690,7 @@ describe('the vault browser read path over the facade', () => {
         'size not known yet - preview it again in a moment'
       )
     );
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
   });
 
   it('retires a failed download from the banner once an action dispatches', async () => {
@@ -776,7 +784,7 @@ describe('the vault browser read path over the facade', () => {
         'too large to preview - download it instead'
       )
     );
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
   });
 
   it('reports a failed read instead of rendering it', async () => {
@@ -881,7 +889,7 @@ describe('the vault browser read path over the streaming pipe', () => {
       await Promise.resolve();
     });
 
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
     // No length: the pipe frames the head from the version its engine stream
     // pins, so a size recorded when the ticket was minted travels nowhere.
     expect(minted).toEqual([
@@ -946,7 +954,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     openRowMenu('notes.txt');
     chooseMenuItem('download');
 
-    await waitFor(() => expect(engine.facade.download).toHaveBeenCalledWith(NOTE));
+    await waitFor(() => expect(engine.reads.download).toHaveBeenCalledWith(NOTE));
     expect(minted).toEqual([]);
   });
 
@@ -961,7 +969,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     await waitFor(() =>
       expect(screen.getByTestId('preview-image').getAttribute('src')).toBe('/stream/ticket-1')
     );
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
     expect(minted[0].mimeType).toBe('image/png');
 
     fireEvent.click(screen.getByLabelText('close'));
@@ -980,7 +988,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     chooseMenuItem('preview');
 
     await waitFor(() => expect(screen.getByTestId('preview-image')).toBeDefined());
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
   });
 
   it('plays a video off a ticket and never buffers it', async () => {
@@ -997,7 +1005,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     const player = await screen.findByTestId('media-player-video');
     expect(player.getAttribute('src')).toBe('/stream/ticket-1');
     expect(minted[0].mimeType).toBe('video/mp4');
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByLabelText('close'));
     await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));
@@ -1186,7 +1194,7 @@ describe('the text editor', () => {
         'too large to preview - download it instead'
       )
     );
-    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(engine.reads.download).not.toHaveBeenCalled();
     expect(screen.queryByTestId('text-editor-field')).toBeNull();
   });
 });
@@ -1278,7 +1286,7 @@ describe('the row action menu', () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
-    engine.facade.snapshot.mockClear();
+    engine.reads.snapshot.mockClear();
 
     const control = screen.getByLabelText('actions for documents');
     control.focus();
@@ -1286,13 +1294,13 @@ describe('the row action menu', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(engine.facade.snapshot).not.toHaveBeenCalled();
+    expect(engine.reads.snapshot).not.toHaveBeenCalled();
 
     fireEvent.keyDown(screen.getAllByTestId('file-list-item')[0], { key: 'Enter' });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(engine.facade.snapshot).toHaveBeenLastCalledWith(DOCS);
+    expect(engine.reads.snapshot).toHaveBeenLastCalledWith(DOCS);
   });
 
   it('takes focus into the menu and hands it back to the trigger', async () => {

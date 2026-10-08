@@ -130,7 +130,7 @@ class ReadHost extends StubEngineHost {
       case 'pendingApprovals':
         return Promise.resolve([]);
       case 'deviceRegistrationChallenge':
-        return Promise.resolve(Uint8Array.of(9, 9));
+        return Promise.resolve(Uint8Array.of(9, 9).buffer);
       case 'deviceRendezvous':
         return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
       case 'siweChallenge':
@@ -284,9 +284,11 @@ describe('serveEngine read requests', () => {
 
     await expect(transport.read({ kind: 'devices' })).resolves.toEqual([DEVICE_ROW]);
     await expect(transport.read({ kind: 'pendingApprovals' })).resolves.toEqual([]);
-    await expect(
-      transport.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
-    ).resolves.toEqual(Uint8Array.of(9, 9));
+    const challenge = await transport.read({
+      kind: 'deviceRegistrationChallenge',
+      devicePublicKey: 'ed25519hex',
+    });
+    expect(new Uint8Array(challenge)).toEqual(Uint8Array.of(9, 9));
 
     expect(host.readIntents).toEqual([
       { kind: 'devices' },
@@ -517,23 +519,10 @@ describe('serveEngine event pump over the real EngineHost', () => {
       pushChunk: () => Promise.resolve(undefined),
       commitWrite: () => Promise.resolve(1n),
       abortWrite: () => Promise.resolve(undefined),
-      snapshot: () => Promise.reject(new Error('unused')),
-      sharing: () => Promise.reject(new Error('unused')),
-      receivedShares: () => Promise.reject(new Error('unused')),
-      previewInviteLink: () => Promise.reject(new Error('unused')),
-      bin: () => Promise.reject(new Error('unused')),
-      vaultStorage: () => Promise.reject(new Error('unused')),
-      authMethods: () => Promise.reject(new Error('unused')),
-      devices: () => Promise.reject(new Error('unused')),
-      deviceRegistrationChallenge: () => Promise.reject(new Error('unused')),
-      pendingApprovals: () => Promise.reject(new Error('unused')),
-      siweChallenge: () => Promise.reject(new Error('unused')),
-      download: () => Promise.reject(new Error('unused')),
+      read: () => Promise.reject(new Error('unused')),
       openContentStream: () => Promise.reject(new Error('unused')),
       readStream: () => Promise.reject(new Error('unused')),
       closeStream: () => Promise.reject(new Error('unused')),
-      fileVersions: () => Promise.resolve([]),
-      downloadVersion: () => Promise.resolve(new Uint8Array(0)),
       nextEvent: () =>
         pumped.length > 0
           ? Promise.resolve(pumped.shift())

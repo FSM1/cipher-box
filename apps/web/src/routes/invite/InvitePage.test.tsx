@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebCoreKitSession } from '../../auth/coreKit';
 import { authStore } from '../../stores/auth.store';
 import { FAKE_PHRASE, fakeCoreKitSession, pageWrapper, signInByEmail } from '../../test/authFakes';
+import { fakeRead } from '../../test/readFakes';
 import { InvitePage } from './InvitePage';
 
 /** Stands in for the engine's opaque capability; the page reads none of it. */
@@ -67,7 +68,10 @@ function inviteEngine({
     signedInAccount: () => account,
     facade: {
       subscribe: () => () => undefined,
-      snapshot: () => new Promise<never>(() => undefined),
+      read: fakeRead({
+        snapshot: () => new Promise<never>(() => undefined),
+        invitePreview: ({ fragment }) => previewInviteLink(fragment),
+      }),
       setFocus: () => Promise.resolve(),
       // The hand-off a restored Core Kit session owes the engine; it is what
       // gives this tab an account to join with.
@@ -76,7 +80,6 @@ function inviteEngine({
         account = accountId;
         for (const listener of [...listeners]) listener();
       },
-      previewInviteLink,
       claimInviteLink,
     },
     reportFocus: () => undefined,

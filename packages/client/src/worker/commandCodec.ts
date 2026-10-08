@@ -1,11 +1,10 @@
 /**
  * The worker's side of the WASM seam, inside the engine worker realm: the
- * checkers for the request fields a read or a write handle carries, and the
+ * checkers for the request fields a write or a stream handle carries, and the
  * fail-closed read of each enum value in an event or a view. No
  * interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
@@ -44,8 +43,8 @@ import type { EngineWasm, WasmNodeId } from './engineWasm.js';
  * untrusted however they are typed here: a version-skewed peer can carry a
  * wrong-typed one, and wasm-bindgen would coerce it — a 16-character string set
  * into a `Vec<u8>` as sixteen zero bytes — rather than reject it. Hence the
- * checkers below take `unknown`, and every field the worker reads off a read or
- * a write-handle request passes through one. A command is checked by the
+ * checkers below take `unknown`, and every field the worker reads off a write or
+ * a stream request passes through one. A command and a read are checked by the
  * engine's own decode instead.
  */
 function invalidField(field: string, value: unknown): Error {
@@ -93,17 +92,6 @@ export function count(value: unknown, field: string): number {
 export function minted(value: unknown, field: string): bigint {
   if (typeof value !== 'bigint') throw invalidField(field, value);
   return value;
-}
-
-/**
- * A bearer link's URL fragment, length-guarded before the copy into wasm linear
- * memory. Like every refusal here it names the field and never echoes the
- * value, which is the capability itself.
- */
-export function fragment(value: unknown, field: string): string {
-  const carried = text(value, field);
-  if (carried.length > MAX_FRAGMENT_CHARS) throw invalidField(field, value);
-  return carried;
 }
 
 export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {

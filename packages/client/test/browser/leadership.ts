@@ -196,7 +196,7 @@ window.cbCreateNode = async (name: string, kind: 'file' | 'folder'): Promise<str
 
 window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
   try {
-    const view = await client!.facade.snapshot(unhex(folderHex));
+    const view = await client!.facade.read({ kind: 'snapshot', folder: unhex(folderHex) });
     return {
       rootHex: hex(view.root),
       folderHex: hex(view.folder),
@@ -270,7 +270,7 @@ window.cbLockState = async (name: string): Promise<{ held: number; pending: numb
 
 window.cbDownload = async (nodeHex: string): Promise<DownloadResult> => {
   try {
-    const content = await client!.facade.download(unhex(nodeHex));
+    const content = await client!.facade.read({ kind: 'download', node: unhex(nodeHex) });
     return { bytes: [...new Uint8Array(content)] };
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;

@@ -59,7 +59,7 @@ export function useFileVersions(node: Uint8Array | null, name: string): FileVers
     (target: Uint8Array) => {
       const mine = ++generation.current;
       return run('versions', async (facade) => {
-        const read = await facade.fileVersions(target);
+        const read = await facade.read({ kind: 'fileVersions', node: target });
         if (mine === generation.current) setEntries(read);
       });
     },
@@ -81,7 +81,7 @@ export function useFileVersions(node: Uint8Array | null, name: string): FileVers
     (contentCid: Uint8Array): Promise<boolean> => {
       if (node === null) return Promise.resolve(false);
       return run('download', async (facade) => {
-        const bytes = await facade.downloadVersion(node, contentCid);
+        const bytes = await facade.read({ kind: 'downloadVersion', node, contentCid });
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveBlobToDisk(url, name);
         const timer = setTimeout(() => {

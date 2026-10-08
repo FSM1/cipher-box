@@ -83,7 +83,7 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     let live = true;
     setPreview({ status: 'loading' });
 
-    client.facade.download(node).then(
+    client.facade.read({ kind: 'download', node }).then(
       (bytes) => {
         if (!live) return;
         // The projection can lag the file, so the bytes get the last word.

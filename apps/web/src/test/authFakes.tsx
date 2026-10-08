@@ -29,6 +29,7 @@ import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
 import type { WebCoreKitSession } from '../auth/coreKit';
 import { DeviceIdentity, DeviceKeyUnusableError } from '../auth/deviceIdentity';
+import { fakeRead } from './readFakes';
 import { MemoryDeviceKeys, SerialLocks } from './storeFakes';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
@@ -323,11 +324,57 @@ export function fakeEngineClient(
         await (overrides.start?.() ?? Promise.resolve());
         holds(accountId);
       },
-      siweChallenge(intent: SiweIntent) {
-        calls.siweChallenges += 1;
-        calls.siweChallengeIntents.push(intent);
-        return Promise.resolve(FAKE_NONCE);
-      },
+      read: fakeRead({
+        siweChallenge: ({ intent }) => {
+          calls.siweChallenges += 1;
+          calls.siweChallengeIntents.push(intent);
+          return Promise.resolve(FAKE_NONCE);
+        },
+        vaultStorage: () => overrides.vaultStorage?.() ?? Promise.resolve(FAKE_VAULT_STORAGE),
+        authMethods: () => overrides.authMethods?.() ?? Promise.resolve([]),
+        receivedShares: () => overrides.receivedShares?.() ?? Promise.resolve([]),
+        bin: () => overrides.bin?.() ?? Promise.resolve(FAKE_EMPTY_BIN),
+        snapshot: () => overrides.snapshot?.() ?? new Promise(() => undefined),
+        devices: () => overrides.devices?.() ?? Promise.resolve([]),
+        pendingApprovals: () => overrides.pendingApprovals?.() ?? Promise.resolve([]),
+        deviceRegistrationChallenge: ({ devicePublicKey }) => {
+          calls.registrationChallenges.push(devicePublicKey);
+          return Promise.resolve(Uint8Array.from([0xc0, 0xde]).buffer);
+        },
+        deviceRendezvous: ({ step }): Promise<DeviceRendezvousResult> => {
+          calls.rendezvous.push(step);
+          calls.rendezvousSent.push(snapshotStep(step));
+          detachTransferred(step);
+          const refused = overrides.deviceRendezvous?.();
+          if (refused) return refused;
+          switch (step.kind) {
+            case 'open':
+              return Promise.resolve({
+                kind: 'opened',
+                ephemeralPublicKey: FAKE_EPHEMERAL_PUBLIC_KEY,
+                requestPayload: FAKE_REQUEST_PAYLOAD,
+                comparisonValue: fakeComparisonValue(
+                  step.devicePublicKey,
+                  FAKE_EPHEMERAL_PUBLIC_KEY
+                ),
+              });
+            case 'approve':
+              return Promise.resolve({
+                kind: 'response',
+                sealedFactor: FAKE_SEALED_FACTOR,
+                payload: FAKE_APPROVE_PAYLOAD,
+              });
+            case 'deny':
+              return Promise.resolve({
+                kind: 'response',
+                sealedFactor: null,
+                payload: FAKE_DENY_PAYLOAD,
+              });
+            case 'openFactor':
+              return Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(32).fill(0x7c) });
+          }
+        },
+      }),
       siweLink(message: string, signature: Uint8Array) {
         calls.siweLinks.push({ message, signature });
         return Promise.resolve();
@@ -344,10 +391,6 @@ export function fakeEngineClient(
         calls.unlinked.push(methodId);
         return overrides.unlinkAuthMethod?.() ?? Promise.resolve();
       },
-      vaultStorage: () => overrides.vaultStorage?.() ?? Promise.resolve(FAKE_VAULT_STORAGE),
-      authMethods: () => overrides.authMethods?.() ?? Promise.resolve([]),
-      receivedShares: () => overrides.receivedShares?.() ?? Promise.resolve([]),
-      bin: () => overrides.bin?.() ?? Promise.resolve(FAKE_EMPTY_BIN),
       restore(node: Uint8Array, into: Uint8Array | null) {
         calls.restores.push({ node, into });
         return overrides.restore?.() ?? Promise.resolve({ kind: 'done' as const });
@@ -355,42 +398,6 @@ export function fakeEngineClient(
       purge(node: Uint8Array) {
         calls.purges.push(node);
         return overrides.purge?.() ?? Promise.resolve({ kind: 'done' as const });
-      },
-      devices: () => overrides.devices?.() ?? Promise.resolve([]),
-      pendingApprovals: () => overrides.pendingApprovals?.() ?? Promise.resolve([]),
-      deviceRegistrationChallenge(devicePublicKey: string) {
-        calls.registrationChallenges.push(devicePublicKey);
-        return Promise.resolve(Uint8Array.from([0xc0, 0xde]));
-      },
-      deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-        calls.rendezvous.push(step);
-        calls.rendezvousSent.push(snapshotStep(step));
-        detachTransferred(step);
-        const refused = overrides.deviceRendezvous?.();
-        if (refused) return refused;
-        switch (step.kind) {
-          case 'open':
-            return Promise.resolve({
-              kind: 'opened',
-              ephemeralPublicKey: FAKE_EPHEMERAL_PUBLIC_KEY,
-              requestPayload: FAKE_REQUEST_PAYLOAD,
-              comparisonValue: fakeComparisonValue(step.devicePublicKey, FAKE_EPHEMERAL_PUBLIC_KEY),
-            });
-          case 'approve':
-            return Promise.resolve({
-              kind: 'response',
-              sealedFactor: FAKE_SEALED_FACTOR,
-              payload: FAKE_APPROVE_PAYLOAD,
-            });
-          case 'deny':
-            return Promise.resolve({
-              kind: 'response',
-              sealedFactor: null,
-              payload: FAKE_DENY_PAYLOAD,
-            });
-          case 'openFactor':
-            return Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(32).fill(0x7c) });
-        }
       },
       registerDevice(
         publicKey: string,
@@ -442,7 +449,6 @@ export function fakeEngineClient(
         eventListeners.add(listener);
         return () => eventListeners.delete(listener);
       },
-      snapshot: () => overrides.snapshot?.() ?? new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
     },
     reportFocus: () => undefined,
