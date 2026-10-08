@@ -222,18 +222,22 @@ scenario fails the meta-test):
   a kept rename with no result in its note leaves with no apply
   (`kept_op.rs`, `drain.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, a kept delete included,
-  also a late write that the wave did not carry; under the scope pointer
-  read, a kept edit that the wave carried leaves with no notice, also one
-  folder below the scope root, and so does a carried rename and a kept
-  delete whose folder the owner deleted after the wave, and a carried
-  delete of a folder directly below the scope root; a kept edit stays while
-  the pointer names a root of no later write epoch than its own; one that it lost
-  dead-letters with a notice,
-  each rename and each version restore of a lost chain dead-letters, each
-  after a read of the moved tree, and a bookmark with no scope pointer name
-  keeps the keyless charge with no read (ADR 0069 D3,
-  `crates/engine/tests/mount_convergence.rs`); a folder at a name that does
-  not parse reads as not gated, and its stale links stay
+  also a late write that the wave did not carry; the kept write of a
+  surviving write grantee that an owner write cut did not carry waits past the
+  bound and applies again, and under a root the walk does not prove it waits
+  with no notice (ADR 0069 D3, D5,
+  `crates/engine/tests/mount_convergence.rs`); the pointer follow alone heals
+  the grafted root and drops the old write seed (`received_status.rs`); under
+  the scope pointer read, a kept edit that the wave carried leaves with no
+  notice, also one folder below the scope root, and so does a carried rename
+  and a kept delete whose folder the owner deleted after the wave, and a
+  carried delete of a folder directly below the scope root; a kept edit stays
+  while the pointer names a root of no later write epoch than its own; one
+  that it lost dead-letters with a notice, each rename and each version
+  restore of a lost chain dead-letters, each after a read of the moved tree,
+  and a bookmark with no scope pointer name keeps the keyless charge with no
+  read (ADR 0069 D3, `crates/engine/tests/mount_convergence.rs`); a folder at
+  a name that does not parse reads as not gated, and its stale links stay
   (`crates/engine/src/net/focus.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
