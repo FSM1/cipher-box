@@ -2469,7 +2469,13 @@ fn a_downgraded_grantees_kept_delete_dead_letters_at_the_keyless_budget() {
         })),
         Ok(CommandOutcome::Done)
     );
+    block_on(engine_t.command(Command::SetFocus { node: Some(shared) }))
+        .expect("the owner opens the folder");
     tick_n(&world, &engine_t, &mut tasks_t, 2);
+    assert!(
+        listed_names(&engine_t, shared).contains(&"gone".to_owned()),
+        "the moved tree carries the deleted folder back"
+    );
     let _ = events_so_far(&mut events_r);
     tick_n(&world, &engine_r, &mut tasks_r, 8);
 
