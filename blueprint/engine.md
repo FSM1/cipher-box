@@ -244,12 +244,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   publishing. It skips a tombstoned node that the base links nowhere, unless
   the base holds no newer copy of the parent record that the walk reached the
   node through: a parent that the device did not load can link the node. It
-  registers in batches, reads the name again after the registration, reads the durable floor with no await before the signature,
-  and signs at `floor + 1`
-  with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
-  that cycle. The numbers: at most 500 visits for each pass, a walk window of
-  60 days of EOL left, and a new cycle no sooner than 7 days after the previous
-  one began. A visit signs only under the write seed that derives its scope
+  registers in batches, reads the name again after the registration, reads
+  the durable floor with no await before the signature, and signs at
+  `floor + 1` with an EOL one day short of `eol_from(now)`. A `LostRace` is
+  not retried in that cycle. The numbers: at most 500 visits for each pass, a
+  walk window of 60 days of EOL left, and a new cycle no sooner than 7 days
+  after the previous one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
   The walk enters each folder once for each pass, so a link cycle ends.
   A visit that finds a name lapsed revives it through the read of its plane

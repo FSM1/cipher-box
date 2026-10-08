@@ -1461,7 +1461,6 @@ where
     )
 }
 
-/// A held pass before its queued visits: it reports only `underived`.
 /// The record bytes the gate admitted, whether or not the token refused the read.
 fn observed_bytes(observed: &Result<Observed, RefusedRead>) -> &[u8] {
     match observed {
@@ -1470,6 +1469,7 @@ fn observed_bytes(observed: &Result<Observed, RefusedRead>) -> &[u8] {
     }
 }
 
+/// A held pass before its queued visits: it reports only `underived`.
 fn held_report(underived: Vec<[u8; 16]>) -> WalkReport {
     WalkReport {
         underived,
