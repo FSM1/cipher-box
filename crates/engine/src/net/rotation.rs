@@ -935,10 +935,11 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// and an empty head CID is this build's own release-active refusal to sign
 /// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
 /// pass authored, so a retry re-authors and re-charges a head block forever
-/// without converging. Everything else stays retryable. This includes a size
-/// refusal ([`PublishVerdict::RefusedOversized`]): an engine-side guard on the
-/// bytes this device signs names no party, and a permanent verdict would stop
-/// the rotation for good on a condition the next drive can clear.
+/// without converging. The produce-side gate's other refusals
+/// ([`PublishVerdict::Refused`]) reject too. A size refusal
+/// ([`PublishVerdict::RefusedOversized`]) retries: it is an engine-side guard on
+/// the bytes this device signs, it names no party, and a permanent verdict
+/// would stop the rotation for good on a condition the next drive can clear.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
