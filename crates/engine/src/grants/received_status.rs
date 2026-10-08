@@ -2779,13 +2779,18 @@ mod tests {
         }
 
         /// The pointer follow alone, as a pass runs it ahead of its drain.
-        fn follow_pointers(&self, at_millis: u64) {
-            self.follow_pointers_over(&self.records, at_millis);
+        fn follow_pointers(&self, at_millis: u64) -> Vec<Event> {
+            self.follow_pointers_over(&self.records, at_millis)
         }
 
-        /// [`Self::follow_pointers`] whose records come from `transport`.
-        fn follow_pointers_over<T: RecordTransport>(&self, transport: &T, at_millis: u64) {
-            let (events, _rx) = mpsc::unbounded();
+        /// [`Self::follow_pointers`] whose records come from `transport`, and
+        /// the events it sent.
+        fn follow_pointers_over<T: RecordTransport>(
+            &self,
+            transport: &T,
+            at_millis: u64,
+        ) -> Vec<Event> {
+            let (events, mut rx) = mpsc::unbounded();
             block_on(
                 ReceivedShareStatus {
                     transport,
@@ -2820,6 +2825,8 @@ mod tests {
                     &SyncTimingProfile::CI,
                 ),
             );
+            drop(events);
+            core::iter::from_fn(|| rx.try_recv().ok()).collect()
         }
 
         /// The names the render tree lists under the shared scope root.
@@ -4640,6 +4647,89 @@ mod tests {
                 fx.write_seeds.borrow().contains_key(&SCOPE),
                 "the own seed stays"
             );
+        }
+
+        /// A bookmark at `SCOPE` whose pointer moved, over a render node at the
+        /// old root and a write seed that the sharer's namespace cached.
+        fn moved_pointer_over_a_graft() -> RenderedScope {
+            let fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            let mut graft = NodeMeta::new(NodeId(SCOPE), "photos-folder", NodeKind::Folder);
+            graft.ipns_name = Some(old_root_name().as_str().as_bytes().to_vec());
+            fx.base.borrow_mut().upsert_node(graft);
+            crate::scope_seeds::deposit_seed(
+                &fx.write_seeds,
+                SCOPE,
+                Zeroizing::new([0x77; 32]),
+                Some(1),
+                FloorNamespace::GrantedBy(ContactLabel::of(
+                    &label_seed(),
+                    &sharer_signer().verifying_key().to_sec1(),
+                )),
+            );
+            serve_pointer(&fx, &sharer_signer(), 1);
+            fx
+        }
+
+        /// A node of this vault's own tree at a sharer's id does not move, and
+        /// the sharer's seed at that id stays, though no walk named the id an
+        /// own scope root.
+        #[test]
+        fn a_moved_pointer_at_an_own_tree_node_leaves_it() {
+            let fx = moved_pointer_over_a_graft();
+            let own_root = fx.base.borrow().root;
+            assert!(
+                fx.base.borrow_mut().link(own_root, NodeId(SCOPE), 1),
+                "the node links below the own root"
+            );
+
+            fx.follow_pointers(0);
+
+            assert_the_own_scope_kept(&fx);
+        }
+
+        /// A list reload that fails after the pointer read moves nothing,
+        /// persists nothing and accuses no one; the next due pass heals.
+        #[test]
+        fn a_failed_reload_after_the_pointer_read_moves_nothing_until_the_next_pass() {
+            let fx = moved_pointer_over_a_graft();
+            let transport = MidPass {
+                records: &fx.records,
+                during: RefCell::new(Some(Box::new(|| {
+                    fx.staging.fail_staged_reads_under(
+                        crate::grants::received_share_store::RECEIVED_SHARES_PREFIX,
+                    );
+                }))),
+            };
+
+            let events = fx.follow_pointers_over(&transport, 0);
+
+            assert_the_own_scope_kept(&fx);
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+                "a failed reload is no trust violation"
+            );
+            fx.staging.heal_staged_reads();
+            assert_eq!(
+                stored(&fx).0,
+                old_root_name().as_str().as_bytes(),
+                "nothing persists"
+            );
+
+            fx.follow_pointers(1_000);
+
+            assert_eq!(
+                fx.base
+                    .borrow()
+                    .node(NodeId(SCOPE))
+                    .and_then(|meta| meta.ipns_name.clone()),
+                Some(scope_root_name().as_str().as_bytes().to_vec()),
+                "the next pass moves the graft"
+            );
+            assert!(!fx.write_seeds.borrow().contains_key(&SCOPE));
+            assert_eq!(stored(&fx).0, scope_root_name().as_str().as_bytes());
         }
 
         /// A second sharer's bookmark at the same id, added while the pointer
