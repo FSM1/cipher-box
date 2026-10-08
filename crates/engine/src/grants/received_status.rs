@@ -38,7 +38,7 @@ use crate::net::rotation::scope_name;
 use crate::net::signed_data;
 use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
 use crate::profile::SyncTimingProfile;
-use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed};
+use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed, drop_seed_in};
 use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
@@ -381,6 +381,9 @@ pub(crate) struct PointerFollow {
     scheduled: BTreeSet<BookmarkKey>,
     pointers: BTreeMap<BookmarkKey, PointerVerdict>,
     pin_reads: BTreeMap<BookmarkKey, PointerVerdict>,
+    /// The root each moved bookmark heals to, so the refresh of this pass
+    /// reads the healed root whether or not the persist landed.
+    heals: Vec<(BookmarkKey, Vec<u8>)>,
 }
 
 impl PointerFollow {
@@ -392,6 +395,7 @@ impl PointerFollow {
             scheduled: BTreeSet::new(),
             pointers: BTreeMap::new(),
             pin_reads: BTreeMap::new(),
+            heals: Vec::new(),
         }
     }
 }
@@ -548,26 +552,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
         if !heals.is_empty() {
-            {
-                // The grafted drain pass reads and publishes under this name. A
-                // write seed cached for the old root cannot derive the new one.
-                let mut base = render.base.borrow_mut();
-                for (key, root) in &heals {
-                    let Some(share) = received.find(key) else {
-                        continue;
-                    };
-                    render.write_seeds.borrow_mut().remove(&share.scope_id);
-                    if let Some(meta) = base.node_mut(NodeId(share.scope_id)) {
-                        meta.ipns_name = Some(root.clone());
-                    }
-                }
-            }
+            self.repaint_healed_grafts(&received, &heals, render);
             // Best effort: a failed persist leaves the stored list one pass
-            // behind, and the next pass reaches the same heal from the pointer.
+            // behind. The refresh of this pass heals its own load from
+            // `PointerFollow::heals`, and the next pass reaches the same heal
+            // from the pointer.
             let _list_guard = self.list_lock.lock().await;
             if let Ok(mut stored) = store.load().await {
-                for (key, root) in heals {
-                    stored.heal_root_name(&key, root);
+                for (key, root) in &heals {
+                    stored.heal_root_name(key, root.clone());
                 }
                 let _ = store.persist(&stored).await;
             }
@@ -577,7 +570,52 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         prior.scheduled.extend(scheduled);
         prior.pointers.extend(pointers);
         prior.pin_reads.extend(pin_reads);
+        prior.heals.extend(heals);
         prior
+    }
+
+    /// Move each healed graft to the root its pointer vouched, ahead of the
+    /// drain: the render node, which the grafted drain pass reads and
+    /// publishes under, and the write seed cached for the old root, which
+    /// cannot derive the new one. Only the unique graft of the bookmark, in
+    /// its sharer's namespace and still at the old root, moves, so a
+    /// sharer-authored id cannot reach this vault's own node or seed.
+    fn repaint_healed_grafts(
+        &self,
+        received: &ReceivedSharesList,
+        heals: &[(BookmarkKey, Vec<u8>)],
+        render: &ScopeRender<'_>,
+    ) {
+        let renderable: BTreeSet<[u8; 16]> = received
+            .granted_scope_roots()
+            .into_iter()
+            .map(|granted| granted.scope_id)
+            .collect();
+        let own_descendants = render.own_descendants.borrow();
+        let mut base = render.base.borrow_mut();
+        for (key, root) in heals {
+            let Some(share) = received.find(key) else {
+                continue;
+            };
+            let id = NodeId(share.scope_id);
+            if !renderable.contains(&share.scope_id)
+                || is_own_scope(render.own_root, &own_descendants, &share.scope_id)
+                || in_own_tree(&base, id)
+            {
+                continue;
+            }
+            drop_seed_in(
+                render.write_seeds,
+                &share.scope_id,
+                self.sharer_namespace(share),
+            );
+            if let Some(meta) = base
+                .node_mut(id)
+                .filter(|meta| meta.ipns_name.as_deref() == Some(share.scope_root_name.as_slice()))
+            {
+                meta.ipns_name = Some(root.clone());
+            }
+        }
     }
 
     /// The refresh, with no pointer follow ahead of it.
@@ -640,14 +678,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             scheduled,
             pointers,
             pin_reads,
+            heals,
             ..
         } = self
             .follow_from(staging, entropy, verdicts, render, profile, followed)
             .await;
         let store = StagingReceivedShareStore::new(staging, self.enc_secret, entropy);
-        let Ok(received) = store.load().await else {
+        let Ok(mut received) = store.load().await else {
             return;
         };
+        for (key, root) in heals {
+            received.heal_root_name(&key, root);
+        }
         // Ahead of the contact book, which costs one signature verify per entry
         // to decode: a vault that has accepted nothing pays none of it.
         if received.iter().next().is_none() {
@@ -4510,6 +4552,82 @@ mod tests {
                 !fx.write_seeds.borrow().contains_key(&SCOPE),
                 "the old root's write seed is gone"
             );
+        }
+
+        /// A bookmark at `SCOPE` whose pointer moved, over a render node and a
+        /// write seed that this vault's own namespace holds at `SCOPE`.
+        fn moved_pointer_over_an_own_scope() -> RenderedScope {
+            let fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            let mut own = NodeMeta::new(NodeId(SCOPE), "own-folder", NodeKind::Folder);
+            own.ipns_name = Some(old_root_name().as_str().as_bytes().to_vec());
+            fx.base.borrow_mut().upsert_node(own);
+            crate::scope_seeds::deposit_seed(
+                &fx.write_seeds,
+                SCOPE,
+                Zeroizing::new([0x77; 32]),
+                Some(1),
+                FloorNamespace::Own,
+            );
+            serve_pointer(&fx, &sharer_signer(), 1);
+            fx
+        }
+
+        /// The pointer follow leaves the own node at its name and keeps the
+        /// own seed.
+        fn assert_the_own_scope_stays(fx: &RenderedScope) {
+            fx.follow_pointers(0);
+
+            assert_eq!(
+                fx.base
+                    .borrow()
+                    .node(NodeId(SCOPE))
+                    .and_then(|meta| meta.ipns_name.clone()),
+                Some(old_root_name().as_str().as_bytes().to_vec()),
+                "the own node keeps its name"
+            );
+            assert!(
+                fx.write_seeds.borrow().contains_key(&SCOPE),
+                "the own seed stays"
+            );
+        }
+
+        /// A sharer's pointer for an id that names an own descendant scope
+        /// root moves neither the own node nor the own seed.
+        #[test]
+        fn a_moved_pointer_at_an_own_descendant_id_leaves_the_own_scope() {
+            let fx = moved_pointer_over_an_own_scope();
+            fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
+
+            assert_the_own_scope_stays(&fx);
+        }
+
+        /// Two sharers that claim one scope id answer for neither, so a moved
+        /// pointer of one of them moves neither the node nor the seed.
+        #[test]
+        fn a_moved_pointer_at_an_id_two_sharers_claim_leaves_the_node() {
+            let fx = moved_pointer_over_an_own_scope();
+            let mut list = block_on(
+                StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+            )
+            .expect("the list loads");
+            list.reconcile(ReceivedShare {
+                scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: cipherbox_core::suite::ecdsa::EcdsaSigner::from_scalar(
+                    &[0x0b; 32],
+                )
+                .expect("valid scalar")
+                .verifying_key()
+                .to_sec1(),
+                display_name: "other-folder".to_owned(),
+                permission: Permission::Read,
+                pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: None,
+            });
+            fx.persist(&list).expect("the second bookmark persists");
+
+            assert_the_own_scope_stays(&fx);
         }
 
         /// ADR 0024 D2: the holder prefers its personal tag, and the pass that

@@ -160,6 +160,22 @@ pub(crate) fn deposit_seed(
     }
 }
 
+/// Drop `scope_id`'s cached seed, but only one that `namespace` cached: one
+/// scope id can name both an own scope and a grant.
+pub(crate) fn drop_seed_in(
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: &[u8; 16],
+    namespace: FloorNamespace,
+) {
+    let mut seeds = cell.borrow_mut();
+    if seeds
+        .get(scope_id)
+        .is_some_and(|cached| cached.namespace == namespace)
+    {
+        seeds.remove(scope_id);
+    }
+}
+
 /// Whether `seed` derives the scope root's own `ipnsName` — the one proof every
 /// holder of a write scope seed is held to, stated once so they cannot drift
 /// apart: the deposit ([`deposit_write_seed`]), the read

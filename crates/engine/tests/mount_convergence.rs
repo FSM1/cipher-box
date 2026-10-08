@@ -2665,8 +2665,17 @@ fn a_surviving_grantees_kept_write_under_an_unproved_root_waits_past_the_bound()
     tick_n(&world, &engine_r, &mut tasks_r, 6);
 
     assert!(holds_the_create(), "the create waits past the bound");
+    let events = events_so_far(&mut events_r);
     assert!(
-        dead_letter_events(&mut events_r).is_empty(),
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::DeadLetter { .. })),
         "with no notice"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "and no trust violation: an unproved root is an availability outcome"
     );
 }
