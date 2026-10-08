@@ -130,7 +130,7 @@ pub fn decode_read(read: &JsValue) -> Result<Read, JsError> {
 }
 
 fn decode_plain_read(read: &JsValue) -> Result<Read, JsError> {
-    check_bounded(read, 0, read_refused)?;
+    check_bounded(read, read_refused)?;
     serde_wasm_bindgen::from_value(read.clone()).map_err(|_| read_refused())
 }
 
@@ -141,8 +141,9 @@ fn read_refused() -> JsError {
 /// Decodes where a streaming write lands. Refuses a target that names both a
 /// new file and a version, an unknown field, and a field of the wrong type.
 pub fn decode_write_target(target: JsValue) -> Result<WriteTarget, JsError> {
-    serde_wasm_bindgen::from_value(target)
-        .map_err(|_| JsError::new("the write target does not decode"))
+    let refused = || JsError::new("the write target does not decode");
+    check_bounded(&target, refused)?;
+    serde_wasm_bindgen::from_value(target).map_err(|_| refused())
 }
 
 /// Decodes one device-rendezvous step; its secrets go through
@@ -152,7 +153,7 @@ pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, Js
     if !step.is_object() {
         return Err(rendezvous_refused());
     }
-    check_bounded(step, 0, rendezvous_refused)?;
+    check_bounded(step, rendezvous_refused)?;
     // An absent secret stays absent, so serde refuses it as a missing field.
     let placeheld: Vec<String> = Object::keys(step.unchecked_ref::<Object>())
         .iter()
@@ -209,29 +210,50 @@ pub fn encode_view<T: Serialize + ?Sized>(view: &T) -> Result<JsValue, JsError> 
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {
-    serde_wasm_bindgen::from_value(tag_bigints(command, 0)?).map_err(|_| refused())
+    check_bounded(command, refused)?;
+    serde_wasm_bindgen::from_value(tag_bigints(command)?).map_err(|_| refused())
 }
 
-/// How deep [`tag_bigints`] and [`check_bounded`] walk. The deepest field a
-/// command or a read carries, `settings.byo.accessToken`, is at depth 3; a
-/// structured clone keeps cycles, so the walk needs a bound.
+/// The bounds on a value the boundary decodes, which come over a port from
+/// another tab. A structured clone keeps cycles and shared references, so
+/// depth, width and total work each need a cap. The largest legitimate value,
+/// a `saveVaultSettings` command, nests 3 deep, has at most 8 keys in one
+/// object and about 20 values in all; each cap leaves a margin over that.
 const MAX_VALUE_DEPTH: usize = 8;
+/// Keys in one object; see [`MAX_VALUE_DEPTH`].
+const MAX_VALUE_KEYS: u32 = 16;
+/// Values the walk visits in all, shared ones each time; see [`MAX_VALUE_DEPTH`].
+const MAX_VALUE_VISITS: usize = 64;
 
-/// Refuses a value that nests past [`MAX_VALUE_DEPTH`] or holds an array,
-/// before serde buffers it whole. No read or rendezvous field is an array.
-fn check_bounded(value: &JsValue, depth: usize, refusal: fn() -> JsError) -> Result<(), JsError> {
-    if Array::is_array(value) {
-        return Err(refusal());
+/// Refuses a value past a bound or holding an array, before serde buffers it
+/// whole or [`tag_bigints`] copies it. No command, read or write field is an
+/// array.
+fn check_bounded(value: &JsValue, refusal: fn() -> JsError) -> Result<(), JsError> {
+    let mut visits = 0;
+    walk_bounded(value, 0, &mut visits).map_err(|()| refusal())
+}
+
+fn walk_bounded(value: &JsValue, depth: usize, visits: &mut usize) -> Result<(), ()> {
+    *visits += 1;
+    if *visits > MAX_VALUE_VISITS || Array::is_array(value) {
+        return Err(());
     }
     if !value.is_object() || is_bytes(value) {
         return Ok(());
     }
     if depth >= MAX_VALUE_DEPTH {
-        return Err(refusal());
+        return Err(());
     }
-    for key in Object::keys(value.unchecked_ref::<Object>()).iter() {
-        let inner = Reflect::get(value, &key).map_err(|_| refusal())?;
-        check_bounded(&inner, depth + 1, refusal)?;
+    let keys = Object::keys(value.unchecked_ref::<Object>());
+    if keys.length() > MAX_VALUE_KEYS {
+        return Err(());
+    }
+    for key in keys.iter() {
+        walk_bounded(
+            &Reflect::get(value, &key).map_err(|_| ())?,
+            depth + 1,
+            visits,
+        )?;
     }
     Ok(())
 }
@@ -239,10 +261,9 @@ fn check_bounded(value: &JsValue, depth: usize, refusal: fn() -> JsError) -> Res
 /// A copy of `value` with each `bigint` in its plain objects replaced by a
 /// [`BIGINT_TAG`] object, so the decode tells a `bigint` from a `number`.
 /// Bytes and every other value pass as they are. A host object that already
-/// has the tag key is refused, so no tag reaches the decode but this one. No
-/// command field is an array, so an array is refused before serde buffers it
-/// without a bound.
-fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
+/// has the tag key is refused, so no tag reaches the decode but this one.
+/// Runs on a value [`check_bounded`] has passed.
+fn tag_bigints(value: &JsValue) -> Result<JsValue, JsError> {
     if value.is_bigint() {
         let decimal = value
             .unchecked_ref::<BigInt>()
@@ -252,14 +273,8 @@ fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
         Reflect::set(&tagged, &BIGINT_TAG.into(), &decimal).map_err(|_| refused())?;
         return Ok(tagged.into());
     }
-    if Array::is_array(value) {
-        return Err(refused());
-    }
     if !value.is_object() || is_bytes(value) {
         return Ok(value.clone());
-    }
-    if depth >= MAX_VALUE_DEPTH {
-        return Err(JsError::new("the command nests too deep"));
     }
     let object = value.unchecked_ref::<Object>();
     if Object::has_own(object, &BIGINT_TAG.into()) {
@@ -267,10 +282,7 @@ fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
     }
     let copy = Object::new();
     for key in Object::keys(object).iter() {
-        let inner = tag_bigints(
-            &Reflect::get(value, &key).map_err(|_| refused())?,
-            depth + 1,
-        )?;
+        let inner = tag_bigints(&Reflect::get(value, &key).map_err(|_| refused())?)?;
         Reflect::set(&copy, &key, &inner).map_err(|_| refused())?;
     }
     Ok(copy.into())

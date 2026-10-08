@@ -223,14 +223,14 @@ fn a_command_past_the_depth_bound_is_refused() {
     let cyclic = hosted_settings(&[]);
     let settings = Reflect::get(&cyclic, &text("settings")).unwrap();
     Reflect::set(&settings, &text("loop"), &cyclic).unwrap();
-    assert_eq!(message(&cyclic), "the command nests too deep");
+    assert_eq!(message(&cyclic), "the command does not decode");
 
     let mut deep = object(&[]);
     for _ in 0..8 {
         deep = object(&[("inner", deep)]);
     }
     let nested = object(&[("kind", text("manualRefresh")), ("extra", deep)]);
-    assert_eq!(message(&nested), "the command nests too deep");
+    assert_eq!(message(&nested), "the command does not decode");
 }
 
 /// No command field is an array, so an array is refused before the decode

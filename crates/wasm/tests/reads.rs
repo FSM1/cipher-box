@@ -7,7 +7,9 @@
 
 use cipherbox_engine::facade::{NodeId, SiweIntent};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
-use cipherbox_wasm::boundary::{decode_read, decode_rendezvous_step, encode_view};
+use cipherbox_wasm::boundary::{
+    decode_read, decode_rendezvous_step, decode_write_target, encode_view,
+};
 use cipherbox_wasm::read::{Read, ReadAnswer};
 use cipherbox_wasm::read_unstarted;
 use cipherbox_wasm::rendezvous::DeviceRendezvousStep;
@@ -274,17 +276,116 @@ async fn a_read_that_needs_a_session_is_refused_before_one() {
     );
 }
 
+async fn fingerprint(key: &[u8]) -> Result<JsValue, String> {
+    let read = object(&[
+        ("kind", text("identityFingerprint")),
+        ("identityPublicKey", bytes(key)),
+    ]);
+    JsFuture::from(read_unstarted(Ts::new_unchecked(read)))
+        .await
+        .map_err(|error| {
+            String::from(
+                error
+                    .dyn_into::<js_sys::Error>()
+                    .expect("a refusal is an Error")
+                    .message(),
+            )
+        })
+}
+
+/// The core KAT's primary vector (`contact/fingerprint.json`).
+const IDENTITY_PK: &str = "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27";
+
 #[wasm_bindgen_test]
 async fn a_fingerprint_read_needs_no_session() {
-    let key = object(&[
-        ("kind", text("identityFingerprint")),
-        ("identityPublicKey", bytes(&[2; 32])),
-    ]);
-    let refusal = JsFuture::from(read_unstarted(Ts::new_unchecked(key)))
-        .await
-        .expect_err("a 32-byte key is no identity key");
+    let key: Vec<u8> = (0..IDENTITY_PK.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&IDENTITY_PK[at..at + 2], 16).unwrap())
+        .collect();
+    let answer = fingerprint(&key).await.expect("a session-free read");
     assert_eq!(
-        String::from(refusal.unchecked_into::<js_sys::Error>().message()),
+        Reflect::get(&answer, &text("kind")).unwrap(),
+        text("identityFingerprint")
+    );
+    assert_eq!(
+        Reflect::get(&answer, &text("value")).unwrap(),
+        text("e686 bdd6 b44e 05c4 4db0")
+    );
+    assert_eq!(
+        fingerprint(&[2; 32]).await.unwrap_err(),
         "invalid identity public key"
     );
+}
+
+/// Builds `(value, seen)`: `value` is one object with `keys` keys whose last
+/// key is a getter that sets `seen.read` when anything reads it.
+fn wide(keys: u32) -> (JsValue, JsValue) {
+    let built = Function::new_with_args(
+        "keys",
+        "const seen = { read: false };
+         const value = {};
+         for (let i = 0; i < keys - 1; i++) value['k' + i] = i;
+         Object.defineProperty(value, 'last', {
+           enumerable: true,
+           get() { seen.read = true; return 1; },
+         });
+         return { value, seen };",
+    )
+    .call1(&JsValue::NULL, &JsValue::from(keys))
+    .expect("the builder runs");
+    (
+        Reflect::get(&built, &text("value")).unwrap(),
+        Reflect::get(&built, &text("seen")).unwrap(),
+    )
+}
+
+/// Builds `(value, seen)`: a graph 4 levels deep where each level holds 10
+/// references to one shared object below it, so a walk visits 10^4 values
+/// in a value a structured clone carries in 40 objects. The top object's
+/// last key is a getter that sets `seen.read`.
+fn shared() -> (JsValue, JsValue) {
+    let built = Function::new_no_args(
+        "const seen = { read: false };
+         let below = 0;
+         for (let level = 0; level < 4; level++) {
+           const next = {};
+           for (let i = 0; i < 10; i++) next['k' + i] = below;
+           below = next;
+         }
+         Object.defineProperty(below, 'last', {
+           enumerable: true,
+           get() { seen.read = true; return 1; },
+         });
+         return { value: below, seen };",
+    )
+    .call0(&JsValue::NULL)
+    .expect("the builder runs");
+    (
+        Reflect::get(&built, &text("value")).unwrap(),
+        Reflect::get(&built, &text("seen")).unwrap(),
+    )
+}
+
+/// One object past the key cap is refused before any of its values is read.
+#[wasm_bindgen_test]
+fn a_read_with_too_many_keys_is_refused_unread() {
+    let (value, seen) = wide(17);
+    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(!was_read(&seen));
+}
+
+/// A shared graph passes every depth and key check, so the visit cap stops it
+/// before the walk reaches the top object's last key.
+#[wasm_bindgen_test]
+fn a_read_past_the_visit_cap_is_refused_unread() {
+    let (value, seen) = shared();
+    assert!(refused(&object(&[("kind", text("bin")), ("x", value)])));
+    assert!(!was_read(&seen));
+}
+
+#[wasm_bindgen_test]
+fn a_cyclic_write_target_is_refused() {
+    let target = object(&[("node", bytes(&[1; 16]))]);
+    Reflect::set(&target, &text("self"), &target).unwrap();
+    assert!(decode_write_target(target).is_err());
 }

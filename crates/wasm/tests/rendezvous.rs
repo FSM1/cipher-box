@@ -47,7 +47,14 @@ async fn run(step: &JsValue) -> Result<JsValue, String> {
     let read = object(&[("kind", text("deviceRendezvous")), ("step", step.clone())]);
     let answer = JsFuture::from(read_unstarted(Ts::new_unchecked(read)))
         .await
-        .map_err(|error| String::from(error.unchecked_into::<js_sys::Error>().message()))?;
+        .map_err(|error| {
+            String::from(
+                error
+                    .dyn_into::<js_sys::Error>()
+                    .expect("a refusal is an Error")
+                    .message(),
+            )
+        })?;
     assert_eq!(get(&answer, "kind"), "deviceRendezvous");
     Ok(get(&answer, "value"))
 }
