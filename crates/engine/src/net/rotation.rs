@@ -936,8 +936,9 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
 /// pass authored, so a retry re-authors and re-charges a head block forever
 /// without converging. Everything else stays retryable. This includes a size
-/// refusal ([`PublishVerdict::RefusedOversized`]): another party can grow the
-/// record, so a permanent verdict lets that party block the rotation.
+/// refusal ([`PublishVerdict::RefusedOversized`]): an engine-side guard on the
+/// bytes this device signs names no party, and a permanent verdict would stop
+/// the rotation for good on a condition the next drive can clear.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
