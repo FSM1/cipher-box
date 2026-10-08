@@ -355,8 +355,6 @@ enum HoldChange {
     Drop(BookmarkKey),
     /// The link entry's deadline differs from the last verified one.
     Deadline(BookmarkKey, Option<UnixMillis>),
-    /// The scope pointer vouched for another scope root.
-    Heal(BookmarkKey, Vec<u8>),
 }
 
 impl HoldChange {
@@ -366,7 +364,34 @@ impl HoldChange {
                 list.drop_link(&key);
             }
             Self::Deadline(key, deadline) => list.set_link_deadline(&key, deadline),
-            Self::Heal(key, root) => list.heal_root_name(&key, root),
+        }
+    }
+}
+
+/// What one pass's pointer follow scheduled and found
+/// ([`ReceivedShareStatus::follow_pointers`]).
+pub(crate) struct PointerFollow {
+    /// The pass clock the follow scheduled against.
+    now: UnixMillis,
+    /// Every bookmark the follow weighed, scheduled or not. A bookmark an
+    /// accept adds later in the pass is weighed by the refresh.
+    seen: BTreeSet<BookmarkKey>,
+    /// What is left of the pass's [`MAX_RESOLVES_PER_PASS`].
+    budget: usize,
+    scheduled: BTreeSet<BookmarkKey>,
+    pointers: BTreeMap<BookmarkKey, PointerVerdict>,
+    pin_reads: BTreeMap<BookmarkKey, PointerVerdict>,
+}
+
+impl PointerFollow {
+    fn empty(now: UnixMillis) -> Self {
+        Self {
+            now,
+            seen: BTreeSet::new(),
+            budget: MAX_RESOLVES_PER_PASS,
+            scheduled: BTreeSet::new(),
+            pointers: BTreeMap::new(),
+            pin_reads: BTreeMap::new(),
         }
     }
 }
@@ -420,6 +445,166 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
 }
 
 impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F> {
+    /// Schedule the due bookmarks, follow the scope pointer of each scheduled
+    /// one, and heal each bookmark whose pointer vouched another root: in the
+    /// stored list, and at the grafted root's name in the base. A pass runs
+    /// this ahead of its drain, so the drain judges a kept op against the
+    /// write-epoch floor and the root that the pointer vouched (ADR 0069 D5).
+    pub(crate) async fn follow_pointers<St, E>(
+        &self,
+        staging: &St,
+        entropy: &RefCell<E>,
+        verdicts: &RefCell<ReceivedVerdicts>,
+        render: &ScopeRender<'_>,
+        now: UnixMillis,
+        profile: &SyncTimingProfile,
+    ) -> PointerFollow
+    where
+        St: StagingStore,
+        E: Entropy,
+    {
+        self.follow_from(
+            staging,
+            entropy,
+            verdicts,
+            render,
+            profile,
+            PointerFollow::empty(now),
+        )
+        .await
+    }
+
+    /// [`Self::follow_pointers`] over the bookmarks `prior` did not weigh, on
+    /// what is left of its budget.
+    async fn follow_from<St, E>(
+        &self,
+        staging: &St,
+        entropy: &RefCell<E>,
+        verdicts: &RefCell<ReceivedVerdicts>,
+        render: &ScopeRender<'_>,
+        profile: &SyncTimingProfile,
+        mut prior: PointerFollow,
+    ) -> PointerFollow
+    where
+        St: StagingStore,
+        E: Entropy,
+    {
+        let now = prior.now;
+        let store = StagingReceivedShareStore::new(staging, self.enc_secret, entropy);
+        let Ok(received) = store.load().await else {
+            return prior;
+        };
+        let fresh: Vec<BookmarkKey> = received
+            .iter()
+            .map(ReceivedShare::key)
+            .filter(|key| !prior.seen.contains(key))
+            .collect();
+        if fresh.is_empty() {
+            return prior;
+        }
+        let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
+            .contacts()
+            .await
+        else {
+            return prior;
+        };
+        let by_identity: BTreeMap<[u8; IDENTITY_PUBLIC_LEN], &Contact> = contacts
+            .iter()
+            .map(|contact| (contact.identity_pk().to_sec1(), contact))
+            .collect();
+
+        let due = |key: &BookmarkKey| {
+            self.mode == ResolveMode::NoCache
+                || on_access_refresh_due(
+                    now,
+                    verdicts.borrow().get(key).map(|held| held.at),
+                    profile,
+                )
+        };
+        // One budget, spent least recently refreshed first, so capped passes
+        // reach every bookmark in turn. A held bookmark spends one resolve on
+        // its scope pointer and one on its scope root.
+        let mut due_keys: Vec<(Option<UnixMillis>, BookmarkKey)> = fresh
+            .iter()
+            .copied()
+            .filter(due)
+            .map(|key| (verdicts.borrow().get(&key).map(|held| held.at), key))
+            .collect();
+        due_keys.sort_by_key(|(at, _)| *at);
+        let mut budget = prior.budget;
+        let scheduled: BTreeSet<BookmarkKey> = due_keys
+            .into_iter()
+            .map(|(_, key)| key)
+            .map_while(|key| {
+                let named = received
+                    .find(&key)
+                    .is_some_and(|share| share.scope_pointer_name.is_some());
+                let cost = 1 + usize::from(named);
+                budget = budget.checked_sub(cost)?;
+                Some(key)
+            })
+            .collect();
+        let (pointers, heals, pin_reads) = self
+            .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
+            .await;
+        if !heals.is_empty() {
+            {
+                // The grafted drain pass reads and publishes under this name. A
+                // write seed cached for the old root cannot derive the new one.
+                let mut base = render.base.borrow_mut();
+                for (key, root) in &heals {
+                    let Some(share) = received.find(key) else {
+                        continue;
+                    };
+                    render.write_seeds.borrow_mut().remove(&share.scope_id);
+                    if let Some(meta) = base.node_mut(NodeId(share.scope_id)) {
+                        meta.ipns_name = Some(root.clone());
+                    }
+                }
+            }
+            // Best effort: a failed persist leaves the stored list one pass
+            // behind, and the next pass reaches the same heal from the pointer.
+            let _list_guard = self.list_lock.lock().await;
+            if let Ok(mut stored) = store.load().await {
+                for (key, root) in heals {
+                    stored.heal_root_name(&key, root);
+                }
+                let _ = store.persist(&stored).await;
+            }
+        }
+        prior.seen.extend(fresh);
+        prior.budget = budget;
+        prior.scheduled.extend(scheduled);
+        prior.pointers.extend(pointers);
+        prior.pin_reads.extend(pin_reads);
+        prior
+    }
+
+    /// The refresh, with no pointer follow ahead of it.
+    #[cfg(test)]
+    pub(crate) async fn follow_and_refresh<St, E>(
+        &self,
+        staging: &St,
+        entropy: &RefCell<E>,
+        verdicts: &RefCell<ReceivedVerdicts>,
+        render: &ScopeRender<'_>,
+        now: UnixMillis,
+        profile: &SyncTimingProfile,
+    ) where
+        St: StagingStore,
+        E: Entropy,
+    {
+        self.refresh(
+            staging,
+            entropy,
+            verdicts,
+            render,
+            profile,
+            PointerFollow::empty(now),
+        )
+        .await;
+    }
+
     /// Re-classify the bookmarked shared scope roots that are due, into
     /// `verdicts`.
     ///
@@ -444,14 +629,23 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         entropy: &RefCell<E>,
         verdicts: &RefCell<ReceivedVerdicts>,
         render: &ScopeRender<'_>,
-        now: UnixMillis,
         profile: &SyncTimingProfile,
+        followed: PointerFollow,
     ) where
         St: StagingStore,
         E: Entropy,
     {
+        let PointerFollow {
+            now,
+            scheduled,
+            pointers,
+            pin_reads,
+            ..
+        } = self
+            .follow_from(staging, entropy, verdicts, render, profile, followed)
+            .await;
         let store = StagingReceivedShareStore::new(staging, self.enc_secret, entropy);
-        let Ok(mut received) = store.load().await else {
+        let Ok(received) = store.load().await else {
             return;
         };
         // Ahead of the contact book, which costs one signature verify per entry
@@ -476,41 +670,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .iter()
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
-
-        let due = |key: &BookmarkKey| {
-            self.mode == ResolveMode::NoCache
-                || on_access_refresh_due(
-                    now,
-                    verdicts.borrow().get(key).map(|held| held.at),
-                    profile,
-                )
-        };
-        // One budget, spent least recently refreshed first, so capped passes
-        // reach every bookmark in turn. A held bookmark spends one resolve on
-        // its scope pointer and one on its scope root.
-        let mut due_keys: Vec<(Option<UnixMillis>, BookmarkKey)> = received
-            .iter()
-            .map(ReceivedShare::key)
-            .filter(due)
-            .map(|key| (verdicts.borrow().get(&key).map(|held| held.at), key))
-            .collect();
-        due_keys.sort_by_key(|(at, _)| *at);
-        let mut budget = MAX_RESOLVES_PER_PASS;
-        let scheduled: BTreeSet<BookmarkKey> = due_keys
-            .into_iter()
-            .map(|(_, key)| key)
-            .map_while(|key| {
-                let named = received
-                    .find(&key)
-                    .is_some_and(|share| share.scope_pointer_name.is_some());
-                let cost = 1 + usize::from(named);
-                budget = budget.checked_sub(cost)?;
-                Some(key)
-            })
-            .collect();
-        let (pointers, heals, pin_reads) = self
-            .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
-            .await;
         let pins = PinPass {
             now,
             root_reconciled: self.root_reconciled,
@@ -520,10 +679,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         self.observe_pointer_pins(&received, &pin_reads, render, &pins)
             .await;
         let mut hold_changes: Vec<HoldChange> = Vec::new();
-        for (key, root) in heals {
-            received.heal_root_name(&key, root.clone());
-            hold_changes.push(HoldChange::Heal(key, root));
-        }
 
         // A browse addresses a scope by its id alone, but the id is the sharer's
         // to author: `granted_scope_roots` decides ambiguity over every bookmark,
@@ -2554,7 +2709,7 @@ mod tests {
                     mode,
                     root_reconciled: self.root_reconciled.get(),
                 }
-                .refresh(
+                .follow_and_refresh(
                     &self.staging,
                     &self.entropy,
                     &self.verdicts,
@@ -2577,6 +2732,45 @@ mod tests {
                 )
                 .await;
             }
+        }
+
+        /// The pointer follow alone, as a pass runs it ahead of its drain.
+        fn follow_pointers(&self, at_millis: u64) {
+            let (events, _rx) = mpsc::unbounded();
+            block_on(
+                ReceivedShareStatus {
+                    transport: &self.records,
+                    gateway: &self.gateway,
+                    http: &self.http,
+                    floors: &self.floors,
+                    enc_secret: &my_enc(),
+                    contact_label_seed: &label_seed(),
+                    list_lock: &self.list_lock,
+                    mode: ResolveMode::NoCache,
+                    root_reconciled: self.root_reconciled.get(),
+                }
+                .follow_pointers(
+                    &self.staging,
+                    &self.entropy,
+                    &self.verdicts,
+                    &ScopeRender {
+                        base: &self.base,
+                        read_seeds: &self.read_seeds,
+                        write_seeds: &self.write_seeds,
+                        own_root: &self.vault_root,
+                        own_descendants: &self.own_descendants,
+                        grafted_sharers: &self.grafted_sharers,
+                        scope_roots: &self.scope_roots,
+                        permissions: &self.permissions,
+                        claims: &self.claims,
+                        pointer_pins: &self.pointer_pins,
+                        root_sequences: &RefCell::default(),
+                        events: &events,
+                    },
+                    UnixMillis(at_millis),
+                    &SyncTimingProfile::CI,
+                ),
+            );
         }
 
         /// The names the render tree lists under the shared scope root.
@@ -3538,7 +3732,7 @@ mod tests {
                     mode: ResolveMode::CacheFirst,
                     root_reconciled: true,
                 }
-                .refresh(
+                .follow_and_refresh(
                     &self.staging,
                     &self.entropy,
                     &self.verdicts,
@@ -4277,6 +4471,44 @@ mod tests {
                     .node(NodeId(SCOPE))
                     .and_then(|meta| meta.ipns_name.clone()),
                 Some(scope_root_name().as_str().as_bytes().to_vec()),
+            );
+        }
+
+        /// The pointer follow alone heals the render node, and drops the write
+        /// seed cached for the old root, before a drain reads either.
+        #[test]
+        fn the_pointer_follow_heals_the_root_and_drops_the_old_write_seed() {
+            let fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            let mut rendered = NodeMeta::new(NodeId(SCOPE), "photos-folder", NodeKind::Folder);
+            rendered.ipns_name = Some(old_root_name().as_str().as_bytes().to_vec());
+            fx.base.borrow_mut().upsert_node(rendered);
+            crate::scope_seeds::deposit_seed(
+                &fx.write_seeds,
+                SCOPE,
+                Zeroizing::new([0x77; 32]),
+                Some(1),
+                FloorNamespace::GrantedBy(ContactLabel::of(
+                    &label_seed(),
+                    &sharer_signer().verifying_key().to_sec1(),
+                )),
+            );
+            serve_pointer(&fx, &sharer_signer(), 1);
+
+            fx.follow_pointers(0);
+
+            assert_eq!(
+                fx.base
+                    .borrow()
+                    .node(NodeId(SCOPE))
+                    .and_then(|meta| meta.ipns_name.clone()),
+                Some(scope_root_name().as_str().as_bytes().to_vec()),
+                "the render node moves to the vouched root"
+            );
+            assert_eq!(stored(&fx).0, scope_root_name().as_str().as_bytes());
+            assert!(
+                !fx.write_seeds.borrow().contains_key(&SCOPE),
+                "the old root's write seed is gone"
             );
         }
 

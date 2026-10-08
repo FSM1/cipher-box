@@ -222,8 +222,12 @@ scenario fails the meta-test):
   a kept rename with no result in its note leaves with no apply
   (`kept_op.rs`, `drain.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, a kept delete included,
-  also a late write that the wave did not carry (ADR 0069 D3,
-  `crates/engine/tests/mount_convergence.rs`); a body of many
+  also a late write that the wave did not carry; the kept write of a
+  surviving write grantee that an owner write cut did not carry waits past the
+  bound and applies again, and under a root the walk does not prove it waits
+  with no notice (ADR 0069 D3, D5,
+  `crates/engine/tests/mount_convergence.rs`); the pointer follow alone heals
+  the grafted root and drops the old write seed (`received_status.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk
