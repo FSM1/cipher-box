@@ -552,13 +552,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
         if !heals.is_empty() {
-            self.repaint_healed_grafts(&received, &heals, render);
-            // Best effort: a failed persist leaves the stored list one pass
-            // behind. The refresh of this pass heals its own load from
-            // `PointerFollow::heals`, and the next pass reaches the same heal
-            // from the pointer.
+            // The list as it stands after the pointer reads: an accept can add
+            // a bookmark at the same id while they await. A failed reload
+            // moves nothing. Best effort: a failed persist leaves the stored
+            // list one pass behind, the refresh of this pass heals its own
+            // load from `PointerFollow::heals`, and the next pass reaches the
+            // same heal from the pointer.
             let _list_guard = self.list_lock.lock().await;
             if let Ok(mut stored) = store.load().await {
+                self.repaint_healed_grafts(&stored, &heals, render);
                 for (key, root) in &heals {
                     stored.heal_root_name(key, root.clone());
                 }
@@ -604,16 +606,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             {
                 continue;
             }
-            drop_seed_in(
-                render.write_seeds,
-                &share.scope_id,
-                self.sharer_namespace(share),
-            );
             if let Some(meta) = base
                 .node_mut(id)
                 .filter(|meta| meta.ipns_name.as_deref() == Some(share.scope_root_name.as_slice()))
             {
                 meta.ipns_name = Some(root.clone());
+                drop_seed_in(
+                    render.write_seeds,
+                    &share.scope_id,
+                    self.sharer_namespace(share),
+                );
             }
         }
     }
@@ -2778,10 +2780,15 @@ mod tests {
 
         /// The pointer follow alone, as a pass runs it ahead of its drain.
         fn follow_pointers(&self, at_millis: u64) {
+            self.follow_pointers_over(&self.records, at_millis);
+        }
+
+        /// [`Self::follow_pointers`] whose records come from `transport`.
+        fn follow_pointers_over<T: RecordTransport>(&self, transport: &T, at_millis: u64) {
             let (events, _rx) = mpsc::unbounded();
             block_on(
                 ReceivedShareStatus {
-                    transport: &self.records,
+                    transport,
                     gateway: &self.gateway,
                     http: &self.http,
                     floors: &self.floors,
@@ -4573,11 +4580,32 @@ mod tests {
             fx
         }
 
+        /// A second sharer's bookmark at `SCOPE`.
+        fn second_claim() -> ReceivedShare {
+            ReceivedShare {
+                scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: cipherbox_core::suite::ecdsa::EcdsaSigner::from_scalar(
+                    &[0x0b; 32],
+                )
+                .expect("valid scalar")
+                .verifying_key()
+                .to_sec1(),
+                display_name: "other-folder".to_owned(),
+                permission: Permission::Read,
+                pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: None,
+            }
+        }
+
         /// The pointer follow leaves the own node at its name and keeps the
         /// own seed.
         fn assert_the_own_scope_stays(fx: &RenderedScope) {
             fx.follow_pointers(0);
+            assert_the_own_scope_kept(fx);
+        }
 
+        fn assert_the_own_scope_kept(fx: &RenderedScope) {
             assert_eq!(
                 fx.base
                     .borrow()
@@ -4590,6 +4618,49 @@ mod tests {
                 fx.write_seeds.borrow().contains_key(&SCOPE),
                 "the own seed stays"
             );
+        }
+
+        /// A moved pointer moves the sharer's graft, and keeps a seed that the
+        /// own namespace cached at the same id.
+        #[test]
+        fn a_moved_pointer_moves_the_graft_and_keeps_an_own_seed() {
+            let fx = moved_pointer_over_an_own_scope();
+
+            fx.follow_pointers(0);
+
+            assert_eq!(
+                fx.base
+                    .borrow()
+                    .node(NodeId(SCOPE))
+                    .and_then(|meta| meta.ipns_name.clone()),
+                Some(scope_root_name().as_str().as_bytes().to_vec()),
+                "the graft moves to the vouched root"
+            );
+            assert!(
+                fx.write_seeds.borrow().contains_key(&SCOPE),
+                "the own seed stays"
+            );
+        }
+
+        /// A second sharer's bookmark at the same id, added while the pointer
+        /// read awaits, makes the id ambiguous before anything moves.
+        #[test]
+        fn a_second_claim_during_the_pointer_read_leaves_the_node() {
+            let fx = moved_pointer_over_an_own_scope();
+            let transport = MidPass {
+                records: &fx.records,
+                during: RefCell::new(Some(Box::new(|| {
+                    let enc = my_enc();
+                    let store = StagingReceivedShareStore::new(&fx.staging, &enc, &fx.entropy);
+                    let mut list = block_on(store.load()).expect("the list loads");
+                    list.reconcile(second_claim());
+                    block_on(store.persist(&list)).expect("the second claim persists");
+                }))),
+            };
+
+            fx.follow_pointers_over(&transport, 0);
+
+            assert_the_own_scope_kept(&fx);
         }
 
         /// A sharer's pointer for an id that names an own descendant scope
@@ -4611,20 +4682,7 @@ mod tests {
                 StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
             )
             .expect("the list loads");
-            list.reconcile(ReceivedShare {
-                scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
-                scope_id: SCOPE,
-                sharer_identity_pk: cipherbox_core::suite::ecdsa::EcdsaSigner::from_scalar(
-                    &[0x0b; 32],
-                )
-                .expect("valid scalar")
-                .verifying_key()
-                .to_sec1(),
-                display_name: "other-folder".to_owned(),
-                permission: Permission::Read,
-                pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
-                scope_pointer_name: None,
-            });
+            list.reconcile(second_claim());
             fx.persist(&list).expect("the second bookmark persists");
 
             assert_the_own_scope_stays(&fx);
