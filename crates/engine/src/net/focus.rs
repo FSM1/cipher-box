@@ -11,7 +11,7 @@
 use core::cell::RefCell;
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ChildRef, ReadBody};
+use cipherbox_core::seal::{ChildRef, ReadBody, Version};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
@@ -53,6 +53,18 @@ pub(crate) struct FolderRefreshReport {
 }
 
 impl FolderRefreshReport {
+    /// The report of a leg that has read nothing yet.
+    pub(crate) fn reconciled() -> Self {
+        Self {
+            changed: false,
+            verdict: RefreshVerdict::Reconciled,
+            unread: false,
+            departed: Vec::new(),
+            pins: Vec::new(),
+            lapsed: Vec::new(),
+        }
+    }
+
     fn fold(&mut self, verdict: RefreshVerdict) {
         self.verdict = self.verdict.worst(verdict);
         self.unread |= matches!(
@@ -137,14 +149,7 @@ where
     /// They arrive nearest-first; the merge runs root-ward, so a parent that
     /// dropped a child unlinks it before the pass would project into it.
     pub(crate) async fn run(&self, folders: &[NodeId]) -> FolderRefreshReport {
-        let mut report = FolderRefreshReport {
-            changed: false,
-            verdict: RefreshVerdict::Reconciled,
-            unread: false,
-            departed: Vec::new(),
-            pins: Vec::new(),
-            lapsed: Vec::new(),
-        };
+        let mut report = FolderRefreshReport::reconciled();
         for folder in folders.iter().rev() {
             let Some((name, adopted, scope)) = self
                 .resolve_focused(*folder, NodeKind::Folder, &mut report)
@@ -243,43 +248,41 @@ where
     /// Failure handling is the folder leg's, and a file that has published no
     /// version leaves the base untouched rather than projecting a zero.
     pub(crate) async fn run_files(&self, files: &[NodeId]) -> FolderRefreshReport {
-        let mut report = FolderRefreshReport {
-            changed: false,
-            verdict: RefreshVerdict::Reconciled,
-            unread: false,
-            departed: Vec::new(),
-            pins: Vec::new(),
-            lapsed: Vec::new(),
-        };
+        let mut report = FolderRefreshReport::reconciled();
         for file in files {
-            let Some((name, adopted, _)) = self
-                .resolve_focused(*file, NodeKind::File, &mut report)
-                .await
-            else {
-                continue;
-            };
-            let ReadBody::File { versions, .. } = &adopted.read_body else {
-                emit_trust_violation(
-                    self.events,
-                    name.as_str(),
-                    "sealed folder body behind a file child ref",
-                );
-                report.fold(RefreshVerdict::Rejected);
-                continue;
-            };
-            let Some(head) = versions.first() else {
-                continue;
-            };
+            self.read_file(*file, &mut report).await;
+        }
+        report
+    }
+
+    /// Fold one file's published head into the base, and answer its version
+    /// list, newest first.
+    pub(crate) async fn read_file(
+        &self,
+        file: NodeId,
+        report: &mut FolderRefreshReport,
+    ) -> Option<Vec<Version>> {
+        let (name, adopted, _) = self.resolve_focused(file, NodeKind::File, report).await?;
+        let ReadBody::File { versions, .. } = adopted.read_body else {
+            emit_trust_violation(
+                self.events,
+                name.as_str(),
+                "sealed folder body behind a file child ref",
+            );
+            report.fold(RefreshVerdict::Rejected);
+            return None;
+        };
+        if let Some(head) = versions.first() {
             report.changed |= project_child_version(
                 &mut self.base.borrow_mut(),
-                *file,
+                file,
                 head.size,
                 head.modified_at,
                 versions.len() as u64,
                 Some(&head.content_cid),
             );
         }
-        report
+        Some(versions)
     }
 
     /// Resolve one focused node's own record through the child gate, with the

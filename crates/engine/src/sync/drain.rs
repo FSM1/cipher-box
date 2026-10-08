@@ -56,14 +56,14 @@ use crate::content::{
 use crate::deadlines::DeadlinePolicy;
 use crate::entropy::{Entropy, SharedEntropy, fresh_ephemeral, fresh_nonce};
 use crate::facade::{
-    BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
+    BlockProgress, Event, ForkSightings, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
     emit_trust_violation,
 };
 use crate::gate::GateStage;
 use crate::gate::{
     Adopted, GateError, GateRejection, RejectionReason, floor, refuse_below_cut_floor,
 };
-use crate::grants::grafted::{FloorNamespace, GraftedPlane};
+use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
@@ -94,6 +94,7 @@ use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
 use crate::rotation::{
     LaggingSeedMiss, PublishedRoot, ScopeExitRotator, derive_write_name, lagging_read_seed,
 };
+use crate::scope_seeds::ScopeSeeds;
 use crate::seams::{
     CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
@@ -112,8 +113,8 @@ use crate::sync::doomed::{
 };
 use crate::sync::kept_op::{
     KeptNote, KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue,
-    is_kept, keeps, kept_outcome, kept_verdict, load_kept_notes, needs_result, shows_a_flip,
-    store_kept_notes,
+    is_kept, keeps, kept_outcome, kept_verdict, live_head, live_place, load_kept_notes,
+    needs_result, shows_a_flip, store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -136,6 +137,8 @@ use crate::sync::staging::{
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
 use crate::sync::tick::{ResolveMode, scope_root_of};
+
+mod keyless_kept;
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue.
@@ -1704,6 +1707,12 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) bin_index_unsettled: &'a Cell<Option<u64>>,
     /// The sequences a navigation measures a scope root against.
     pub(crate) root_sequences: &'a RefCell<RootSequences>,
+    /// What a read of a keyless scope's moved tree runs under
+    /// ([`keyless_kept`]).
+    pub(crate) scope_read_seeds: &'a RefCell<ScopeSeeds>,
+    pub(crate) forks: &'a ForkSightings,
+    pub(crate) grafted_claims: &'a RefCell<ClaimRecord>,
+    pub(crate) bookmarked_scope_roots: &'a RefCell<BookmarkedScopeRoots>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2697,7 +2706,10 @@ where
             &rest[..]
         };
         // A kept op under a keyless scope does not apply again ([`KeptPlace::Keyless`]).
+        // One that the moved tree decides leaves with no notice.
         let kept = self.kept_ops(scope).await?;
+        let mut moved = keyless_kept::MovedRoots::new();
+        let mut decided = Vec::new();
         let mut end = pending.len();
         for (index, (op_id, op)) in pending.iter().enumerate() {
             if !kept.holds(*op_id, op) {
@@ -2707,7 +2719,16 @@ where
                 .kept_place(scope, op, kept.parent(*op_id), kept.scope(*op_id))
                 .await?
             {
-                if index == 0 {
+                if self
+                    .moved_tree_decides(scope, &mut moved, &kept, (*op_id, op), root)
+                    .await
+                {
+                    self.dequeue_op(*op_id).await?;
+                    report.dropped.push(*op_id);
+                    decided.push(*op_id);
+                    continue;
+                }
+                if index == decided.len() {
                     let halt = halt_below_another_scope_root(
                         scope.keyless_roots,
                         scope.charges_the_identity,
@@ -2721,7 +2742,17 @@ where
                 break;
             }
         }
-        let pending = &pending[..end];
+        let undecided: Vec<(OpId, Op)>;
+        let pending = if decided.is_empty() {
+            &pending[..end]
+        } else {
+            undecided = pending[..end]
+                .iter()
+                .filter(|(op_id, _)| !decided.contains(op_id))
+                .cloned()
+                .collect();
+            &undecided[..]
+        };
 
         let opened = self.open_rebased_pass(scope, pending, &kept).await;
         // A halt that names its op reaches the valve to be bounded and named
@@ -3621,26 +3652,12 @@ where
                         .map_err(at)?;
                 }
             }
-            let place = {
-                let base = self.cells.base.borrow();
-                let live = base
-                    .parent_of(op.target)
-                    .zip(base.node(op.target))
-                    .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())));
-                replayed
-                    .get(&op.target)
-                    .cloned()
-                    .or(live)
-                    .or_else(|| created.get(&op.target).cloned())
-            };
-            let live = match (result, &place) {
-                (KeptResult::Rename { .. }, Some((holder, name))) if *holder == parent => {
-                    LiveValue::Name(name)
-                }
-                (KeptResult::Move { .. }, Some((holder, name))) => LiveValue::Place(*holder, name),
-                _ => LiveValue::Absent,
-            };
-            match kept_outcome(result, live) {
+            let place = replayed
+                .get(&op.target)
+                .cloned()
+                .or_else(|| place_in(&self.cells.base.borrow(), op.target))
+                .or_else(|| created.get(&op.target).cloned());
+            match kept_outcome(result, live_place(result, parent, place.as_ref())) {
                 KeptOutcome::Landed => {
                     leaving.insert(*op_id, DropReason::AlreadySatisfied);
                 }
@@ -3741,9 +3758,7 @@ where
             if let Some(result) = restored {
                 let live = match replayed.get(&op.target) {
                     Some(head) => LiveValue::Head(head),
-                    None => versions
-                        .first()
-                        .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid)),
+                    None => live_head(versions),
                 };
                 match kept_outcome(result, live) {
                     KeptOutcome::Landed => {
@@ -3759,10 +3774,7 @@ where
                     }
                 }
             } else if let Some(content) = op.staged_content() {
-                if versions
-                    .iter()
-                    .any(|version| version.content_cid == content.root_cid)
-                {
+                if lists_version(versions, content) {
                     landed.insert(*op_id, DropReason::AlreadySatisfied);
                 } else {
                     replayed.insert(op.target, content.root_cid.clone());
@@ -9914,6 +9926,21 @@ fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
         ) => parent,
         _ => op.target,
     }
+}
+
+/// Whether a file's version list names the version `content` staged
+/// ([`Drain::read_kept_heads`]).
+fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
+    versions
+        .iter()
+        .any(|version| version.content_cid == content.root_cid)
+}
+
+/// The folder that holds `node` in `base`, and its name there.
+fn place_in(base: &Snapshot, node: NodeId) -> Option<(NodeId, Zeroizing<String>)> {
+    base.parent_of(node)
+        .zip(base.node(node))
+        .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())))
 }
 
 /// How a later op of this device on the same node decides an earlier op.

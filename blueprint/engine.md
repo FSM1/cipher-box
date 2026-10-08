@@ -1187,7 +1187,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   hold its folder. A
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
-  (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
+  (ADR 0069 D3). When the bookmark holds the scope pointer name, the drain
+  first reads the moved tree under the pointer read key, and a kept op that
+  the tree shows, or that a later write decided, leaves with no notice. A
+  kept op is not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
@@ -1563,10 +1566,10 @@ rebases and signs above.
   label for a sweep-length window, and the label attests nothing.
 - Late writes: a write that a revoked or downgraded writer puts in the old
   tree after the walk dead-letters on its own device (ADR 0069 D3). A
-  read-only graft does not read the moved tree, so each kept op of that
-  writer dead-letters, also one that the wave carried. Its copy stays
-  preserved on the device, and its notice reads as `attemptsExhausted`,
-  though the write can be in the shared folder. A version delete or a prune
+  bookmark with no scope pointer name cannot read the moved tree, so each
+  kept op of that writer dead-letters, also one that the wave carried. Its
+  copy stays preserved on the device, and its notice reads as
+  `attemptsExhausted`, though the write can be in the shared folder. A version delete or a prune
   that lands in the old tree after the walk is lost, because neither stays
   kept. A kept op whose device
   sees no flip within T leaves the queue at T, so a flip after T loses the

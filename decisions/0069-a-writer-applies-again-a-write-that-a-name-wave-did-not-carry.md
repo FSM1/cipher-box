@@ -52,6 +52,7 @@ ops, and the per-op rebase rules apply unchanged. A revoked or downgraded party 
 seed, so its op does not apply again and takes the dead-letter path of "Sync core". Amended on
 2026-10-03: that dead letter is not landed. Its kept op reads the old tree and leaves with no notice
 (FSM1/cipher-box#2272). Amended on 2026-10-05: the dead letter landed.
+Amended on 2026-10-08: a party whose bookmark holds the scope pointer name reads the moved tree under the pointer read key, and a kept op that the tree already decides leaves with no notice; only a lost op, or one under a bookmark with no pointer name, dead-letters.
 
 Amended on 2026-10-03: the owner ruled the three Residuals: the kept op, T = 7 days, and an
 amendment of this ADR in place. D4 to D7 record the rulings. Each sentence that starts with

@@ -5,6 +5,7 @@
 //! Every assertion lands on published bytes, a drained queue, or a rendered
 //! view — what the other device would see.
 
+use core::cell::RefCell;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
@@ -21,6 +22,7 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use cipherbox_engine::gate::floor;
+use cipherbox_engine::grants::{ReceivedShareStore, ReceivedSharesList, StagingReceivedShareStore};
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -36,6 +38,7 @@ use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
+    without_scope_pointer_names,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
@@ -2224,11 +2227,43 @@ fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
     assert_reads_both_versions(&engine, file, &bodies, "offline");
 }
 
-/// A write grantee's edit stays kept after its publish. A downgrade takes the
-/// write seed, so the kept edit does not apply again: it dead-letters at the
-/// keyless budget rather than halt the queue for ever (ADR 0069 D3).
-#[test]
-fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
+/// The grantee's stored bookmarks, read past the engine.
+fn recipient_bookmarks(recipient: &FakeDevice) -> ReceivedSharesList {
+    let entropy = RefCell::new(SeededEntropy::new(29));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    block_on(StagingReceivedShareStore::new(&recipient.staging_store, &enc, &entropy).load())
+        .expect("the bookmarks read")
+}
+
+/// Drop the scope pointer name from each of the grantee's stored bookmarks.
+fn forget_scope_pointer_names(recipient: &FakeDevice) {
+    let bare = without_scope_pointer_names(&recipient_bookmarks(recipient));
+    let entropy = RefCell::new(SeededEntropy::new(31));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    block_on(
+        StagingReceivedShareStore::new(&recipient.staging_store, &enc, &entropy).persist(&bare),
+    )
+    .expect("the bookmarks persist");
+}
+
+/// What the grantee's device holds, and what the name wave does with its
+/// kept edit, in [`kept_edit_through_a_downgrade`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DowngradeCase {
+    /// The bookmark holds the scope pointer name, and the wave carries the edit.
+    Carried,
+    /// The bookmark holds the scope pointer name, and the wave reads the file
+    /// record from before the edit.
+    Lost,
+    /// The bookmark holds no scope pointer name, and the wave carries the edit.
+    NoPointerName,
+}
+
+/// A write grantee's edit stays kept after its publish, and the owner then
+/// downgrades the grantee to read. Answers the dead-letter notices of the
+/// grantee's passes after the downgrade; the kept edit has left the queue,
+/// and a later op publishes.
+fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_vault(&world, &blocks);
@@ -2249,6 +2284,16 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
     let (mut engine_r, mut events_r, mut tasks_r) =
         recipient_on_with_the_share(&world, &blocks, &recipient);
+    let endpoints = world.record_store.endpoints();
+    let before_the_edit: std::collections::BTreeMap<String, Vec<u8>> = world
+        .record_store
+        .routing_keys(&endpoints[0])
+        .into_iter()
+        .filter_map(|key| {
+            let record = world.record_store.record_at(&endpoints[0], &key)?;
+            Some((key, record))
+        })
+        .collect();
     write_file(
         &mut engine_r,
         WriteTarget::Version {
@@ -2273,6 +2318,27 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     assert_eq!(queued(&recipient), 0, "the edit published");
     assert!(holds_the_edit(), "and the queue keeps it");
 
+    if case == DowngradeCase::NoPointerName {
+        forget_scope_pointer_names(&recipient);
+        tab.mailbox.set_post_failing(true);
+    }
+    // The edit moved the file record. Served the record from before it, the
+    // wave carries the file as it stood before the edit.
+    let written: Vec<(String, Vec<u8>)> = if case == DowngradeCase::Lost {
+        before_the_edit
+            .into_iter()
+            .filter(|(key, record)| {
+                world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (key, record) in &written {
+        world
+            .record_store
+            .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
+    }
     assert_eq!(
         block_on(engine_t.command(Command::ChangePermission {
             node: shared,
@@ -2281,17 +2347,35 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
         })),
         Ok(CommandOutcome::Done)
     );
+    for (key, _) in &written {
+        world.record_store.serve_gets_for_after(key, 0, 0, None);
+    }
+    block_on(engine_t.command(Command::SetFocus { node: Some(shared) }))
+        .expect("the owner opens the folder");
     tick_n(&world, &engine_t, &mut tasks_t, 2);
+    assert_eq!(
+        block_on(engine_t.read_content(file)).map_err(|e| e.to_string()) == Ok(vec![3u8; 70]),
+        case != DowngradeCase::Lost,
+        "the moved tree carries the grantee's edit unless the case loses it"
+    );
     // The grantee's passes see the downgrade, so the kept edit's scope is a
     // proved root with no write seed.
     let _ = events_so_far(&mut events_r);
     tick_n(&world, &engine_r, &mut tasks_r, 8);
-    assert!(!holds_the_edit(), "the kept edit left the queue");
     assert_eq!(
-        dead_letter_events(&mut events_r).len(),
-        1,
-        "as a dead letter"
+        block_on(engine_r.received_shares()).expect("the list reads")[0].permission,
+        Permission::Read,
+        "the grantee holds the read grant"
     );
+    assert_eq!(
+        recipient_bookmarks(&recipient)
+            .iter()
+            .all(|share| share.scope_pointer_name.is_some()),
+        case != DowngradeCase::NoPointerName,
+        "the bookmark holds the scope pointer name unless the case drops it"
+    );
+    assert!(!holds_the_edit(), "the kept edit left the queue");
+    let notices = dead_letter_events(&mut events_r).len();
     let own_root = block_on(engine_r.view()).expect("a rendered view").root();
     block_on(engine_r.command(Command::Create {
         parent: own_root,
@@ -2302,12 +2386,49 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_r, &mut tasks_r, 4);
 
     assert_eq!(queued(&recipient), 0, "the later op published");
+    notices
+}
+
+/// A downgrade takes the write seed, so a kept edit does not apply again. With
+/// no scope pointer name the device cannot read the moved tree, so the edit
+/// dead-letters at the keyless budget rather than halt the queue for ever
+/// (ADR 0069 D3).
+#[test]
+fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
+    assert_eq!(
+        kept_edit_through_a_downgrade(DowngradeCase::NoPointerName),
+        1,
+        "as a dead letter"
+    );
+}
+
+/// A downgraded grantee reads the moved tree under the pointer read key, sees
+/// that the wave carried its kept edit, and the edit leaves with no notice
+/// (ADR 0069 D3).
+#[test]
+fn a_downgraded_grantees_carried_kept_edit_leaves_with_no_notice() {
+    assert_eq!(
+        kept_edit_through_a_downgrade(DowngradeCase::Carried),
+        0,
+        "and with no notice"
+    );
+}
+
+/// The same kept edit, which the wave did not carry, dead-letters with a
+/// notice after the read of the moved tree (ADR 0069 D3).
+#[test]
+fn a_downgraded_grantees_lost_kept_edit_dead_letters_after_the_read() {
+    assert_eq!(
+        kept_edit_through_a_downgrade(DowngradeCase::Lost),
+        1,
+        "as a dead letter"
+    );
 }
 
 /// A write grantee's delete stays kept after its publish, and its note names
-/// the folder it unlinked the node from. A downgrade takes the write seed, so
-/// the kept delete takes the keyless charge and dead-letters with a notice,
-/// as a kept edit does (ADR 0069 D3).
+/// the folder it unlinked the node from. The owner's wave carries the node
+/// back, so the moved tree shows the delete lost: it takes the keyless charge
+/// and dead-letters with a notice, as a lost kept edit does (ADR 0069 D3).
 #[test]
 fn a_downgraded_grantees_kept_delete_dead_letters_at_the_keyless_budget() {
     let world = FakeWorld::new();
@@ -2510,6 +2631,12 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
 
     tick_n(&world, &engine_r, &mut tasks_r, 10);
 
+    assert!(
+        recipient_bookmarks(&recipient)
+            .iter()
+            .all(|share| share.scope_pointer_name.is_some()),
+        "the grantee reads the moved tree under its scope pointer"
+    );
     assert_eq!(
         dead_letter_events(&mut events_r).len(),
         1,

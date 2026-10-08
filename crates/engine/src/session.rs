@@ -828,6 +828,10 @@ impl SessionState {
             publishing: &self.publishing,
             bin_index_unsettled: &self.bin_index_unsettled,
             root_sequences: &self.root_sequences,
+            scope_read_seeds: &self.scope_read_seeds,
+            forks: &self.fork_sightings,
+            grafted_claims: &self.grafted_claims,
+            bookmarked_scope_roots: &self.bookmarked_scope_roots,
         }
     }
 }

@@ -46,6 +46,21 @@ pub fn padding(bytes: usize) -> cipherbox_core::seal::PreservedFields {
     .collect()
 }
 
+/// `list` with no scope pointer name on any bookmark, the shape of a bookmark
+/// stored before the owner posted the name, and so with no link hold.
+pub fn without_scope_pointer_names(
+    list: &crate::grants::ReceivedSharesList,
+) -> crate::grants::ReceivedSharesList {
+    let mut bare = crate::grants::ReceivedSharesList::new();
+    for share in list.iter() {
+        bare.reconcile(crate::grants::ReceivedShare {
+            scope_pointer_name: None,
+            ..share.clone()
+        });
+    }
+    bare
+}
+
 /// Compiles only while the bearer a request carries wipes itself on drop.
 /// The proof is the type, so the test never reads the credential.
 #[track_caller]
