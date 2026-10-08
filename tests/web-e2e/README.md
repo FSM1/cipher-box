@@ -49,11 +49,12 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   databases and its staged records, and reclaims only its snapshot cache; the
   first account still holds its link and converts the claim a recipient made
   meanwhile; a forget erases every store of its own account and none of the
-  other. The first account signs out over a drained queue, so this spec checks
-  no pending op and no floor value across the switch. The `storeReclaim` case of
-  the Chromium browser seam test (`packages/client/test/browser/`) keeps the
-  staged directory of a departed account that has an op queued; it checks floor
-  values and queue contents for the live account only.
+  other. Each account signs out with its kept create and kept rename queued, and
+  the switch keeps both; this spec checks no floor value across the switch. The
+  `storeReclaim` case of the Chromium browser seam test
+  (`packages/client/test/browser/`) keeps the staged directory of a departed
+  account that has an op queued; it checks floor values and queue contents for
+  the live account only.
 - the link-first flow across two owner devices (`link-first.spec.ts`), in these
   steps:
   1. device A mints a read link with the owner name on a folder of two entries
