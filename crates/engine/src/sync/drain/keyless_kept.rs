@@ -10,11 +10,12 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
 use super::{Drain, DrainScope, lists_version, place_in};
-use crate::facade::NodeId;
+use crate::facade::{NodeId, emit_trust_violation};
 use crate::grants::grafted::FloorNamespace;
 use crate::grants::link_read::held_scope_root;
+use crate::grants::received_status::grafted_root_name;
 use crate::grants::{ReceivedShareStore, StagingReceivedShareStore};
-use crate::net::{FolderRefresh, FolderRefreshReport, GraftedLeg};
+use crate::net::{FolderRefresh, FolderRefreshReport, GraftedLeg, PointerConsultError};
 use crate::scope_seeds::{SeedFloor, StampedSeed, current_seed};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SharerScopedFloorStore,
@@ -49,11 +50,10 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Whether the moved tree of the keyless scope at `root` decides the kept
-    /// op as a rebase on a writing device does with no second apply: it shows
-    /// the op, or a later write decided it (ADR 0069 D6). Such an op leaves
-    /// with no notice. `false` when the bookmark holds no scope pointer name
-    /// or a read fails, and the op takes the keyless charge.
+    /// Whether the moved tree of the keyless scope at `root` shows the kept
+    /// op ([`Self::moved_outcome`]). Such an op leaves with no notice. `false`
+    /// when the bookmark holds no scope pointer name or a read cannot tell,
+    /// and the op takes the keyless charge.
     pub(super) async fn moved_tree_decides(
         &self,
         scope: &DrainScope<'_>,
@@ -119,9 +119,19 @@ where
         };
         let owner = EcdsaVerifier::from_sec1(&share.sharer_identity_pk)?;
         let pointer = share.scope_pointer_name.as_ref()?;
-        let name = held_scope_root(&self.seams.transport, &floors, share, pointer, &owner)
-            .await
-            .ok()??;
+        let name =
+            match held_scope_root(&self.seams.transport, &floors, share, pointer, &owner).await {
+                Ok(name) => name?,
+                Err(PointerConsultError::Rejected) => {
+                    emit_trust_violation(
+                        &self.seams.events,
+                        grafted_root_name(&share.display_name, root).as_str(),
+                        "the scope pointer's re-point object was refused",
+                    );
+                    return None;
+                }
+                Err(PointerConsultError::Unavailable) => return None,
+            };
         let listed = self.cells.base.borrow().node(root)?.ipns_name.as_deref()
             == Some(name.as_str().as_bytes());
         if !listed {
@@ -142,7 +152,12 @@ where
     }
 
     /// Whether the moved tree decides the op, or `None` when the read cannot
-    /// tell.
+    /// tell. Only a delete reads an absent node as decided (ADR 0069 D6): for
+    /// any other kind, absence can be a later delete, a move by the owner, or
+    /// a write the wave lost. A rename, a move and a restore are decided only
+    /// when the tree shows their own result: with no second apply, another
+    /// value cannot tell a later writer from an earlier op of this device that
+    /// the wave lost.
     async fn moved_outcome(
         &self,
         refresh: &MovedRefresh<'_, T, S, H, F>,
@@ -163,12 +178,6 @@ where
             }
         };
         match &op.kind {
-            OpKind::Create { parent, .. } => {
-                if !self.read_moved_folder(refresh, root, *parent).await? {
-                    return Some(true);
-                }
-                linked(*parent)
-            }
             OpKind::Delete { .. } => {
                 let parent = kept.parent(op_id)?;
                 if !self.read_moved_folder(refresh, root, parent).await? {
@@ -176,17 +185,22 @@ where
                 }
                 linked(parent).map(|alive| !alive)
             }
+            OpKind::Create { parent, .. } => {
+                self.reads_moved_folder(refresh, root, *parent).await?;
+                linked(*parent).filter(|shown| *shown)
+            }
             OpKind::UpdateContent { .. } | OpKind::RestoreVersion { .. } => {
                 let folder = self.cells.base.borrow().parent_of(op.target)?;
-                if !self.read_moved_folder(refresh, root, folder).await? || !linked(folder)? {
-                    return Some(true);
-                }
+                self.reads_moved_folder(refresh, root, folder).await?;
+                linked(folder).filter(|shown| *shown)?;
                 let mut report = FolderRefreshReport::reconciled();
                 let versions = refresh.read_file(op.target, &mut report).await?;
-                Some(match kept.result(op_id) {
-                    Some(result) => kept_outcome(result, live_head(&versions)) != KeptOutcome::Lost,
-                    None => lists_version(&versions, op.staged_content()?),
-                })
+                match kept.result(op_id) {
+                    Some(result) => {
+                        Some(kept_outcome(result, live_head(&versions)) == KeptOutcome::Landed)
+                    }
+                    None => Some(lists_version(&versions, op.staged_content()?)),
+                }
             }
             OpKind::Rename { .. } | OpKind::Move { .. } | OpKind::Relink { .. } => {
                 let parent = kept.parent(op_id)?;
@@ -198,23 +212,36 @@ where
                     folders.push(*to);
                 }
                 for folder in folders {
-                    self.read_moved_folder(refresh, root, folder).await?;
+                    self.reads_moved_folder(refresh, root, folder).await?;
                 }
                 let place = place_in(&self.cells.base.borrow(), op.target);
                 Some(
                     kept_outcome(result, live_place(result, parent, place.as_ref()))
-                        != KeptOutcome::Lost,
+                        == KeptOutcome::Landed,
                 )
             }
             _ => None,
         }
     }
 
+    /// [`Self::read_moved_folder`], where a folder the moved tree no longer
+    /// names cannot tell.
+    async fn reads_moved_folder(
+        &self,
+        refresh: &MovedRefresh<'_, T, S, H, F>,
+        root: NodeId,
+        folder: NodeId,
+    ) -> Option<()> {
+        self.read_moved_folder(refresh, root, folder)
+            .await?
+            .then_some(())
+    }
+
     /// Read `folder` and each folder between it and `root` in the moved tree,
     /// root first. Each name comes from the listing just read, so no read
     /// lands on the old tree. `Some(false)` when a listing no longer names the
-    /// next folder, and `None` when a read fails or the base cannot place the
-    /// folder below `root`.
+    /// next folder, and `None` when a folder's record does not pass the gate
+    /// on this read or the base cannot place the folder below `root`.
     async fn read_moved_folder(
         &self,
         refresh: &MovedRefresh<'_, T, S, H, F>,
@@ -244,8 +271,9 @@ where
                     return (!base.contains(node)).then_some(false);
                 }
             }
-            let report = refresh.run(&[node]).await;
-            if report.verdict != RefreshVerdict::Reconciled || report.unread {
+            let mut report = FolderRefreshReport::reconciled();
+            let gated = refresh.read_folder(node, &mut report).await;
+            if !gated || report.verdict != RefreshVerdict::Reconciled || report.unread {
                 return None;
             }
             above = node;

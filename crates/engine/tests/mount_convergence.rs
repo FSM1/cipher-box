@@ -29,7 +29,7 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::rotation::published_override_seed;
 use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
 use cipherbox_engine::sync::SessionRole;
-use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::pointer::{scope_pointer_name, seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
     owner_identity, serve_http,
@@ -2247,64 +2247,96 @@ fn forget_scope_pointer_names(recipient: &FakeDevice) {
 }
 
 /// What the grantee's device holds, and what the name wave does with its
-/// kept edit, in [`kept_edit_through_a_downgrade`].
+/// kept ops, in [`kept_ops_through_a_downgrade`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DowngradeCase {
-    /// The bookmark holds the scope pointer name, and the wave carries the edit.
+    /// The bookmark holds the scope pointer name, and the wave carries the ops.
     Carried,
-    /// The bookmark holds the scope pointer name, and the wave reads the file
-    /// record from before the edit.
+    /// The bookmark holds the scope pointer name, and the wave reads each
+    /// record the ops wrote as it stood before them.
     Lost,
-    /// The bookmark holds no scope pointer name, and the wave carries the edit.
+    /// The bookmark holds no scope pointer name, and the wave carries the ops.
     NoPointerName,
 }
 
-/// A write grantee's edit stays kept after its publish, and the owner then
-/// downgrades the grantee to read. Answers the dead-letter notices of the
-/// grantee's passes after the downgrade; the kept edit has left the queue,
-/// and a later op publishes.
-fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
+/// What the grantee's passes after a downgrade did.
+struct AfterTheDowngrade {
+    /// The dead-letter notices.
+    notices: usize,
+    /// The GETs at the names the wave moved below the scope root: only the
+    /// drain's read of the moved tree makes them.
+    moved_reads: usize,
+}
+
+/// The owner's `doc.bin` holds three versions, `nested` one folder below the
+/// shared scope root. A write grantee runs `act` on it, and the queue keeps
+/// each op after its publish. The owner then downgrades the grantee to read,
+/// and `owner_sees` checks the moved tree. Every op on the file leaves the
+/// grantee's queue, and a later op publishes.
+fn kept_ops_through_a_downgrade(
+    case: DowngradeCase,
+    nested: bool,
+    act: impl FnOnce(&World<'_>, &mut Engine<FakeSeamTypes>, &mut Vec<BoxedTask>, NodeId),
+    owner_sees: impl FnOnce(&Engine<FakeSeamTypes>, NodeId, NodeId),
+) -> AfterTheDowngrade {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_vault(&world, &blocks);
     let tab = world.device(&owner_identity().verifying_key().to_sec1());
     let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
     let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let parent = if nested {
+        create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "sub")
+    } else {
+        shared
+    };
     let file = file_with_two_versions(
         &world,
         &mut engine_t,
         &mut tasks_t,
-        shared,
+        parent,
         "doc.bin",
         &two_bodies(9),
     );
+    write_file(
+        &mut engine_t,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        &THIRD_BODY,
+    )
+    .expect("the third version commits");
+    tick_n(&world, &engine_t, &mut tasks_t, 4);
     import_recipient(&mut engine_t);
     grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
 
     let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
     let (mut engine_r, mut events_r, mut tasks_r) =
         recipient_on_with_the_share(&world, &blocks, &recipient);
+    if nested {
+        block_on(engine_r.command(Command::SetFocus { node: Some(parent) }))
+            .expect("the grantee opens the folder");
+        tick_n(&world, &engine_r, &mut tasks_r, 2);
+    }
     let endpoints = world.record_store.endpoints();
-    let before_the_edit: std::collections::BTreeMap<String, Vec<u8>> = world
-        .record_store
-        .routing_keys(&endpoints[0])
-        .into_iter()
-        .filter_map(|key| {
-            let record = world.record_store.record_at(&endpoints[0], &key)?;
-            Some((key, record))
-        })
-        .collect();
-    write_file(
-        &mut engine_r,
-        WriteTarget::Version {
-            node: file,
-            expected_version: None,
-        },
-        &[3u8; 70],
-    )
-    .expect("the grantee's version commits");
+    let records = || -> std::collections::BTreeMap<String, Vec<u8>> {
+        world
+            .record_store
+            .routing_keys(&endpoints[0])
+            .into_iter()
+            .filter_map(|key| {
+                let record = world.record_store.record_at(&endpoints[0], &key)?;
+                Some((key, record))
+            })
+            .collect()
+    };
+    let before_the_ops = records();
+    act(&World(&world), &mut engine_r, &mut tasks_r, file);
+    block_on(engine_r.command(Command::SetFocus { node: None }))
+        .expect("the grantee closes the folder");
     tick_n(&world, &engine_r, &mut tasks_r, 4);
-    let holds_the_edit = || {
+    let holds_an_op = || {
         let raw =
             block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
         decode_queue(
@@ -2315,17 +2347,17 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
         .iter()
         .any(|(_, op)| op.target == file)
     };
-    assert_eq!(queued(&recipient), 0, "the edit published");
-    assert!(holds_the_edit(), "and the queue keeps it");
+    assert_eq!(queued(&recipient), 0, "the ops published");
+    assert!(holds_an_op(), "and the queue keeps them");
 
     if case == DowngradeCase::NoPointerName {
         forget_scope_pointer_names(&recipient);
         tab.mailbox.set_post_failing(true);
     }
-    // The edit moved the file record. Served the record from before it, the
-    // wave carries the file as it stood before the edit.
+    // Served each record from before the ops, the wave carries the file as
+    // it stood before them.
     let written: Vec<(String, Vec<u8>)> = if case == DowngradeCase::Lost {
-        before_the_edit
+        before_the_ops
             .into_iter()
             .filter(|(key, record)| {
                 world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
@@ -2339,6 +2371,7 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
             .record_store
             .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
     }
+    let before_the_wave: std::collections::BTreeSet<String> = records().into_keys().collect();
     assert_eq!(
         block_on(engine_t.command(Command::ChangePermission {
             node: shared,
@@ -2350,18 +2383,14 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
     for (key, _) in &written {
         world.record_store.serve_gets_for_after(key, 0, 0, None);
     }
-    block_on(engine_t.command(Command::SetFocus { node: Some(shared) }))
+    block_on(engine_t.command(Command::SetFocus { node: Some(parent) }))
         .expect("the owner opens the folder");
     tick_n(&world, &engine_t, &mut tasks_t, 2);
-    assert_eq!(
-        block_on(engine_t.read_content(file)).map_err(|e| e.to_string()) == Ok(vec![3u8; 70]),
-        case != DowngradeCase::Lost,
-        "the moved tree carries the grantee's edit unless the case loses it"
-    );
-    // The grantee's passes see the downgrade, so the kept edit's scope is a
-    // proved root with no write seed.
+    owner_sees(&engine_t, parent, file);
+
+    let gets_before = moved_gets(&world, &before_the_wave, shared);
     let _ = events_so_far(&mut events_r);
-    tick_n(&world, &engine_r, &mut tasks_r, 8);
+    tick_n(&world, &engine_r, &mut tasks_r, 16);
     assert_eq!(
         block_on(engine_r.received_shares()).expect("the list reads")[0].permission,
         Permission::Read,
@@ -2374,7 +2403,8 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
         case != DowngradeCase::NoPointerName,
         "the bookmark holds the scope pointer name unless the case drops it"
     );
-    assert!(!holds_the_edit(), "the kept edit left the queue");
+    let moved_reads = moved_reads(&world, &recipient, &gets_before);
+    assert!(!holds_an_op(), "each kept op left the queue");
     let notices = dead_letter_events(&mut events_r).len();
     let own_root = block_on(engine_r.view()).expect("a rendered view").root();
     block_on(engine_r.command(Command::Create {
@@ -2386,7 +2416,82 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
     tick_n(&world, &engine_r, &mut tasks_r, 4);
 
     assert_eq!(queued(&recipient), 0, "the later op published");
-    notices
+    AfterTheDowngrade {
+        notices,
+        moved_reads,
+    }
+}
+
+/// The GET count of each name the wave moved below the shared scope root:
+/// each key the store holds now that `before` lacks, but the scope pointer.
+fn moved_gets(
+    world: &FakeWorld,
+    before: &std::collections::BTreeSet<String>,
+    shared: NodeId,
+) -> Vec<(String, usize)> {
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &shared.0);
+    let endpoint = &world.record_store.endpoints()[0];
+    world
+        .record_store
+        .routing_keys(endpoint)
+        .into_iter()
+        .filter(|key| !before.contains(key) && *key != pointer.as_str())
+        .map(|key| {
+            let count = world.record_store.get_count(&key);
+            (key, count)
+        })
+        .collect()
+}
+
+/// The GETs since `before` at the moved names, but the moved root that the
+/// grantee's bookmark now names: only the drain's read of the moved tree
+/// makes them.
+fn moved_reads(world: &FakeWorld, recipient: &FakeDevice, before: &[(String, usize)]) -> usize {
+    let roots: Vec<Vec<u8>> = recipient_bookmarks(recipient)
+        .iter()
+        .map(|share| share.scope_root_name.clone())
+        .collect();
+    before
+        .iter()
+        .filter(|(key, _)| !roots.contains(&key.as_bytes().to_vec()))
+        .map(|(key, count)| world.record_store.get_count(key) - count)
+        .sum()
+}
+
+/// The world a grantee's `act` ticks in.
+struct World<'w>(&'w FakeWorld);
+
+/// The third version of `doc.bin`, its head before the grantee acts.
+const THIRD_BODY: [u8; 50] = [7u8; 50];
+
+/// The grantee commits one version of the file.
+fn edit(
+    world: &World<'_>,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut Vec<BoxedTask>,
+    file: NodeId,
+) {
+    write_file(
+        engine,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        &[3u8; 70],
+    )
+    .expect("the grantee's version commits");
+    tick_n(world.0, engine, tasks, 2);
+}
+
+/// The owner reads the grantee's edit exactly when the wave carried it.
+fn edit_carried(carried: bool) -> impl FnOnce(&Engine<FakeSeamTypes>, NodeId, NodeId) {
+    move |engine, _, file| {
+        assert_eq!(
+            block_on(engine.read_content(file)).map_err(|e| e.to_string()) == Ok(vec![3u8; 70]),
+            carried,
+            "the moved tree carries the grantee's edit exactly when the case does"
+        );
+    }
 }
 
 /// A downgrade takes the write seed, so a kept edit does not apply again. With
@@ -2395,11 +2500,14 @@ fn kept_edit_through_a_downgrade(case: DowngradeCase) -> usize {
 /// (ADR 0069 D3).
 #[test]
 fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
-    assert_eq!(
-        kept_edit_through_a_downgrade(DowngradeCase::NoPointerName),
-        1,
-        "as a dead letter"
+    let after = kept_ops_through_a_downgrade(
+        DowngradeCase::NoPointerName,
+        false,
+        edit,
+        edit_carried(true),
     );
+    assert_eq!(after.notices, 1, "as a dead letter");
+    assert_eq!(after.moved_reads, 0, "and no read of the moved tree");
 }
 
 /// A downgraded grantee reads the moved tree under the pointer read key, sees
@@ -2407,22 +2515,87 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
 /// (ADR 0069 D3).
 #[test]
 fn a_downgraded_grantees_carried_kept_edit_leaves_with_no_notice() {
-    assert_eq!(
-        kept_edit_through_a_downgrade(DowngradeCase::Carried),
-        0,
-        "and with no notice"
-    );
+    for nested in [false, true] {
+        let after =
+            kept_ops_through_a_downgrade(DowngradeCase::Carried, nested, edit, edit_carried(true));
+        assert_eq!(after.notices, 0, "nested {nested}: no notice");
+        assert!(
+            after.moved_reads > 0,
+            "nested {nested}: after a read of the moved tree"
+        );
+    }
 }
 
 /// The same kept edit, which the wave did not carry, dead-letters with a
 /// notice after the read of the moved tree (ADR 0069 D3).
 #[test]
 fn a_downgraded_grantees_lost_kept_edit_dead_letters_after_the_read() {
-    assert_eq!(
-        kept_edit_through_a_downgrade(DowngradeCase::Lost),
-        1,
-        "as a dead letter"
+    let after = kept_ops_through_a_downgrade(DowngradeCase::Lost, false, edit, edit_carried(false));
+    assert_eq!(after.notices, 1, "as a dead letter");
+    assert!(after.moved_reads > 0, "after a read of the moved tree");
+}
+
+/// Two renames of one file that the wave lost. The moved tree shows the name
+/// before both, which is the result of neither, so each dead-letters with a
+/// notice: only the op's own result decides it under a keyless scope.
+#[test]
+fn a_downgraded_grantees_lost_rename_chain_dead_letters_each_rename() {
+    let after = kept_ops_through_a_downgrade(
+        DowngradeCase::Lost,
+        true,
+        |world, engine, tasks, file| {
+            for name in ["b.bin", "c.bin"] {
+                block_on(engine.command(Command::Rename {
+                    node: file,
+                    new_name: name.into(),
+                }))
+                .expect("the rename stages");
+                tick_n(world.0, engine, tasks, 2);
+            }
+        },
+        |engine, parent, _| {
+            assert_eq!(
+                listed_names(engine, parent),
+                vec!["doc.bin".to_owned()],
+                "the moved tree carries neither rename"
+            );
+        },
     );
+    assert_eq!(after.notices, 2, "each rename dead-letters");
+    assert!(after.moved_reads > 0, "after a read of the moved tree");
+}
+
+/// Two version restores of one file that the wave lost. The moved head is the
+/// head before both, which is the result of neither, so each dead-letters
+/// with a notice.
+#[test]
+fn a_downgraded_grantees_lost_restore_chain_dead_letters_each_restore() {
+    let after = kept_ops_through_a_downgrade(
+        DowngradeCase::Lost,
+        true,
+        |world, engine, tasks, file| {
+            let prior =
+                block_on(engine.file_versions(file)).expect("the grantee reads the history");
+            assert_eq!(prior.len(), 2, "two prior versions");
+            for version in prior.iter().rev() {
+                block_on(engine.command(Command::RestoreVersion {
+                    node: file,
+                    content_cid: version.content_cid.clone(),
+                }))
+                .expect("the restore stages");
+                tick_n(world.0, engine, tasks, 2);
+            }
+        },
+        |engine, _, file| {
+            assert_eq!(
+                block_on(engine.read_content(file)).map_err(|e| e.to_string()),
+                Ok(THIRD_BODY.to_vec()),
+                "the moved tree carries neither restore"
+            );
+        },
+    );
+    assert_eq!(after.notices, 2, "each restore dead-letters");
+    assert!(after.moved_reads > 0, "after a read of the moved tree");
 }
 
 /// A write grantee's delete stays kept after its publish, and its note names
@@ -2615,6 +2788,13 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
             .record_store
             .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
     }
+    block_on(engine_r.command(Command::SetFocus { node: None }))
+        .expect("the grantee closes the folder");
+    let before_the_wave: std::collections::BTreeSet<String> = world
+        .record_store
+        .routing_keys(&endpoints[0])
+        .into_iter()
+        .collect();
     assert_eq!(
         block_on(engine_t.command(Command::ChangePermission {
             node: shared,
@@ -2633,9 +2813,15 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
         !listed_names(&engine_t, child).contains(&"late".to_owned()),
         "the moved tree does not carry the create"
     );
+    let gets_before = moved_gets(&world, &before_the_wave, shared);
     let _ = events_so_far(&mut events_r);
 
     tick_n(&world, &engine_r, &mut tasks_r, 10);
+
+    assert!(
+        moved_reads(&world, &recipient, &gets_before) > 0,
+        "the grantee read the moved tree"
+    );
 
     assert!(
         recipient_bookmarks(&recipient)

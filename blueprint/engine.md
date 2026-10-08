@@ -1188,9 +1188,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). When the bookmark holds the scope pointer name, the drain
-  first reads the moved tree under the pointer read key, and a kept op that
-  the tree shows, or that a later write decided, leaves with no notice. A
-  kept op is not pending (ADR 0069 D7).
+  first reads the moved tree under the pointer read key, and a kept op whose
+  own result the tree shows, or a kept delete whose node the tree lacks,
+  leaves with no notice. A kept op is not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer

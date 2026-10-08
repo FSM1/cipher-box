@@ -223,10 +223,14 @@ scenario fails the meta-test):
   (`kept_op.rs`, `drain.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, a kept delete included,
   also a late write that the wave did not carry; under the scope pointer
-  read, a kept edit that the wave carried leaves with no notice and one that
-  it lost dead-letters with a notice, and a bookmark with no scope pointer
-  name keeps the keyless charge (ADR 0069 D3,
-  `crates/engine/tests/mount_convergence.rs`); a body of many
+  read, a kept edit that the wave carried leaves with no notice, also one
+  folder below the scope root, one that it lost dead-letters with a notice,
+  each rename and each version restore of a lost chain dead-letters, each
+  after a read of the moved tree, and a bookmark with no scope pointer name
+  keeps the keyless charge with no read (ADR 0069 D3,
+  `crates/engine/tests/mount_convergence.rs`); a folder at a name that does
+  not parse reads as not gated, and its stale links stay
+  (`crates/engine/src/net/focus.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk
