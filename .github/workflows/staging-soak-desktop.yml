@@ -156,6 +156,35 @@ jobs:
             exit 1
           fi
 
+      - name: Collect the logs a failure leaves
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p failure-logs/runner
+          log_root="${RUNNER_TEMP}/desktop-soak"
+          # Exclude account data and control tokens; preserve each backend's log.
+          # A stranded mount must not hold up artifact collection.
+          if [ -d "$log_root" ]; then
+            while IFS= read -r -d '' log_file; do
+              relative_path=${log_file#"$log_root"/}
+              destination="failure-logs/desktop-soak/$relative_path"
+              mkdir -p "$(dirname "$destination")"
+              cp "$log_file" "$destination" 2>/dev/null || true
+            done < <(find "$log_root" -xdev -type f -name '*.log' -print0 2>/dev/null)
+          fi
+          cp "${RUNNER_TEMP}/xvfb.log" failure-logs/runner/ 2>/dev/null || true
+          cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/runner/ 2>/dev/null || true
+
+      - name: Upload the logs a failure leaves
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-logs-${{ inputs.leg }}
+          path: failure-logs/
+          retention-days: 7
+          if-no-files-found: warn
+          overwrite: true
+
       - name: Upload the result lines
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
