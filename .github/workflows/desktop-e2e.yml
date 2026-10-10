@@ -318,17 +318,25 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          mkdir -p failure-logs
+          mkdir -p failure-logs/runner
           # Only the log files: the home roots hold the account directory and
           # the control token, and neither may reach an artifact.
           # -xdev: a scenario that failed can leave a mount under the workdir,
           # and descending into one hangs the collection rather than reading it.
-          find "${RUNNER_TEMP}/desktop-e2e" -xdev -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
-          find "${RUNNER_TEMP}/cross-client-e2e" -xdev -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
-          cp "${RUNNER_TEMP}/kubo.log" failure-logs/ 2>/dev/null || true
-          cp "${RUNNER_TEMP}/xvfb.log" failure-logs/ 2>/dev/null || true
-          cp /tmp/mock-ipns-routing.log failure-logs/ 2>/dev/null || true
-          cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/ 2>/dev/null || true
+          # Preserve instance paths: every FUSE-T backend writes fuse-t.log.
+          for log_root in "${RUNNER_TEMP}/desktop-e2e" "${RUNNER_TEMP}/cross-client-e2e"; do
+            [ -d "$log_root" ] || continue
+            while IFS= read -r -d '' log_file; do
+              relative_path=${log_file#"$log_root"/}
+              destination="failure-logs/${log_root##*/}/$relative_path"
+              mkdir -p "$(dirname "$destination")"
+              cp "$log_file" "$destination" 2>/dev/null || true
+            done < <(find "$log_root" -xdev -type f -name '*.log' -print0 2>/dev/null)
+          done
+          cp "${RUNNER_TEMP}/kubo.log" failure-logs/runner/ 2>/dev/null || true
+          cp "${RUNNER_TEMP}/xvfb.log" failure-logs/runner/ 2>/dev/null || true
+          cp /tmp/mock-ipns-routing.log failure-logs/runner/ 2>/dev/null || true
+          cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/runner/ 2>/dev/null || true
 
       - name: Upload the logs a failure leaves
         if: failure()
