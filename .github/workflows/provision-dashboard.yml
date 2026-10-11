@@ -41,7 +41,6 @@ jobs:
           # The key goes through a 0600 header file, never curl's argv.
           AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
           trap 'rm -f "$AUTH_HEADER"' EXIT
-          chmod 600 "$AUTH_HEADER"
           printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
           # One deadline bounds every request and wait. The floor of 1 matters:
           # curl reads --max-time 0 as no limit.
@@ -76,7 +75,7 @@ jobs:
             echo "Grafana not ready (HTTP $HTTP_CODE, attempt $attempt, ${SECONDS}s of ${DEADLINE}s)"
             sleep "$(cap "$INTERVAL")"
           done
-          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE); a 404 for the whole wait suggests a wrong GRAFANA_URL"
+          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE); 404 or 503 means asleep or still waking; 404 for the whole wait suggests a wrong GRAFANA_URL"
           exit 1
 
       - name: Push dashboard to Grafana Cloud
@@ -94,7 +93,6 @@ jobs:
           GRAFANA_URL="${GRAFANA_URL%/}"
           AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
           trap 'rm -f "$AUTH_HEADER"' EXIT
-          chmod 600 "$AUTH_HEADER"
           printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
 
           # The dashboard JSON uses __inputs for datasource templating.
