@@ -51,6 +51,8 @@ The deploy workflow writes these into `.env.staging` on the VPS, where the Alloy
 
 ### 6. Import the dashboard
 
+An idle Grafana Cloud instance sleeps and answers `/api/health` with 404 or 503, so the readiness step of `.github/workflows/provision-dashboard.yml` sends an unauthenticated GET to `/login?disableAutoLogin=true` to wake it before each health poll.
+
 1. In Grafana Cloud, go to **Dashboards** > **Import**
 2. Upload `docker/grafana/dashboards/cipherbox-staging.json`
 3. Select the Prometheus and Loki data sources when prompted

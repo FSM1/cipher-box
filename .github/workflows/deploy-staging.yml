@@ -407,100 +407,14 @@ jobs:
             # Cleanup old images
             docker image prune -f
 
+  # A tag run provisions the dashboard from tag-staging.yml, beside Staging E2E.
   provision-dashboard:
     name: Provision Grafana Dashboard
     needs: [deploy-vps]
-    runs-on: ubuntu-latest
-    environment: staging
+    if: ${{ !inputs.staging_tag }}
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.DEPLOY_TAG }}
-
-      - name: Wait for Grafana Cloud readiness
-        env:
-          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
-          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
-        run: |
-          set -euo pipefail
-          : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
-          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
-          GRAFANA_URL="${GRAFANA_URL%/}"
-          MAX_ATTEMPTS=30
-          INTERVAL=10
-          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
-            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 15 \
-              -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
-              "${GRAFANA_URL}/api/health") || HTTP_CODE=000
-            if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "Grafana Cloud is ready (attempt $i/$MAX_ATTEMPTS)"
-              exit 0
-            elif [[ "$HTTP_CODE" =~ ^(401|403|404)$ ]]; then
-              echo "::error::Grafana returned HTTP $HTTP_CODE — check GRAFANA_URL and GRAFANA_API_KEY"
-              exit 1
-            fi
-            echo "Grafana not ready (HTTP $HTTP_CODE), waiting ${INTERVAL}s... ($i/$MAX_ATTEMPTS)"
-            sleep "$INTERVAL"
-          done
-          echo "::error::Grafana Cloud did not become ready after $((MAX_ATTEMPTS * INTERVAL))s"
-          exit 1
-
-      - name: Push dashboard to Grafana Cloud
-        env:
-          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
-          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
-          DS_METRICS_UID: ${{ vars.GRAFANA_DS_METRICS_UID }}
-          DS_LOGS_UID: ${{ vars.GRAFANA_DS_LOGS_UID }}
-        run: |
-          set -euo pipefail
-          : "${GRAFANA_URL:?GRAFANA_URL is required}"
-          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
-          : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
-          : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
-          GRAFANA_URL="${GRAFANA_URL%/}"
-
-          # The dashboard JSON uses __inputs for datasource templating.
-          # Replace variable references with actual datasource UIDs.
-          DASHBOARD=$(cat docker/grafana/dashboards/cipherbox-staging.json \
-            | jq --arg metrics "$DS_METRICS_UID" --arg logs "$DS_LOGS_UID" \
-                 'del(.__inputs)
-                  | .id = null
-                  | walk(if type == "object" and .uid? and (.uid | test("\\$\\{DS_")) then
-                      .uid = (if .uid == "${DS_GRAFANA_CLOUD_METRICS}" then $metrics
-                              elif .uid == "${DS_GRAFANA_CLOUD_LOGS}" then $logs
-                              else .uid end)
-                    else . end)')
-
-          # Fail if any datasource placeholder survived the rewrite
-          if jq -e '.. | objects | .uid? | select(type == "string" and test("^\\$\\{DS_"))' \
-            >/dev/null <<<"$DASHBOARD"; then
-            echo "::error::Unresolved datasource placeholder(s) remain in dashboard JSON"
-            exit 1
-          fi
-
-          # Wrap in import payload
-          PAYLOAD=$(jq -n --argjson dashboard "$DASHBOARD" '{
-            dashboard: $dashboard,
-            overwrite: true,
-            message: "Provisioned by deploy-staging workflow"
-          }')
-
-          # Push to Grafana API
-          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
-            -o /tmp/grafana-response.json -w "%{http_code}" \
-            -X POST "${GRAFANA_URL}/api/dashboards/db" \
-            -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
-            echo "::error::Grafana API returned HTTP $HTTP_CODE"
-            cat /tmp/grafana-response.json
-            exit 1
-          fi
-
-          echo "Dashboard provisioned successfully (HTTP $HTTP_CODE)"
-          jq -r '.url // "unknown"' /tmp/grafana-response.json
+    uses: ./.github/workflows/provision-dashboard.yml
+    with:
+      ref: ${{ github.sha }}
+    secrets: inherit
