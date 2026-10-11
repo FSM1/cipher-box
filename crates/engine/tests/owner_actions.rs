@@ -5393,7 +5393,17 @@ fn assert_a_purge_stops_at_a_granted_folder_it_holds(permission: Permission) {
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    block_on(fx.engine.command(Command::Delete { node: plain })).expect("the delete journals");
+    // A delete of `plain` is refused, so another writer's unlink bins it by owner capture.
+    block_on(fx.engine.command(Command::SetFocus { node: Some(outer) })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| children.retain(|child| child.id != plain.0),
+    );
     for _ in 0..4 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
