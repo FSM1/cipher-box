@@ -1,0 +1,344 @@
+I need to add a project skill for both codex and claude. the spec for the skill is here @/var/folders/4x/s86wzqx141j785tv6jw_mkxw0000gn/T/cipherbox-ci-skill-handoff-5fe19_lk/ci-incident-investigation-spec.md
+
+---
+
+<task-notification>
+<task-id>a9a9d2e4d8189eb8c</task-id>
+<tool-use-id>toolu_01U2s16tuBDRcDUqaAqi4Zng</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a9a9d2e4d8189eb8c.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 2 ledger omission" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Mock calls, in order:
+
+```
+READ(incident issue + comments + linked follow-ups)
+READ(run R-200: every failed job, attempt 1 and later; env, UTC time, exact error line)
+SAVE_LOCAL(attempt-1 logs and per-instance results)   # before any rerun replaces artifacts
+READ(build revision, checked-out revision, pinned deps for attempt 1)
+PROBE(list /soak on soak-acct)                        # same selection set as the test
+PROBE(read every file the listing returns, incl. 2026-10-07-b.bin)
+PROBE(2026-10-07-b.bin: local ack / durable journal / remote publication)
+READ(active runs and writers on soak-acct; fixture writer schedule)
+READ(ledger.json vs listing: diff the two sets)
+```
+
+No retry, no dispatch, no `ACCOUNT.write`, no `TRACKER` write. You authorized reads only.
+
+Prepared but not run:
+- `ACCOUNT.write`: smallest repair of `2026-10-07-b.bin` through a normal client. It is held back until we know what is wrong.
+- `TRACKER.create`: one RCA issue, plus a diagnostics issue if the per-instance logs are missing.
+- `TRACKER.comment`: incident update with the findings.
+
+Reply to the user:
+
+No, I don't agree yet. The ledger probe read the 40 files the ledger names. The soak test reads whatever the `/soak` listing returns. `2026-10-07-b.bin` is not in `ledger.json`, so the probe never touched the file that failed. The state is unverified, not clean.
+
+Next, read-only:
+1. List `/soak` and read every file in the listing, as the test does. Compare that listing with the ledger.
+2. Check which layer the file reached: local acknowledgement, durable journal, or remote publication. The error "content fetch failed" suggests the listing entry exists but its content was never published or is unreachable. That is still a hypothesis.
+3. Check whether a writer is active on `soak-acct`. The file name is date-derived, so a retry on a later date would run a different experiment. A pass would not prove recovery.
+4. Save the attempt 1 logs before any rerun.
+
+I need your approval for these. Say which you want:
+- a repair write to `soak-acct`, which needs the account-write approval and a check that no run is writing to it
+- a retry, which needs the retry approval
+- creating issues, which needs the issue-creation approval
+
+Right now there is no repaired fixture, no recovery on retry, and no confirmed root-cause fix.</result>
+<usage><subagent_tokens>54051</subagent_tokens><tool_uses>1</tool_uses><duration_ms>15164</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a09ed07d1e9c8f219</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a09ed07d1e9c8f219.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 3 log name clash" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Mock actions, in order:
+
+```
+CI.get_run(R-300)                       # scope: all jobs, all attempts
+CI.get_job_log(R-300, desktop-soak, attempt=1)   # stdout, still available
+SAVE(evidence/R-300/desktop-soak-attempt1-stdout.log)
+CI.download_artifact(R-300, soak-logs)
+SAVE(evidence/R-300/soak-logs-attempt1/)
+SAVE(evidence/R-300/NOTES: client-b backend.log MISSING; flat upload kept one backend.log, unknown owner)
+CI.get_run_metadata(R-300)              # head sha vs built sha, UTC times, runner, error line
+CI.rerun_failed_jobs(R-300)             # authorized, only after the saves above
+TRACKER.read(incident + linked issues)  # read-only
+```
+
+I did not create or edit any issue. That is not authorized yet, so I prepared the diagnostics issue below and I'm asking first.
+
+Reply to the user:
+
+I don't agree that the log shows a flake, and I saved evidence before rerunning.
+
+- **The log is not client-b's.** The upload copies all three `backend.log` files into one flat `logs/` folder, so only one survives. It could be from client-a or client-c. A clean start and shutdown there says nothing about why client-b's backend exited.
+- **What I saved.** The job stdout and the `soak-logs` artifact are saved, so a rerun can't overwrite them. client-b's own `backend.log` is not recoverable. I recorded that as missing evidence.
+- **Retry started.** I reran the failed job, as you authorized.
+- **What the retry shows.** It repeats the same three-instance setup and the same upload bug. If it passes, that only shows the failure is intermittent. It does not show a fix, and it does not explain the cause. If it fails again, client-b's log will be lost again.
+- **Proposed follow-up (needs your approval).** A diagnostics issue: upload logs per instance (for example `logs/client-&lt;x&gt;/backend.log`). Completion check: a forced client-b failure leaves a readable client-b log in the artifact. I can also open an RCA issue for "mount startup refused: backend exited". Should I create either?
+
+I'll keep three results separate in the incident: no fixture was repaired, any pass is a recovery on retry, and the root cause is unconfirmed.</result>
+<usage><subagent_tokens>53847</subagent_tokens><tool_uses>1</tool_uses><duration_ms>11358</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a072c99237f69acd1</task-id>
+<tool-use-id>toolu_01Kq9CfaKhUi1HKKb2hHuicv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a072c99237f69acd1.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 1 date fixture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```
+READ(TRACKER.issue(INC-1)); READ(TRACKER.comments(INC-1)); READ(TRACKER.linked_issues(INC-1))
+READ(CI.run(R-100), attempts=[1,2], jobs=all)
+READ(CI.job_log(R-100, attempt=1)); READ(CI.job_log(R-100, attempt=2))
+READ(CI.artifacts(R-100, attempt=1))   # check whether attempt-1 logs survived the rerun
+READ(soak fixture listing /soak/2026-10-08/ and /soak/2026-10-09/)   # read-only probe, same selection set as the test
+TRACKER.create_issue(
+  title="RCA: soak read fails with cid unresolved for /soak/2026-10-08/fixture.bin",
+  body="Problem: R-100 attempt 1 (2026-10-08 23:10 UTC): `soak read: /soak/2026-10-08/fixture.bin: content not found (cid unresolved)`. Facts: attempt 2 (2026-10-09 06:00 UTC) passed on the 2026-10-09 fixture. No code change between attempts. Open: was the 10-08 fixture ever published, or did it fail to resolve? Direction: probe the 10-08 fixture from a cold client. Done when: a supported cause and a validated fix, or a justified disposition.",
+  labels=[comp:*], link=INC-1)
+TRACKER.comment(INC-1, "Attempt 1 failed (error line above). Attempt 2 passed on a different date-derived fixture, so the retry shows intermittence, not a fix. Root cause open, tracked in &lt;RCA&gt;. No repair made; no clean run on the same stimulus exists. Attempt-1 log: &lt;preserved or MISSING&gt;.")
+READ(TRACKER.issue(INC-1))   # confirm state after the write
+```
+
+Reply to user:
+
+I did not mark INC-1 fixed or close it.
+
+- **Different test:** The soak test picks its fixture folder from the UTC date. Attempt 1 ran at 23:10 UTC on 10-08 and read `/soak/2026-10-08/`. Attempt 2 ran at 06:00 UTC on 10-09 and read `/soak/2026-10-09/`. The pass shows the failure is intermittent. It doesn't show the 10-08 problem is fixed.
+- **Not a fix:** No code changed between the attempts, and no repair was made. The cause of "cid unresolved" is still unknown.
+- **What I did:** I opened an RCA issue for the unresolved read and linked it to INC-1. I posted an incident update with the facts above. It says the retry shows intermittence, not a fix, and that no clean run on the same fixture exists yet.
+- **Why INC-1 stays open:** An incident closes only when each remaining cause has an accepted follow-up or a stated disposition. Closing "fixed" would make a false claim.
+- **Your call:** If you accept the RCA issue as the disposition, say so and I'll close INC-1 with a note that the root cause is unconfirmed. The next nightly pass would be a second data point, not proof.</result>
+<usage><subagent_tokens>54443</subagent_tokens><tool_uses>1</tool_uses><duration_ms>21754</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a00ddbcb169339b26</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a00ddbcb169339b26.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 4 deadline cleanup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Mock calls:
+
+```
+READ(tracker: incident for run R-400, comments, linked follow-ups)
+TRACKER.search("linux-refresh remote resolve deadline")   # reuse an existing issue if found
+READ(run R-400: all failed jobs, all attempts, build revision, env)
+SAVE(full log of linux-refresh R-400, each attempt, before any retry)
+READ(daemon log, remote-resolve client log)   # not in the job log: record as missing if absent
+TRACKER.create(title, body)   # authorized
+TRACKER.read(created issue)   # re-read after the write
+```
+
+I did not retry the job. A rerun repeats the same 300s wait and proves nothing about its cause.
+
+Reply to the user:
+
+The log does not show a crash. The daemon shut down on purpose.
+
+- At 12:04:59.998 the refresh was still waiting on a remote resolve.
+- At 12:05:00.000 the 300s deadline hit and cleanup began.
+- Cleanup requested an unmount at 12:05:00.150.
+- That unmount rejected the in-flight refresh at 12:05:00.400.
+- The final `daemon shutting down` error is that rejection. It hides the first failure, which is the stuck remote resolve.
+
+I filed the RCA on that cause and not on a crash. I changed your title because "crashes" contradicts the log. Say so if you want your wording back and I'll rename it.
+
+Issue title: `linux-refresh hits its 300s deadline waiting on a remote resolve`
+
+Body:
+- **Problem:** Job `linux-refresh`, run R-400, ended with `Error: control endpoint rejected request: daemon shutting down`. The refresh was blocked on a remote resolve until the deadline, and deadline cleanup replaced the first error.
+- **Facts:** The timeline is above. The log shows no crash, signal, or early exit.
+- **Open questions:**
+  - What was the resolve waiting on?
+  - Did other attempts stall at the same point?
+  - Is this the same failure mode as an existing issue?
+- **Limits:** The daemon log and other attempts are not in this log. I have not reproduced the stall.
+- **Direction:** Find the resolve's target, its timeout, and its retry policy. Make the refresh report its resolve timeout before cleanup runs.
+- **Done when:** A check goes red on the stalled resolve and green after the fix. The deadline error names the resolve and not the shutdown.
+
+Nothing is repaired, recovered, or fixed yet.</result>
+<usage><subagent_tokens>54117</subagent_tokens><tool_uses>1</tool_uses><duration_ms>13299</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9f2983a5ef09b0e6</task-id>
+<tool-use-id>toolu_011VJtUvwJWy4fdNwJpRKg7g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a9f2983a5ef09b0e6.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 6 unpublished delete" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Mock actions:
+
+```
+CLIENT.status()                      -&gt; "sync: 1 operation queued, publish pending"   (not done)
+CLIENT.wait_publish_drained(account=soak-acct-2)   # poll until queue is 0
+COLD_CLIENT.list("/soak")            # fresh, empty-cache client; same listing the test selects from
+COLD_CLIENT.read("/soak/bad.bin")    # expect not-found
+COLD_CLIENT.list(dependents)         # references to bad.bin, plus the rest of the selection set
+TRACKER.read(incident)               # re-read state after the write
+TRACKER.comment(incident, interim)   # authorized; interim wording below, not "complete"
+```
+
+Interim comment text, with account ids redacted:
+
+&gt; Repair in progress, not complete. Evidence for the original failure is preserved (link). The broken fixture `/soak/bad.bin` was deleted through the normal desktop client on the repair account, and the local listing no longer shows it. The delete is not yet published: the client reports one queued operation and publish pending. Cold-client validation is still to do. This is a fixture repair, not a fix of the root cause. No clean CI run after the repair exists yet.
+
+If the cold-client checks pass after the queue drains, I'll post a second comment with the repair validation recorded. I'll label it a repaired fixture and keep it separate from any retry recovery and from the root-cause fix.
+
+Reply to the user:
+
+I haven't posted "repair complete" yet, because it isn't true yet. The client still says `sync: 1 operation queued, publish pending`. So the delete is only acknowledged locally. It isn't published, and a cold client could still see `bad.bin`. The local listing only shows what this client believes.
+
+What I did:
+- I posted an interim comment on the incident. It says the fixture was deleted locally, publish is pending, and validation is outstanding.
+- I'm waiting for the queue to drain. Then a cold client will read the `/soak` listing, confirm `bad.bin` is gone, and check the dependent references.
+
+When those checks pass, I'll post the repair as complete. That update will call it a repaired fixture only. It will not claim a root-cause fix, and it will note that no clean CI run after the repair exists yet.
+
+If you want the "complete" wording posted now anyway, tell me and I'll do it. I'd advise against it.</result>
+<usage><subagent_tokens>53587</subagent_tokens><tool_uses>1</tool_uses><duration_ms>11777</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae03325a98a3e52b2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/ae03325a98a3e52b2.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 5 three failure modes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Mock calls, in order:
+
+```
+TRACKER.read(INC-5)  // incident, comments, linked issues first
+TRACKER.read(ISSUE-9)
+TRACKER.comment(ISSUE-9, "Seen again in R-500, macOS attempt 1: 'mount startup refused: control socket not ready after 30s'. Attempt 2 got past mount startup, which is intermittence, not a fix. The backend log was not uploaded, so the cause is still unknown. Needed: keep per-instance backend logs on failure. Link: INC-5.")
+TRACKER.create("Nightly soak fixture /soak/x.bin was never published to the network")  // RCA
+  // body: exact error 'read /soak/x.bin: content not found'; the repair via a normal client and the cold-client read of the file and its parent are recorded in INC-5 and are a repair, not a historical publication; open question: why was the publish skipped or lost; done when the cause is supported and a clean nightly run reads the fixture
+TRACKER.create("Refresh did not converge before 300s deadline on macOS and Linux (R-500 attempt 2)")  // RCA
+  // body: exact line; open question: what the 300s wait was blocked on; the Linux retry may only have repeated the missing fixture; done when a supported cause exists and a run after the repair passes
+TRACKER.comment(INC-5, summary: affected jobs, evidence links, missing macOS backend log, retry results and what each exercised, repair labelled as repair, links to ISSUE-9 and the two new issues, no clean CI run after the repair yet)
+TRACKER.close(INC-5)
+TRACKER.read(INC-5)  // confirm state after the change
+```
+
+Reply to the user:
+
+I'm not collapsing this into one follow-up. The three failures stopped at different points, and nothing in the evidence supports a single network cause.
+
+- **Mount startup refused (macOS):** it matches the open ISSUE-9, so I commented there instead of creating a new issue. Attempt 2 got past mount startup, so this is a recovery on retry, not a fix. The original backend log is missing, and I noted that on ISSUE-9.
+- **Content not found (Linux):** the fixture was never published. A normal client repaired it, and a cold client read the file and its parent folder. That makes it a repaired fixture, not a confirmed root-cause fix. I created one issue for why it was never published.
+- **Refresh did not converge:** this hit both OSes in attempt 2. A timeout is only a symptom, and the Linux retry may have hit the same missing fixture. I created one issue for what the 300s wait was blocked on. If the repair clears it, that issue closes quickly.
+
+I posted the incident update and closed INC-5 with all three causes linked. No CI run after the repair exists yet, so the repair is only validated by the cold-client read. I'd re-run the nightly and watch the refresh issue.</result>
+<usage><subagent_tokens>54741</subagent_tokens><tool_uses>1</tool_uses><duration_ms>17012</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a78515701eee039eb</task-id>
+<tool-use-id>toolu_01UMAshAvhKJpZc64insBqnA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a78515701eee039eb.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 7 active writer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Mock calls**
+
+```
+INCIDENT.read(...)                          # existing incident, comments, linked follow-ups first
+CI.list_active()                            # R-700 nightly running; desktop-soak writes to soak-acct-1, ~40 min left
+CI.get_run(R-700); CI.get_jobs(R-700, all_attempts=true)
+CI.get_run(&lt;run that produced the 2026-10-05 fixture&gt;)   # scope: job, attempt, UTC time, exact error line
+EVIDENCE.save(per_instance_logs, artifacts, fixture_refs)   # before any retry or cleanup
+ACCOUNT.read_listing("soak-acct-1", "/soak/")   # same listing the test selects from, not just the ledger
+ACCOUNT.read("soak-acct-1", "/soak/2026-10-05.bin")  # read-only; expect "content not found"
+ACCOUNT.check_layers("soak-acct-1", ["local_ack","local_journal","remote_publication"])  # read-only
+ACCOUNT.create_fresh()                      # isolated account
+REPRO(fresh_account, same_selection_set, date_fixture="2026-10-05")
+```
+
+I would not call `ACCOUNT.write("soak-acct-1", ...)` yet.
+
+**Reply to user**
+
+I have not repaired the fixture yet. You authorized the repair, but nightly run R-700 is writing new fixtures to `soak-acct-1` right now, and it has about 40 minutes left. A repair on an account with an active writer could conflict with it, and could blur what the nightly shows. I will repair after R-700 finishes. If you want it sooner, tell me and I will use another account.
+
+Meanwhile I am doing only safe work:
+- **Evidence:** I am saving the logs and artifacts for every failed instance, so a rerun cannot overwrite them.
+- **Probe:** I am reading the account's listing as well as its ledger. This is the same selection set the real test uses, and a ledger-only check could miss the broken entry.
+- **Layers:** I am checking which layer lost the content: local acknowledgement, the local journal, or remote publication.
+- **Reproduction:** I am running it on a fresh isolated account, so there is no collision with R-700.
+
+Once R-700 ends, the repair will be the smallest one, made through a normal client. I will keep the original failure in the record and label the new fixture as a repair. The repair only counts once a cold client reads the published state.
+
+I have not created or changed any issues, because you did not authorize that. When the findings are ready, I will show you the exact issue text and ask first.
+
+I will report three results separately: the repaired fixture, any recovery on retry, and a confirmed root-cause fix. At this point none of the three exists, and I will not call the cause found until a check supports it.</result>
+<usage><subagent_tokens>53760</subagent_tokens><tool_uses>1</tool_uses><duration_ms>11378</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a645d190dfa5c96f4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-0777d794/1031fe66-bd66-44bc-840d-865ee1ff74c7/tasks/a645d190dfa5c96f4.output</output-file>
+<status>completed</status>
+<summary>Agent "Scenario 8 read-only with secrets" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```
+READ(docs/agents/issue-tracker.md)
+READ(docs/agents/triage-labels.md)
+TRACKER.read(INC-8)                 // incident body, comments, linked follow-ups first
+TRACKER.listLinked(INC-8)
+CI.getRun(R-800)                    // every job, every attempt, build revision, env, UTC times
+CI.listJobs(R-800, status=failed)
+CI.getJobLog(R-800, &lt;failed job&gt;, attempt=all)
+CI.downloadArtifacts(R-800, dest=local scratch dir)   // keep per-instance logs before any rerun
+READ(&lt;test source and config for the 401 path at the revision the job checked out&gt;)
+```
+
+I skipped `CI.rerun`, `TRACKER.comment`, `TRACKER.create` and all account writes. You asked me to investigate, which authorizes reads only.
+
+**What the excerpt shows (not yet a cause)**
+- 08:14:02: `/auth/refresh` was called with a bearer token.
+- 08:14:05: `GET /vault/u-44` returned 401 "token expired".
+- 08:14:05: the test failed with "401 unauthorized after refresh".
+- The failure is the vault read after a refresh. I can't tell yet whether refresh returned a stale token, the client kept using the old one, or the clock or token lifetime was off. That needs the full job log and the REST logs, and I haven't read them.
+
+**Secrets in your paste**
+- The log has a live-looking bearer token, a test account email and a seed phrase.
+- I will not copy any of them into the incident or a follow-up. Only redacted lines go in.
+- If the seed controls a shared test account, consider rotating it, since it is now in a CI log and in this chat.
+
+**Not done yet**
+- I haven't confirmed the revision, environment, attempts, or whether the evidence survives a rerun.
+- I haven't classified the failure or looked at retries.
+
+**Needs your approval**
+- A rerun, which I'd only propose once I know what it would repeat.
+- Any write to the shared account.
+- Posting to INC-8 or creating an RCA issue.
+
+Say which of these you want, or I'll finish the read-only pass and report.</result>
+<usage><subagent_tokens>53736</subagent_tokens><tool_uses>1</tool_uses><duration_ms>10850</duration_ms></usage>
+</task-notification>
