@@ -1,5 +1,4 @@
-# The staging Grafana dashboard push. Its own workflow so a tag run provisions
-# it beside Staging E2E rather than in the deploy that Staging E2E waits on.
+# Pushes the staging Grafana dashboard.
 name: Provision Grafana Dashboard
 
 on:
@@ -9,6 +8,9 @@ on:
         description: 'The revision whose dashboard JSON is pushed'
         required: true
         type: string
+    secrets:
+      GRAFANA_API_KEY:
+        required: true
 
 permissions: {}
 
@@ -16,7 +18,7 @@ jobs:
   provision-dashboard:
     name: Provision Grafana Dashboard
     runs-on: ubuntu-latest
-    environment: staging
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -36,27 +38,40 @@ jobs:
           : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
           : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
           GRAFANA_URL="${GRAFANA_URL%/}"
-          MAX_ATTEMPTS="${MAX_ATTEMPTS:-30}"
-          INTERVAL="${INTERVAL:-10}"
+          # One deadline bounds every request and wait. The floor of 1 matters:
+          # curl reads --max-time 0 as no limit.
+          DEADLINE=300
+          REQUEST_MAX=15
+          INTERVAL=10
+          cap() {
+            local left=$((DEADLINE - SECONDS))
+            (( left < $1 )) || left=$1
+            (( left >= 1 )) || left=1
+            echo "$left"
+          }
           HTTP_CODE=000
-          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
-            curl -sS --connect-timeout 10 --max-time 15 -o /dev/null \
+          attempt=0
+          while (( SECONDS < DEADLINE )); do
+            attempt=$((attempt + 1))
+            curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" -o /dev/null \
               "${GRAFANA_URL}/login?disableAutoLogin=true" >/dev/null 2>&1 || true
-            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 15 \
+            (( SECONDS < DEADLINE )) || break
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" \
               -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
               "${GRAFANA_URL}/api/health") || HTTP_CODE=000
             if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "Grafana Cloud is ready (attempt $i/$MAX_ATTEMPTS)"
+              echo "Grafana Cloud is ready (attempt $attempt, ${SECONDS}s)"
               exit 0
             elif [[ "$HTTP_CODE" =~ ^(401|403)$ ]]; then
               echo "::error::Grafana returned HTTP $HTTP_CODE — check GRAFANA_URL and GRAFANA_API_KEY"
               exit 1
             fi
-            echo "Grafana not ready (HTTP $HTTP_CODE), waiting ${INTERVAL}s... ($i/$MAX_ATTEMPTS)"
-            sleep "$INTERVAL"
+            (( SECONDS < DEADLINE )) || break
+            echo "Grafana not ready (HTTP $HTTP_CODE, attempt $attempt, ${SECONDS}s of ${DEADLINE}s)"
+            sleep "$(cap "$INTERVAL")"
           done
-          echo "::error::Grafana Cloud did not become ready after $((MAX_ATTEMPTS * INTERVAL))s (last HTTP $HTTP_CODE). A sleeping instance answers 404 or 503 and wakes in 1-2 minutes; a 404 that persists can also be a wrong GRAFANA_URL."
+          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE). A sleeping instance answers 404 or 503 and wakes in 1-2 minutes; a 404 for the whole wait more likely means a wrong GRAFANA_URL."
           exit 1
 
       - name: Push dashboard to Grafana Cloud

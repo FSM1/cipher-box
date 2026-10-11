@@ -140,7 +140,8 @@ jobs:
       staging_tag: ${{ needs.tag-staging.outputs.staging_tag }}
     secrets: inherit
 
-  # Beside Staging E2E, so a dashboard failure fails the run but skips no e2e.
+  # Its own job beside Staging E2E, not inside the deploy that Staging E2E
+  # needs: a dashboard failure fails the run but skips no e2e.
   dashboard:
     name: Provision Grafana Dashboard
     needs: [resolve-main, deploy]
@@ -149,7 +150,8 @@ jobs:
     uses: ./.github/workflows/provision-dashboard.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
-    secrets: inherit
+    secrets:
+      GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
 
   # The deploy carries no health gate of its own, so this run is both the
   # release verdict and the first signal that the containers came up.

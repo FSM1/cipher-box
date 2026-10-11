@@ -407,7 +407,7 @@ jobs:
             # Cleanup old images
             docker image prune -f
 
-  # A tag run provisions the dashboard from tag-staging.yml, beside Staging E2E.
+  # A dispatch only; a tag run provisions it from tag-staging.yml.
   provision-dashboard:
     name: Provision Grafana Dashboard
     needs: [deploy-vps]
@@ -417,4 +417,5 @@ jobs:
     uses: ./.github/workflows/provision-dashboard.yml
     with:
       ref: ${{ github.sha }}
-    secrets: inherit
+    secrets:
+      GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
