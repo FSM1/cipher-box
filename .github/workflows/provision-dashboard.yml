@@ -38,6 +38,11 @@ jobs:
           : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
           : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
           GRAFANA_URL="${GRAFANA_URL%/}"
+          # The key goes through a 0600 header file, never curl's argv.
+          AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
+          trap 'rm -f "$AUTH_HEADER"' EXIT
+          chmod 600 "$AUTH_HEADER"
+          printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
           # One deadline bounds every request and wait. The floor of 1 matters:
           # curl reads --max-time 0 as no limit.
           DEADLINE=300
@@ -58,7 +63,7 @@ jobs:
             (( SECONDS < DEADLINE )) || break
             HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" \
               -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
+              -H @"$AUTH_HEADER" \
               "${GRAFANA_URL}/api/health") || HTTP_CODE=000
             if [[ "$HTTP_CODE" == "200" ]]; then
               echo "Grafana Cloud is ready (attempt $attempt, ${SECONDS}s)"
@@ -87,6 +92,10 @@ jobs:
           : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
           : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
           GRAFANA_URL="${GRAFANA_URL%/}"
+          AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
+          trap 'rm -f "$AUTH_HEADER"' EXIT
+          chmod 600 "$AUTH_HEADER"
+          printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
 
           # The dashboard JSON uses __inputs for datasource templating.
           DASHBOARD=$(cat docker/grafana/dashboards/cipherbox-staging.json \
@@ -114,7 +123,7 @@ jobs:
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
             -o /tmp/grafana-response.json -w "%{http_code}" \
             -X POST "${GRAFANA_URL}/api/dashboards/db" \
-            -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
+            -H @"$AUTH_HEADER" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
