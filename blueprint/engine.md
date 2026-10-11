@@ -812,11 +812,13 @@ delete does (ADR 0043).
   `UnsupportedTarget` / `delete-target-is-a-scope-root`. The command uses every
   root this session knows: proved roots, minted roots, and named roots without
   material. A folder stays a scope root after its last grant is revoked, so
-  the refusal still applies. A scope root is neither binned nor hard-deleted.
+  the refusal still applies. A scope root is neither binned nor hard-deleted,
+  so a folder whose subtree holds a known scope root is refused the same way.
 - **An unknown folder can queue offline.** A queued delete whose target is in
   the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
   target and reason sent to the host. Before any other queued delete
-  publishes, the drain must prove the target's plane from its current record.
+  publishes, the drain must prove the target's plane from its current record,
+  and then the plane of each node below it, under the same rules.
   A missing index entry does not prove that the target is a plain folder. A
   target record with a grant section dead-letters the same way. A plain record
   that arrives while an endpoint failed is not a proof, because that endpoint

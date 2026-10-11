@@ -4209,6 +4209,24 @@ fn answers_as_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[Nod
     node == rendered.root || scope_roots.contains(&node)
 }
 
+/// Whether a known scope root sits below `node` by any link, which is every
+/// link a delete's re-key or doomed walk follows.
+fn holds_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> bool {
+    let mut seen = BTreeSet::from([node]);
+    let mut pending = vec![node];
+    while let Some(folder) = pending.pop() {
+        for child in rendered.children(folder) {
+            if scope_roots.contains(&child.id) {
+                return true;
+            }
+            if seen.insert(child.id) {
+                pending.push(child.id);
+            }
+        }
+    }
+    false
+}
+
 /// A rename leaves the child count alone and moves the listing's bytes, so the
 /// count arm of [`refuse_full_parent`] never fires for one. Refused here, where
 /// the caller learns it, rather than at the drain's oversized re-seal.
@@ -7753,7 +7771,10 @@ where {
                 if home == WriteHome::Vault {
                     refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
                     // A scope root's seed and grant section are not its parent's plane.
-                    if answers_as_a_scope_root(&rendered, node, &self.state.known_scope_roots()) {
+                    let scope_roots = self.state.known_scope_roots();
+                    if answers_as_a_scope_root(&rendered, node, &scope_roots)
+                        || holds_a_scope_root(&rendered, node, &scope_roots)
+                    {
                         return Err(EngineError::UnsupportedTarget {
                             check: "delete-target-is-a-scope-root",
                         });

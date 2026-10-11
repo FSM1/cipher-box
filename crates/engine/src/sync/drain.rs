@@ -4793,7 +4793,8 @@ where
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
         if !scope.is_grafted() {
-            self.prove_delete_plane(scope, pass, &plane, &child).await?;
+            self.prove_delete_plane(scope, pass, &plane, origin, &child)
+                .await?;
         }
 
         // The soft branch earns its bin entry and its re-key before the unlink;
@@ -4903,14 +4904,57 @@ where
         Ok(())
     }
 
-    /// An index can omit a scope root, so only the target's own record proves its plane.
+    /// An index can omit a scope root, so only each subtree node's own record
+    /// proves its plane. A scope root below the target is refused like the
+    /// target itself: the bin and the doomed walk would strand its scope.
     async fn prove_delete_plane(
         &self,
         scope: &DrainScope<'_>,
         pass: &Pass,
         plane: &SealPlane<'_>,
-        child: &ChildRef,
+        origin: NodeId,
+        target: &ChildRef,
     ) -> Result<(), Halt> {
+        // Child refs are wire data, so a cycle back to the parent is reachable.
+        let mut seen = BTreeSet::from([origin.0]);
+        let mut pending = vec![target.clone()];
+        while let Some(child) = pending.pop() {
+            if !seen.insert(child.id) {
+                continue;
+            }
+            if scope.known_scope_roots.contains(&NodeId(child.id)) {
+                return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
+            }
+            let body = self
+                .prove_node_plane(scope, pass, plane, NodeId(target.id), &child)
+                .await?;
+            if let ReadBody::Folder { children, .. } = body {
+                // The doomed walk's file arm: a ref kind is authored by any
+                // write-seed holder, so only a kind this device's own state
+                // confirms skips the proof.
+                let base = self.cells.base.borrow();
+                pending.extend(children.into_iter().filter(|child| {
+                    child.kind == NodeKind::Folder
+                        || !base
+                            .node(NodeId(child.id))
+                            .is_some_and(|meta| meta.kind == crate::facade::NodeKind::File)
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    /// One subtree node's plane, proved from its current record, and its body.
+    /// A node an interrupted soft delete already sealed into the bin opens
+    /// under `target`'s held key.
+    async fn prove_node_plane(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        plane: &SealPlane<'_>,
+        target: NodeId,
+        child: &ChildRef,
+    ) -> Result<ReadBody, Halt> {
         let name = crate::net::rotation::scope_name(&child.ipns_name)
             .map_err(|_| Halt::DeletePlaneUnavailable)?;
         let (_, bytes, endpoint_failed) = fanout_get_verify_failed(&self.seams.transport, &name)
@@ -4974,28 +5018,27 @@ where
         .map_err(|_| Halt::DeletePlaneUnavailable)?;
         let adopter = self.child_adopter(plane, &floors, NodeId(child.id));
         match adopter.open_interior_under(&name, &bytes, &seed).await {
-            Ok(_) => Ok(()),
+            Ok((adopted, _)) => Ok(adopted.read_body),
             Err(
                 error @ GateError::Rejected(GateRejection {
                     stage: GateStage::Unseal,
                     ..
                 }),
             ) => {
-                // An interrupted soft delete may already have sealed the target into the bin.
                 let index = self.carried_bin_index().await?;
                 let entry = index
                     .entries
                     .iter()
-                    .find(|entry| entry.node_id == child.id && entry.scope_id == plane.end.root.0);
+                    .find(|entry| entry.node_id == target.0 && entry.scope_id == plane.end.root.0);
                 let Some(entry) = entry else {
                     return Err(fault(error));
                 };
-                let held = self.inputs.bin_keys.held_key(&child.id, entry.deleted_at);
-                adopter
+                let held = self.inputs.bin_keys.held_key(&target.0, entry.deleted_at);
+                let (adopted, _) = adopter
                     .open_interior_under(&name, &bytes, &held)
                     .await
                     .map_err(fault)?;
-                Ok(())
+                Ok(adopted.read_body)
             }
             Err(error) => Err(fault(error)),
         }

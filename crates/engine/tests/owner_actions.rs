@@ -577,6 +577,16 @@ struct GrantScenario {
 
 impl GrantScenario {
     fn new() -> Self {
+        Self::with_folder_under(None).0
+    }
+
+    /// The scenario with the folder to grant inside a plain folder `outer`,
+    /// which this answers beside it.
+    fn nested() -> (Self, NodeId) {
+        Self::with_folder_under(Some("outer"))
+    }
+
+    fn with_folder_under(outer: Option<&str>) -> (Self, NodeId) {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         seed_vault(&world, &blocks, Vec::new());
@@ -585,9 +595,12 @@ impl GrantScenario {
         let owner_device = world.device(&owner_identity().verifying_key().to_sec1());
         let recipient_device = world.device(&recipient_identity().verifying_key().to_sec1());
         let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &owner_device);
-        let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "shared");
+        let parent = outer.map_or(ROOT, |name| {
+            create_published_folder(&world, &mut engine, &mut tasks, ROOT, name)
+        });
+        let folder = create_published_folder(&world, &mut engine, &mut tasks, parent, "shared");
         import_recipient(&mut engine);
-        Self {
+        let fx = Self {
             world,
             blocks,
             owner_device,
@@ -596,7 +609,8 @@ impl GrantScenario {
             _events,
             _tasks: tasks,
             folder,
-        }
+        };
+        (fx, parent)
     }
 
     fn grant_folder_to_recipient(&mut self) -> Result<CommandOutcome, EngineError> {
@@ -5911,8 +5925,12 @@ fn an_offline_delete_of_a_plain_folder_queues_and_waits_for_its_plane() {
 }
 
 fn stage_legacy_folder_delete(fx: &GrantScenario) -> cipherbox_engine::seams::OpId {
+    stage_legacy_delete(fx, fx.folder)
+}
+
+fn stage_legacy_delete(fx: &GrantScenario, node: NodeId) -> cipherbox_engine::seams::OpId {
     let enc = kdf::enc_subkey(&SECRET);
-    let sequence = sequence_at(&fx.world, &write_name(fx.folder));
+    let sequence = sequence_at(&fx.world, &write_name(node));
     block_on(cipherbox_engine::sync::stage_op(
         &fx.owner_device.staging_store,
         cipherbox_engine::sync::RecordSeal {
@@ -5920,7 +5938,7 @@ fn stage_legacy_folder_delete(fx: &GrantScenario) -> cipherbox_engine::seams::Op
             ephemeral_scalar: Zeroizing::new([0x6a; 32]),
         },
         &cipherbox_engine::sync::Op::delete(
-            fx.folder,
+            node,
             sequence,
             fx.world.scheduler.now(),
             sequence,
@@ -6271,6 +6289,195 @@ fn a_queued_delete_loses_to_a_grant_on_another_owner_device() {
                 .any(|child| child.id == fx.folder)
         );
     }
+}
+
+fn set_retention(fx: &mut GrantScenario, retention: u32) {
+    block_on(fx.engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            bin_retention_days: retention,
+            ..VaultSettings::default()
+        },
+    }))
+    .expect("the retention choice publishes");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// Every record on every endpoint, as its endpoint, name and bytes.
+fn every_record(world: &FakeWorld) -> Vec<(EndpointId, String, Option<Vec<u8>>)> {
+    let mut records = Vec::new();
+    for endpoint in world.record_store.endpoints() {
+        for name in world.record_store.routing_keys(&endpoint) {
+            let record = world.record_store.record_at(&endpoint, &name);
+            records.push((endpoint.clone(), name, record));
+        }
+    }
+    records
+}
+
+/// `outer` still holds the granted folder, and the grant still stands.
+fn assert_nested_scope_intact(fx: &GrantScenario, outer: NodeId) {
+    let view = block_on(fx.engine.view()).unwrap();
+    assert!(view.children(ROOT).iter().any(|child| child.id == outer));
+    assert!(
+        view.children(outer)
+            .iter()
+            .any(|child| child.id == fx.folder)
+    );
+    assert!(!fx.folder_section().commitment.entries.is_empty());
+}
+
+#[test]
+fn deleting_a_folder_that_holds_a_granted_scope_root_refuses_before_any_publish() {
+    for retention in [0, 30] {
+        let (mut fx, outer) = GrantScenario::nested();
+        assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        set_retention(&mut fx, retention);
+        events_so_far(&mut fx._events);
+
+        let before = every_record(&fx.world);
+        assert_eq!(
+            block_on(fx.engine.command(Command::Delete { node: outer })),
+            Err(EngineError::UnsupportedTarget {
+                check: "delete-target-is-a-scope-root",
+            }),
+            "retention {retention}"
+        );
+        assert_eq!(
+            every_record(&fx.world),
+            before,
+            "the refusal publishes nothing"
+        );
+        assert_eq!(queued_ops(&fx.owner_device), 0, "no delete is queued");
+        for _ in 0..12 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        assert_eq!(abuse_events(&mut fx._events), 0);
+        assert!(published_bin_entries(&fx).is_empty());
+        assert_nested_scope_intact(&fx, outer);
+    }
+}
+
+/// The queued delete reaches its subtree only at the drain, which proves each
+/// descendant's plane before it bins or enumerates anything.
+#[test]
+fn a_queued_delete_of_a_folder_loses_to_a_grant_inside_it() {
+    for retention in [0, 30] {
+        let (mut fx, outer) = GrantScenario::nested();
+        set_retention(&mut fx, retention);
+        for _ in 0..4 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+            .expect("the delete queues")
+            .op_id()
+            .unwrap();
+        let peer = fx.world.device(b"peer owner device");
+        let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+        import_recipient(&mut engine);
+        // The peer has to load `outer` before it can name the folder inside it.
+        navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+        assert_eq!(
+            block_on(engine.command(Command::Grant {
+                node: fx.folder,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done)
+        );
+        events_so_far(&mut fx._events);
+        let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
+        for _ in 0..12 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+
+        assert_eq!(queued_ops(&fx.owner_device), 0, "retention {retention}");
+        let events = events_so_far(&mut fx._events);
+        assert_eq!(abuse_events_in(&events), 0, "retention {retention}");
+        assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+        let status = block_on(fx.engine.status()).unwrap();
+        assert_eq!(status.dead_letters.len(), 1);
+        assert_eq!(
+            status.dead_letters[0].reason,
+            DeadLetterReason::TargetIsScopeRoot
+        );
+        assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
+        assert!(published_bin_entries(&fx).is_empty());
+        assert!(retired(&fx.owner_device).is_empty());
+        assert_nested_scope_intact(&fx, outer);
+    }
+}
+
+#[test]
+fn a_folder_with_a_plain_subtree_still_deletes() {
+    for retention in [0, 30] {
+        let (mut fx, outer) = GrantScenario::nested();
+        create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            fx.folder,
+            "grand",
+        );
+        set_retention(&mut fx, retention);
+        assert!(
+            block_on(fx.engine.command(Command::Delete { node: outer }))
+                .expect("a plain folder deletes")
+                .op_id()
+                .is_some()
+        );
+        for _ in 0..4 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        assert_eq!(queued_ops(&fx.owner_device), 0, "retention {retention}");
+        assert!(
+            block_on(fx.engine.status())
+                .unwrap()
+                .dead_letters
+                .is_empty()
+        );
+        assert_eq!(abuse_events(&mut fx._events), 0);
+        assert!(
+            !block_on(fx.engine.view())
+                .unwrap()
+                .children(ROOT)
+                .iter()
+                .any(|child| child.id == outer)
+        );
+        let binned = published_bin_entries(&fx);
+        if retention == 0 {
+            assert!(binned.is_empty());
+        } else {
+            assert_eq!(binned.len(), 1);
+            assert_eq!(binned[0].node_id, outer.0);
+        }
+    }
+}
+
+/// A known root below the target refuses the queued delete with no read of
+/// its record, so an unreachable record does not hold the queue.
+#[test]
+fn a_restarted_delete_of_a_folder_over_a_named_unproved_root_dead_letters() {
+    let (mut fx, outer) = GrantScenario::nested();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let op_id = stage_legacy_delete(&fx, outer);
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+    restart_owner(&mut fx);
+    for _ in 0..16 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&events), 0);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(block_on(fx.engine.status()).unwrap().queue_hold, None);
+    assert!(published_bin_entries(&fx).is_empty());
 }
 
 /// Every retire entry this device sent, as the record it names and its
