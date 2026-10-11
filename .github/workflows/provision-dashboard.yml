@@ -26,9 +26,9 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+          sparse-checkout: docker/grafana/dashboards
 
-      # An idle instance sleeps and answers /api/health with 404 or 503 until a
-      # page load wakes it; /api/health alone does not (docker/MONITORING.md).
+      # The login GET wakes a sleeping instance (docker/MONITORING.md).
       - name: Wait for Grafana Cloud readiness
         env:
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
@@ -53,8 +53,8 @@ jobs:
           attempt=0
           while (( SECONDS < DEADLINE )); do
             attempt=$((attempt + 1))
-            curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" -o /dev/null \
-              "${GRAFANA_URL}/login?disableAutoLogin=true" >/dev/null 2>&1 || true
+            curl -s --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" -o /dev/null \
+              "${GRAFANA_URL}/login?disableAutoLogin=true" || true
             (( SECONDS < DEADLINE )) || break
             HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" \
               -o /dev/null -w "%{http_code}" \
@@ -71,7 +71,7 @@ jobs:
             echo "Grafana not ready (HTTP $HTTP_CODE, attempt $attempt, ${SECONDS}s of ${DEADLINE}s)"
             sleep "$(cap "$INTERVAL")"
           done
-          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE). A sleeping instance answers 404 or 503 and wakes in 1-2 minutes; a 404 for the whole wait more likely means a wrong GRAFANA_URL."
+          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE); a 404 for the whole wait suggests a wrong GRAFANA_URL"
           exit 1
 
       - name: Push dashboard to Grafana Cloud
@@ -89,7 +89,6 @@ jobs:
           GRAFANA_URL="${GRAFANA_URL%/}"
 
           # The dashboard JSON uses __inputs for datasource templating.
-          # Replace variable references with actual datasource UIDs.
           DASHBOARD=$(cat docker/grafana/dashboards/cipherbox-staging.json \
             | jq --arg metrics "$DS_METRICS_UID" --arg logs "$DS_LOGS_UID" \
                  'del(.__inputs)
@@ -100,21 +99,18 @@ jobs:
                               else .uid end)
                     else . end)')
 
-          # Fail if any datasource placeholder survived the rewrite
           if jq -e '.. | objects | .uid? | select(type == "string" and test("^\\$\\{DS_"))' \
             >/dev/null <<<"$DASHBOARD"; then
             echo "::error::Unresolved datasource placeholder(s) remain in dashboard JSON"
             exit 1
           fi
 
-          # Wrap in import payload
           PAYLOAD=$(jq -n --argjson dashboard "$DASHBOARD" '{
             dashboard: $dashboard,
             overwrite: true,
-            message: "Provisioned by deploy-staging workflow"
+            message: "Provisioned by provision-dashboard workflow"
           }')
 
-          # Push to Grafana API
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
             -o /tmp/grafana-response.json -w "%{http_code}" \
             -X POST "${GRAFANA_URL}/api/dashboards/db" \
