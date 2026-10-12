@@ -6534,11 +6534,26 @@ fn a_delete_probes_a_nested_scope_root_mislabeled_as_a_file() {
     let events = events_so_far(&mut fx._events);
     assert!(published_bin_entries(&fx).is_empty(), "nothing is binned");
     assert!(dead_lettered_as_scope_root(&events, op_id, outer));
-    let abuse: Vec<_> = events
-        .iter()
-        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
-        .collect();
-    assert!(abuse.is_empty(), "{abuse:?}");
+    assert_eq!(abuse_events_in(&events), 0);
+}
+
+/// The op id of a queued delete of `target`, with a create queued behind it.
+fn queue_delete_then_create(
+    fx: &mut GrantScenario,
+    target: NodeId,
+    later: &str,
+) -> cipherbox_engine::seams::OpId {
+    let op_id = block_on(fx.engine.command(Command::Delete { node: target }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: later.into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a later create queues");
+    op_id
 }
 
 /// A descendant whose record no endpoint serves, or one endpoint withholds,
@@ -6556,16 +6571,7 @@ fn assert_a_withheld_descendant_holds_the_delete(one_endpoint: bool) {
         } else {
             fx.world.record_store.fail_get_for(name.as_str());
         }
-        let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
-            .expect("the delete queues")
-            .op_id()
-            .unwrap();
-        block_on(fx.engine.command(Command::Create {
-            parent: ROOT,
-            name: "behind the held delete".into(),
-            kind: NodeKind::Folder,
-        }))
-        .expect("a later create queues");
+        let op_id = queue_delete_then_create(&mut fx, outer, "behind the held delete");
         let before = every_record(&fx.world);
         for _ in 0..16 {
             tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -6626,16 +6632,7 @@ fn a_delete_holds_while_one_endpoint_withholds_a_descendant() {
 fn assert_an_unprovable_descendant_charges_the_delete(plant: impl FnOnce(&GrantScenario)) {
     let (mut fx, outer) = GrantScenario::nested();
     plant(&fx);
-    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
-        .expect("the delete queues")
-        .op_id()
-        .unwrap();
-    block_on(fx.engine.command(Command::Create {
-        parent: ROOT,
-        name: "after the charged delete".into(),
-        kind: NodeKind::Folder,
-    }))
-    .expect("a later create queues");
+    let op_id = queue_delete_then_create(&mut fx, outer, "after the charged delete");
     // The unattributed budget spends one charge per draining pass.
     serve_http(
         &fx.owner_device,

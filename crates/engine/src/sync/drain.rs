@@ -84,9 +84,9 @@ use crate::net::retire::{
 };
 use crate::net::signed_data;
 use crate::net::{
-    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
-    HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_classified, fanout_get_tied_classified, fanout_get_verify,
+    Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
+    HeldRecord, HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_answered, fanout_get_classified, fanout_get_verify,
     observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
@@ -4916,6 +4916,7 @@ where
         target: &ChildRef,
     ) -> Result<(), Halt> {
         // Child refs are wire data, so a cycle back to the parent is reachable.
+        let bin_target = NodeId(target.id);
         let mut seen = BTreeSet::from([origin.0]);
         let mut pending = vec![target.clone()];
         while let Some(child) = pending.pop() {
@@ -4926,13 +4927,13 @@ where
                 return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
             }
             let body = self
-                .prove_node_plane(scope, pass, plane, NodeId(target.id), &child)
+                .prove_node_plane(scope, pass, plane, bin_target, &child)
                 .await?;
             if let ReadBody::Folder { children, .. } = body {
                 pending.extend(
                     children
                         .into_iter()
-                        .filter(|child| !self.confirmed_file(NodeId(child.id))),
+                        .filter(|next| !self.confirmed_file(NodeId(next.id))),
                 );
             }
         }
@@ -4964,14 +4965,15 @@ where
     ) -> Result<ReadBody, Halt> {
         let name =
             crate::net::rotation::scope_name(&child.ipns_name).map_err(|_| Halt::Unclassified)?;
-        let fetch = fanout_get_tied_classified(&self.seams.transport, &name).await;
-        let endpoint_failed = fetch.endpoint_failed;
-        let Some((_, bytes, _)) = fetch.pick else {
-            return Err(if fetch.absent {
-                Halt::Unclassified
-            } else {
-                Halt::DeletePlaneUnavailable
-            });
+        let AnsweredFetch {
+            record,
+            endpoint_failed,
+            ..
+        } = fanout_get_answered(&self.seams.transport, &name).await;
+        let bytes = match record {
+            FanoutRecord::Found(_, bytes) => bytes,
+            FanoutRecord::Absent => return Err(Halt::Unclassified),
+            FanoutRecord::Unavailable(_) => return Err(Halt::DeletePlaneUnavailable),
         };
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
