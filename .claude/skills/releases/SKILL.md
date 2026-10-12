@@ -45,7 +45,7 @@ Every `gh` command uses `env -u GITHUB_TOKEN gh ... --repo FSM1/cipher-box`. In 
      -F 'environment_ids[]=<id>' -f state=approved -f comment='vX.Y.Z, approved by the owner'
    ```
 
-6. If "Provision Grafana Dashboard" fails with HTTP 404 on `/api/health`, the Grafana Cloud instance is asleep. The secrets are correct. Staging E2E needs the full deploy, so it does not run. Until the readiness step wakes the instance itself, wake it: open the instance login page in a browser session, or send an unauthenticated GET to `<instance>/login?disableAutoLogin=true`. The wake takes 1 to 2 minutes. Then run `env -u GITHUB_TOKEN gh run rerun <run-id> $R --failed`. Do not write the instance URL into an issue or a document.
+6. "Provision Grafana Dashboard" runs beside Staging E2E, so its failure does not stop Staging E2E. Its readiness step wakes a sleeping Grafana Cloud instance itself and waits up to 300 seconds. HTTP 401 or 403 means a wrong `GRAFANA_API_KEY`. A 404 for the full wait more likely means a wrong `GRAFANA_URL`. After the fix, re-run the failed jobs: `env -u GITHUB_TOKEN gh run rerun <run-id> $R --failed`. Do not write the instance URL into an issue or a document.
 7. If "Cross-Client E2E (macos)" fails on the second session, it is a known flake. Re-run the failed jobs one time.
 8. If the Staging E2E job fails, use the `staging-e2e-triage` skill before any re-run.
 

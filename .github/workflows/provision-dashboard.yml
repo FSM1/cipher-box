@@ -1,0 +1,135 @@
+# Pushes the staging Grafana dashboard.
+name: Provision Grafana Dashboard
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'The revision whose dashboard JSON is pushed'
+        required: true
+        type: string
+    secrets:
+      GRAFANA_API_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  provision-dashboard:
+    name: Provision Grafana Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+          sparse-checkout: docker/grafana/dashboards
+
+      # The login GET wakes a sleeping instance (docker/MONITORING.md).
+      - name: Wait for Grafana Cloud readiness
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
+          GRAFANA_URL="${GRAFANA_URL%/}"
+          # The key goes through a 0600 header file, never curl's argv.
+          AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
+          trap 'rm -f "$AUTH_HEADER"' EXIT
+          printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
+          # One deadline bounds every request and wait. The floor of 1 matters:
+          # curl reads --max-time 0 as no limit.
+          DEADLINE=300
+          REQUEST_MAX=15
+          INTERVAL=10
+          cap() {
+            local left=$((DEADLINE - SECONDS))
+            (( left < $1 )) || left=$1
+            (( left >= 1 )) || left=1
+            echo "$left"
+          }
+          HTTP_CODE=000
+          attempt=0
+          while (( SECONDS < DEADLINE )); do
+            attempt=$((attempt + 1))
+            curl -s --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" -o /dev/null \
+              "${GRAFANA_URL}/login?disableAutoLogin=true" || true
+            (( SECONDS < DEADLINE )) || break
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time "$(cap "$REQUEST_MAX")" \
+              -o /dev/null -w "%{http_code}" \
+              -H @"$AUTH_HEADER" \
+              "${GRAFANA_URL}/api/health") || HTTP_CODE=000
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "Grafana Cloud is ready (attempt $attempt, ${SECONDS}s)"
+              exit 0
+            elif [[ "$HTTP_CODE" =~ ^(401|403)$ ]]; then
+              echo "::error::Grafana returned HTTP $HTTP_CODE — check GRAFANA_URL and GRAFANA_API_KEY"
+              exit 1
+            fi
+            (( SECONDS < DEADLINE )) || break
+            echo "Grafana not ready (HTTP $HTTP_CODE, attempt $attempt, ${SECONDS}s of ${DEADLINE}s)"
+            sleep "$(cap "$INTERVAL")"
+          done
+          echo "::error::Grafana Cloud did not become ready after ${SECONDS}s (last HTTP $HTTP_CODE); 404 or 503 means asleep or still waking; 404 for the whole wait suggests a wrong GRAFANA_URL"
+          exit 1
+
+      - name: Push dashboard to Grafana Cloud
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          DS_METRICS_UID: ${{ vars.GRAFANA_DS_METRICS_UID }}
+          DS_LOGS_UID: ${{ vars.GRAFANA_DS_LOGS_UID }}
+        run: |
+          set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
+          : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
+          : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
+          GRAFANA_URL="${GRAFANA_URL%/}"
+          AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
+          trap 'rm -f "$AUTH_HEADER"' EXIT
+          printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
+
+          # The dashboard JSON uses __inputs for datasource templating.
+          DASHBOARD=$(cat docker/grafana/dashboards/cipherbox-staging.json \
+            | jq --arg metrics "$DS_METRICS_UID" --arg logs "$DS_LOGS_UID" \
+                 'del(.__inputs)
+                  | .id = null
+                  | walk(if type == "object" and .uid? and (.uid | test("\\$\\{DS_")) then
+                      .uid = (if .uid == "${DS_GRAFANA_CLOUD_METRICS}" then $metrics
+                              elif .uid == "${DS_GRAFANA_CLOUD_LOGS}" then $logs
+                              else .uid end)
+                    else . end)')
+
+          if jq -e '.. | objects | .uid? | select(type == "string" and test("^\\$\\{DS_"))' \
+            >/dev/null <<<"$DASHBOARD"; then
+            echo "::error::Unresolved datasource placeholder(s) remain in dashboard JSON"
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n --argjson dashboard "$DASHBOARD" '{
+            dashboard: $dashboard,
+            overwrite: true,
+            message: "Provisioned by provision-dashboard workflow"
+          }')
+
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
+            -o /tmp/grafana-response.json -w "%{http_code}" \
+            -X POST "${GRAFANA_URL}/api/dashboards/db" \
+            -H @"$AUTH_HEADER" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::Grafana API returned HTTP $HTTP_CODE"
+            cat /tmp/grafana-response.json
+            exit 1
+          fi
+
+          echo "Dashboard provisioned successfully (HTTP $HTTP_CODE)"
+          jq -r '.url // "unknown"' /tmp/grafana-response.json

@@ -48,6 +48,7 @@ The deploy workflow writes these into `.env.staging` on the VPS, where the Alloy
 - **Logs**: labeled with `service`, `container`, and `project`, then sent to Grafana Cloud Loki
 - **Metrics**: three scrape jobs at a 30 second interval, then sent to Grafana Cloud Mimir (Prometheus-compatible)
 - The two infra jobs pass a keep-list relabel first, so only a short set of series leaves the box
+- **Dashboard**: each staging deploy pushes it through `.github/workflows/provision-dashboard.yml`. An idle Grafana Cloud instance sleeps and answers `/api/health` with 404 or 503, so the readiness step sends an unauthenticated GET to `/login?disableAutoLogin=true` to wake it before each health poll
 
 ### 6. Import the dashboard
 
