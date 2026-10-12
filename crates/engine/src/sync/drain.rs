@@ -84,9 +84,9 @@ use crate::net::retire::{
 };
 use crate::net::signed_data;
 use crate::net::{
-    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
-    HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed,
+    Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
+    HeldRecord, HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_answered, fanout_get_classified, fanout_get_verify,
     observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
@@ -2695,8 +2695,9 @@ where
             return Ok(());
         }
 
-        // The command refuses the same set, so a delete queued before a grant
-        // leaves the same way whether or not this walk proved the root.
+        // The command refuses a target in the same set, so a delete queued
+        // before a grant leaves the same way whether or not this walk proved
+        // the root.
         let refused: Vec<(OpId, DeadLetterReason)> = queued
             .iter()
             .filter(|(_, op)| deletes_a_known_scope_root(scope, op))
@@ -4793,7 +4794,8 @@ where
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
         if !scope.is_grafted() {
-            self.prove_delete_plane(scope, pass, &plane, &child).await?;
+            self.prove_delete_plane(scope, pass, &plane, origin, &child)
+                .await?;
         }
 
         // The soft branch earns its bin entry and its re-key before the unlink;
@@ -4903,19 +4905,78 @@ where
         Ok(())
     }
 
-    /// An index can omit a scope root, so only the target's own record proves its plane.
+    /// An index can omit a scope root, so only each subtree node's own record
+    /// proves its plane. A scope root below the target is refused like the
+    /// target itself: the bin and the doomed walk would strand its scope.
     async fn prove_delete_plane(
         &self,
         scope: &DrainScope<'_>,
         pass: &Pass,
         plane: &SealPlane<'_>,
-        child: &ChildRef,
+        origin: NodeId,
+        target: &ChildRef,
     ) -> Result<(), Halt> {
-        let name = crate::net::rotation::scope_name(&child.ipns_name)
-            .map_err(|_| Halt::DeletePlaneUnavailable)?;
-        let (_, bytes, endpoint_failed) = fanout_get_verify_failed(&self.seams.transport, &name)
-            .await
-            .ok_or(Halt::DeletePlaneUnavailable)?;
+        // Child refs are wire data, so a cycle back to the parent is reachable.
+        let bin_target = NodeId(target.id);
+        let mut seen = BTreeSet::from([origin.0]);
+        let mut pending = vec![target.clone()];
+        while let Some(child) = pending.pop() {
+            if !seen.insert(child.id) {
+                continue;
+            }
+            if scope.known_scope_roots.contains(&NodeId(child.id)) {
+                return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
+            }
+            let body = self
+                .prove_node_plane(scope, pass, plane, bin_target, &child)
+                .await?;
+            if let ReadBody::Folder { children, .. } = body {
+                // A version projected before a grant survives a relabel, so
+                // a known root stays in the walk whatever the base calls it.
+                pending.extend(children.into_iter().filter(|next| {
+                    scope.known_scope_roots.contains(&NodeId(next.id))
+                        || !self.confirmed_file(NodeId(next.id))
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this device's own gate-passing state calls `node` a file. A ref
+    /// kind is authored by any write-seed holder and the base copies it, so
+    /// only a file body this device projected confirms it.
+    fn confirmed_file(&self, node: NodeId) -> bool {
+        self.cells.base.borrow().node(node).is_some_and(|meta| {
+            meta.kind == crate::facade::NodeKind::File && meta.content_version.is_some()
+        })
+    }
+
+    /// One subtree node's plane, proved from its current record, and its body.
+    /// A node an interrupted soft delete already sealed into the bin opens
+    /// under `bin_target`'s held key.
+    ///
+    /// Only a failed endpoint holds uncharged: a name every endpoint calls
+    /// vacant, or one this scope does not derive, has no proof to wait for.
+    async fn prove_node_plane(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        plane: &SealPlane<'_>,
+        bin_target: NodeId,
+        child: &ChildRef,
+    ) -> Result<ReadBody, Halt> {
+        let name =
+            crate::net::rotation::scope_name(&child.ipns_name).map_err(|_| Halt::Unclassified)?;
+        let AnsweredFetch {
+            record,
+            endpoint_failed,
+            ..
+        } = fanout_get_answered(&self.seams.transport, &name).await;
+        let bytes = match record {
+            FanoutRecord::Found(_, bytes) => bytes,
+            FanoutRecord::Absent => return Err(Halt::Unclassified),
+            FanoutRecord::Unavailable(_) => return Err(Halt::DeletePlaneUnavailable),
+        };
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
@@ -4963,7 +5024,7 @@ where
             return Err(Halt::DeletePlaneUnavailable);
         }
         if !names_this_scope(&plane.end, child) {
-            return Err(Halt::DeletePlaneUnavailable);
+            return Err(Halt::Unclassified);
         }
         let seed = seed_for_lagging(
             plane.end.root.0,
@@ -4974,28 +5035,29 @@ where
         .map_err(|_| Halt::DeletePlaneUnavailable)?;
         let adopter = self.child_adopter(plane, &floors, NodeId(child.id));
         match adopter.open_interior_under(&name, &bytes, &seed).await {
-            Ok(_) => Ok(()),
+            Ok((adopted, _)) => Ok(adopted.read_body),
             Err(
                 error @ GateError::Rejected(GateRejection {
                     stage: GateStage::Unseal,
                     ..
                 }),
             ) => {
-                // An interrupted soft delete may already have sealed the target into the bin.
                 let index = self.carried_bin_index().await?;
-                let entry = index
-                    .entries
-                    .iter()
-                    .find(|entry| entry.node_id == child.id && entry.scope_id == plane.end.root.0);
+                let entry = index.entries.iter().find(|entry| {
+                    entry.node_id == bin_target.0 && entry.scope_id == plane.end.root.0
+                });
                 let Some(entry) = entry else {
                     return Err(fault(error));
                 };
-                let held = self.inputs.bin_keys.held_key(&child.id, entry.deleted_at);
-                adopter
+                let held = self
+                    .inputs
+                    .bin_keys
+                    .held_key(&bin_target.0, entry.deleted_at);
+                let (adopted, _) = adopter
                     .open_interior_under(&name, &bytes, &held)
                     .await
                     .map_err(fault)?;
-                Ok(())
+                Ok(adopted.read_body)
             }
             Err(error) => Err(fault(error)),
         }
@@ -5494,20 +5556,9 @@ where
                     };
                     (loaded.name, versions)
                 }
-                // A `ChildRef.kind` is authored by any holder of the scope's
-                // write seed, and an unreadable node's sealed body cannot
-                // confirm it. Only a kind this device's own gate-passing state
-                // also calls a file may license the best-effort arm; anything
-                // else is unknown structure and fails closed.
-                Err(halt)
-                    if kind == NodeKind::Folder
-                        || !self
-                            .cells
-                            .base
-                            .borrow()
-                            .node(node)
-                            .is_some_and(|meta| meta.kind == crate::facade::NodeKind::File) =>
-                {
+                // An unreadable node's sealed body cannot confirm its ref
+                // kind, so only a confirmed file licenses the best-effort arm.
+                Err(halt) if kind == NodeKind::Folder || !self.confirmed_file(node) => {
                     return Err(halt);
                 }
                 Err(_) => (plane.end.write_name(&node.0), Vec::new()),
