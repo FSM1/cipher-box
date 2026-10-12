@@ -2695,8 +2695,9 @@ where
             return Ok(());
         }
 
-        // The command refuses the same set, so a delete queued before a grant
-        // leaves the same way whether or not this walk proved the root.
+        // The command refuses a target in the same set, so a delete queued
+        // before a grant leaves the same way whether or not this walk proved
+        // the root.
         let refused: Vec<(OpId, DeadLetterReason)> = queued
             .iter()
             .filter(|(_, op)| deletes_a_known_scope_root(scope, op))
