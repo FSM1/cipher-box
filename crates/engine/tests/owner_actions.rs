@@ -6556,6 +6556,94 @@ fn queue_delete_then_create(
     op_id
 }
 
+/// A writer of the enclosing scope serves a file body with a version at a known
+/// root's name and labels its ref a file. The known set still refuses the
+/// delete after a restart.
+#[test]
+fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
+    let (mut fx, outer) = GrantScenario::nested();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let inner = fx.folder;
+    write_version(
+        &mut fx,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo".into(),
+        },
+        &[3u8; 200],
+    );
+    let photo = block_on(fx.engine.view())
+        .unwrap()
+        .children(ROOT)
+        .into_iter()
+        .find(|child| child.name == "photo")
+        .expect("the photo is listed")
+        .id;
+    let Some(ReadBody::File { versions, .. }) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(photo),
+        &read_key_of(photo),
+    )
+    .2
+    else {
+        panic!("a file body");
+    };
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| {
+            children
+                .iter_mut()
+                .find(|child| child.id == inner.0)
+                .expect("outer names the folder")
+                .kind = CoreNodeKind::File;
+        },
+    );
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: inner.0,
+        scope_id: SCOPE,
+        epoch: EPOCH,
+        read_key: &read_key_of(inner),
+        nonce: &[0x5b; 24],
+        body: &ReadBody::File {
+            created_at: 0,
+            modified_at: 1,
+            versions,
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted file seals");
+    fx.blocks.put(planted.block.clone());
+    publish_value_at(
+        &fx.world,
+        inner,
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+    );
+    restart_owner(&mut fx);
+    for node in [outer, inner] {
+        block_on(fx.engine.command(Command::SetFocus { node: Some(node) })).unwrap();
+        for _ in 0..3 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+    }
+    block_on(fx.engine.command(Command::SetFocus { node: None })).unwrap();
+    let op_id = stage_legacy_delete(&fx, outer);
+    for _ in 0..16 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let events = events_so_far(&mut fx._events);
+    assert!(published_bin_entries(&fx).is_empty(), "nothing is binned");
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+}
+
 /// A descendant whose record no endpoint serves, or one endpoint withholds,
 /// holds the delete uncharged; the ops behind it wait and then publish.
 fn assert_a_withheld_descendant_holds_the_delete(one_endpoint: bool) {
