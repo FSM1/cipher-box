@@ -86,7 +86,7 @@ use crate::net::signed_data;
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
     HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed,
+    assemble_head_envelope, fanout_get_classified, fanout_get_tied_classified, fanout_get_verify,
     observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
@@ -4929,37 +4929,50 @@ where
                 .prove_node_plane(scope, pass, plane, NodeId(target.id), &child)
                 .await?;
             if let ReadBody::Folder { children, .. } = body {
-                // The doomed walk's file arm: a ref kind is authored by any
-                // write-seed holder, so only a kind this device's own state
-                // confirms skips the proof.
-                let base = self.cells.base.borrow();
-                pending.extend(children.into_iter().filter(|child| {
-                    child.kind == NodeKind::Folder
-                        || !base
-                            .node(NodeId(child.id))
-                            .is_some_and(|meta| meta.kind == crate::facade::NodeKind::File)
-                }));
+                pending.extend(
+                    children
+                        .into_iter()
+                        .filter(|child| !self.confirmed_file(NodeId(child.id))),
+                );
             }
         }
         Ok(())
     }
 
+    /// Whether this device's own gate-passing state calls `node` a file. A ref
+    /// kind is authored by any write-seed holder and the base copies it, so
+    /// only a file body this device projected confirms it.
+    fn confirmed_file(&self, node: NodeId) -> bool {
+        self.cells.base.borrow().node(node).is_some_and(|meta| {
+            meta.kind == crate::facade::NodeKind::File && meta.content_version.is_some()
+        })
+    }
+
     /// One subtree node's plane, proved from its current record, and its body.
     /// A node an interrupted soft delete already sealed into the bin opens
-    /// under `target`'s held key.
+    /// under `bin_target`'s held key.
+    ///
+    /// Only a failed endpoint holds uncharged: a name every endpoint calls
+    /// vacant, or one this scope does not derive, has no proof to wait for.
     async fn prove_node_plane(
         &self,
         scope: &DrainScope<'_>,
         pass: &Pass,
         plane: &SealPlane<'_>,
-        target: NodeId,
+        bin_target: NodeId,
         child: &ChildRef,
     ) -> Result<ReadBody, Halt> {
-        let name = crate::net::rotation::scope_name(&child.ipns_name)
-            .map_err(|_| Halt::DeletePlaneUnavailable)?;
-        let (_, bytes, endpoint_failed) = fanout_get_verify_failed(&self.seams.transport, &name)
-            .await
-            .ok_or(Halt::DeletePlaneUnavailable)?;
+        let name =
+            crate::net::rotation::scope_name(&child.ipns_name).map_err(|_| Halt::Unclassified)?;
+        let fetch = fanout_get_tied_classified(&self.seams.transport, &name).await;
+        let endpoint_failed = fetch.endpoint_failed;
+        let Some((_, bytes, _)) = fetch.pick else {
+            return Err(if fetch.absent {
+                Halt::Unclassified
+            } else {
+                Halt::DeletePlaneUnavailable
+            });
+        };
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
@@ -5007,7 +5020,7 @@ where
             return Err(Halt::DeletePlaneUnavailable);
         }
         if !names_this_scope(&plane.end, child) {
-            return Err(Halt::DeletePlaneUnavailable);
+            return Err(Halt::Unclassified);
         }
         let seed = seed_for_lagging(
             plane.end.root.0,
@@ -5026,14 +5039,16 @@ where
                 }),
             ) => {
                 let index = self.carried_bin_index().await?;
-                let entry = index
-                    .entries
-                    .iter()
-                    .find(|entry| entry.node_id == target.0 && entry.scope_id == plane.end.root.0);
+                let entry = index.entries.iter().find(|entry| {
+                    entry.node_id == bin_target.0 && entry.scope_id == plane.end.root.0
+                });
                 let Some(entry) = entry else {
                     return Err(fault(error));
                 };
-                let held = self.inputs.bin_keys.held_key(&target.0, entry.deleted_at);
+                let held = self
+                    .inputs
+                    .bin_keys
+                    .held_key(&bin_target.0, entry.deleted_at);
                 let (adopted, _) = adopter
                     .open_interior_under(&name, &bytes, &held)
                     .await
@@ -5537,20 +5552,9 @@ where
                     };
                     (loaded.name, versions)
                 }
-                // A `ChildRef.kind` is authored by any holder of the scope's
-                // write seed, and an unreadable node's sealed body cannot
-                // confirm it. Only a kind this device's own gate-passing state
-                // also calls a file may license the best-effort arm; anything
-                // else is unknown structure and fails closed.
-                Err(halt)
-                    if kind == NodeKind::Folder
-                        || !self
-                            .cells
-                            .base
-                            .borrow()
-                            .node(node)
-                            .is_some_and(|meta| meta.kind == crate::facade::NodeKind::File) =>
-                {
+                // An unreadable node's sealed body cannot confirm its ref
+                // kind, so only a confirmed file licenses the best-effort arm.
+                Err(halt) if kind == NodeKind::Folder || !self.confirmed_file(node) => {
                     return Err(halt);
                 }
                 Err(_) => (plane.end.write_name(&node.0), Vec::new()),

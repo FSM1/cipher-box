@@ -818,7 +818,11 @@ delete does (ADR 0043).
   the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
   target and reason sent to the host. Before any other queued delete
   publishes, the drain must prove the target's plane from its current record,
-  and then the plane of each node below it, under the same rules.
+  and then the plane of each node below it, under the same rules. Only a file
+  whose own body this device has read skips the proof, as a ref kind is
+  authored by any writer of the scope. A node every endpoint calls vacant, or
+  one at a name the scope's write seed does not derive, has no proof to wait
+  for: the delete is charged, and it dead-letters having published nothing.
   A missing index entry does not prove that the target is a plain folder. A
   target record with a grant section dead-letters the same way. A plain record
   that arrives while an endpoint failed is not a proof, because that endpoint
@@ -894,6 +898,9 @@ the grantee that removed it stops reading it.
   order and for the opposite reason: the unlink has already published, so
   nothing waits on the entry, and an entry ahead of the re-key would claim a cut
   that may never run.
+- **A capture cannot refuse a nested scope root.** Residual: a captured folder
+  that holds a scope root is binned, and the re-key stops at that root, so its
+  scope and its grants stay live with no path to them until a restore.
 - **A capture outlives the pass that could not settle it.** The merge that saw
   the departure has already dropped the node from the base, so the next pass
   would see nothing; the session holds the unsettled captures and clears one

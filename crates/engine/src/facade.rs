@@ -4209,8 +4209,7 @@ fn answers_as_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[Nod
     node == rendered.root || scope_roots.contains(&node)
 }
 
-/// Whether a known scope root sits below `node` by any link, which is every
-/// link a delete's re-key or doomed walk follows.
+/// Whether a known scope root sits anywhere below `node`.
 fn holds_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> bool {
     let mut seen = BTreeSet::from([node]);
     let mut pending = vec![node];
