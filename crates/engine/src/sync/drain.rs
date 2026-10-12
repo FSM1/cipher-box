@@ -4931,11 +4931,12 @@ where
                 .prove_node_plane(scope, pass, plane, bin_target, &child)
                 .await?;
             if let ReadBody::Folder { children, .. } = body {
-                pending.extend(
-                    children
-                        .into_iter()
-                        .filter(|next| !self.confirmed_file(NodeId(next.id))),
-                );
+                // A version projected before a grant survives a relabel, so
+                // a known root stays in the walk whatever the base calls it.
+                pending.extend(children.into_iter().filter(|next| {
+                    scope.known_scope_roots.contains(&NodeId(next.id))
+                        || !self.confirmed_file(NodeId(next.id))
+                }));
             }
         }
         Ok(())

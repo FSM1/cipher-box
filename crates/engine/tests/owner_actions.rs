@@ -6541,7 +6541,7 @@ fn a_delete_probes_a_nested_scope_root_mislabeled_as_a_file() {
 fn queue_delete_then_create(
     fx: &mut GrantScenario,
     target: NodeId,
-    later: &str,
+    later_name: &str,
 ) -> cipherbox_engine::seams::OpId {
     let op_id = block_on(fx.engine.command(Command::Delete { node: target }))
         .expect("the delete queues")
@@ -6549,24 +6549,17 @@ fn queue_delete_then_create(
         .unwrap();
     block_on(fx.engine.command(Command::Create {
         parent: ROOT,
-        name: later.into(),
+        name: later_name.into(),
         kind: NodeKind::Folder,
     }))
     .expect("a later create queues");
     op_id
 }
 
-/// A writer of the enclosing scope serves a file body with a version at a known
-/// root's name and labels its ref a file. The known set still refuses the
-/// delete after a restart.
-#[test]
-fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
-    let (mut fx, outer) = GrantScenario::nested();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let inner = fx.folder;
+/// The version list of a fresh file this device writes under the root.
+fn a_published_version_list(fx: &mut GrantScenario) -> Vec<cipherbox_core::seal::Version> {
     write_version(
-        &mut fx,
+        fx,
         WriteTarget::NewFile {
             parent: ROOT,
             name: "photo".into(),
@@ -6590,6 +6583,11 @@ fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
     else {
         panic!("a file body");
     };
+    versions
+}
+
+/// A writer of the vault scope labels `inner`'s ref in `outer` as `kind`.
+fn label_child(fx: &GrantScenario, outer: NodeId, inner: NodeId, kind: CoreNodeKind) {
     concurrent_edit(
         &fx.world,
         &fx.blocks,
@@ -6601,14 +6599,19 @@ fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
                 .iter_mut()
                 .find(|child| child.id == inner.0)
                 .expect("outer names the folder")
-                .kind = CoreNodeKind::File;
+                .kind = kind;
         },
     );
+}
+
+/// A writer of the vault scope publishes a file body with `versions` at
+/// `node`'s name, under the vault plane.
+fn plant_file_body(fx: &GrantScenario, node: NodeId, versions: Vec<cipherbox_core::seal::Version>) {
     let planted = author_child_envelope(EnvelopeAuthoring {
-        node_id: inner.0,
+        node_id: node.0,
         scope_id: SCOPE,
         epoch: EPOCH,
-        read_key: &read_key_of(inner),
+        read_key: &read_key_of(node),
         nonce: &[0x5b; 24],
         body: &ReadBody::File {
             created_at: 0,
@@ -6621,21 +6624,94 @@ fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
     })
     .expect("the planted file seals");
     fx.blocks.put(planted.block.clone());
-    publish_value_at(
-        &fx.world,
-        inner,
-        format!("/ipfs/{}", planted.cid).as_bytes(),
-    );
-    restart_owner(&mut fx);
-    for node in [outer, inner] {
-        block_on(fx.engine.command(Command::SetFocus { node: Some(node) })).unwrap();
+    publish_value_at(&fx.world, node, format!("/ipfs/{}", planted.cid).as_bytes());
+}
+
+fn focus_each(fx: &mut GrantScenario, nodes: &[NodeId]) {
+    for node in nodes {
+        block_on(fx.engine.command(Command::SetFocus { node: Some(*node) })).unwrap();
         for _ in 0..3 {
             tick(&fx.world, &fx.engine, &mut fx._tasks);
         }
     }
     block_on(fx.engine.command(Command::SetFocus { node: None })).unwrap();
+}
+
+/// What the rendered view says of `node`: its kind and projected version count.
+fn viewed(fx: &GrantScenario, parent: NodeId, node: NodeId) -> (NodeKind, Option<u64>) {
+    let child = block_on(fx.engine.view())
+        .unwrap()
+        .children(parent)
+        .into_iter()
+        .find(|child| child.id == node)
+        .expect("the node is listed");
+    (child.kind, child.content_version)
+}
+
+/// A writer of the enclosing scope serves a file body with a version at a known
+/// root's name and labels its ref a file. The known set still refuses the
+/// delete after a restart.
+#[test]
+fn a_delete_refuses_a_known_root_the_base_calls_a_file() {
+    let (mut fx, outer) = GrantScenario::nested();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let inner = fx.folder;
+    let versions = a_published_version_list(&mut fx);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    plant_file_body(&fx, inner, versions);
+    restart_owner(&mut fx);
+    focus_each(&mut fx, &[outer, inner]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, None));
     let op_id = stage_legacy_delete(&fx, outer);
     for _ in 0..16 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let events = events_so_far(&mut fx._events);
+    assert!(published_bin_entries(&fx).is_empty(), "nothing is binned");
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+}
+
+/// A file version this device projected for `inner` before the grant
+/// survives a relabel, so the ref kind and the base both call the new root a
+/// file. The known set still refuses the queued delete.
+#[test]
+fn a_queued_delete_refuses_a_root_with_a_version_projected_before_its_grant() {
+    let (mut fx, outer) = GrantScenario::nested();
+    let inner = fx.folder;
+    let folder_record = published_value(&fx.world, &write_name(inner));
+    let versions = a_published_version_list(&mut fx);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    plant_file_body(&fx, inner, versions);
+    focus_each(&mut fx, &[outer, inner]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+    label_child(&fx, outer, inner, CoreNodeKind::Folder);
+    publish_value_at(&fx.world, inner, &folder_record);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    focus_each(&mut fx, &[outer]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    events_so_far(&mut fx._events);
+    for _ in 0..12 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
 
