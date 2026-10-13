@@ -1,13 +1,11 @@
 import { Logger } from '@nestjs/common';
 import { DataSource, Migration } from 'typeorm';
-import { migrationRunLockKey } from './common/advisory-lock';
+import { MIGRATION_RUN_LOCK_NAME as LOCK_NAME, migrationRunLockKey } from './common/advisory-lock';
 
 const LOCK_POLL_MS = 250;
 
 /** A deploy whose runner waits this long behind another one fails with a named error. */
 export const MIGRATION_LOCK_WAIT_DEADLINE_MS = 10 * 60 * 1000;
-
-const LOCK_NAME = 'migration-run';
 
 const logger = new Logger('MigrationRunner');
 
@@ -28,8 +26,6 @@ export class MigrationLockReleaseError extends Error {
 }
 
 export interface MigrationLockOptions {
-  pollMs?: number;
-  deadlineMs?: number;
   /** Wall-clock milliseconds; injected so a test can pass the deadline. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -50,8 +46,6 @@ export async function runMigrationsLocked(
   dataSource: DataSource,
   options: MigrationLockOptions = {}
 ): Promise<Migration[]> {
-  const pollMs = options.pollMs ?? LOCK_POLL_MS;
-  const deadlineMs = options.deadlineMs ?? MIGRATION_LOCK_WAIT_DEADLINE_MS;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? sleepMs;
   const key = migrationRunLockKey().toString();
@@ -71,10 +65,10 @@ export async function runMigrationsLocked(
         logger.log(`waiting for the ${LOCK_NAME} advisory lock that another runner holds`);
       }
       const waited = now() - started;
-      if (waited >= deadlineMs) {
+      if (waited >= MIGRATION_LOCK_WAIT_DEADLINE_MS) {
         throw new MigrationLockTimeoutError(waited);
       }
-      await sleep(pollMs);
+      await sleep(LOCK_POLL_MS);
     }
 
     let applied: Migration[];

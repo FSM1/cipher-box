@@ -65,20 +65,24 @@ export async function setAdvisoryLockTimeout(
  * the driver code and hint.
  */
 export function isLockNotAvailable(error: unknown): boolean {
-  if (!(error instanceof QueryFailedError)) {
-    return false;
-  }
-  const { code, hint } = driverFields(error);
-  return (
-    code === LOCK_NOT_AVAILABLE ||
-    (code === OUT_OF_MEMORY && hint?.includes(LOCK_TABLE_FULL_HINT) === true)
-  );
+  return lockFailureKind(error) !== undefined;
 }
 
-function driverFields(error: QueryFailedError): { code?: string; hint?: string } {
+function lockFailureKind(error: unknown): 'timeout' | 'lockTableFull' | undefined {
+  if (!(error instanceof QueryFailedError)) {
+    return undefined;
+  }
   const driver = error.driverError as { code?: string; hint?: string } | undefined;
   const own = error as unknown as { code?: string; hint?: string };
-  return { code: driver?.code ?? own.code, hint: driver?.hint ?? own.hint };
+  const code = driver?.code ?? own.code;
+  const hint = driver?.hint ?? own.hint;
+  if (code === LOCK_NOT_AVAILABLE) {
+    return 'timeout';
+  }
+  if (code === OUT_OF_MEMORY && hint?.includes(LOCK_TABLE_FULL_HINT) === true) {
+    return 'lockTableFull';
+  }
+  return undefined;
 }
 
 /**
@@ -86,10 +90,11 @@ function driverFields(error: QueryFailedError): { code?: string; hint?: string }
  * unchanged. A full lock table logs one warning, as it is a capacity signal.
  */
 function mapLockFailure(error: unknown): unknown {
-  if (!isLockNotAvailable(error)) {
+  const kind = lockFailureKind(error);
+  if (kind === undefined) {
     return error;
   }
-  if (driverFields(error as QueryFailedError).code === OUT_OF_MEMORY) {
+  if (kind === 'lockTableFull') {
     logger.warn('Postgres shared lock table full (53200); answered a retryable 503');
   }
   return new ServiceUnavailableException('Contended resource; retry shortly');
@@ -148,9 +153,11 @@ export function subjectLockKey(identitySubjectId: string): bigint {
   return advisoryLockKey(`device-registry-subject:${identitySubjectId}`);
 }
 
+export const MIGRATION_RUN_LOCK_NAME = 'migration-run';
+
 /** The one key every migration run takes, so concurrent runners apply each migration once. */
 export function migrationRunLockKey(): bigint {
-  return advisoryLockKey('migration-run');
+  return advisoryLockKey(MIGRATION_RUN_LOCK_NAME);
 }
 
 /** Namespaced per-account key for the device registry's cap count and insert. */
