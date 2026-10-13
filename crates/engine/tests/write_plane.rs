@@ -10,6 +10,7 @@ use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -948,19 +949,17 @@ fn boot_observed(
 ) -> (
     Engine<FakeSeamTypes>,
     Vec<BoxedTask>,
-    std::rc::Rc<RefCell<Vec<PassEvent>>>,
+    Rc<RefCell<Vec<PassEvent>>>,
 ) {
     serve_http(device, blocks, 400);
-    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
-    let (engine, _stream) = engine_on(device, 42);
-    let mut engine = if observed {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (mut engine, _stream) = engine_on(device, 42);
+    if observed {
         let into = events.clone();
-        engine.with_pass_timings(std::rc::Rc::new(move |event: &PassEvent| {
+        engine = engine.with_pass_timings(Rc::new(move |event: &PassEvent| {
             into.borrow_mut().push(*event);
-        }))
-    } else {
-        engine
-    };
+        }));
+    }
     block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);

@@ -51,23 +51,25 @@ impl<S> Timed<S> {
         }
     }
 
-    fn observe(
+    async fn timed<R>(
         &self,
         kind: &'static str,
         url: &str,
-        started: Instant,
-        outcome: impl FnOnce() -> String,
-    ) {
+        call: impl Future<Output = R>,
+        outcome: impl FnOnce(&R) -> String,
+    ) -> R {
+        let started = Instant::now();
+        let result = call.await;
         let elapsed = started.elapsed();
-        if elapsed < self.threshold {
-            return;
+        if elapsed >= self.threshold {
+            (self.report)(&SlowRequest {
+                kind,
+                host: host_of(url),
+                millis: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                outcome: outcome(&result),
+            });
         }
-        (self.report)(&SlowRequest {
-            kind,
-            host: host_of(url),
-            millis: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
-            outcome: outcome(),
-        });
+        result
     }
 }
 
@@ -113,17 +115,18 @@ impl<S: RecordTransport> RecordTransport for Timed<S> {
         max_bytes: usize,
         bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
-        let started = Instant::now();
-        let got = self
-            .inner
-            .get_record(endpoint, routing_key, max_bytes, bearer)
-            .await;
-        self.observe("record-get", &endpoint.0, started, || match &got {
-            Ok(Some(_)) => "ok".to_owned(),
-            Ok(None) => "absent".to_owned(),
-            Err(error) => error_class(error),
-        });
-        got
+        self.timed(
+            "record-get",
+            &endpoint.0,
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes, bearer),
+            |got| match got {
+                Ok(Some(_)) => "ok".to_owned(),
+                Ok(None) => "absent".to_owned(),
+                Err(error) => error_class(error),
+            },
+        )
+        .await
     }
 
     async fn put_record(
@@ -132,26 +135,27 @@ impl<S: RecordTransport> RecordTransport for Timed<S> {
         routing_key: &str,
         record: &[u8],
     ) -> SeamResult<()> {
-        let started = Instant::now();
-        let put = self.inner.put_record(endpoint, routing_key, record).await;
-        self.observe("record-put", &endpoint.0, started, || match &put {
-            Ok(()) => "ok".to_owned(),
-            Err(error) => error_class(error),
-        });
-        put
+        self.timed(
+            "record-put",
+            &endpoint.0,
+            self.inner.put_record(endpoint, routing_key, record),
+            |put| match put {
+                Ok(()) => "ok".to_owned(),
+                Err(error) => error_class(error),
+            },
+        )
+        .await
     }
 }
 
 impl<S: Http> Http for Timed<S> {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
         let url = request.url.clone();
-        let started = Instant::now();
-        let sent = self.inner.send(request).await;
-        self.observe("http", &url, started, || match &sent {
+        self.timed("http", &url, self.inner.send(request), |sent| match sent {
             Ok(response) => status_class(response.status),
             Err(error) => error_class(error),
-        });
-        sent
+        })
+        .await
     }
 
     async fn send_capped(
@@ -160,14 +164,17 @@ impl<S: Http> Http for Timed<S> {
         max_bytes: usize,
     ) -> Result<HttpResponse, CappedFetchError> {
         let url = request.url.clone();
-        let started = Instant::now();
-        let sent = self.inner.send_capped(request, max_bytes).await;
-        self.observe("http-capped", &url, started, || match &sent {
-            Ok(response) => status_class(response.status),
-            Err(CappedFetchError::BodyTooLarge { .. }) => "over-cap".to_owned(),
-            Err(CappedFetchError::Transport(error)) => error_class(error),
-        });
-        sent
+        self.timed(
+            "http-capped",
+            &url,
+            self.inner.send_capped(request, max_bytes),
+            |sent| match sent {
+                Ok(response) => status_class(response.status),
+                Err(CappedFetchError::BodyTooLarge { .. }) => "over-cap".to_owned(),
+                Err(CappedFetchError::Transport(error)) => error_class(error),
+            },
+        )
+        .await
     }
 }
 
@@ -176,6 +183,7 @@ mod tests {
     use std::sync::Mutex;
 
     use cipherbox_engine::seams::{HttpCredentials, HttpMethod};
+    use cipherbox_engine::testkit::block_on;
     use zeroize::Zeroizing;
 
     use super::*;
@@ -263,13 +271,6 @@ mod tests {
         (timed, seen)
     }
 
-    fn run<F: core::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("a runtime")
-            .block_on(future)
-    }
-
     fn request_to(url: String) -> HttpRequest {
         HttpRequest {
             method: HttpMethod::Get,
@@ -329,12 +330,12 @@ mod tests {
     fn each_slow_request_reports_its_kind_host_and_outcome_and_nothing_it_addressed() {
         let (timed, seen) = collecting(Duration::ZERO, false);
         let endpoint = timed.endpoints().remove(0);
-        let _ = run(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
-        let _ = run(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
-        let _ = run(timed.send(request_to(format!(
+        let _ = block_on(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
+        let _ = block_on(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
+        let _ = block_on(timed.send(request_to(format!(
             "https://[2001:db8::1]:8443/ipfs/{CID}?token={BEARER}"
         ))));
-        let _ = run(timed.send_capped(
+        let _ = block_on(timed.send_capped(
             request_to(format!("https://gateway.test/ipfs/{CID}#{BEARER}")),
             1024,
         ));
@@ -355,11 +356,11 @@ mod tests {
     #[test]
     fn a_backslash_path_or_an_unparsed_url_reports_no_part_of_the_path() {
         let (timed, seen) = collecting(Duration::ZERO, true);
-        let _ = run(timed.send_capped(
+        let _ = block_on(timed.send_capped(
             request_to(format!("https://gateway.test\\ipfs\\{CID}")),
             1024,
         ));
-        let _ = run(timed.send(request_to(format!("gateway.test/ipfs/{CID}"))));
+        let _ = block_on(timed.send(request_to(format!("gateway.test/ipfs/{CID}"))));
 
         let seen = reports(&seen);
         assert_eq!(
@@ -382,9 +383,9 @@ mod tests {
     fn a_request_under_the_threshold_reports_nothing() {
         let (timed, seen) = collecting(Duration::from_secs(3600), false);
         let endpoint = timed.endpoints().remove(0);
-        let _ = run(timed.get_record(&endpoint, ROUTING_KEY, 1024, None));
-        let _ = run(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
-        let _ = run(timed.send(request_to(format!("https://gateway.test/ipfs/{CID}"))));
+        let _ = block_on(timed.get_record(&endpoint, ROUTING_KEY, 1024, None));
+        let _ = block_on(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
+        let _ = block_on(timed.send(request_to(format!("https://gateway.test/ipfs/{CID}"))));
 
         assert!(seen.lock().unwrap().is_empty());
     }

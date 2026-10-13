@@ -4,9 +4,10 @@
 
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use cipherbox_desktop_seams::{SlowRequest, SlowRequestSink};
+use cipherbox_desktop_seams::{SlowRequest, SlowRequestSink, TokioScheduler};
+use cipherbox_engine::seams::Scheduler;
 use cipherbox_engine::{PassEvent, PassTimingSink, TickCause};
 
 /// A request this slow is reported: well inside the 30 s refresh deadline, so a
@@ -53,10 +54,7 @@ fn slow_line(at: &str, slow: &SlowRequest) -> String {
 
 /// Now, as `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 fn wall_clock() -> String {
-    let since = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    utc(u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+    utc(TokioScheduler::new().now().0)
 }
 
 /// `millis` past the Unix epoch, in UTC. The date is the days-to-civil
