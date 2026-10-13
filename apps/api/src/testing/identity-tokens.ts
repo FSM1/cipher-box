@@ -26,6 +26,13 @@ export function encodedIdentitySigningKey(): string {
   return Buffer.from(privateKey).toString('base64');
 }
 
+/** Throws on any use, so a test that reaches the database fails with a clear message. */
+const NO_DATABASE = new Proxy({} as DataSource, {
+  get(): never {
+    throw new Error('no database: this token service was booted without one');
+  },
+});
+
 /** A real token service, booted on `values` as the module boots it, with no database. */
 export async function bootedIdentityTokenService(
   values: Record<string, string | undefined>,
@@ -35,7 +42,7 @@ export async function bootedIdentityTokenService(
     fakeConfig(values).service,
     clock,
     new FakeEntropy(),
-    {} as DataSource
+    NO_DATABASE
   );
   await service.onModuleInit();
   return service;

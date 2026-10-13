@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomUUID } from 'node:crypto';
@@ -587,6 +588,62 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       await new SpentIdentityTokenSweepTask(identityTokens, fakeConfig({}).service).runOnce();
 
       expect((await spent.find()).map((row) => row.tokenId)).toEqual([recent]);
+    });
+
+    it('sweeps in batches up to the exact grace cutoff, and skips a row another transaction locks', async () => {
+      const sweeper = new IdentityTokenService(
+        fakeConfig({ SPENT_IDENTITY_TOKEN_SWEEP_BATCH_SIZE: '2' }).service,
+        clock,
+        new SystemEntropy(),
+        db.dataSource
+      );
+      const spent = db.dataSource.getRepository(SpentIdentityToken);
+      const cutoff = clock.now().getTime() - 60_000;
+      const stale = Array.from({ length: 5 }, (_, i) => ({
+        tokenId: randomUUID(),
+        expiresAt: new Date(cutoff - (i + 1) * 1000),
+      }));
+      const atCutoff = { tokenId: randomUUID(), expiresAt: new Date(cutoff) };
+      const insideGrace = { tokenId: randomUUID(), expiresAt: new Date(cutoff + 1) };
+      const locked = { tokenId: randomUUID(), expiresAt: new Date(cutoff - 10_000) };
+      await spent.insert([...stale, atCutoff, insideGrace, locked]);
+
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query('SELECT 1 FROM spent_identity_tokens WHERE token_id = $1 FOR UPDATE', [
+          locked.tokenId,
+        ]);
+        // Three full batches of two, then a short one.
+        expect(await sweeper.sweepExpired()).toBe(6);
+        expect((await spent.find()).map((row) => row.tokenId).sort()).toEqual(
+          [insideGrace.tokenId, locked.tokenId].sort()
+        );
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
+
+      expect(await sweeper.sweepExpired()).toBe(1);
+      expect((await spent.find()).map((row) => row.tokenId)).toEqual([insideGrace.tokenId]);
+    });
+
+    it('refuses a replay that verified before expiry and spends after the sweep took its row', async () => {
+      const account = await boundAccount();
+      const token = account.subjectToken;
+      const verified = await identityTokens.verify(token);
+      await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
+
+      // The replay waits past expiry plus the grace, and the sweep deletes the row.
+      clock.advanceMs(verified.expiresAt.getTime() - clock.now().getTime() + 61_000);
+      await new SpentIdentityTokenSweepTask(identityTokens, fakeConfig({}).service).runOnce();
+      expect(await db.dataSource.getRepository(SpentIdentityToken).count()).toBe(0);
+
+      await expect(
+        db.dataSource.transaction((manager) => identityTokens.spend(manager, verified))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(await db.dataSource.getRepository(SpentIdentityToken).count()).toBe(0);
     });
   });
 

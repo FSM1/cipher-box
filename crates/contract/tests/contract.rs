@@ -2517,12 +2517,18 @@ async fn a_registration_that_replays_a_spent_identity_token_is_refused() {
         login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
 
     let (token, _) = wallet_identity_token(&base, &wallet).await;
-    register_device(&account, &random_device_key(), &token)
+    let first = register_device(&account, &random_device_key(), &token)
         .await
         .expect("the first registration spends the token");
     let replay = register_device(&account, &random_device_key(), &token).await;
     assert!(
         matches!(replay, Err(ApiError::Unauthorized)),
         "a replayed identity token is refused with a 401, got {replay:?}"
+    );
+    let devices = expect_auth("device list", account.devices().await);
+    assert_eq!(
+        devices.iter().map(|d| &d.public_key).collect::<Vec<_>>(),
+        vec![&first.public_key],
+        "the refused replay wrote no device row"
     );
 }

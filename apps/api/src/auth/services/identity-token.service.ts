@@ -172,6 +172,13 @@ export class IdentityTokenService implements OnModuleInit {
    * concurrent spend of the same token wait for this one and then refuse.
    */
   async spend(manager: EntityManager, token: VerifiedIdentityToken): Promise<void> {
+    // Rechecked here, after the caller's pool and lock waits: the sweep deletes a
+    // spent row only past expiry plus the grace, so a token that is still live at
+    // spend always finds its row. Only clock skew beyond CLOCK_SKEW_SECONDS
+    // between instances can open that window.
+    if (token.expiresAt.getTime() <= this.clock.now().getTime()) {
+      throw new UnauthorizedException('Identity token expired');
+    }
     const inserted = await manager
       .createQueryBuilder()
       .insert()

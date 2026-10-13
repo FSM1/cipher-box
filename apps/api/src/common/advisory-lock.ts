@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
@@ -12,12 +12,18 @@ import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
  */
 const DEFAULT_LOCK_TIMEOUT_MS = 3000;
 
+/** Postgres `lock_not_available`: a statement aborted by `lock_timeout`. */
+const LOCK_NOT_AVAILABLE = '55P03';
+
 /**
- * Postgres `lock_not_available` (55P03), a statement aborted by `lock_timeout`,
- * and `out_of_memory` (53200), which a lock acquire raises when the shared lock
- * table is full. Both clear when concurrent holders commit, so both are retryable.
+ * Postgres `out_of_memory`. The lock manager raises it with a hint that names
+ * `max_locks_per_transaction` when the shared lock table is full, which clears
+ * when concurrent holders commit. Any other 53200 is a real memory fault.
  */
-const LOCK_NOT_AVAILABLE_CODES: ReadonlySet<string> = new Set(['55P03', '53200']);
+const OUT_OF_MEMORY = '53200';
+const LOCK_TABLE_FULL_HINT = 'max_locks_per_transaction';
+
+const logger = new Logger('AdvisoryLock');
 
 /**
  * Read the advisory-lock wait bound (ms) from config, failing closed to the
@@ -56,16 +62,37 @@ export async function setAdvisoryLockTimeout(
  * A lock the transaction could not take now: a `lock_timeout` abort, whether on
  * the advisory-lock acquire or a row lock taken later under the same bound, or a
  * full shared lock table. TypeORM wraps either as a `QueryFailedError` carrying
- * the driver code.
+ * the driver code and hint.
  */
 export function isLockNotAvailable(error: unknown): boolean {
   if (!(error instanceof QueryFailedError)) {
     return false;
   }
-  const code =
-    (error.driverError as { code?: string } | undefined)?.code ??
-    (error as unknown as { code?: string }).code;
-  return code !== undefined && LOCK_NOT_AVAILABLE_CODES.has(code);
+  const { code, hint } = driverFields(error);
+  return (
+    code === LOCK_NOT_AVAILABLE ||
+    (code === OUT_OF_MEMORY && hint?.includes(LOCK_TABLE_FULL_HINT) === true)
+  );
+}
+
+function driverFields(error: QueryFailedError): { code?: string; hint?: string } {
+  const driver = error.driverError as { code?: string; hint?: string } | undefined;
+  const own = error as unknown as { code?: string; hint?: string };
+  return { code: driver?.code ?? own.code, hint: driver?.hint ?? own.hint };
+}
+
+/**
+ * The retryable 503 for a lock the transaction could not take, or `error`
+ * unchanged. A full lock table logs one warning, as it is a capacity signal.
+ */
+function mapLockFailure(error: unknown): unknown {
+  if (!isLockNotAvailable(error)) {
+    return error;
+  }
+  if (driverFields(error as QueryFailedError).code === OUT_OF_MEMORY) {
+    logger.warn('Postgres shared lock table full (53200); answered a retryable 503');
+  }
+  return new ServiceUnavailableException('Contended resource; retry shortly');
 }
 
 /**
@@ -167,10 +194,7 @@ export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[
       [sorted.map((key) => key.toString())]
     );
   } catch (error) {
-    if (isLockNotAvailable(error)) {
-      throw new ServiceUnavailableException('Contended resource; retry shortly');
-    }
-    throw error;
+    throw mapLockFailure(error);
   }
 }
 
@@ -200,10 +224,7 @@ export async function runLockGuardedTransaction<T>(
   try {
     return await dataSource.transaction(work);
   } catch (error) {
-    if (isLockNotAvailable(error)) {
-      throw new ServiceUnavailableException('Contended resource; retry shortly');
-    }
-    throw error;
+    throw mapLockFailure(error);
   }
 }
 
@@ -240,10 +261,7 @@ export async function withSessionAdvisoryLock<T>(
       acquired = true;
       return await work();
     } catch (error) {
-      if (isLockNotAvailable(error)) {
-        throw new ServiceUnavailableException('Contended resource; retry shortly');
-      }
-      throw error;
+      throw mapLockFailure(error);
     } finally {
       // Unlock failure implies a dead connection, whose session lock Postgres
       // has already dropped — the pool discards it on release.
