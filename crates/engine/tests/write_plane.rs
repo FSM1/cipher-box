@@ -956,7 +956,7 @@ fn boot_observed(
     let (mut engine, _stream) = engine_on(device, 42);
     if observed {
         let into = events.clone();
-        engine = engine.with_pass_timings(Rc::new(move |event: &PassEvent| {
+        engine = engine.with_pass_events(Rc::new(move |event: &PassEvent| {
             into.borrow_mut().push(*event);
         }));
     }
@@ -1031,7 +1031,7 @@ fn a_host_that_asks_for_pass_timings_gets_each_leg_as_it_ends() {
 }
 
 #[test]
-fn a_session_with_no_pass_sink_reads_the_clock_no_more_than_before() {
+fn a_pass_sink_adds_one_clock_read_per_leg_and_one_per_pass() {
     let reads = |observed: bool| {
         let world = FakeWorld::new();
         let blocks = Blocks::default();

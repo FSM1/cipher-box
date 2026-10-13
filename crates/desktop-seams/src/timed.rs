@@ -193,11 +193,26 @@ mod tests {
     const CID: &str = "bafkreisecretcid";
     const ACCELERATOR: &str = "https://routing.test";
 
-    /// Answers each call at once with a fixed result whose error message holds
-    /// every planted secret.
+    /// Which fixed answer [`Canned`] gives. Each error message holds every
+    /// planted secret.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        /// A status, or an error with no status.
+        Refuse,
+        /// A body over the cap.
+        OverCap,
+        /// A capped fetch that failed in transport.
+        Transport,
+        /// Each call succeeds; a record GET serves a record.
+        Serve,
+        /// A record GET finds no record.
+        Vacant,
+    }
+
+    /// Answers each call at once with its [`Answer`].
     #[derive(Clone)]
     struct Canned {
-        capped_over_cap: bool,
+        answer: Answer,
     }
 
     fn planted() -> String {
@@ -220,7 +235,12 @@ mod tests {
             _max_bytes: usize,
             _bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
-            Err(SeamError::http_status(planted(), 429))
+            match self.answer {
+                Answer::Refuse | Answer::Transport => Err(SeamError::http_status(planted(), 429)),
+                Answer::OverCap => Err(SeamError::over_cap(planted())),
+                Answer::Serve => Ok(Some(planted().into_bytes())),
+                Answer::Vacant => Ok(None),
+            }
         }
 
         async fn put_record(
@@ -229,13 +249,19 @@ mod tests {
             _routing_key: &str,
             _record: &[u8],
         ) -> SeamResult<()> {
-            Err(SeamError::new(planted()))
+            match self.answer {
+                Answer::Serve => Ok(()),
+                _ => Err(SeamError::new(planted())),
+            }
         }
     }
 
     impl Http for Canned {
         async fn send(&self, _request: HttpRequest) -> SeamResult<HttpResponse> {
-            Err(SeamError::new(planted()))
+            match self.answer {
+                Answer::Serve => Ok(answered(200)),
+                _ => Err(SeamError::new(planted())),
+            }
         }
 
         async fn send_capped(
@@ -243,28 +269,34 @@ mod tests {
             _request: HttpRequest,
             max_bytes: usize,
         ) -> Result<HttpResponse, CappedFetchError> {
-            if self.capped_over_cap {
-                return Err(CappedFetchError::BodyTooLarge {
+            match self.answer {
+                Answer::OverCap => Err(CappedFetchError::BodyTooLarge {
                     observed: max_bytes + 1,
                     limit: max_bytes,
-                });
+                }),
+                Answer::Transport => Err(CappedFetchError::Transport(SeamError::new(planted()))),
+                Answer::Serve => Ok(answered(200)),
+                Answer::Refuse | Answer::Vacant => Ok(answered(404)),
             }
-            Ok(HttpResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: Zeroizing::new(Vec::new()),
-            })
+        }
+    }
+
+    fn answered(status: u16) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: vec![("Set-Cookie".to_owned(), planted())],
+            body: Zeroizing::new(planted().into_bytes()),
         }
     }
 
     fn collecting(
         threshold: Duration,
-        capped_over_cap: bool,
+        answer: Answer,
     ) -> (Timed<Canned>, Arc<Mutex<Vec<SlowRequest>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         let timed = Timed::new(
-            Canned { capped_over_cap },
+            Canned { answer },
             threshold,
             Arc::new(move |slow: &SlowRequest| sink.lock().unwrap().push(slow.clone())),
         );
@@ -328,7 +360,7 @@ mod tests {
 
     #[test]
     fn each_slow_request_reports_its_kind_host_and_outcome_and_nothing_it_addressed() {
-        let (timed, seen) = collecting(Duration::ZERO, false);
+        let (timed, seen) = collecting(Duration::ZERO, Answer::Refuse);
         let endpoint = timed.endpoints().remove(0);
         let _ = block_on(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
         let _ = block_on(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
@@ -355,7 +387,7 @@ mod tests {
 
     #[test]
     fn a_backslash_path_or_an_unparsed_url_reports_no_part_of_the_path() {
-        let (timed, seen) = collecting(Duration::ZERO, true);
+        let (timed, seen) = collecting(Duration::ZERO, Answer::OverCap);
         let _ = block_on(timed.send_capped(
             request_to(format!("https://gateway.test\\ipfs\\{CID}")),
             1024,
@@ -374,14 +406,48 @@ mod tests {
     }
 
     #[test]
+    fn every_other_outcome_class_reports_its_class_and_no_planted_secret() {
+        let mut seen = Vec::new();
+        for answer in [
+            Answer::OverCap,
+            Answer::Transport,
+            Answer::Serve,
+            Answer::Vacant,
+        ] {
+            let (timed, reported) = collecting(Duration::ZERO, answer);
+            let endpoint = timed.endpoints().remove(0);
+            let _ = block_on(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
+            let _ = block_on(
+                timed.send_capped(request_to(format!("https://gateway.test/ipfs/{CID}")), 1024),
+            );
+            seen.extend(reports(&reported));
+        }
+
+        assert_eq!(
+            seen,
+            [
+                report("record-get", "delegated.test", "over-cap"),
+                report("http-capped", "gateway.test", "over-cap"),
+                report("record-get", "delegated.test", "status 429"),
+                report("http-capped", "gateway.test", "error"),
+                report("record-get", "delegated.test", "ok"),
+                report("http-capped", "gateway.test", "ok"),
+                report("record-get", "delegated.test", "absent"),
+                report("http-capped", "gateway.test", "status 404"),
+            ]
+        );
+        carries_no_secret(&seen);
+    }
+
+    #[test]
     fn the_wrapper_forwards_the_accelerator() {
-        let (timed, _seen) = collecting(Duration::ZERO, false);
+        let (timed, _seen) = collecting(Duration::ZERO, Answer::Refuse);
         assert_eq!(timed.accelerator(), Some(EndpointId::new(ACCELERATOR)));
     }
 
     #[test]
     fn a_request_under_the_threshold_reports_nothing() {
-        let (timed, seen) = collecting(Duration::from_secs(3600), false);
+        let (timed, seen) = collecting(Duration::from_secs(3600), Answer::Refuse);
         let endpoint = timed.endpoints().remove(0);
         let _ = block_on(timed.get_record(&endpoint, ROUTING_KEY, 1024, None));
         let _ = block_on(timed.put_record(&endpoint, ROUTING_KEY, b"record"));

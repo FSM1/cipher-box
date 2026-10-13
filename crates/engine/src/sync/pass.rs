@@ -74,7 +74,7 @@ use crate::sync::kept_op::keeps;
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
-use crate::sync::pass_timing::{LegClock, PassTimingSink};
+use crate::sync::pass_timing::{LegClock, PassEventSink};
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
 use crate::sync::rebase::{DropReason, QueueScanMemo, replay};
@@ -100,8 +100,8 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     root_id: [u8; 16],
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
-    timings: Option<PassTimingSink>,
-    /// Passes run under `timings`, so each event names its pass.
+    pass_events: Option<PassEventSink>,
+    /// Passes run under `pass_events`, so each event names its pass.
     passes: Cell<u64>,
 }
 
@@ -369,14 +369,14 @@ where
             root_id,
             settings_rechecked,
             link_swept,
-            timings: None,
+            pass_events: None,
             passes: Cell::new(0),
         }
     }
 
     /// Send each pass's legs to `sink` as they end.
-    pub(crate) fn with_timings(mut self, sink: Option<PassTimingSink>) -> Self {
-        self.timings = sink;
+    pub(crate) fn with_pass_events(mut self, sink: Option<PassEventSink>) -> Self {
+        self.pass_events = sink;
         self
     }
 
@@ -386,7 +386,7 @@ where
             return PassReport::STOPPED;
         };
         let scheduler = &self.seams.scheduler;
-        let mut clock = self.timings.as_ref().map(|sink| {
+        let mut clock = self.pass_events.as_ref().map(|sink| {
             self.passes.set(self.passes.get() + 1);
             LegClock::start(sink, self.passes.get(), cause, scheduler.now())
         });

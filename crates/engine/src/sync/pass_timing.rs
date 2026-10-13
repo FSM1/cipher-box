@@ -1,5 +1,5 @@
 //! Each leg of a sync pass as it ends, for a host that asks
-//! ([`Engine::with_pass_timings`](crate::Engine::with_pass_timings)).
+//! ([`Engine::with_pass_events`](crate::Engine::with_pass_events)).
 //!
 //! Read off the scheduler clock seam. An event names a leg and a duration only
 //! (`cipherbox_desktop_seams::Timed` states the rule for the host log).
@@ -47,17 +47,18 @@ pub enum PassEvent {
         leg: &'static str,
         /// How long it ran, in milliseconds.
         millis: u64,
-        /// The leg that runs now; `None` when the pass ended.
+        /// The leg that runs now; `None` after the last leg. A pass that stops
+        /// early sends no `None`.
         next: Option<&'static str>,
     },
 }
 
 /// Where a host takes each [`PassEvent`].
-pub type PassTimingSink = Rc<dyn Fn(&PassEvent)>;
+pub type PassEventSink = Rc<dyn Fn(&PassEvent)>;
 
 /// The laps of one pass, against the clock readings its caller takes.
 pub(crate) struct LegClock<'a> {
-    sink: &'a PassTimingSink,
+    sink: &'a PassEventSink,
     pass: u64,
     at: UnixMillis,
     leg: usize,
@@ -65,7 +66,7 @@ pub(crate) struct LegClock<'a> {
 
 impl<'a> LegClock<'a> {
     pub(crate) fn start(
-        sink: &'a PassTimingSink,
+        sink: &'a PassEventSink,
         pass: u64,
         cause: TickCause,
         now: UnixMillis,
@@ -106,7 +107,7 @@ mod tests {
     fn each_lap_is_sent_as_it_ends_and_names_the_leg_after_it() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let into = seen.clone();
-        let sink: PassTimingSink = Rc::new(move |event: &PassEvent| into.borrow_mut().push(*event));
+        let sink: PassEventSink = Rc::new(move |event: &PassEvent| into.borrow_mut().push(*event));
 
         let mut clock = LegClock::start(&sink, 3, TickCause::Manual, UnixMillis(1_000));
         clock.lap(UnixMillis(1_250));

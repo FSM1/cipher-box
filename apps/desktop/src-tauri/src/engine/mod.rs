@@ -605,8 +605,8 @@ async fn start_engine(
         session.config.api_base_url.clone(),
         session.config.gateway.clone(),
     );
-    if let Some(sink) = pass_timings() {
-        engine = engine.with_pass_timings(sink);
+    if let Some(sink) = pass_events() {
+        engine = engine.with_pass_events(sink);
     }
 
     // The engine copies the secret into its own zeroizing store; this frame's
@@ -621,12 +621,12 @@ async fn start_engine(
 /// Where each sync pass reports its leg durations: standard error in an
 /// `e2e-hook` build, nowhere in a shipped one.
 #[cfg(feature = "e2e-hook")]
-fn pass_timings() -> Option<cipherbox_engine::PassTimingSink> {
-    Some(crate::e2e::diagnostics::pass_timings())
+fn pass_events() -> Option<cipherbox_engine::PassEventSink> {
+    Some(crate::e2e::diagnostics::pass_events())
 }
 
 #[cfg(not(feature = "e2e-hook"))]
-fn pass_timings() -> Option<cipherbox_engine::PassTimingSink> {
+fn pass_events() -> Option<cipherbox_engine::PassEventSink> {
     None
 }
 
@@ -818,14 +818,14 @@ mod tests {
 
     #[cfg(feature = "e2e-hook")]
     #[test]
-    fn an_e2e_hook_build_reports_pass_timings() {
-        assert!(pass_timings().is_some());
+    fn an_e2e_hook_build_reports_pass_events() {
+        assert!(pass_events().is_some());
     }
 
     #[cfg(not(feature = "e2e-hook"))]
     #[test]
-    fn a_shipped_build_reports_no_pass_timings() {
-        assert!(pass_timings().is_none());
+    fn a_shipped_build_reports_no_pass_events() {
+        assert!(pass_events().is_none());
     }
 
     /// A session loop under a counting repaint seam: `painted` rises once per

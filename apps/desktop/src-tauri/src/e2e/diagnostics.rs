@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use cipherbox_desktop_seams::{SlowRequest, SlowRequestSink, TokioScheduler};
 use cipherbox_engine::seams::Scheduler;
-use cipherbox_engine::{PassEvent, PassTimingSink, TickCause};
+use cipherbox_engine::{PASS_LEGS, PassEvent, PassEventSink, TickCause};
 
 /// A request this slow is reported: well inside the 30 s refresh deadline, so a
 /// pass that crosses it names the requests that used it up.
 pub const SLOW_REQUEST: Duration = Duration::from_secs(5);
 
 /// Each pass event's line on standard error.
-pub fn pass_timings() -> PassTimingSink {
+pub fn pass_events() -> PassEventSink {
     Rc::new(|event: &PassEvent| eprintln!("{}", pass_line(&wall_clock(), event)))
 }
 
@@ -31,7 +31,10 @@ fn pass_line(at: &str, event: &PassEvent) -> String {
                 TickCause::Poll => "poll",
                 TickCause::Manual => "manual",
             };
-            format!("e2e: {at} pass {pass} {cause} started")
+            format!(
+                "e2e: {at} pass {pass} {cause} started, next {}",
+                PASS_LEGS[0]
+            )
         }
         PassEvent::LegEnded {
             pass,
@@ -101,7 +104,7 @@ mod tests {
                     cause: TickCause::Manual
                 }
             ),
-            "e2e: 2026-10-12T14:17:11.042Z pass 7 manual started"
+            "e2e: 2026-10-12T14:17:11.042Z pass 7 manual started, next settings"
         );
         assert_eq!(
             pass_line(
