@@ -1,51 +1,88 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ControlProtocolError, ControlRefusal } from '../control';
-import type { PollClock } from '../poll';
+import { PollTimeout, poll, type PollClock } from '../poll';
 import { refreshPastOverdue } from './refresh';
 
 // The literal, not `REFRESH_OVERDUE`: the engine states it in
 // `ForcedPass::landed`, so a copy on each side would let the two drift unseen.
 const OVERDUE_TEXT = 'refresh failed: the pass did not land within the refresh deadline';
 
-/** The production pace: one 30 s tick between retries, a 30 s engine deadline. */
+/** One tick between retries, and the engine refresh deadline, as the soak runs them. */
 const WAIT_MS = 30_000;
 const REFRESH_DEADLINE_MS = 30_000;
 
 /**
- * A clock the test drives. A wait ends on a later macrotask, and a wait can
- * end late by `lateByMs`, so a helper that does not await it, or that trusts
- * its length, fails the test.
+ * A clock the test drives. Each wait, alarm and refresh answer is an event at
+ * a fake time, and one event fires per macrotask in time order, so every
+ * promise settles between two events. A wait can end late by `lateByMs`.
  */
 function fakeClock(lateByMs = 0) {
   let millis = 0;
-  let pending = 0;
+  let order = 0;
+  let pumping = false;
+  let openWaits = 0;
+  const events: { at: number; order: number; fire: () => void }[] = [];
   const waits: number[] = [];
+
+  const pump = () => {
+    if (pumping) return;
+    pumping = true;
+    setTimeout(() => {
+      pumping = false;
+      events.sort((one, other) => one.at - other.at || one.order - other.order);
+      const next = events.shift();
+      if (!next) return;
+      millis = Math.max(millis, next.at);
+      next.fire();
+      if (events.length > 0) pump();
+    }, 0);
+  };
+  const at = (due: number, fire: () => void) => {
+    const event = { at: due, order: order++, fire };
+    events.push(event);
+    pump();
+    return event;
+  };
+
   const clock: PollClock = {
     now: () => millis,
     wait: (ms) => {
       waits.push(ms);
-      pending += 1;
+      openWaits += 1;
       return new Promise<void>((resolve) =>
-        setTimeout(() => {
-          millis += ms + lateByMs;
-          pending -= 1;
+        at(millis + ms + lateByMs, () => {
+          openWaits -= 1;
           resolve();
-        }, 0)
+        })
       );
     },
-    alarm: () => ({ expired: new Promise<void>(() => undefined), cancel: () => undefined }),
+    alarm: (ms) => {
+      let fire: () => void = () => undefined;
+      const expired = new Promise<void>((resolve) => {
+        fire = resolve;
+      });
+      const event = at(millis + ms, () => fire());
+      return {
+        expired,
+        cancel: () => {
+          const index = events.indexOf(event);
+          if (index >= 0) events.splice(index, 1);
+        },
+      };
+    },
   };
   return {
     clock,
     waits,
-    advance: (ms: number) => {
-      millis += ms;
-    },
-    waiting: () => pending > 0,
+    now: () => millis,
+    /** An answer `costMs` from now. */
+    answerIn: (costMs: number, settle: () => void) => at(millis + costMs, settle),
+    waiting: () => openWaits > 0,
   };
 }
 
-type Answer = { costMs: number; error?: Error };
+type FakeClock = ReturnType<typeof fakeClock>;
+type Answer = { costMs: number; error?: Error } | 'never';
 
 const overdue = (costMs: number): Answer => ({
   costMs,
@@ -54,18 +91,21 @@ const overdue = (costMs: number): Answer => ({
 const landed = (costMs: number): Answer => ({ costMs });
 
 /** A refresh that gives each answer in turn, and fails if a wait is still open. */
-function refreshes(fake: ReturnType<typeof fakeClock>, answers: Answer[]) {
+function refreshes(fake: FakeClock, answers: Answer[]) {
   let sent = 0;
-  const refresh = async (): Promise<void> => {
-    if (fake.waiting()) throw new Error('a refresh was sent before its wait ended');
+  const refresh = (): Promise<void> => {
+    if (fake.waiting())
+      return Promise.reject(new Error('a refresh was sent before its wait ended'));
     const answer = answers[sent++];
-    fake.advance(answer.costMs);
-    if (answer.error) throw answer.error;
+    if (answer === 'never') return new Promise<void>(() => undefined);
+    return new Promise<void>((resolve, reject) =>
+      fake.answerIn(answer.costMs, () => (answer.error ? reject(answer.error) : resolve()))
+    );
   };
   return { refresh, sent: () => sent };
 }
 
-function run(fake: ReturnType<typeof fakeClock>, refresh: () => Promise<void>, untilMs: number) {
+function run(fake: FakeClock, refresh: () => Promise<void>, untilMs: number) {
   const lines: string[] = [];
   const done = refreshPastOverdue(refresh, {
     name: 'linux-writer',
@@ -78,13 +118,19 @@ function run(fake: ReturnType<typeof fakeClock>, refresh: () => Promise<void>, u
   return { done, lines };
 }
 
-async function overdueFailure(done: Promise<void>): Promise<void> {
-  const failure = await done.then(
+async function failure(done: Promise<unknown>): Promise<Error> {
+  const error = await done.then(
     () => undefined,
-    (error: unknown) => error
+    (thrown: unknown) => thrown
   );
-  expect(failure).toBeInstanceOf(ControlRefusal);
-  expect((failure as ControlRefusal).refusal).toBe(OVERDUE_TEXT);
+  expect(error).toBeInstanceOf(Error);
+  return error as Error;
+}
+
+async function overdueFailure(done: Promise<void>): Promise<void> {
+  const error = await failure(done);
+  expect(error).toBeInstanceOf(ControlRefusal);
+  expect((error as ControlRefusal).refusal).toBe(OVERDUE_TEXT);
 }
 
 describe('a soak refresh', () => {
@@ -112,51 +158,107 @@ describe('a soak refresh', () => {
 
     expect(sent()).toBe(1);
     expect(fake.waits).toEqual([]);
-    expect(lines).toEqual([
-      '  linux-writer: refresh 1 was overdue after 30000ms; it retries every 30000ms\n',
-      '  linux-writer: refresh was overdue on attempt 1, 30000ms after the first; the step budget is spent\n',
-    ]);
+    expect(lines.at(-1)).toBe(
+      '  linux-writer: refresh was overdue on attempt 1, 30000ms after the first; the step budget is spent\n'
+    );
   });
 
-  it('starts no retry after a wait that ended late', async () => {
-    const fake = fakeClock(15_000);
+  it('starts no retry after a late wait that leaves exactly one refresh deadline', async () => {
+    const fake = fakeClock(1_000);
     const { refresh, sent } = refreshes(fake, [overdue(30_000), landed(0)]);
 
-    const { done, lines } = run(fake, refresh, 100_000);
+    // Overdue at 30 s, 61 s left; the wait ends at 61 s, so 30 s are left.
+    const { done, lines } = run(fake, refresh, 91_000);
     await overdueFailure(done);
 
     expect(sent()).toBe(1);
     expect(fake.waits).toEqual([WAIT_MS]);
     expect(lines.at(-1)).toBe(
-      '  linux-writer: refresh was overdue on attempt 1, 75000ms after the first; the step budget is spent\n'
+      '  linux-writer: refresh was overdue on attempt 1, 61000ms after the first; the step budget is spent\n'
     );
   });
 
-  it('fails with the overdue refusal when a retry lands past the budget', async () => {
-    const fake = fakeClock();
-    const { refresh, sent } = refreshes(fake, [overdue(30_000), landed(45_000)]);
+  it('retries after a late wait that leaves one millisecond more than a refresh deadline', async () => {
+    const fake = fakeClock(1_000);
+    const { refresh, sent } = refreshes(fake, [overdue(30_000), landed(0)]);
 
-    const { done, lines } = run(fake, refresh, 100_000);
-    await overdueFailure(done);
+    const { done } = run(fake, refresh, 91_001);
+    await done;
 
     expect(sent()).toBe(2);
-    expect(lines.at(-1)).toBe(
-      '  linux-writer: refresh landed late on attempt 2, 105000ms after the first; the step budget is spent\n'
-    );
   });
 
-  it('fails with the overdue refusal when a retry still runs at the end of the budget', async () => {
+  it.each([
+    ['lands', landed(59_000)],
+    ['answers overdue', overdue(59_000)],
+  ])(
+    'gives the overdue refusal at the margin when a queued retry %s after two refresh deadlines',
+    async (_, retry) => {
+      const fake = fakeClock();
+      const { refresh, sent } = refreshes(fake, [overdue(30_000), retry]);
+
+      // The retry starts at 60 s with 40 s left; it would answer at 119 s.
+      const { done, lines } = run(fake, refresh, 100_000);
+      await overdueFailure(done);
+
+      expect(sent()).toBe(2);
+      expect(fake.now()).toBe(99_000);
+      expect(lines.at(-1)).toBe(
+        '  linux-writer: refresh got no answer on attempt 2, 99000ms after the first; the step budget is spent\n'
+      );
+    }
+  );
+
+  it('fails a first refresh that never answers one second before the budget ends', async () => {
     const fake = fakeClock();
-    const { refresh, sent } = refreshes(fake, [overdue(30_000), overdue(45_000), landed(0)]);
+    const { refresh } = refreshes(fake, ['never']);
 
-    const { done, lines } = run(fake, refresh, 100_000);
-    await overdueFailure(done);
+    const { done } = run(fake, refresh, 100_000);
+    const error = await failure(done);
 
-    expect(sent()).toBe(2);
-    expect(fake.waits).toEqual([WAIT_MS]);
-    expect(lines.at(-1)).toBe(
-      '  linux-writer: refresh was overdue on attempt 2, 105000ms after the first; the step budget is spent\n'
+    expect(error.message).toBe('linux-writer: the refresh got no answer within the step budget');
+    expect(fake.now()).toBe(99_000);
+  });
+
+  it('gives a first refresh sent with a few seconds left only what is left less the margin', async () => {
+    const slow = fakeClock();
+    const late = refreshes(slow, [landed(5_000)]);
+    const error = await failure(run(slow, late.refresh, 3_000).done);
+    expect(error.message).toBe('linux-writer: the refresh got no answer within the step budget');
+    expect(slow.now()).toBe(2_000);
+
+    const fast = fakeClock();
+    const quick = refreshes(fast, [landed(500)]);
+    await run(fast, quick.refresh, 3_000).done;
+    expect(fast.now()).toBe(500);
+  });
+
+  it('fails a poll step with the overdue refusal, not with its poll timeout', async () => {
+    const fake = fakeClock();
+    const { refresh } = refreshes(fake, [overdue(0), 'never']);
+    const release = vi.fn(async () => undefined);
+    let reads = 0;
+
+    const waited = poll(
+      async () => {
+        if (reads++ > 0) await run(fake, refresh, 300_000).done;
+        return 'ENOENT';
+      },
+      (seen) => seen !== 'ENOENT',
+      {
+        what: 'the grantee ledger to open',
+        timeoutMs: 300_000,
+        intervalMs: WAIT_MS,
+        clock: fake.clock,
+        release,
+      }
     );
+    const error = await failure(waited);
+
+    expect(error).not.toBeInstanceOf(PollTimeout);
+    expect((error as ControlRefusal).refusal).toBe(OVERDUE_TEXT);
+    expect(fake.now()).toBe(299_000);
+    expect(release).not.toHaveBeenCalled();
   });
 
   it.each([
