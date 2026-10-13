@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.13.1](https://github.com/FSM1/cipher-box/compare/v2.13.0...v2.13.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **engine:** refuse a delete of a folder whose subtree holds a scope root ([#2400](https://github.com/FSM1/cipher-box/issues/2400)) ([88056c4](https://github.com/FSM1/cipher-box/commit/88056c4ae269e419b165430f8d70b9474ddbbc6c))
+
 ## [2.13.0](https://github.com/FSM1/cipher-box/compare/v2.12.4...v2.13.0) (2026-10-08)
 
 
