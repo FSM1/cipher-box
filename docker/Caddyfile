@@ -240,8 +240,7 @@ routing-staging.cipherbox.cc {
 
 	# A record PUT carries the IPNS record media type, which is not CORS-safelisted,
 	# so the browser preflights Content-Type and blocks the publish without it.
-	# someguy bounds no lookup and the clients give up at 30 s, so a slow lookup
-	# fails here first, as a 502 the host records.
+	# The 25 s bound: scripts/check-accelerator-front.mjs.
 	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS" "Authorization, Range, Accept, Content-Type" 25s
 }
 

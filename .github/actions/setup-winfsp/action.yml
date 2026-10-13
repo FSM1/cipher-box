@@ -18,27 +18,13 @@ runs:
         $ErrorActionPreference = 'Stop'
         $out = Join-Path $env:RUNNER_TEMP "winfsp-$env:WINFSP_BUILD.msi"
         $url = "https://github.com/winfsp/winfsp/releases/download/v$env:WINFSP_VERSION/winfsp-$env:WINFSP_BUILD.msi"
-        # A download was once cut mid-stream. Windows PowerShell 5.1 has no
-        # -MaximumRetryCount, so the retry is a loop.
-        $attempts = 3
-        for ($i = 1; ; $i++) {
-          try {
-            Invoke-WebRequest -Uri $url -OutFile $out
-            break
-          } catch {
-            if ($i -ge $attempts) { throw }
-            Write-Warning "WinFsp download attempt $i of $attempts failed: $($_.Exception.Message)"
-            Start-Sleep -Seconds (10 * $i)
-          }
+        & (Join-Path $env:GITHUB_ACTION_PATH 'install-verified.ps1') -Uri $url -OutFile $out -Sha256 $env:WINFSP_SHA256 -Install {
+          param($msi)
+          # INSTALLLEVEL=1000 selects the developer feature — the headers and
+          # import library `winfsp-sys` builds its bindings against.
+          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
+          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
         }
-        $actual = (Get-FileHash $out -Algorithm SHA256).Hash
-        if ($actual -ne $env:WINFSP_SHA256) {
-          throw "WinFsp MSI hash mismatch: expected $env:WINFSP_SHA256, got $actual"
-        }
-        # INSTALLLEVEL=1000 selects the developer feature — the headers and
-        # import library `winfsp-sys` builds its bindings against.
-        $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
-        if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
 
     # `winfsp-sys` (and `winfsp_init` at runtime) find WinFsp through this key
     # and nothing else, so a build that never linked the installed driver fails

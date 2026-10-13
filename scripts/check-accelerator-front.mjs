@@ -30,13 +30,14 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CADDY_BUILD = resolve(repoRoot, 'docker/caddy');
 /** Generates the staging env, so it holds the hop count the API actually runs. */
 const DEPLOY_WORKFLOW = '.github/workflows/deploy-staging.yml';
-const ACCELERATORS = ['ipfs:8080', 'someguy:8190'];
 const ROUTING = 'someguy:8190';
+const ACCELERATORS = ['ipfs:8080', ROUTING];
 /**
- * The clients give up on a record at 30 s, and someguy bounds no lookup, so a
- * slow lookup must fail at the proxy first to show as a 502 on the host.
+ * The clients give up on a record at 30 s, and Boxo cuts a someguy lookup at
+ * 30 s. The proxy gives up first, with margin for the Cloudflare hop and the
+ * verify leg, so a slow lookup fails as a Caddy 504, not a client timeout.
  */
-const CLIENT_RECORD_TIMEOUT_NS = 30e9;
+const MAX_ROUTING_HEADER_TIMEOUT_NS = 25e9;
 const VERIFY_PATH = '/auth/gateway/verify';
 /** Anything that would tell the verify leg WHAT is being read, not merely who asks. */
 const PATH_NAMING_HEADERS = [
@@ -273,12 +274,12 @@ for (const { node, ancestors } of nodes) {
     );
   }
 
+  const isPublishLeg = ancestors.some(narrowedBy(publishOnly));
   if (target.includes(ROUTING)) {
     const timeout = node.transport?.response_header_timeout ?? 0;
-    const leg = ancestors.some(narrowedBy(publishOnly)) ? 'publish proxy' : 'proxy';
     check(
-      timeout > 0 && timeout < CLIENT_RECORD_TIMEOUT_NS,
-      `${vhost}: ${leg} to ${ROUTING} has no response header timeout under the client's ${CLIENT_RECORD_TIMEOUT_NS / 1e9} s, so a slow lookup fails only at the client`
+      timeout > 0 && timeout <= MAX_ROUTING_HEADER_TIMEOUT_NS,
+      `${vhost}: ${isPublishLeg ? 'publish proxy' : 'proxy'} to ${ROUTING} has no response header timeout of at most ${MAX_ROUTING_HEADER_TIMEOUT_NS / 1e9} s, so a slow lookup fails only at the client`
     );
   }
 
@@ -297,7 +298,6 @@ for (const { node, ancestors } of nodes) {
     continue;
   }
 
-  const isPublishLeg = ancestors.some(narrowedBy(publishOnly));
   if (isPublishLeg) publishVhosts.add(vhost);
   check(
     isPublishLeg,
