@@ -265,6 +265,13 @@ jobs:
       - uses: ./.github/actions/setup-winfsp
         if: runner.os == 'Windows'
 
+      # The download retry and hash check of the step above, on the failure
+      # paths a real download only hits by chance.
+      - name: WinFsp download retry and hash check
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .github/actions/setup-winfsp/install-verified.test.ps1
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: adapters
