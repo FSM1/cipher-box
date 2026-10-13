@@ -1,23 +1,28 @@
 //! A transport seam that reports each request slower than a threshold, for the
 //! headless e2e host's diagnostics.
 //!
-//! A report names the request kind, the endpoint host, the duration and the
-//! outcome class. It never carries a path, a routing key, a CID, a header or
-//! an error message, because each of those can carry a name or a token.
+//! The privacy rule for that log: a report names the request kind, the endpoint
+//! host, the duration and the outcome class. It never carries a path, a routing
+//! key, a CID, a header or an error message, because each of those can carry a
+//! name or a token.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cipherbox_engine::seams::{
-    CappedFetchError, EndpointId, Http, HttpRequest, HttpResponse, RecordTransport, SeamResult,
+    CappedFetchError, EndpointId, Http, HttpRequest, HttpResponse, RecordTransport, SeamError,
+    SeamResult,
 };
+
+/// The host a report names when the URL does not parse.
+const UNPARSED: &str = "unparsed";
 
 /// One request that took at least the threshold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlowRequest {
     /// `record-get`, `record-put`, `http` or `http-capped`.
     pub kind: &'static str,
-    /// The endpoint host, with no scheme, user info, port, path or query.
+    /// The endpoint host as the URL parser reads it, or `unparsed`.
     pub host: String,
     /// How long the request took.
     pub millis: u64,
@@ -59,22 +64,20 @@ impl<S> Timed<S> {
         }
         (self.report)(&SlowRequest {
             kind,
-            host: host_of(url).to_owned(),
+            host: host_of(url),
             millis: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
             outcome: outcome(),
         });
     }
 }
 
-/// The host of `url`: past the scheme and any user info, before the port,
-/// path, query or fragment.
-fn host_of(url: &str) -> &str {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    host.split(':').next().unwrap_or_default()
+/// The host of `url` as `reqwest` would reach it: a backslash ends the host,
+/// and an IPv6 host keeps its brackets.
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| UNPARSED.to_owned())
 }
 
 fn status_class(status: u16) -> String {
@@ -83,6 +86,15 @@ fn status_class(status: u16) -> String {
     } else {
         format!("status {status}")
     }
+}
+
+fn error_class(error: &SeamError) -> String {
+    if error.is_over_cap() {
+        return "over-cap".to_owned();
+    }
+    error
+        .status()
+        .map_or_else(|| "error".to_owned(), status_class)
 }
 
 impl<S: RecordTransport> RecordTransport for Timed<S> {
@@ -109,9 +121,7 @@ impl<S: RecordTransport> RecordTransport for Timed<S> {
         self.observe("record-get", &endpoint.0, started, || match &got {
             Ok(Some(_)) => "ok".to_owned(),
             Ok(None) => "absent".to_owned(),
-            Err(error) => error
-                .status()
-                .map_or_else(|| "error".to_owned(), status_class),
+            Err(error) => error_class(error),
         });
         got
     }
@@ -126,9 +136,7 @@ impl<S: RecordTransport> RecordTransport for Timed<S> {
         let put = self.inner.put_record(endpoint, routing_key, record).await;
         self.observe("record-put", &endpoint.0, started, || match &put {
             Ok(()) => "ok".to_owned(),
-            Err(error) => error
-                .status()
-                .map_or_else(|| "error".to_owned(), status_class),
+            Err(error) => error_class(error),
         });
         put
     }
@@ -141,7 +149,7 @@ impl<S: Http> Http for Timed<S> {
         let sent = self.inner.send(request).await;
         self.observe("http", &url, started, || match &sent {
             Ok(response) => status_class(response.status),
-            Err(_) => "error".to_owned(),
+            Err(error) => error_class(error),
         });
         sent
     }
@@ -157,7 +165,7 @@ impl<S: Http> Http for Timed<S> {
         self.observe("http-capped", &url, started, || match &sent {
             Ok(response) => status_class(response.status),
             Err(CappedFetchError::BodyTooLarge { .. }) => "over-cap".to_owned(),
-            Err(CappedFetchError::Transport(_)) => "error".to_owned(),
+            Err(CappedFetchError::Transport(error)) => error_class(error),
         });
         sent
     }
@@ -167,21 +175,34 @@ impl<S: Http> Http for Timed<S> {
 mod tests {
     use std::sync::Mutex;
 
-    use cipherbox_engine::seams::{HttpCredentials, HttpMethod, SeamError};
+    use cipherbox_engine::seams::{HttpCredentials, HttpMethod};
     use zeroize::Zeroizing;
 
     use super::*;
 
     const ROUTING_KEY: &str = "k51qzi5uqu5dsecretroutingkey";
     const BEARER: &str = "pseudonym-token";
+    const CID: &str = "bafkreisecretcid";
+    const ACCELERATOR: &str = "https://routing.test";
 
-    /// Answers every request at once with a fixed result.
+    /// Answers each call at once with a fixed result whose error message holds
+    /// every planted secret.
     #[derive(Clone)]
-    struct Refusing;
+    struct Canned {
+        capped_over_cap: bool,
+    }
 
-    impl RecordTransport for Refusing {
+    fn planted() -> String {
+        format!("failed for {ROUTING_KEY} under {BEARER} at {CID}")
+    }
+
+    impl RecordTransport for Canned {
         fn endpoints(&self) -> Vec<EndpointId> {
             vec![EndpointId::new("https://user:pw@delegated.test:8443/base")]
+        }
+
+        fn accelerator(&self) -> Option<EndpointId> {
+            Some(EndpointId::new(ACCELERATOR))
         }
 
         async fn get_record(
@@ -191,10 +212,7 @@ mod tests {
             _max_bytes: usize,
             _bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
-            Err(SeamError::http_status(
-                format!("record_transport get: status 429 for {ROUTING_KEY}"),
-                429,
-            ))
+            Err(SeamError::http_status(planted(), 429))
         }
 
         async fn put_record(
@@ -203,12 +221,26 @@ mod tests {
             _routing_key: &str,
             _record: &[u8],
         ) -> SeamResult<()> {
-            Ok(())
+            Err(SeamError::new(planted()))
         }
     }
 
-    impl Http for Refusing {
+    impl Http for Canned {
         async fn send(&self, _request: HttpRequest) -> SeamResult<HttpResponse> {
+            Err(SeamError::new(planted()))
+        }
+
+        async fn send_capped(
+            &self,
+            _request: HttpRequest,
+            max_bytes: usize,
+        ) -> Result<HttpResponse, CappedFetchError> {
+            if self.capped_over_cap {
+                return Err(CappedFetchError::BodyTooLarge {
+                    observed: max_bytes + 1,
+                    limit: max_bytes,
+                });
+            }
             Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),
@@ -217,11 +249,14 @@ mod tests {
         }
     }
 
-    fn collecting(threshold: Duration) -> (Timed<Refusing>, Arc<Mutex<Vec<SlowRequest>>>) {
+    fn collecting(
+        threshold: Duration,
+        capped_over_cap: bool,
+    ) -> (Timed<Canned>, Arc<Mutex<Vec<SlowRequest>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         let timed = Timed::new(
-            Refusing,
+            Canned { capped_over_cap },
             threshold,
             Arc::new(move |slow: &SlowRequest| sink.lock().unwrap().push(slow.clone())),
         );
@@ -235,10 +270,10 @@ mod tests {
             .block_on(future)
     }
 
-    fn block_request() -> HttpRequest {
+    fn request_to(url: String) -> HttpRequest {
         HttpRequest {
             method: HttpMethod::Get,
-            url: format!("https://gateway.test/ipfs/bafkreisecretcid?format=raw#{BEARER}"),
+            url,
             headers: vec![(
                 "Authorization".to_owned(),
                 Zeroizing::new(format!("Bearer {BEARER}")),
@@ -249,46 +284,107 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_slow_request_reports_its_kind_host_and_outcome_and_nothing_it_addressed() {
-        let (timed, seen) = collecting(Duration::ZERO);
-        let endpoint = timed.endpoints().remove(0);
-        let _ = run(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
-        let _ = run(timed.send_capped(block_request(), 1024));
+    fn report(kind: &'static str, host: &str, outcome: &str) -> SlowRequest {
+        SlowRequest {
+            kind,
+            host: host.to_owned(),
+            millis: 0,
+            outcome: outcome.to_owned(),
+        }
+    }
 
-        let seen = seen.lock().unwrap();
-        let reported: Vec<(&str, &str, &str)> = seen
+    /// The reports with their durations set to zero: a canned answer takes no
+    /// measurable time, and the duration is not what these tests prove.
+    fn reports(seen: &Mutex<Vec<SlowRequest>>) -> Vec<SlowRequest> {
+        seen.lock()
+            .unwrap()
             .iter()
-            .map(|slow| (slow.kind, slow.host.as_str(), slow.outcome.as_str()))
-            .collect();
-        assert_eq!(
-            reported,
-            [
-                ("record-get", "delegated.test", "status 429"),
-                ("http-capped", "gateway.test", "status 404"),
-            ]
-        );
+            .map(|slow| {
+                assert!(slow.millis < 60_000, "a canned answer took {}", slow.millis);
+                SlowRequest {
+                    millis: 0,
+                    ..slow.clone()
+                }
+            })
+            .collect()
+    }
+
+    fn carries_no_secret(seen: &[SlowRequest]) {
         let text = format!("{seen:?}");
         for secret in [
             ROUTING_KEY,
             BEARER,
-            "bafkreisecretcid",
+            CID,
             "user",
             "pw",
             "/base",
             "8443",
+            "ipfs",
         ] {
             assert!(!text.contains(secret), "a report carries {secret:?}");
         }
     }
 
     #[test]
+    fn each_slow_request_reports_its_kind_host_and_outcome_and_nothing_it_addressed() {
+        let (timed, seen) = collecting(Duration::ZERO, false);
+        let endpoint = timed.endpoints().remove(0);
+        let _ = run(timed.get_record(&endpoint, ROUTING_KEY, 1024, Some(BEARER)));
+        let _ = run(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
+        let _ = run(timed.send(request_to(format!(
+            "https://[2001:db8::1]:8443/ipfs/{CID}?token={BEARER}"
+        ))));
+        let _ = run(timed.send_capped(
+            request_to(format!("https://gateway.test/ipfs/{CID}#{BEARER}")),
+            1024,
+        ));
+
+        let seen = reports(&seen);
+        assert_eq!(
+            seen,
+            [
+                report("record-get", "delegated.test", "status 429"),
+                report("record-put", "delegated.test", "error"),
+                report("http", "[2001:db8::1]", "error"),
+                report("http-capped", "gateway.test", "status 404"),
+            ]
+        );
+        carries_no_secret(&seen);
+    }
+
+    #[test]
+    fn a_backslash_path_or_an_unparsed_url_reports_no_part_of_the_path() {
+        let (timed, seen) = collecting(Duration::ZERO, true);
+        let _ = run(timed.send_capped(
+            request_to(format!("https://gateway.test\\ipfs\\{CID}")),
+            1024,
+        ));
+        let _ = run(timed.send(request_to(format!("gateway.test/ipfs/{CID}"))));
+
+        let seen = reports(&seen);
+        assert_eq!(
+            seen,
+            [
+                report("http-capped", "gateway.test", "over-cap"),
+                report("http", UNPARSED, "error"),
+            ]
+        );
+        carries_no_secret(&seen);
+    }
+
+    #[test]
+    fn the_wrapper_forwards_the_accelerator() {
+        let (timed, _seen) = collecting(Duration::ZERO, false);
+        assert_eq!(timed.accelerator(), Some(EndpointId::new(ACCELERATOR)));
+    }
+
+    #[test]
     fn a_request_under_the_threshold_reports_nothing() {
-        let (timed, seen) = collecting(Duration::from_secs(3600));
+        let (timed, seen) = collecting(Duration::from_secs(3600), false);
         let endpoint = timed.endpoints().remove(0);
         let _ = run(timed.get_record(&endpoint, ROUTING_KEY, 1024, None));
         let _ = run(timed.put_record(&endpoint, ROUTING_KEY, b"record"));
-        let _ = run(timed.send(block_request()));
+        let _ = run(timed.send(request_to(format!("https://gateway.test/ipfs/{CID}"))));
 
         assert!(seen.lock().unwrap().is_empty());
     }

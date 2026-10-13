@@ -5832,7 +5832,7 @@ impl<T: SeamTypes> Engine<T> {
         self
     }
 
-    /// Report every sync pass's leg durations to `sink`. Call it before
+    /// Send each leg of every sync pass to `sink` as it ends. Call it before
     /// [`start`](Self::start), which builds the tick loop.
     #[must_use]
     pub fn with_pass_timings(mut self, sink: PassTimingSink) -> Self {

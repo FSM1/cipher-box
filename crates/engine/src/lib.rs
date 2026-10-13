@@ -148,7 +148,7 @@ pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
     AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
     HeadReconciliation, Link, NewNode, NodeMeta, Op, OpKind, OpRecordError, OpResolution,
-    PassTimingSink, PassTimings, PointerError, PointerFetch, PointerRecord, QueueHold,
+    PASS_LEGS, PassEvent, PassTimingSink, PointerError, PointerFetch, PointerRecord, QueueHold,
     QueueHoldReason, RecordClass, RecordReader, RecordSeal, Repair, Replaced, ReplayReport,
     ScopeCrossing, SessionRole, Snapshot, StagedContent, TickCause, TickControl,
     VaultPointerAdoption, apply_overlay, apply_repairs, classify, decode_queue, encode_op_record,

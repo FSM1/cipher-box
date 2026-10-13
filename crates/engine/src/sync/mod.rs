@@ -53,7 +53,7 @@ pub use drain::{
 pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
-pub use pass_timing::{PassTimingSink, PassTimings};
+pub use pass_timing::{PASS_LEGS, PassEvent, PassTimingSink};
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, PointerRecord, SessionRole, VaultPointerAdoption,
     open_repoint, resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint,

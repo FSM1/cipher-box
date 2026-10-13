@@ -101,6 +101,8 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
     timings: Option<PassTimingSink>,
+    /// Passes run under `timings`, so each event names its pass.
+    passes: Cell<u64>,
 }
 
 /// What one pass reports to the loop that ran it.
@@ -368,10 +370,11 @@ where
             settings_rechecked,
             link_swept,
             timings: None,
+            passes: Cell::new(0),
         }
     }
 
-    /// Report each pass's leg durations to `sink`.
+    /// Send each pass's legs to `sink` as they end.
     pub(crate) fn with_timings(mut self, sink: Option<PassTimingSink>) -> Self {
         self.timings = sink;
         self
@@ -379,31 +382,32 @@ where
 
     /// One tick, and its report: a stopped one once the session is gone.
     pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> PassReport {
-        let scheduler = &self.seams.scheduler;
-        let mut clock = self
-            .timings
-            .as_ref()
-            .map(|_| LegClock::start(cause, scheduler.now()));
-        let mut lap = |leg| {
-            if let Some(clock) = clock.as_mut() {
-                clock.lap(leg, scheduler.now());
-            }
-        };
         let Some(mut pass) = self.loop_gate(state, cause) else {
             return PassReport::STOPPED;
+        };
+        let scheduler = &self.seams.scheduler;
+        let mut clock = self.timings.as_ref().map(|sink| {
+            self.passes.set(self.passes.get() + 1);
+            LegClock::start(sink, self.passes.get(), cause, scheduler.now())
+        });
+        // One lap per entry of `PASS_LEGS`, in that order.
+        let mut lap = || {
+            if let Some(clock) = clock.as_mut() {
+                clock.lap(scheduler.now());
+            }
         };
         let Some(decision) = self.redecide_settings(state, &pass).await else {
             return PassReport::STOPPED;
         };
-        lap("settings");
+        lap();
         self.consult_scope_pointers(state, &mut pass).await;
-        lap("scope-pointers");
+        lap();
         let followed = self.follow_received_pointers(state, &pass).await;
-        lap("received-pointers");
+        lap();
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
-        lap("floors");
+        lap();
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
-        lap("root");
+        lap();
         pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
             matches!(
                 resolved.outcome,
@@ -414,30 +418,27 @@ where
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
         let descendants = self.walk_scopes(state, &pass, recovered_root).await;
-        lap("scope-walk");
+        lap();
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
-        lap("focus");
+        lap();
         let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
             .assemble_scopes(state, &pass, &scopes, descendants)
             .await;
-        lap("assembly");
+        lap();
         let boundaries = self
             .drain(state, &pass, &decision, &read_seed, &scopes, assembly)
             .await;
-        lap("drain");
+        lap();
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
-        lap("mailbox");
+        lap();
         self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
             .await;
-        lap("claims");
+        lap();
         self.repost_claims(state, &pass).await;
-        lap("claim-repost");
+        lap();
         self.refresh_received_shares(state, &pass, followed).await;
-        lap("received-shares");
-        if let (Some(sink), Some(clock)) = (&self.timings, clock) {
-            sink(&clock.finish());
-        }
+        lap();
         PassReport {
             verdict,
             stop: false,
