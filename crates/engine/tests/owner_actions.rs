@@ -24366,6 +24366,67 @@ fn the_sweep_a_read_revoke_enqueues_reports_no_node_left_at_the_old_epoch() {
     assert!(*at >= cut_at);
 }
 
+/// The old-epoch node counts the sweep runs report for `scope_root`.
+fn old_epoch_counts(events: &mut EventStream, scope_root: NodeId) -> Vec<u32> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SweepConvergence {
+                scope_root: reported,
+                old_epoch_nodes,
+                ..
+            } if reported == scope_root => Some(old_epoch_nodes),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A read cut while a link mint's interior move is owed: the cut's sweep cannot
+/// open the node still in the scope the folder left, so it settles with that
+/// node at the old epoch. The re-drive that lands the move files the sweep
+/// that proves the scope converged, before any idle sweep runs.
+#[test]
+fn the_redrive_that_lands_an_owed_move_files_the_sweep_that_proves_the_cut() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let stalled = write_name(inner);
+    fx.world.record_store.fail_put_for(stalled.as_str());
+    fx.mint_link();
+    // The parent's sweep names the promoted root in the vault root's index.
+    settle_filed_sweeps(&fx);
+    let folder = fx.folder;
+    events_so_far(&mut fx._events);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: folder })),
+        Ok(CommandOutcome::Done)
+    );
+    settle_filed_sweeps(&fx);
+    let before = old_epoch_counts(&mut fx._events, folder);
+    assert!(
+        !before.is_empty() && before.iter().all(|count| *count > 0),
+        "the cut's sweep leaves the unmoved interior behind: {before:?}"
+    );
+
+    fx.world.record_store.heal_put_for(stalled.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The idle sweep job is due on this clock; only the filed run counts.
+    events_so_far(&mut fx._events);
+    settle_filed_sweeps(&fx);
+
+    assert_eq!(
+        old_epoch_counts(&mut fx._events, folder),
+        vec![0],
+        "the sweep the landed move files proves the cut"
+    );
+}
+
 /// A write wave that stops sends its start and no end: the owed work is its
 /// terminal event.
 #[test]

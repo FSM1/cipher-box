@@ -208,29 +208,33 @@ the old epoch. The cross-client half, a mounted desktop host beside a browser
 host on one vault, is not recorded yet. `Perf Benches` takes it from the wait
 samples of a `Desktop E2E Tests` run.
 
-Taken on 2026-10-07 with `cipherbox-load --scenario rotation-wave --target
-local --nodes <n>`, on the local host of "The environments", against the mock
-`/routing/v1` store and Kubo. One engine ran the `PRODUCTION` sync timing
-profile. The folder holds `n` subfolders under one scope root, so the name wave
-moves `n + 1` nodes. Each phase started on a full content bucket. Times come
-from the engine events, on the engine clock.
+Taken with `cipherbox-load --scenario rotation-wave --target local --nodes
+<n>`, on the local host of "The environments", against the mock `/routing/v1`
+store and Kubo: the 4 and 16 node rows on 2026-10-07, the 64 node row on
+2026-10-13. One engine ran the `PRODUCTION` sync timing profile. The folder
+holds `n` subfolders under one scope root, so the name wave moves `n + 1`
+nodes. Each phase started on a full content bucket. Times come from the engine
+events, on the engine clock.
 
 | Nodes | Sweep converged | Last sweep re-seal | Name wave     | Per node, p50 / p95 |
 | ----: | --------------: | -----------------: | :------------ | ------------------: |
 |     4 |          165 ms |             165 ms | 335 ms        |      44 ms / 132 ms |
 |    16 |          734 ms |             734 ms | 1021 ms       |      35 ms / 404 ms |
-|    64 |       641867 ms |           31742 ms | stopped, owed |                   — |
+|    64 |        90320 ms |           31558 ms | stopped, owed |                   — |
 
 The API's per-account content bucket, 60 uploads a minute, sets both limits
-at 64 nodes. Each node that the sweep re-seals and each node that the wave moves
-uploads a block:
+at 64 nodes. Each node that the link mint moves, that the sweep re-seals, or
+that the wave moves uploads a block:
 
-- The sweep that the read cut files got `429` answers. Its second pass
-  re-sealed more nodes 31.7 s after the cut, but the passes of the cut's task
-  left nodes at the old epoch. So the proof waits for the idle sweep job, one
-  `sweep_cadence` (900 s) after the engine started. For a scope with more nodes
-  than the bucket, the proof that no node is at the old epoch arrives up to one
-  `sweep_cadence` after the cut.
+- The link mint used the bucket and left the move of the last 13 nodes owed.
+  The sweep that the read cut files got no `429` answer. It re-sealed 51 nodes
+  and could not open the 13 nodes that still claim the vault root scope, so it
+  settled with them at the old epoch after its second pass. The re-drive of the
+  owed move lands those nodes when the bucket refills, and then files the
+  scope's sweep, which proves convergence. Before that change, the proof
+  waited for the idle sweep job, one `sweep_cadence` (900 s) after the engine
+  started: 641867 ms after the cut. A larger pass cap does not change this,
+  because the cut's sweep stops when a pass moves nothing.
 - The name wave got `429` answers part way. It sent no end, and the cut became
   owed rotation work.
 
@@ -239,5 +243,5 @@ Until a cross-client row lands, the `SyncTimingProfile::PRODUCTION`
 placeholders `escalation_window`, `focus_horizon`, `pointer_consult_interval`
 and `migration_window` keep the values they carry.
 
-`sweep_cadence` keeps 900 s on this measurement. The cadence bounds only the
-proof of convergence for a scope with more nodes than the content bucket.
+`sweep_cadence` keeps 900 s on this measurement. It no longer bounds the proof
+of convergence after a cut over an owed interior move.
