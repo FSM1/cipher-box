@@ -193,7 +193,7 @@ async function runLeg(context: LegContext): Promise<void> {
         }
       );
       const instance = await open(context, 'writer', devKey);
-      await refreshOf(context, instance, until);
+      await refreshWithinBudget(context, instance, until);
       return { instance, devKey };
     }
   );
@@ -214,7 +214,7 @@ async function runLeg(context: LegContext): Promise<void> {
   const markerWriter = writer.instance.abandoned
     ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async (until) => {
         const instance = await open(context, 'writer-reopened', writer.devKey);
-        await refreshOf(context, instance, until);
+        await refreshWithinBudget(context, instance, until);
         return instance;
       })
     : writer.instance;
@@ -238,7 +238,7 @@ async function runLeg(context: LegContext): Promise<void> {
     budgets.signInMs,
     async (until) => {
       const instance = await open(context, 'reader', writer.devKey);
-      await refreshOf(context, instance, until);
+      await refreshWithinBudget(context, instance, until);
       return instance;
     }
   );
@@ -463,7 +463,7 @@ async function writeMarker(
 
   // The ledger as it is now, not as the leg read it before the marker reads.
   const ledgerAt = join(instance.mountRoot, ...granteeLedgerPath());
-  await refreshOf(context, instance, untilMs);
+  await refreshWithinBudget(context, instance, untilMs);
   const ledger = ledgerFrom(await readOrErrno(ledgerAt));
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
@@ -541,17 +541,22 @@ function refreshingAfterFirst<T>(
 ): () => Promise<T> {
   let calls = 0;
   return async () => {
-    if (calls++ > 0) await refreshOf(context, instance, untilMs);
+    if (calls++ > 0) await refreshWithinBudget(context, instance, untilMs);
     return probe();
   };
 }
 
 /** A nocache refresh that sends an overdue one again until the step budget ends. */
-function refreshOf(context: LegContext, instance: Instance, untilMs: number): Promise<void> {
+function refreshWithinBudget(
+  context: LegContext,
+  instance: Instance,
+  untilMs: number
+): Promise<void> {
   return refreshPastOverdue(() => instance.refresh(), {
     name: instance.name,
     untilMs,
-    intervalMs: context.deadlines.intervalMs,
+    waitMs: context.deadlines.readIntervalMs,
+    refreshDeadlineMs: PRODUCTION_PROFILE.refreshDeadlineMs,
     log: (line) => process.stdout.write(line),
   });
 }
