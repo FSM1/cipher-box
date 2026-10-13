@@ -16,7 +16,7 @@ pub use cipherbox_fuse::KernelOp;
 /// What the mounting thread hands back: the mount it made, or why it made none.
 pub type Landing = Result<Mount, String>;
 
-/// Shown once the kernel session has ended under a live app — an unmount from a
+/// Shown once the mount has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
 /// projected again by signing in again, not by re-mounting under it.
 const ENDED: &str = "the vault was unmounted outside CipherBox; sign out and back in to mount it";

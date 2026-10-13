@@ -24,12 +24,13 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::task::Poll;
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{NodeKind, StatFs};
+use cipherbox_mount_table::Identity;
 use fuser::{
     BackgroundSession, FileAttr, FileType, Filesystem, KernelConfig, MountOption, Notifier,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
@@ -471,21 +472,23 @@ impl Drop for KernelOp {
 /// A live mount. Dropping it unmounts and ends the session thread; the
 /// operation core it fed is torn down separately, by its own `unmount`.
 pub struct FuseMount {
+    /// Ahead of the session, so the watch stops before the unmount it would
+    /// otherwise report as one from outside the app.
+    published: Watched,
     /// Held for its `Drop`, which is the unmount.
     _session: BackgroundSession,
     invalidator: FuseInvalidator,
     ops: mpsc::UnboundedReceiver<FuseOp>,
     owner: Ownership,
-    published: Watched,
 }
 
-/// Whether the mount table lists the mount point. Never a read through the
-/// mount itself: a hung FUSE-T volume blocks one.
-type MountTable = Box<dyn FnMut() -> io::Result<bool> + Send>;
+/// Which mount the mount table lists at the mount point, if any
+/// ([`cipherbox_mount_table`] says why it is not a read through the mount).
+type MountTable = Box<dyn FnMut() -> io::Result<Option<Identity>> + Send>;
 
-/// The table FUSE-T's mount is watched through once it is live. FUSE-T serves
-/// the volume over SMB, and an eject of that volume leaves the FUSE session
-/// open, so `next_op` alone never reports it.
+/// The table FUSE-T's mount is watched through. FUSE-T serves the volume over
+/// SMB, and an eject of that volume leaves the FUSE session open, so `next_op`
+/// alone never reports it.
 ///
 /// Spelled the way the table spells it, which is resolved before the mount: a
 /// resolve after it is a read through the mount.
@@ -493,7 +496,11 @@ type MountTable = Box<dyn FnMut() -> io::Result<bool> + Send>;
 fn mount_table(mountpoint: &Path) -> io::Result<Option<MountTable>> {
     let listed_as = fs::canonicalize(mountpoint)?;
     Ok(Some(Box::new(move || {
-        Ok(cipherbox_mount_table::mount_points()?.contains(&listed_as))
+        // The last entry is the one on top, if a mount lands over another.
+        Ok(cipherbox_mount_table::mounts()?
+            .into_iter()
+            .rfind(|mounted| mounted.on == listed_as)
+            .map(|mounted| mounted.identity))
     })))
 }
 
@@ -513,8 +520,8 @@ struct Watched {
 }
 
 /// Watch `at` from a thread of its own until the mount serves it rather than
-/// the directory it covers, or until `within` runs out — then, through `table`
-/// every `every`, until the mount table drops the live mount.
+/// the directory it covers, and `table` lists it, or until `within` runs out —
+/// then, through `table` every `every`, until that mount leaves the table.
 ///
 /// Off the pump, and it has to be: once the mount is published, reading the
 /// mount point is a kernel operation this session owes the answer to, so a pump
@@ -528,7 +535,7 @@ fn watch_publication(
     at: PathBuf,
     covered: u64,
     within: Duration,
-    mut table: Option<MountTable>,
+    table: Option<MountTable>,
     every: Duration,
 ) -> Watched {
     let verdict = Arc::new(AtomicU8::new(PENDING));
@@ -536,30 +543,45 @@ fn watch_publication(
     let watch = verdict.clone();
     thread::spawn(move || {
         let log = WatchLog::start(&at, within);
+        let mut table = table.map(|table| TableReads::new(table, &log));
         let deadline = Instant::now() + within;
         let mut seen = None;
-        let settled = loop {
+        let mut listing = None;
+        let live_as = loop {
             let sighting = sight(&at, covered);
             if seen != Some(sighting) {
                 log.line(format_args!("the mount point is {sighting}"));
                 seen = Some(sighting);
             }
-            if let Some(settled) = settle(sighting, deadline) {
-                break settled;
+            let listed = match table.as_mut() {
+                Some(table) if sighting == Sighting::Served => {
+                    let read = table.read();
+                    if read.is_some() && read != listing {
+                        listing = read.clone();
+                        log.line(format_args!("the mount table {}", Listing(&listing)));
+                    }
+                    read.flatten()
+                }
+                _ => None,
+            };
+            let confirmed = table.is_none() || listed.is_some();
+            match settle(sighting, confirmed, deadline) {
+                Some(LIVE) => break listed,
+                Some(_) => {
+                    watch.store(REFUSED, Ordering::Release);
+                    log.line(format_args!(
+                        "refused, the mount table {}",
+                        Listing(&listing)
+                    ));
+                    return;
+                }
+                None => thread::sleep(PUBLISH_POLL),
             }
-            thread::sleep(PUBLISH_POLL);
         };
-        watch.store(settled, Ordering::Release);
-        if settled == REFUSED {
-            let listed = table.as_mut().map(|listed| listed());
-            log.line(format_args!(
-                "refused, the mount table listing it: {listed:?}"
-            ));
-            return;
-        }
+        watch.store(LIVE, Ordering::Release);
         log.line(format_args!("live"));
-        if let Some(table) = table.as_mut()
-            && left_the_table(table, &wake, every)
+        if let (Some(table), Some(live_as)) = (table.as_mut(), live_as)
+            && table.until_it_leaves(&live_as, &wake, every)
         {
             watch.store(UNMOUNTED, Ordering::Release);
             log.line(format_args!("unmounted outside CipherBox"));
@@ -572,21 +594,74 @@ fn watch_publication(
     }
 }
 
-/// Read `table` every `every` until a mount it has listed leaves it. False
-/// once the mount the watch reports to is gone.
-fn left_the_table(table: &mut MountTable, wake: &oneshot::Sender<()>, every: Duration) -> bool {
-    let mut listed = false;
-    while !wake.is_canceled() {
-        match table() {
-            Ok(true) => listed = true,
-            // A mount the table never listed is not one it dropped: a table
-            // that spells the path differently would otherwise end each mount.
-            Ok(false) if listed => return true,
-            Ok(false) | Err(_) => {}
+/// Reads of the mount table, which log the first failed read and no later one.
+struct TableReads<'a> {
+    table: MountTable,
+    log: &'a WatchLog<'a>,
+    failed: bool,
+}
+
+impl<'a> TableReads<'a> {
+    fn new(table: MountTable, log: &'a WatchLog<'a>) -> Self {
+        Self {
+            table,
+            log,
+            failed: false,
         }
-        thread::sleep(every);
     }
-    false
+
+    /// The table's listing, or `None` when the read failed.
+    fn read(&mut self) -> Option<Option<Identity>> {
+        match (self.table)() {
+            Ok(listed) => Some(listed),
+            Err(error) => {
+                if !self.failed {
+                    self.failed = true;
+                    self.log
+                        .line(format_args!("the mount table could not be read: {error}"));
+                }
+                None
+            }
+        }
+    }
+
+    /// Read every `every` until the table no longer lists `live_as` at the
+    /// mount point. False once the mount the watch reports to is gone.
+    fn until_it_leaves(
+        &mut self,
+        live_as: &Identity,
+        wake: &oneshot::Sender<()>,
+        every: Duration,
+    ) -> bool {
+        while !wake.is_canceled() {
+            match self.read() {
+                Some(Some(listed)) if listed == *live_as => {}
+                Some(Some(other)) => {
+                    self.log.line(format_args!(
+                        "the mount table lists another mount there: {other:?}"
+                    ));
+                    return true;
+                }
+                Some(None) => return true,
+                None => {}
+            }
+            thread::sleep(every);
+        }
+        false
+    }
+}
+
+/// What the mount table last said of the mount point, for the watch's log.
+struct Listing<'a>(&'a Option<Option<Identity>>);
+
+impl std::fmt::Display for Listing<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("was not read"),
+            Some(None) => f.write_str("does not list it"),
+            Some(Some(identity)) => write!(f, "lists it as {identity:?}"),
+        }
+    }
 }
 
 /// The watch's lines on stderr, each stamped with the wall clock and the time
@@ -651,13 +726,36 @@ fn sight(at: &Path, covered: u64) -> Sighting {
 }
 
 /// The verdict one read of the mount point reaches, or nothing while the
-/// answer is still to come.
-fn settle(sighting: Sighting, deadline: Instant) -> Option<u8> {
+/// answer is still to come. `confirmed` is whether the mount table lists the
+/// mount, where a table is watched: a live mount it never listed is one whose
+/// unmount it could not report.
+fn settle(sighting: Sighting, confirmed: bool, deadline: Instant) -> Option<u8> {
     // A read that fails while the mount lands is not a verdict; the deadline is.
-    if sighting == Sighting::Served {
+    if sighting == Sighting::Served && confirmed {
         return Some(LIVE);
     }
     (Instant::now() >= deadline).then_some(REFUSED)
+}
+
+/// The next kernel operation, `None` once the session has ended, or `None`
+/// once `unmounted` resolves with nothing left queued: an operation already
+/// queued may be a write the mount acked, so it is answered first.
+fn poll_inbound<T>(
+    ops: &mut mpsc::UnboundedReceiver<T>,
+    unmounted: &mut Option<oneshot::Receiver<()>>,
+    cx: &mut Context<'_>,
+) -> Poll<Option<T>> {
+    if let Poll::Ready(op) = Pin::new(&mut *ops).poll_next(cx) {
+        return Poll::Ready(op);
+    }
+    if let Some(wake) = unmounted.as_mut() {
+        match Pin::new(wake).poll(cx) {
+            Poll::Ready(Ok(())) => return Poll::Ready(None),
+            Poll::Ready(Err(oneshot::Canceled)) => *unmounted = None,
+            Poll::Pending => {}
+        }
+    }
+    Poll::Pending
 }
 
 impl FuseMount {
@@ -721,18 +819,9 @@ impl FuseMount {
     /// Cancel-safe: an operation is taken off the queue or it is not, so a host
     /// may wait on this beside its other wake sources.
     pub async fn next_op(&mut self) -> Option<KernelOp> {
-        core::future::poll_fn(|cx| {
-            if let Some(unmounted) = self.published.unmounted.as_mut() {
-                match Pin::new(unmounted).poll(cx) {
-                    Poll::Ready(Ok(())) => return Poll::Ready(None),
-                    Poll::Ready(Err(_)) => self.published.unmounted = None,
-                    Poll::Pending => {}
-                }
-            }
-            Pin::new(&mut self.ops).poll_next(cx)
-        })
-        .await
-        .map(|op| KernelOp(Some(op)))
+        core::future::poll_fn(|cx| poll_inbound(&mut self.ops, &mut self.published.unmounted, cx))
+            .await
+            .map(|op| KernelOp(Some(op)))
     }
 
     /// Answer one operation from `core`.
@@ -1439,6 +1528,7 @@ fn file_attr(attrs: &Attributes, size: u64, owner: Ownership) -> FileAttr {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::task::Waker;
 
     use cipherbox_engine::NodeId;
 
@@ -1467,10 +1557,7 @@ mod tests {
 
         let sighting = sight(home.path(), covered);
         assert_eq!(sighting, Sighting::Covered);
-        assert_eq!(
-            settle(sighting, Instant::now() + Duration::from_secs(30)),
-            None
-        );
+        assert_eq!(settle(sighting, true, later()), None);
     }
 
     /// The mount moves the mount point onto its own filesystem, which is what
@@ -1482,9 +1569,17 @@ mod tests {
 
         let sighting = sight(home.path(), covered);
         assert_eq!(sighting, Sighting::Served);
+        assert_eq!(settle(sighting, true, later()), Some(LIVE));
+    }
+
+    /// A served mount point the watched table does not list yet is not live:
+    /// the watch could not report its unmount.
+    #[test]
+    fn a_served_mount_the_table_does_not_list_is_not_settled() {
+        assert_eq!(settle(Sighting::Served, false, later()), None);
         assert_eq!(
-            settle(sighting, Instant::now() + Duration::from_secs(30)),
-            Some(LIVE)
+            settle(Sighting::Served, false, Instant::now()),
+            Some(REFUSED)
         );
     }
 
@@ -1495,10 +1590,7 @@ mod tests {
 
         let sighting = sight(&home.path().join("absent"), 0);
         assert_eq!(sighting, Sighting::Unreadable(io::ErrorKind::NotFound));
-        assert_eq!(
-            settle(sighting, Instant::now() + Duration::from_secs(30)),
-            None
-        );
+        assert_eq!(settle(sighting, true, later()), None);
     }
 
     /// A backend that never publishes must reach a verdict rather than leave a
@@ -1509,7 +1601,7 @@ mod tests {
         let covered = device_of(home.path()).expect("a stat");
 
         assert_eq!(
-            settle(sight(home.path(), covered), Instant::now()),
+            settle(sight(home.path(), covered), true, Instant::now()),
             Some(REFUSED)
         );
     }
@@ -1531,6 +1623,10 @@ mod tests {
         assert_eq!(settled(&watched, PENDING), REFUSED);
     }
 
+    fn later() -> Instant {
+        Instant::now() + Duration::from_secs(30)
+    }
+
     /// How long a test waits on the watch thread before it calls it stuck.
     const WATCH_BOUND: Duration = Duration::from_secs(10);
 
@@ -1547,28 +1643,46 @@ mod tests {
         }
     }
 
+    /// The mount the fake tables list.
+    fn ours() -> Identity {
+        identity(1, "//member@localhost/CipherBox")
+    }
+
+    fn identity(fsid: i32, from: &str) -> Identity {
+        Identity {
+            fsid: [fsid, 0],
+            fs_type: "smbfs".into(),
+            from: from.into(),
+        }
+    }
+
     /// A watch over a mount point that reads as published at once, behind the
-    /// fake `table`, which it reads every millisecond.
-    fn live_watch(home: &tempfile::TempDir, table: MountTable) -> Watched {
+    /// fake `table`, which it reads every millisecond once the mount is live.
+    fn watch(home: &tempfile::TempDir, within: Duration, table: MountTable) -> Watched {
         let covered = device_of(home.path()).expect("a stat").wrapping_add(1);
-        let watched = watch_publication(
+        watch_publication(
             home.path().to_path_buf(),
             covered,
-            Duration::from_secs(30),
+            within,
             Some(table),
             Duration::from_millis(1),
-        );
+        )
+    }
+
+    fn live_watch(home: &tempfile::TempDir, table: MountTable) -> Watched {
+        let watched = watch(home, Duration::from_secs(30), table);
         assert_eq!(settled(&watched, PENDING), LIVE);
         watched
     }
 
     /// A fake table that answers `listed` for each read, by its index, and
     /// counts the reads.
-    fn counted(listed: impl Fn(u64) -> bool + Send + 'static) -> (MountTable, Arc<AtomicU64>) {
+    fn counted(
+        listed: impl Fn(u64) -> io::Result<Option<Identity>> + Send + 'static,
+    ) -> (MountTable, Arc<AtomicU64>) {
         let reads = Arc::new(AtomicU64::new(0));
         let counter = reads.clone();
-        let table: MountTable =
-            Box::new(move || Ok(listed(counter.fetch_add(1, Ordering::AcqRel))));
+        let table: MountTable = Box::new(move || listed(counter.fetch_add(1, Ordering::AcqRel)));
         (table, reads)
     }
 
@@ -1583,20 +1697,19 @@ mod tests {
         }
     }
 
-    /// An eject from Finder or `diskutil` leaves the FUSE-T session open, so
-    /// the mount table dropping the live mount is the only sign of it.
-    #[test]
-    fn a_live_mount_the_table_drops_is_reported_unmounted() {
-        let home = tempfile::tempdir().expect("a temp dir");
-        let (table, _) = counted(|read| read < 2);
-
-        let mut watched = live_watch(&home, table);
-        assert_eq!(settled(&watched, LIVE), UNMOUNTED);
+    /// The watch went live, then reported an unmount, and the wake has reached
+    /// the pump's side.
+    fn reports_unmounted(mut watched: Watched) {
+        let mut verdict = settled(&watched, PENDING);
+        if verdict == LIVE {
+            verdict = settled(&watched, LIVE);
+        }
+        assert_eq!(verdict, UNMOUNTED);
         let mut unmounted = watched.unmounted.take().expect("the wake");
         let until = Instant::now() + WATCH_BOUND;
         loop {
             match unmounted.try_recv() {
-                Ok(Some(())) => break,
+                Ok(Some(())) => return,
                 Ok(None) => assert!(Instant::now() < until, "the unmount never woke the pump"),
                 Err(oneshot::Canceled) => panic!("the watch ended without the wake"),
             }
@@ -1604,31 +1717,77 @@ mod tests {
         }
     }
 
+    /// An eject from Finder or `diskutil` leaves the FUSE-T session open, so
+    /// the mount table dropping the live mount is the only sign of it.
+    #[test]
+    fn a_live_mount_the_table_drops_is_reported_unmounted() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let (table, _) = counted(|read| Ok((read < 3).then(ours)));
+
+        reports_unmounted(watch(&home, Duration::from_secs(30), table));
+    }
+
+    /// The table confirmed the mount before it went live, so an eject before
+    /// any read after that is still one it drops.
+    #[test]
+    fn an_eject_right_after_the_mount_goes_live_is_reported_unmounted() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let (table, _) = counted(|read| Ok((read == 0).then(ours)));
+
+        reports_unmounted(watch(&home, Duration::from_secs(30), table));
+    }
+
+    /// Failed reads between the mount going live and the eject do not hide it.
+    #[test]
+    fn an_eject_behind_failed_table_reads_is_reported_unmounted() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let (table, _) = counted(|read| match read {
+            0 => Ok(Some(ours())),
+            1..=3 => Err(io::Error::other("a table read failed")),
+            _ => Ok(None),
+        });
+
+        reports_unmounted(watch(&home, Duration::from_secs(30), table));
+    }
+
+    /// Another filesystem mounted at the same path is not the vault.
+    #[test]
+    fn another_mount_at_the_mount_point_is_reported_unmounted() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let (table, _) = counted(|read| {
+            Ok(Some(if read < 2 {
+                ours()
+            } else {
+                identity(2, "/dev/disk9s1")
+            }))
+        });
+
+        reports_unmounted(watch(&home, Duration::from_secs(30), table));
+    }
+
     /// A mount the table goes on listing stays live, and wakes nobody.
     #[test]
     fn a_live_mount_the_table_keeps_stays_live() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let (table, reads) = counted(|_| true);
+        let (table, reads) = counted(|_| Ok(Some(ours())));
 
         let mut watched = live_watch(&home, table);
-        wait_for_reads(&reads, 3);
+        wait_for_reads(&reads, 4);
         assert_eq!(watched.verdict.load(Ordering::Acquire), LIVE);
         let unmounted = watched.unmounted.as_mut().expect("the wake");
         assert_eq!(unmounted.try_recv(), Ok(None));
     }
 
-    /// A table that never listed the mount says nothing about it, so the
-    /// mount is not called gone.
+    /// A mount the table never lists is refused at the deadline, never called
+    /// live: its unmount would go unreported.
     #[test]
-    fn a_mount_the_table_never_listed_is_not_reported_unmounted() {
+    fn a_mount_the_table_never_lists_is_refused() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let (table, reads) = counted(|_| false);
+        let (table, reads) = counted(|_| Ok(None));
 
-        let mut watched = live_watch(&home, table);
-        wait_for_reads(&reads, 3);
-        assert_eq!(watched.verdict.load(Ordering::Acquire), LIVE);
-        let unmounted = watched.unmounted.as_mut().expect("the wake");
-        assert_eq!(unmounted.try_recv(), Ok(None));
+        let watched = watch(&home, Duration::from_millis(50), table);
+        assert_eq!(settled(&watched, PENDING), REFUSED);
+        assert!(reads.load(Ordering::Acquire) > 0);
     }
 
     /// A table read that does not return holds the watch thread only: the
@@ -1638,10 +1797,13 @@ mod tests {
         let home = tempfile::tempdir().expect("a temp dir");
         let (started, reading) = std::sync::mpsc::channel();
         let (release, released) = std::sync::mpsc::channel::<()>();
+        let mut first = true;
         let table: MountTable = Box::new(move || {
-            let _ = started.send(());
-            let _ = released.recv();
-            Ok(true)
+            if !std::mem::take(&mut first) {
+                let _ = started.send(());
+                let _ = released.recv();
+            }
+            Ok(Some(ours()))
         });
 
         let mut watched = live_watch(&home, table);
@@ -1658,16 +1820,68 @@ mod tests {
     #[test]
     fn dropping_the_mount_stops_the_watch() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let (table, reads) = counted(|_| true);
+        let (table, reads) = counted(|_| Ok(Some(ours())));
 
         let watched = live_watch(&home, table);
-        wait_for_reads(&reads, 1);
+        wait_for_reads(&reads, 2);
         drop(watched);
         // One read may already be under way when the mount goes.
         thread::sleep(Duration::from_millis(50));
         let after_drop = reads.load(Ordering::Acquire);
         thread::sleep(Duration::from_millis(50));
         assert_eq!(reads.load(Ordering::Acquire), after_drop);
+    }
+
+    /// One poll of the pump's inbound side.
+    fn poll_once(
+        ops: &mut mpsc::UnboundedReceiver<u32>,
+        unmounted: &mut Option<oneshot::Receiver<()>>,
+    ) -> Poll<Option<u32>> {
+        poll_inbound(ops, unmounted, &mut Context::from_waker(Waker::noop()))
+    }
+
+    /// An op queued before the eject may be a write the mount acked, so it
+    /// reaches the pump before the unmount does.
+    #[test]
+    fn a_queued_op_is_answered_before_the_unmount() {
+        let (session, mut ops) = mpsc::unbounded();
+        let (wake, unmounted) = oneshot::channel();
+        let mut unmounted = Some(unmounted);
+        session.unbounded_send(7).expect("the queue takes an op");
+        wake.send(()).expect("the pump listens");
+
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Ready(Some(7)));
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Ready(None));
+        drop(session);
+    }
+
+    /// FUSE-T leaves its session open after an eject, so the wake alone has to
+    /// end the pump's wait.
+    #[test]
+    fn the_unmount_ends_the_wait_while_the_session_stays_open() {
+        let (session, mut ops) = mpsc::unbounded::<u32>();
+        let (wake, unmounted) = oneshot::channel();
+        let mut unmounted = Some(unmounted);
+
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Pending);
+        wake.send(()).expect("the pump listens");
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Ready(None));
+        drop(session);
+    }
+
+    /// A watch that ended with no unmount to report leaves the pump waiting on
+    /// the session alone.
+    #[test]
+    fn a_watch_that_ended_quietly_leaves_the_session_to_end_the_wait() {
+        let (session, mut ops) = mpsc::unbounded::<u32>();
+        let (wake, unmounted) = oneshot::channel::<()>();
+        let mut unmounted = Some(unmounted);
+        drop(wake);
+
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Pending);
+        assert!(unmounted.is_none());
+        drop(session);
+        assert_eq!(poll_once(&mut ops, &mut unmounted), Poll::Ready(None));
     }
 
     /// The mount point is made on demand and made private: a member who has

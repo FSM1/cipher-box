@@ -288,6 +288,11 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo clippy -p cipherbox-fuse -p cipherbox-win-security --all-targets -- -D warnings
 
+      # The same for the mount-table crate, whose body exists on macOS alone.
+      - name: Cargo clippy (the macOS mount table)
+        if: runner.os == 'macOS'
+        run: cargo clippy -p cipherbox-mount-table --all-targets -- -D warnings
+
       # Cargo hands a test run an explicit DYLD_FALLBACK_LIBRARY_PATH with the
       # macOS default `/usr/local/lib` spliced in, which resolves
       # `@rpath/libfuse-t.dylib` even when nothing linked an `LC_RPATH` — so a
