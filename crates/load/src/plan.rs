@@ -131,8 +131,8 @@ pub const MAX_BLOCK_BYTES: u32 = 2 * 1024 * 1024;
 /// The registry's batch cap, published as `maxItems` (blueprint/api.md).
 pub const MAX_BATCH: u32 = 1000;
 /// Ceiling on the subfolders one rotated folder holds. Past the API's
-/// 60-per-minute content bucket the wave stops and the sweep waits for the
-/// idle job, so a larger folder measures the throttle again.
+/// 60-per-minute content bucket the wave stops part way, so a larger folder
+/// measures the throttle again.
 pub const MAX_NODES: u32 = 64;
 
 const DEFAULT_LOCAL_API_URL: &str = "http://localhost:3000";

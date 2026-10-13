@@ -1320,7 +1320,7 @@ re-resolve. A node that an owed interior move (ADR 0063) has not moved yet
 still claims the scope the folder left, so the sweep of a cut taken in that
 window cannot open it and settles with it at the old epoch. The re-drive that
 lands the move therefore files the scope's sweep when the scope is past its
-genesis epoch. A move that stalls on the content bucket lands only when the
+mint epoch. A move that stalls on the content bucket lands only when the
 bucket refills, so for a subtree larger than the bucket the proof waits for the
 re-drive and not for the idle job.
 

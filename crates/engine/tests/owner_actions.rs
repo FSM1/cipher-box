@@ -24366,27 +24366,36 @@ fn the_sweep_a_read_revoke_enqueues_reports_no_node_left_at_the_old_epoch() {
     assert!(*at >= cut_at);
 }
 
-/// The old-epoch node counts the sweep runs report for `scope_root`.
-fn old_epoch_counts(events: &mut EventStream, scope_root: NodeId) -> Vec<u32> {
-    events_so_far(events)
-        .into_iter()
+/// The old-epoch node counts the sweep runs in `events` report for
+/// `scope_root`.
+fn old_epoch_counts(events: &[Event], scope_root: NodeId) -> Vec<u32> {
+    events
+        .iter()
         .filter_map(|event| match event {
             Event::SweepConvergence {
                 scope_root: reported,
                 old_epoch_nodes,
                 ..
-            } if reported == scope_root => Some(old_epoch_nodes),
+            } if *reported == scope_root => Some(*old_epoch_nodes),
             _ => None,
         })
         .collect()
 }
 
-/// A read cut while a link mint's interior move is owed: the cut's sweep cannot
-/// open the node still in the scope the folder left, so it settles with that
-/// node at the old epoch. The re-drive that lands the move files the sweep
-/// that proves the scope converged, before any idle sweep runs.
-#[test]
-fn the_redrive_that_lands_an_owed_move_files_the_sweep_that_proves_the_cut() {
+/// The events so far, which must carry no abuse event.
+fn events_without_abuse(events: &mut EventStream, step: &str) -> Vec<Event> {
+    let events = events_so_far(events);
+    let abuse: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+        .collect();
+    assert!(abuse.is_empty(), "{step}: {abuse:?}");
+    events
+}
+
+/// A folder whose link mint left the move of `inner` owed, with the parent's
+/// sweep settled so the vault root's index names the promoted root.
+fn link_mint_with_an_owed_move() -> (GrantScenario, NodeId, IpnsName) {
     let mut fx = GrantScenario::new();
     let inner = create_published_folder(
         &fx.world,
@@ -24398,17 +24407,29 @@ fn the_redrive_that_lands_an_owed_move_files_the_sweep_that_proves_the_cut() {
     let stalled = write_name(inner);
     fx.world.record_store.fail_put_for(stalled.as_str());
     fx.mint_link();
-    // The parent's sweep names the promoted root in the vault root's index.
     settle_filed_sweeps(&fx);
+    events_without_abuse(&mut fx._events, "the stalled mint");
+    (fx, inner, stalled)
+}
+
+/// A read cut while a link mint's interior move is owed: the cut's sweep cannot
+/// open the node still in the scope the folder left, so it settles with that
+/// node at the old epoch. The re-drive that lands the move files the sweep
+/// that proves the scope converged, before any idle sweep runs.
+#[test]
+fn the_redrive_that_lands_an_owed_move_files_the_sweep_that_proves_the_cut() {
+    let (mut fx, _, stalled) = link_mint_with_an_owed_move();
     let folder = fx.folder;
-    events_so_far(&mut fx._events);
 
     assert_eq!(
         block_on(fx.engine.command(Command::RotateNow { node: folder })),
         Ok(CommandOutcome::Done)
     );
     settle_filed_sweeps(&fx);
-    let before = old_epoch_counts(&mut fx._events, folder);
+    let before = old_epoch_counts(
+        &events_without_abuse(&mut fx._events, "the cut's sweep"),
+        folder,
+    );
     assert!(
         !before.is_empty() && before.iter().all(|count| *count > 0),
         "the cut's sweep leaves the unmoved interior behind: {before:?}"
@@ -24416,14 +24437,47 @@ fn the_redrive_that_lands_an_owed_move_files_the_sweep_that_proves_the_cut() {
 
     fx.world.record_store.heal_put_for(stalled.as_str());
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    // The idle sweep job is due on this clock; only the filed run counts.
+    // The idle sweep job is due on this clock; only the filed run counts. The
+    // tick's own leg events are not under test.
     events_so_far(&mut fx._events);
     settle_filed_sweeps(&fx);
 
     assert_eq!(
-        old_epoch_counts(&mut fx._events, folder),
+        old_epoch_counts(
+            &events_without_abuse(&mut fx._events, "the filed sweep"),
+            folder
+        ),
         vec![0],
         "the sweep the landed move files proves the cut"
+    );
+}
+
+/// A re-drive that lands an owed move at the mint epoch files no sweep: no cut
+/// came after the mint, so every node it moved is at the scope's epoch.
+#[test]
+fn the_redrive_that_lands_an_owed_move_at_the_mint_epoch_files_no_sweep() {
+    let (mut fx, inner, stalled) = link_mint_with_an_owed_move();
+    let folder = fx.folder;
+
+    fx.world.record_store.heal_put_for(stalled.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The tick's own leg events are not under test.
+    events_so_far(&mut fx._events);
+    let (override_seed, epoch) = scope_material_of(&fx.world, &fx.blocks, folder);
+    assert_eq!(epoch, 1, "no cut came after the mint");
+    assert!(
+        opens_under(&fx, inner, &read_key_under(&override_seed, inner)),
+        "the re-drive lands the move"
+    );
+    settle_filed_sweeps(&fx);
+
+    assert_eq!(
+        old_epoch_counts(
+            &events_without_abuse(&mut fx._events, "after the re-drive"),
+            folder
+        ),
+        Vec::<u32>::new(),
+        "no sweep runs over the minted scope"
     );
 }
 
@@ -24600,17 +24654,7 @@ fn a_sweep_enqueued_before_a_write_cut_reads_the_current_root() {
     events_so_far(&mut fx._events);
     settle_filed_sweeps(&fx);
 
-    let reports: Vec<u32> = events_so_far(&mut fx._events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::SweepConvergence {
-                scope_root,
-                old_epoch_nodes,
-                ..
-            } if scope_root == folder => Some(old_epoch_nodes),
-            _ => None,
-        })
-        .collect();
+    let reports = old_epoch_counts(&events_so_far(&mut fx._events), folder);
     assert!(!reports.is_empty(), "the enqueued sweep reports");
     assert!(reports.iter().all(|nodes| *nodes == 0), "and converges");
 }

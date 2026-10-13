@@ -228,8 +228,9 @@ that the wave moves uploads a block:
 
 - The link mint used the bucket and left the move of the last 13 nodes owed.
   The sweep that the read cut files got no `429` answer. It re-sealed 51 nodes
-  and could not open the 13 nodes that still claim the vault root scope, so it
-  settled with them at the old epoch after its second pass. The re-drive of the
+  and could not open the 13 nodes that still claim the vault root scope. It
+  settled after its second pass with 6 of them still at the old epoch. The
+  re-drive of the
   owed move lands those nodes when the bucket refills, and then files the
   scope's sweep, which proves convergence. Before that change, the proof
   waited for the idle sweep job, one `sweep_cadence` (900 s) after the engine

@@ -69,9 +69,9 @@ No command deletes the account, so each engine leaves its account behind.
 The API's content bucket allows 60 uploads a minute per account, and each node
 that the link mint moves, the sweep re-seals or the wave moves uploads a block.
 Past about 55 nodes the wave stops part way, the cut becomes owed work, and the
-run exits non-zero. The link mint also leaves part of its move owed, so the
-proof that the sweep converged waits until the re-drive lands that move: 90 s
-after the cut at 64 nodes. `--nodes` stops at 64 for that reason.
+run exits non-zero. `--nodes` stops at 64 for that reason. The link mint also
+leaves part of its move owed, so the proof that the sweep converged waits until
+the re-drive lands that move: 90 s after the cut at 64 nodes.
 
 ## Targets
 
