@@ -567,8 +567,8 @@ fn watch_publication(
             let confirmed = table.is_none() || listed.is_some();
             match settle(sighting, confirmed, deadline) {
                 Some(LIVE) => break listed,
-                Some(_) => {
-                    watch.store(REFUSED, Ordering::Release);
+                Some(refused) => {
+                    watch.store(refused, Ordering::Release);
                     log.line(format_args!(
                         "refused, the mount table {}",
                         Listing(&listing)
@@ -580,7 +580,7 @@ fn watch_publication(
         };
         watch.store(LIVE, Ordering::Release);
         log.line(format_args!("live"));
-        if let (Some(table), Some(live_as)) = (table.as_mut(), live_as)
+        if let Some((table, live_as)) = table.as_mut().zip(live_as)
             && table.until_it_leaves(&live_as, &wake, every)
         {
             watch.store(UNMOUNTED, Ordering::Release);
@@ -1630,17 +1630,25 @@ mod tests {
     /// How long a test waits on the watch thread before it calls it stuck.
     const WATCH_BOUND: Duration = Duration::from_secs(10);
 
-    /// The verdict once it is no longer `from`.
-    fn settled(watched: &Watched, from: u8) -> u8 {
-        let until = Instant::now() + WATCH_BOUND;
+    /// The first value `done` gives, or a failed test named `stuck` once
+    /// [`WATCH_BOUND`] runs out.
+    fn until<T>(stuck: &str, mut done: impl FnMut() -> Option<T>) -> T {
+        let bound = Instant::now() + WATCH_BOUND;
         loop {
-            let verdict = watched.verdict.load(Ordering::Acquire);
-            if verdict != from {
-                return verdict;
+            if let Some(value) = done() {
+                return value;
             }
-            assert!(Instant::now() < until, "the watch never left {from}");
+            assert!(Instant::now() < bound, "{stuck}");
             thread::yield_now();
         }
+    }
+
+    /// The verdict once it is no longer `from`.
+    fn settled(watched: &Watched, from: u8) -> u8 {
+        until(&format!("the watch never left {from}"), || {
+            let verdict = watched.verdict.load(Ordering::Acquire);
+            (verdict != from).then_some(verdict)
+        })
     }
 
     /// The mount the fake tables list.
@@ -1687,14 +1695,9 @@ mod tests {
     }
 
     fn wait_for_reads(reads: &AtomicU64, at_least: u64) {
-        let until = Instant::now() + WATCH_BOUND;
-        while reads.load(Ordering::Acquire) < at_least {
-            assert!(
-                Instant::now() < until,
-                "the watch stopped reading the table"
-            );
-            thread::yield_now();
-        }
+        until("the watch stopped reading the table", || {
+            (reads.load(Ordering::Acquire) >= at_least).then_some(())
+        });
     }
 
     /// The watch went live, then reported an unmount, and the wake has reached
@@ -1706,15 +1709,12 @@ mod tests {
         }
         assert_eq!(verdict, UNMOUNTED);
         let mut unmounted = watched.unmounted.take().expect("the wake");
-        let until = Instant::now() + WATCH_BOUND;
-        loop {
+        until("the unmount never woke the pump", || {
             match unmounted.try_recv() {
-                Ok(Some(())) => return,
-                Ok(None) => assert!(Instant::now() < until, "the unmount never woke the pump"),
+                Ok(woken) => woken,
                 Err(oneshot::Canceled) => panic!("the watch ended without the wake"),
             }
-            thread::yield_now();
-        }
+        });
     }
 
     /// An eject from Finder or `diskutil` leaves the FUSE-T session open, so
