@@ -78,6 +78,8 @@ function fakeClock(lateByMs = 0) {
     /** An answer `costMs` from now. */
     answerIn: (costMs: number, settle: () => void) => at(millis + costMs, settle),
     waiting: () => openWaits > 0,
+    /** The events not yet fired: a wait, an alarm or an answer. */
+    pending: () => events.length,
   };
 }
 
@@ -143,6 +145,8 @@ describe('a soak refresh', () => {
 
     expect(sent()).toBe(4);
     expect(fake.waits).toEqual([WAIT_MS, WAIT_MS, WAIT_MS]);
+    // Each answer that won its race took its alarm away with it.
+    expect(fake.pending()).toBe(0);
     expect(lines).toEqual([
       '  linux-writer: refresh 1 was overdue after 0ms; it retries every 30000ms\n',
       '  linux-writer: refresh landed on attempt 4, 92000ms after the first\n',
@@ -220,18 +224,26 @@ describe('a soak refresh', () => {
     expect(fake.now()).toBe(99_000);
   });
 
-  it('gives a first refresh sent with a few seconds left only what is left less the margin', async () => {
-    const slow = fakeClock();
-    const late = refreshes(slow, [landed(5_000)]);
-    const error = await failure(run(slow, late.refresh, 3_000).done);
-    expect(error.message).toBe('linux-writer: the refresh got no answer within the step budget');
-    expect(slow.now()).toBe(2_000);
+  it.each([
+    ['fails at the margin when its answer comes after it', 5_000, 2_000, false],
+    ['lands when its answer comes before the margin', 500, 500, true],
+  ])(
+    'gives a first refresh sent with three seconds left: it %s',
+    async (_, costMs, endsAtMs, lands) => {
+      const fake = fakeClock();
+      const { refresh } = refreshes(fake, [landed(costMs)]);
 
-    const fast = fakeClock();
-    const quick = refreshes(fast, [landed(500)]);
-    await run(fast, quick.refresh, 3_000).done;
-    expect(fast.now()).toBe(500);
-  });
+      const { done } = run(fake, refresh, 3_000);
+      if (lands) await done;
+      else {
+        const error = await failure(done);
+        expect(error.message).toBe(
+          'linux-writer: the refresh got no answer within the step budget'
+        );
+      }
+      expect(fake.now()).toBe(endsAtMs);
+    }
+  );
 
   it('fails a poll step with the overdue refusal, not with its poll timeout', async () => {
     const fake = fakeClock();

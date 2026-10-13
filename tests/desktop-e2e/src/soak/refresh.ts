@@ -61,7 +61,7 @@ export async function refreshPastOverdue(
   /** The overdue refusal a refresh answered, `undefined` once it lands. */
   const send = async (attempts: number): Promise<ControlRefusal | undefined> => {
     const alarm = clock.alarm(Math.max(0, untilMs - ANSWER_MARGIN_MS - clock.now()));
-    // A refresh the alarm outran settles on its own socket timeout, unread.
+    // The outrun refresh settles later; nothing reads it.
     const answer = refresh().then(
       () => undefined,
       (error: unknown) => {
