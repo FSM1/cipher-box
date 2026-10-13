@@ -1,6 +1,11 @@
 import { Logger } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import { DataSource, Migration } from 'typeorm';
-import { MIGRATION_RUN_LOCK_NAME as LOCK_NAME, migrationRunLockKey } from './common/advisory-lock';
+import {
+  MIGRATION_RUN_LOCK_NAME as LOCK_NAME,
+  migrationRunLockKey,
+  unlockSessionOrClose,
+} from './common/advisory-lock';
 
 const LOCK_POLL_MS = 250;
 
@@ -48,15 +53,15 @@ export async function runMigrationsLocked(
 ): Promise<Migration[]> {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? sleepMs;
-  const key = migrationRunLockKey().toString();
+  const key = migrationRunLockKey();
   const runner = dataSource.createQueryRunner();
-  const session = (await runner.connect()) as { end?: () => Promise<void> };
+  const session: PoolClient = await runner.connect();
   try {
     const started = now();
     for (let attempt = 0; ; attempt += 1) {
       const [{ acquired }]: { acquired: boolean }[] = await runner.query(
         'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
-        [key]
+        [key.toString()]
       );
       if (acquired) {
         break;
@@ -75,32 +80,19 @@ export async function runMigrationsLocked(
     try {
       applied = await dataSource.runMigrations();
     } catch (error) {
-      await unlockOrClose(runner, session, key).catch((cleanup: unknown) => {
-        logger.error(`${String(cleanup)}; the run failed first`);
-      });
+      if ((await unlockSessionOrClose(runner, session, key)) !== undefined) {
+        logger.error(
+          `the ${LOCK_NAME} advisory lock did not release after a failed run; its session was closed`
+        );
+      }
       throw error;
     }
-    await unlockOrClose(runner, session, key);
+    const unlockError = await unlockSessionOrClose(runner, session, key);
+    if (unlockError !== undefined) {
+      throw new MigrationLockReleaseError(unlockError);
+    }
     return applied;
   } finally {
     await runner.release();
-  }
-}
-
-/**
- * A session whose unlock failed may still hold the lock, so it is closed rather
- * than returned to the pool: Postgres drops a session lock when its backend exits,
- * and the pool discards a closed client on release.
- */
-async function unlockOrClose(
-  runner: ReturnType<DataSource['createQueryRunner']>,
-  session: { end?: () => Promise<void> },
-  key: string
-): Promise<void> {
-  try {
-    await runner.query('SELECT pg_advisory_unlock($1::bigint)', [key]);
-  } catch (unlockError) {
-    await session.end?.().catch(() => undefined);
-    throw new MigrationLockReleaseError(unlockError);
   }
 }

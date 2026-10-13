@@ -6,6 +6,7 @@ import {
   isLockNotAvailable,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
+  withSessionAdvisoryLock,
 } from './advisory-lock';
 
 /** The safe fail-closed bound applied to an unset or garbage config value. */
@@ -104,5 +105,46 @@ describe('runLockGuardedTransaction', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('withSessionAdvisoryLock', () => {
+  /** One pooled session whose unlock fails as told. */
+  function fakePool(unlockFails: boolean) {
+    const end = vi.fn().mockResolvedValue(undefined);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const dataSource = {
+      createQueryRunner: () => ({
+        connect: async () => ({ end }),
+        query: (sql: string) =>
+          unlockFails && sql.includes('pg_advisory_unlock')
+            ? Promise.reject(new Error('canceling statement due to user request'))
+            : Promise.resolve([]),
+        release,
+      }),
+    } as unknown as DataSource;
+    return { dataSource, end, release };
+  }
+
+  it('closes the session when the unlock fails, and still returns the work result', async () => {
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const pool = fakePool(true);
+      await expect(
+        withSessionAdvisoryLock(pool.dataSource, 1n, 0, async () => 'done')
+      ).resolves.toBe('done');
+      expect(pool.end).toHaveBeenCalledOnce();
+      expect(pool.release).toHaveBeenCalledOnce();
+      expect(error).toHaveBeenCalledOnce();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('keeps the session open after a clean unlock', async () => {
+    const pool = fakePool(false);
+    await withSessionAdvisoryLock(pool.dataSource, 1n, 0, async () => undefined);
+    expect(pool.end).not.toHaveBeenCalled();
+    expect(pool.release).toHaveBeenCalledOnce();
   });
 });

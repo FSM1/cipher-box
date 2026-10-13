@@ -1,7 +1,8 @@
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
-import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
+import type { PoolClient } from 'pg';
+import { DataSource, EntityManager, QueryFailedError, QueryRunner } from 'typeorm';
 
 /**
  * Default bound on how long an advisory-lock acquire may WAIT while holding its
@@ -246,6 +247,27 @@ export async function runLockGuardedTransaction<T>(
  * session-local on the dedicated connection and RESET before release so it
  * never leaks to the next pool borrower.
  */
+/**
+ * Release a session advisory lock, or close the session when the unlock fails.
+ * A failed unlock may leave the lock held on a live connection, so that session
+ * must not go back to the pool: Postgres drops a session lock when its backend
+ * exits, and pg-pool discards a closed client on release. Returns the unlock
+ * error, or `undefined` after a clean unlock.
+ */
+export async function unlockSessionOrClose(
+  runner: QueryRunner,
+  session: PoolClient,
+  key: bigint
+): Promise<unknown> {
+  try {
+    await runner.query('SELECT pg_advisory_unlock($1::bigint)', [key.toString()]);
+    return undefined;
+  } catch (unlockError) {
+    await session.end().catch(() => undefined);
+    return unlockError;
+  }
+}
+
 export async function withSessionAdvisoryLock<T>(
   dataSource: DataSource,
   key: bigint,
@@ -253,7 +275,7 @@ export async function withSessionAdvisoryLock<T>(
   work: () => Promise<T>
 ): Promise<T> {
   const runner = dataSource.createQueryRunner();
-  await runner.connect();
+  const session: PoolClient = await runner.connect();
   const bounded = timeoutMs > 0;
   try {
     if (bounded) {
@@ -270,12 +292,9 @@ export async function withSessionAdvisoryLock<T>(
     } catch (error) {
       throw mapLockFailure(error);
     } finally {
-      // Unlock failure implies a dead connection, whose session lock Postgres
-      // has already dropped — the pool discards it on release.
-      if (acquired) {
-        await runner.query('SELECT pg_advisory_unlock($1::bigint)', [key.toString()]).catch(() => {
-          /* noop */
-        });
+      // `work` has already finished, so a failed unlock is logged, not thrown.
+      if (acquired && (await unlockSessionOrClose(runner, session, key)) !== undefined) {
+        logger.error('a session advisory lock did not release; its session was closed');
       }
     }
   } finally {

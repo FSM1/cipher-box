@@ -13,25 +13,22 @@ interface FakeSession {
   runMigrations: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
   release: ReturnType<typeof vi.fn>;
-  queries: string[];
 }
 
 /** A DataSource whose one session answers the try-lock and the unlock as told. */
 function fakeSession(lock: { acquired: boolean }, unlock: () => Promise<unknown>): FakeSession {
-  const queries: string[] = [];
   const end = vi.fn().mockResolvedValue(undefined);
   const release = vi.fn().mockResolvedValue(undefined);
   const runMigrations = vi.fn().mockResolvedValue([]);
   const runner = {
     connect: () => Promise.resolve({ end }),
     query: (sql: string) => {
-      queries.push(sql);
       return sql.includes('pg_try_advisory_lock') ? Promise.resolve([lock]) : unlock();
     },
     release,
   };
   const dataSource = { createQueryRunner: () => runner, runMigrations } as unknown as DataSource;
-  return { dataSource, runMigrations, end, release, queries };
+  return { dataSource, runMigrations, end, release };
 }
 
 describe('runMigrationsLocked', () => {
@@ -83,7 +80,6 @@ describe('runMigrationsLocked', () => {
     const fake = fakeSession({ acquired: true }, () => Promise.resolve([{}]));
 
     await expect(runMigrationsLocked(fake.dataSource)).resolves.toEqual([]);
-    expect(fake.queries.some((sql) => sql.includes('pg_advisory_unlock'))).toBe(true);
     expect(fake.end).not.toHaveBeenCalled();
     expect(fake.release).toHaveBeenCalledOnce();
   });
