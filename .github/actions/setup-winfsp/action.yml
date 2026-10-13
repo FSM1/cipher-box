@@ -18,7 +18,19 @@ runs:
         $ErrorActionPreference = 'Stop'
         $out = Join-Path $env:RUNNER_TEMP "winfsp-$env:WINFSP_BUILD.msi"
         $url = "https://github.com/winfsp/winfsp/releases/download/v$env:WINFSP_VERSION/winfsp-$env:WINFSP_BUILD.msi"
-        Invoke-WebRequest -Uri $url -OutFile $out
+        # A download was once cut mid-stream. Windows PowerShell 5.1 has no
+        # -MaximumRetryCount, so the retry is a loop.
+        $attempts = 3
+        for ($i = 1; ; $i++) {
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $out
+            break
+          } catch {
+            if ($i -ge $attempts) { throw }
+            Write-Warning "WinFsp download attempt $i of $attempts failed: $($_.Exception.Message)"
+            Start-Sleep -Seconds (10 * $i)
+          }
+        }
         $actual = (Get-FileHash $out -Algorithm SHA256).Hash
         if ($actual -ne $env:WINFSP_SHA256) {
           throw "WinFsp MSI hash mismatch: expected $env:WINFSP_SHA256, got $actual"

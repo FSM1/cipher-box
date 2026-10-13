@@ -31,6 +31,12 @@ const CADDY_BUILD = resolve(repoRoot, 'docker/caddy');
 /** Generates the staging env, so it holds the hop count the API actually runs. */
 const DEPLOY_WORKFLOW = '.github/workflows/deploy-staging.yml';
 const ACCELERATORS = ['ipfs:8080', 'someguy:8190'];
+const ROUTING = 'someguy:8190';
+/**
+ * The clients give up on a record at 30 s, and someguy bounds no lookup, so a
+ * slow lookup must fail at the proxy first to show as a 502 on the host.
+ */
+const CLIENT_RECORD_TIMEOUT_NS = 30e9;
 const VERIFY_PATH = '/auth/gateway/verify';
 /** Anything that would tell the verify leg WHAT is being read, not merely who asks. */
 const PATH_NAMING_HEADERS = [
@@ -264,6 +270,15 @@ for (const { node, ancestors } of nodes) {
     check(
       deleted.includes(header),
       `${vhost}: proxy to ${target} does not strip ${header} before the upstream`
+    );
+  }
+
+  if (target.includes(ROUTING)) {
+    const timeout = node.transport?.response_header_timeout ?? 0;
+    const leg = ancestors.some(narrowedBy(publishOnly)) ? 'publish proxy' : 'proxy';
+    check(
+      timeout > 0 && timeout < CLIENT_RECORD_TIMEOUT_NS,
+      `${vhost}: ${leg} to ${ROUTING} has no response header timeout under the client's ${CLIENT_RECORD_TIMEOUT_NS / 1e9} s, so a slow lookup fails only at the client`
     );
   }
 

@@ -108,7 +108,8 @@ app-staging.cipherbox.cc {
 }
 
 # Read-accelerator front. Args: {args[0]} upstream, {args[1]} CORS methods,
-# {args[2]} CORS request headers. Obligations per blueprint/api.md (Egress).
+# {args[2]} CORS request headers, {args[3]} upstream response header timeout
+# (0 for none). Obligations per blueprint/api.md (Egress).
 (accelerator_front) {
 	import origin_tls
 
@@ -178,6 +179,10 @@ app-staging.cipherbox.cc {
 			# someguy labels a missing IPNS name as cacheable for two days, so a
 			# vacancy probe's answer outlives the publish that fills it.
 			header_down Cache-Control "no-store"
+
+			transport http {
+				response_header_timeout {args[3]}
+			}
 		}
 	}
 
@@ -188,7 +193,7 @@ app-staging.cipherbox.cc {
 }
 
 gateway-staging.cipherbox.cc {
-	import accelerator_front ipfs:8080 "GET, HEAD, OPTIONS" "Authorization, Range, Accept"
+	import accelerator_front ipfs:8080 "GET, HEAD, OPTIONS" "Authorization, Range, Accept" 0
 }
 
 routing-staging.cipherbox.cc {
@@ -226,12 +231,18 @@ routing-staging.cipherbox.cc {
 			header_up -X-Forwarded-For
 			import strip_caller
 			import strip_upstream_cors
+
+			transport http {
+				response_header_timeout 25s
+			}
 		}
 	}
 
 	# A record PUT carries the IPNS record media type, which is not CORS-safelisted,
 	# so the browser preflights Content-Type and blocks the publish without it.
-	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS" "Authorization, Range, Accept, Content-Type"
+	# someguy bounds no lookup and the clients give up at 30 s, so a slow lookup
+	# fails here first, as a 502 the host records.
+	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS" "Authorization, Range, Accept, Content-Type" 25s
 }
 
 # Without a catch-all site Caddy appends a matcher-less connection policy of its
