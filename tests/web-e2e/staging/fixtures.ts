@@ -15,7 +15,7 @@ import {
 } from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage, RETURNED_TO_SIGN_IN, type SignInOutcome } from '../page-objects/login.page';
+import { LoginPage, refusalText, type SignInOutcome } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
 import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
@@ -257,7 +257,7 @@ export async function signInWithWallet(
       annotate(faults.length === 0 ? 'signed-in' : 'recovered');
       return Date.now() - started;
     }
-    const refusal = outcome.kind === 'refused' ? outcome.text : RETURNED_TO_SIGN_IN;
+    const refusal = refusalText(outcome);
 
     const now = Date.now();
     const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted, Math.random());

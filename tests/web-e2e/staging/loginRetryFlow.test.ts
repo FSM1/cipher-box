@@ -33,10 +33,7 @@ const harness = vi.hoisted(() => {
 
 vi.mock('@playwright/test', () => {
   const test = { extend: () => test, info: () => harness.info };
-  return {
-    test,
-    expect: () => ({ toBeEnabled: harness.enabled }),
-  };
+  return { test, expect: () => ({ toBeEnabled: harness.enabled }) };
 });
 
 // The mocks answer a refusal text: `null` signs in, and RETURNED_TO_SIGN_IN is signed out.

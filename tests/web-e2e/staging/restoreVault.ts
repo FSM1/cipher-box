@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage, RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
+import { LoginPage, refusalText } from '../page-objects/login.page';
 import { signInWithWallet } from './fixtures';
 import { redact } from './forensics';
 import { devnetFault } from './loginRetry';
@@ -18,8 +18,7 @@ function notRestored(refusal: string): Error {
 async function resumed(page: Page, signedIn: Locator, timeout: number): Promise<string | null> {
   const login = new LoginPage(page);
   const outcome = await login.outcome(signedIn, timeout, login.walletButton);
-  if (outcome.kind === 'signed-in') return null;
-  return outcome.kind === 'refused' ? outcome.text : RETURNED_TO_SIGN_IN;
+  return outcome.kind === 'signed-in' ? null : refusalText(outcome);
 }
 
 /**

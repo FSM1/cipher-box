@@ -9,6 +9,11 @@ export type SignInOutcome =
   | { readonly kind: 'signed-out' }
   | { readonly kind: 'refused'; readonly text: string };
 
+/** The refusal text of an outcome that did not sign in. */
+export function refusalText(outcome: Exclude<SignInOutcome, { kind: 'signed-in' }>): string {
+  return outcome.kind === 'refused' ? outcome.text : RETURNED_TO_SIGN_IN;
+}
+
 /** A disabled button belongs to a resume or a login still in flight. */
 async function enabled(locator: Locator): Promise<boolean> {
   if (!(await locator.isVisible())) return false;
@@ -47,11 +52,9 @@ export class LoginPage {
    */
   async replaced(stale: readonly string[], timeout: number): Promise<void> {
     if (stale.length === 0) return;
-    const same = (now: readonly string[]) =>
-      now.length === stale.length && now.every((text, i) => text === stale[i]);
     await expect
-      .poll(async () => same(await this.banners()), { timeout, intervals: [100] })
-      .toBe(false)
+      .poll(() => this.banners(), { timeout, intervals: [100] })
+      .not.toEqual(stale)
       .catch(() => undefined);
   }
 
