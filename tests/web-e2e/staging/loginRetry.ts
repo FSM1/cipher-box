@@ -27,7 +27,7 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['key-assign', /failed to fetch key assign result/i],
   ['key-broadcast', /unable to assign key\b.*could not broadcast/i],
   // The Torus SDK decrypt helper got no share envelope: from rss-client round 1 or
-  // recover, or @tkey/tss getTSSShare. A persistent one still stops at the sign-in budget.
+  // recover, or @tkey/tss getTSSShare.
   ['rss-envelope', /reading 'ciphertext'/i],
 ];
 

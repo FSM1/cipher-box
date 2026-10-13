@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage, refusalText } from '../page-objects/login.page';
+import { LoginPage, refusalText, type SignInOutcome } from '../page-objects/login.page';
 import { signInWithWallet } from './fixtures';
 import { redact } from './forensics';
 import { devnetFault } from './loginRetry';
@@ -14,11 +14,10 @@ function notRestored(refusal: string): Error {
   );
 }
 
-/** Waits for the resume on `page` to settle: `null` once it reaches `signedIn`, else its refusal. */
-async function resumed(page: Page, signedIn: Locator, timeout: number): Promise<string | null> {
+/** Waits for the resume on `page` to settle. */
+function resumed(page: Page, signedIn: Locator, timeout: number): Promise<SignInOutcome> {
   const login = new LoginPage(page);
-  const outcome = await login.outcome(signedIn, timeout, login.walletButton);
-  return outcome.kind === 'signed-in' ? null : refusalText(outcome);
+  return login.outcome(signedIn, timeout, login.walletButton);
 }
 
 /**
@@ -31,8 +30,9 @@ export async function resumeSession(
   signedIn: Locator,
   timeout = 180_000
 ): Promise<void> {
-  const refusal = await resumed(page, signedIn, timeout);
-  if (refusal === null) return;
+  const outcome = await resumed(page, signedIn, timeout);
+  if (outcome.kind === 'signed-in') return;
+  const refusal = refusalText(outcome);
   if (devnetFault(refusal) === null) throw notRestored(refusal);
   await signInWithWallet(page, signedIn, refusal);
 }
@@ -49,7 +49,7 @@ export async function restoreVault(page: Page, timeout = 180_000): Promise<Files
 export async function reloadVault(page: Page): Promise<FilesPage> {
   await page.reload();
   const files = new FilesPage(page);
-  const refusal = await resumed(page, files.browser, 180_000);
-  if (refusal !== null) throw notRestored(refusal);
+  const outcome = await resumed(page, files.browser, 180_000);
+  if (outcome.kind !== 'signed-in') throw notRestored(refusalText(outcome));
   return files;
 }

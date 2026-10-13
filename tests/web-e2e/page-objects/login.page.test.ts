@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { describe, expect, it, vi } from 'vitest';
+import { devnetFault } from '../staging/loginRetry';
 import { LoginPage } from './login.page';
 
 // Vitest owns polling in the harness unit gate; the page object is real.
@@ -7,6 +8,7 @@ vi.mock('@playwright/test', () => ({ expect }));
 
 const POLY_FAILURE = 'master poly commits inconsistent with tssPubKey';
 const NONCE_FAILURE = 'could not retrieve nonce: the request failed with status 429';
+const CONNECTOR_FAILURE = 'the wallet connector refused the request';
 
 /** A page whose state the test changes between reads; `onRead` runs after each read. */
 function browser() {
@@ -88,20 +90,27 @@ describe('the wait for an earlier banner to clear', () => {
     setTimeout(() => b.banners.push(NONCE_FAILURE), 200);
     const started = Date.now();
 
-    await b.login.replaced([POLY_FAILURE], 30_000);
+    await expect(b.login.replaced([POLY_FAILURE], 30_000)).resolves.toEqual([NONCE_FAILURE]);
 
     expect(Date.now() - started).toBeLessThan(5_000);
-    await expect(b.login.outcome(b.signedIn, 10_000)).resolves.toEqual({
-      kind: 'refused',
-      text: `${POLY_FAILURE} | ${NONCE_FAILURE}`,
-    });
+  });
+
+  it('classes a new connector failure next to a stale poly-commits banner as the connector failure', async () => {
+    const b = browser();
+    b.banners.push(POLY_FAILURE);
+    setTimeout(() => b.banners.push(CONNECTOR_FAILURE), 200);
+
+    const fresh = await b.login.replaced([POLY_FAILURE], 30_000);
+
+    expect(fresh).toEqual([CONNECTOR_FAILURE]);
+    expect(devnetFault(fresh.join(' | '))).toBeNull();
   });
 
   it('reads an earlier banner that outlasts the wait as it stands', async () => {
     const b = browser();
     b.banners.push(POLY_FAILURE);
 
-    await expect(b.login.replaced([POLY_FAILURE], 300)).resolves.toBeUndefined();
+    await expect(b.login.replaced([POLY_FAILURE], 300)).resolves.toEqual([]);
     await expect(b.login.outcome(b.signedIn, 10_000)).resolves.toEqual({
       kind: 'refused',
       text: POLY_FAILURE,
@@ -114,7 +123,7 @@ describe('the wait for an earlier banner to clear', () => {
     setTimeout(() => b.banners.splice(0), 200);
     const started = Date.now();
 
-    await b.login.replaced([POLY_FAILURE], 30_000);
+    await expect(b.login.replaced([POLY_FAILURE], 30_000)).resolves.toEqual([]);
 
     expect(Date.now() - started).toBeLessThan(5_000);
   });

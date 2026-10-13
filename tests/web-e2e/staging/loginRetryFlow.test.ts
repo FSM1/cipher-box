@@ -88,6 +88,7 @@ beforeEach(() => {
   vi.spyOn(Math, 'random').mockReturnValue(0);
   harness.resumed.mockResolvedValue(RETURNED_TO_SIGN_IN);
   harness.banners.mockResolvedValue([]);
+  harness.replaced.mockResolvedValue([]);
   harness.info.project.outputDir = mkdtempSync(join(tmpdir(), 'login-flow-'));
   harness.info.project.metadata = {};
   harness.info.annotations = [];
@@ -230,6 +231,7 @@ describe('the wallet login retry flow', () => {
     harness.banners.mockResolvedValueOnce([POLY_FAILURE]);
     harness.replaced.mockImplementationOnce(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
+      return [];
     });
     harness.refusal.mockResolvedValueOnce(null);
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(3_000);
@@ -303,5 +305,17 @@ describe('the wallet login retry flow', () => {
     );
     expect(harness.resumed).toHaveBeenCalledTimes(1);
     expect(records().map(({ result }) => result)).toEqual(['sign-in-budget']);
+  });
+
+  it('reads a new banner next to a stale one as the refusal, and does not retry it', async () => {
+    const opened = page();
+    harness.banners.mockResolvedValueOnce([POLY_FAILURE]);
+    harness.replaced.mockResolvedValueOnce(['the wallet connector refused the request']);
+    await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow(
+      'attempt 1 (refused); the refusal read: the wallet connector refused the request;'
+    );
+    expect(harness.refusal).not.toHaveBeenCalled();
+    expect(opened.calls.waitForTimeout).not.toHaveBeenCalled();
+    expect(records()).toEqual([{ faults: [], result: 'refused' }]);
   });
 });

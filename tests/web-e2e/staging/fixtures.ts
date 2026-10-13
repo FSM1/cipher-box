@@ -241,8 +241,11 @@ export async function signInWithWallet(
           .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
           .click({ timeout: checkBudget() });
         // The banner of an earlier refusal stays until the login begins.
-        await login.replaced(stale, Math.min(60_000, checkBudget()));
-        outcome = await login.outcome(signedIn, Math.min(300_000, checkBudget()));
+        const fresh = await login.replaced(stale, Math.min(60_000, checkBudget()));
+        outcome =
+          fresh.length > 0
+            ? { kind: 'refused', text: fresh.join(' | ') }
+            : await login.outcome(signedIn, Math.min(300_000, checkBudget()));
       }
     } catch (error) {
       if (Date.now() >= deadline) {

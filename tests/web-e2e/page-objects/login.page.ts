@@ -48,14 +48,22 @@ export class LoginPage {
 
   /**
    * Waits until the banners differ from `stale`: the login cleared them or drew
-   * a new one. Banners that outlast `timeout` are read as they stand.
+   * a new one. Answers the banners that are not in `stale`, so an earlier
+   * refusal never classes a new one; banners that outlast `timeout` give none.
    */
-  async replaced(stale: readonly string[], timeout: number): Promise<void> {
-    if (stale.length === 0) return;
+  async replaced(stale: readonly string[], timeout: number): Promise<string[]> {
+    if (stale.length === 0) return [];
     await expect
       .poll(() => this.banners(), { timeout, intervals: [100] })
       .not.toEqual(stale)
       .catch(() => undefined);
+    const old = [...stale];
+    return (await this.banners()).filter((text) => {
+      const at = old.indexOf(text);
+      if (at < 0) return true;
+      old.splice(at, 1);
+      return false;
+    });
   }
 
   /**
