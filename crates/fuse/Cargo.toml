@@ -95,6 +95,9 @@ cipherbox-win-security = { path = "../win-security" }
 fuser = { path = "../../third-party/fuser", default-features = false, features = [
   "libfuse",
 ] }
+# The mount table the unmount watch reads, through the one FFI call this
+# crate forbids itself.
+cipherbox-mount-table = { path = "../mount-table" }
 
 [dev-dependencies]
 # Self dev-dependency enables `test-kit` for this crate's own tests without

@@ -62,6 +62,8 @@ pub enum Publication {
     Live,
     /// The backend was given long enough and never published the mount.
     Refused,
+    /// The mount was live, and an unmount from outside the app took it away.
+    Unmounted,
 }
 
 /// What a mount technology can do for the core.

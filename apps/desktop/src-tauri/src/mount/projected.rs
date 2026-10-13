@@ -136,6 +136,7 @@ impl Projection {
                 },
                 Publication::Pending => MountStatus::Opening,
                 Publication::Refused => MountStatus::refused(NOT_PUBLISHED),
+                Publication::Unmounted => MountStatus::refused(ENDED),
             },
         }
     }
@@ -189,7 +190,7 @@ impl Projection {
         }
     }
 
-    /// The kernel session has ended — an unmount from outside the app. Only the
+    /// The mount has ended — an unmount from outside the app. Only the
     /// mount is dropped here, so this stays a plain wake;
     /// [`quiesce_detached`](Self::quiesce_detached) is what releases the rest.
     fn detach(&mut self) {

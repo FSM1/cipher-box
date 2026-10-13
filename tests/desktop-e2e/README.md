@@ -20,10 +20,14 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   as an error and leaves the vault as it was
 - `cross-client-convergence` — two mounts of one vault each serve what the
   other writes, in both directions, over the network alone
+- `external-unmount` — an unmount with `diskutil` or `fusermount3` turns the
+  session status into the refusal that names it; the Windows leg skips it,
+  because the suite has no tool that unmounts a WinFsp mount from outside
 - `offline-replay` — a write taken while the API is down reads back at once on
   the instance that took it, and reaches a second instance once the API returns
 
-The macOS, Linux, and Windows legs each run every scenario.
+The macOS, Linux, and Windows legs each run every scenario, except where a
+scenario names a leg it skips.
 
 ## How the suite logs in
 

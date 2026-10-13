@@ -236,8 +236,9 @@ jobs:
   # The two operating-system adapter legs. Each keeps the workspace check, so a
   # platform-specific compile break still fails here, and tests only the crates
   # with an operating-system conditional: `crates/fuse` (FUSE-T, libfuse3,
-  # WinFsp), `crates/win-security` (a body on Windows alone) and
-  # `crates/desktop-seams` (the per-platform keyring). Every other crate is
+  # WinFsp), `crates/win-security` (a body on Windows alone),
+  # `crates/mount-table` (a body on macOS alone) and `crates/desktop-seams`
+  # (the per-platform keyring). Every other crate is
   # platform-neutral and the Linux jobs own its tests. blueprint/testing.md
   # names the Windows leg "cargo check + adapter tests".
   adapters:
@@ -295,7 +296,7 @@ jobs:
       # rather than `env:`: SIP strips `DYLD_*` before bash execs.
       - name: Cargo test (the macOS host adapters)
         if: runner.os == 'macOS'
-        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test -p cipherbox-fuse -p cipherbox-desktop-seams
+        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-mount-table
 
       - name: Cargo test (the Windows host adapters)
         if: runner.os == 'Windows'
