@@ -88,11 +88,11 @@ use cipherbox_engine::{
     CommandOutcome, CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter,
     DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event,
     EventStream, GatewayConfig, LapsedHead, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
-    Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
-    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index,
-    reseal_scope_root, stage_op,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, PassTimings,
+    Permission, Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason,
+    RecordReader, RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy,
+    SyncTimingProfile, TickCause, Unopened, WriteHistory, WriteTarget, decode_queue,
+    load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -936,6 +936,57 @@ fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
         started_at,
         "the pass ran on the request, not on the poll cadence"
     );
+}
+
+#[test]
+fn a_host_that_asks_for_pass_timings_gets_every_leg_of_each_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 400);
+
+    let reports = std::rc::Rc::new(RefCell::new(Vec::<PassTimings>::new()));
+    let sink = reports.clone();
+    let (engine, _events) = engine_on(&alice, 42);
+    let mut engine = engine.with_pass_timings(std::rc::Rc::new(move |timings: &PassTimings| {
+        sink.borrow_mut().push(timings.clone());
+    }));
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Ok(CommandOutcome::Done)
+    );
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let reports = reports.borrow();
+    let causes: Vec<TickCause> = reports.iter().map(|report| report.cause).collect();
+    assert_eq!(causes, [TickCause::Manual, TickCause::Poll]);
+    for report in reports.iter() {
+        let legs: Vec<&str> = report.legs.iter().map(|(leg, _)| *leg).collect();
+        assert_eq!(
+            legs,
+            [
+                "settings",
+                "scope-pointers",
+                "received-pointers",
+                "floors",
+                "root",
+                "scope-walk",
+                "focus",
+                "assembly",
+                "drain",
+                "mailbox",
+                "claims",
+                "claim-repost",
+                "received-shares",
+            ]
+        );
+    }
 }
 
 #[test]

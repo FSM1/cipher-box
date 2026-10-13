@@ -74,6 +74,7 @@ use crate::sync::kept_op::keeps;
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
+use crate::sync::pass_timing::{LegClock, PassTimingSink};
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
 use crate::sync::rebase::{DropReason, QueueScanMemo, replay};
@@ -99,6 +100,7 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     root_id: [u8; 16],
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
+    timings: Option<PassTimingSink>,
 }
 
 /// What one pass reports to the loop that ran it.
@@ -365,21 +367,43 @@ where
             root_id,
             settings_rechecked,
             link_swept,
+            timings: None,
         }
+    }
+
+    /// Report each pass's leg durations to `sink`.
+    pub(crate) fn with_timings(mut self, sink: Option<PassTimingSink>) -> Self {
+        self.timings = sink;
+        self
     }
 
     /// One tick, and its report: a stopped one once the session is gone.
     pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> PassReport {
+        let scheduler = &self.seams.scheduler;
+        let mut clock = self
+            .timings
+            .as_ref()
+            .map(|_| LegClock::start(cause, scheduler.now()));
+        let mut lap = |leg| {
+            if let Some(clock) = clock.as_mut() {
+                clock.lap(leg, scheduler.now());
+            }
+        };
         let Some(mut pass) = self.loop_gate(state, cause) else {
             return PassReport::STOPPED;
         };
         let Some(decision) = self.redecide_settings(state, &pass).await else {
             return PassReport::STOPPED;
         };
+        lap("settings");
         self.consult_scope_pointers(state, &mut pass).await;
+        lap("scope-pointers");
         let followed = self.follow_received_pointers(state, &pass).await;
+        lap("received-pointers");
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
+        lap("floors");
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
+        lap("root");
         pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
             matches!(
                 resolved.outcome,
@@ -390,19 +414,30 @@ where
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
         let descendants = self.walk_scopes(state, &pass, recovered_root).await;
+        lap("scope-walk");
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
+        lap("focus");
         let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
             .assemble_scopes(state, &pass, &scopes, descendants)
             .await;
+        lap("assembly");
         let boundaries = self
             .drain(state, &pass, &decision, &read_seed, &scopes, assembly)
             .await;
+        lap("drain");
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
+        lap("mailbox");
         self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
             .await;
+        lap("claims");
         self.repost_claims(state, &pass).await;
+        lap("claim-repost");
         self.refresh_received_shares(state, &pass, followed).await;
+        lap("received-shares");
+        if let (Some(sink), Some(clock)) = (&self.timings, clock) {
+            sink(&clock.finish());
+        }
         PassReport {
             verdict,
             stop: false,

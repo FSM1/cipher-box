@@ -8,6 +8,7 @@
 mod cli;
 mod control;
 mod credentials;
+pub mod diagnostics;
 
 use std::sync::Arc;
 
