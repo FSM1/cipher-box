@@ -21,6 +21,9 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # One register request takes up to 4,000 advisory locks. 512 x 100
+    # connections holds the API pool of 10 at that size with headroom.
+    command: ['postgres', '-c', 'max_locks_per_transaction=512']
     environment:
       POSTGRES_USER: ${DB_USERNAME:-cipherbox}
       POSTGRES_PASSWORD: ${DB_PASSWORD}

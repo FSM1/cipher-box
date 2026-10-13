@@ -35,6 +35,11 @@ describe('isLockNotAvailable', () => {
     expect(isLockNotAvailable(err)).toBe(true);
   });
 
+  it('is true for a full shared lock table (53200)', () => {
+    const err = new QueryFailedError('SELECT 1', [], { code: '53200' } as never);
+    expect(isLockNotAvailable(err)).toBe(true);
+  });
+
   it('is false for a QueryFailedError with a different code', () => {
     const err = new QueryFailedError('SELECT 1', [], { code: '23505' } as never);
     expect(isLockNotAvailable(err)).toBe(false);

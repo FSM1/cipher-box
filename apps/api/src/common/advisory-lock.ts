@@ -12,8 +12,12 @@ import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
  */
 const DEFAULT_LOCK_TIMEOUT_MS = 3000;
 
-/** Postgres `lock_not_available`: a statement aborted by `lock_timeout`. */
-const LOCK_NOT_AVAILABLE = '55P03';
+/**
+ * Postgres `lock_not_available` (55P03), a statement aborted by `lock_timeout`,
+ * and `out_of_memory` (53200), which a lock acquire raises when the shared lock
+ * table is full. Both clear when concurrent holders commit, so both are retryable.
+ */
+const LOCK_NOT_AVAILABLE_CODES: ReadonlySet<string> = new Set(['55P03', '53200']);
 
 /**
  * Read the advisory-lock wait bound (ms) from config, failing closed to the
@@ -49,10 +53,10 @@ export async function setAdvisoryLockTimeout(
 }
 
 /**
- * A Postgres `lock_not_available` (55P03) — a statement aborted by
- * `lock_timeout`, whether the advisory-lock acquire or a row lock taken later
- * under the same transaction-scoped bound. TypeORM wraps it as a
- * `QueryFailedError` carrying the driver code.
+ * A lock the transaction could not take now: a `lock_timeout` abort, whether on
+ * the advisory-lock acquire or a row lock taken later under the same bound, or a
+ * full shared lock table. TypeORM wraps either as a `QueryFailedError` carrying
+ * the driver code.
  */
 export function isLockNotAvailable(error: unknown): boolean {
   if (!(error instanceof QueryFailedError)) {
@@ -61,7 +65,7 @@ export function isLockNotAvailable(error: unknown): boolean {
   const code =
     (error.driverError as { code?: string } | undefined)?.code ??
     (error as unknown as { code?: string }).code;
-  return code === LOCK_NOT_AVAILABLE;
+  return code !== undefined && LOCK_NOT_AVAILABLE_CODES.has(code);
 }
 
 /**
@@ -117,6 +121,11 @@ export function subjectLockKey(identitySubjectId: string): bigint {
   return advisoryLockKey(`device-registry-subject:${identitySubjectId}`);
 }
 
+/** The one key every migration run takes, so concurrent runners apply each migration once. */
+export function migrationRunLockKey(): bigint {
+  return advisoryLockKey('migration-run');
+}
+
 /** Namespaced per-account key for the device registry's cap count and insert. */
 export function registryLockKey(userId: string): bigint {
   return advisoryLockKey(`device-registry:${userId}`);
@@ -143,9 +152,9 @@ export function pinDurabilityLockKey(cid: string): bigint {
  * Acquisition order comes SOLELY from the pre-sorted `sorted` array: Postgres
  * evaluates each `pg_advisory_xact_lock(k)` as it scans `unnest` in array order,
  * BEFORE the sort node runs — so the `ORDER BY k` does NOT co-guarantee ascending
- * acquisition and the pre-sort must never be dropped in reliance on it. A
- * `lock_timeout` abort on any key maps to the retryable 503. Set the bound
- * (setAdvisoryLockTimeout) once before calling.
+ * acquisition and the pre-sort must never be dropped in reliance on it. A key
+ * it cannot take (see `isLockNotAvailable`) maps to the retryable 503. Set the
+ * bound (setAdvisoryLockTimeout) once before calling.
  */
 export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[]): Promise<void> {
   const sorted = [...new Set(keys)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -179,10 +188,10 @@ export async function boundedAcquire(
 }
 
 /**
- * Run `work` in a transaction, mapping any `lock_timeout` abort (55P03) — the
- * advisory acquire OR any row lock taken later under the same bound — to the
- * retryable 503, so a contended caller degrades gracefully instead of escaping
- * as a 500. A 503 an inner helper already raised passes through unchanged.
+ * Run `work` in a transaction, mapping any lock it could not take (see
+ * `isLockNotAvailable`) to the retryable 503, so a contended caller degrades
+ * gracefully instead of escaping as a 500. A 503 an inner helper already
+ * raised passes through unchanged.
  */
 export async function runLockGuardedTransaction<T>(
   dataSource: DataSource,
@@ -204,9 +213,10 @@ export async function runLockGuardedTransaction<T>(
  * Unlike the xact lock (auto-released at COMMIT), a session lock spans several
  * transactions PLUS an external side effect — the caller uses it to serialize a
  * commit → external effect → compensation window that a xact lock would leave
- * unguarded once it releases at commit. A `lock_timeout` abort maps to the
- * retryable 503; the bound is set session-local on the dedicated connection and
- * RESET before release so it never leaks to the next pool borrower.
+ * unguarded once it releases at commit. A lock it cannot take (see
+ * `isLockNotAvailable`) maps to the retryable 503; the bound is set
+ * session-local on the dedicated connection and RESET before release so it
+ * never leaks to the next pool borrower.
  */
 export async function withSessionAdvisoryLock<T>(
   dataSource: DataSource,

@@ -2505,3 +2505,24 @@ async fn a_registration_whose_token_names_another_subject_is_refused() {
         .await
         .expect("the refused registration left no row for this device key");
 }
+
+/// An identity token is single-use at registration: a replay of a spent token
+/// is refused, even for a new device key on the same bound account.
+#[tokio::test]
+async fn a_registration_that_replays_a_spent_identity_token_is_refused() {
+    let base = require_stack!("a_registration_that_replays_a_spent_identity_token_is_refused");
+    let wallet = random_wallet();
+    let (bind_token, _) = wallet_identity_token(&base, &wallet).await;
+    let account =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+
+    let (token, _) = wallet_identity_token(&base, &wallet).await;
+    register_device(&account, &random_device_key(), &token)
+        .await
+        .expect("the first registration spends the token");
+    let replay = register_device(&account, &random_device_key(), &token).await;
+    assert!(
+        matches!(replay, Err(ApiError::Unauthorized)),
+        "a replayed identity token is refused with a 401, got {replay:?}"
+    );
+}

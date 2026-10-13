@@ -1,5 +1,6 @@
 import * as jose from 'jose';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import type { DataSource } from 'typeorm';
 import {
   IDENTITY_TOKEN_AUDIENCE,
   IDENTITY_TOKEN_ISSUER,
@@ -25,12 +26,17 @@ export function encodedIdentitySigningKey(): string {
   return Buffer.from(privateKey).toString('base64');
 }
 
-/** A real token service, booted on `values` as the module boots it. */
+/** A real token service, booted on `values` as the module boots it, with no database. */
 export async function bootedIdentityTokenService(
   values: Record<string, string | undefined>,
   clock = new FakeClock()
 ): Promise<IdentityTokenService> {
-  const service = new IdentityTokenService(fakeConfig(values).service, clock, new FakeEntropy());
+  const service = new IdentityTokenService(
+    fakeConfig(values).service,
+    clock,
+    new FakeEntropy(),
+    {} as DataSource
+  );
   await service.onModuleInit();
   return service;
 }

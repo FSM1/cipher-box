@@ -11,6 +11,7 @@ import { IdentityTokenService } from '../auth/services/identity-token.service';
 import { AcceleratorToken } from '../auth/entities/accelerator-token.entity';
 import { AcceleratorTokenService } from '../auth/services/accelerator-token.service';
 import { TokenService } from '../auth/services/token.service';
+import { SpentIdentityTokenSweepTask } from '../auth/tasks/spent-identity-token-sweep.task';
 import { Clock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
 import { createTestDeviceKey, TestDeviceKey } from '../testing/device-keys';
@@ -583,14 +584,9 @@ describe('device-approval HTTP surface (real Postgres)', () => {
         { tokenId: recent, expiresAt: new Date(clock.now().getTime() - 1_000) },
       ]);
 
-      const account = await boundAccount();
-      const token = account.subjectToken;
-      await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
+      await new SpentIdentityTokenSweepTask(identityTokens, fakeConfig({}).service).runOnce();
 
-      const kept = (await spent.find()).map((row) => row.tokenId);
-      expect(kept).not.toContain(stale);
-      expect(kept).toContain(recent);
-      expect(kept).toHaveLength(2);
+      expect((await spent.find()).map((row) => row.tokenId)).toEqual([recent]);
     });
   });
 
