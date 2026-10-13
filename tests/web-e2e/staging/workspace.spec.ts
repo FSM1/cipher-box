@@ -7,6 +7,7 @@
 import { FilesPage } from '../page-objects/files.page';
 import { expect, published, signIn, test } from './fixtures';
 import { mediaFixtures, mediaPath } from './media';
+import { reloadVault } from './restoreVault';
 
 const FOLDERS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'];
 
@@ -44,8 +45,7 @@ test('a six-folder tree survives a reload', async ({ page }) => {
   await expect(files.row('echo')).toHaveCount(0);
   await published(page);
 
-  await page.reload();
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
+  await reloadVault(page);
 
   for (const folder of ['alpha', 'bravo-renamed', 'delta', 'foxtrot']) {
     await expect(files.row(folder)).toBeVisible({ timeout: 180_000 });

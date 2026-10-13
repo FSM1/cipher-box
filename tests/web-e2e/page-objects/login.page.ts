@@ -1,5 +1,8 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
+/** The refusal {@link LoginPage.refusal} answers when `signedOut` shows with no banner. */
+export const RETURNED_TO_SIGN_IN = 'returned to sign-in without an error';
+
 /** The front door: the Core Kit methods plus the SIWE secondary. */
 export class LoginPage {
   constructor(readonly page: Page) {}
@@ -38,7 +41,7 @@ export class LoginPage {
             return true;
           }
           if (!(await signedOut?.isVisible())) return false;
-          refused = 'returned to sign-in without an error';
+          refused = RETURNED_TO_SIGN_IN;
           return true;
         },
         { timeout, intervals: [2_000], message: 'neither signed in nor refused' }

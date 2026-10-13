@@ -36,6 +36,7 @@ describe('devnetFault', () => {
       'undefined Unable to assign key, failed to fetch key assign result please try again',
       'key-assign',
     ],
+    ["Cannot read properties of undefined (reading 'ciphertext')", 'rss-envelope'],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });
@@ -45,6 +46,7 @@ describe('devnetFault', () => {
     'the request to api.example.com failed with status 500',
     'the request to node-1.dev-node.web3auth.io failed with status 401',
     'undefined Unable to assign key, the key is already assigned',
+    "Cannot read properties of undefined (reading 'sessionKey')",
   ])('fails at once on %s', (refusal) => {
     expect(devnetFault(refusal)).toBeNull();
   });

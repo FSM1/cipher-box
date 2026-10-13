@@ -13,7 +13,8 @@ export type DevnetFault =
   | 'node-quorum'
   | 'node-5xx'
   | 'node-busy'
-  | 'key-assign';
+  | 'key-assign'
+  | 'rss-envelope';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -23,6 +24,8 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
   ['node-busy', /all auth network nodes are currently busy/i],
   ['key-assign', /failed to fetch key assign result/i],
+  // The RSS client decrypts a node's round answer that lacks its share encryption.
+  ['rss-envelope', /reading 'ciphertext'/i],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {

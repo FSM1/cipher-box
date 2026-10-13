@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
 import { signInWithWallet } from './fixtures';
 import {
   RUN_RETRY_BUDGET_KEY,
@@ -22,20 +23,35 @@ const harness = vi.hoisted(() => {
   return {
     info,
     enabled: vi.fn(),
+    errorCount: vi.fn(),
     walletClick: vi.fn(),
     refusal: vi.fn(),
+    resumed: vi.fn(),
+    error: { testId: 'login-error' },
   };
 });
 
 vi.mock('@playwright/test', () => {
   const test = { extend: () => test, info: () => harness.info };
-  return { test, expect: () => ({ toBeEnabled: harness.enabled }) };
+  return {
+    test,
+    expect: (target: unknown) => ({
+      toBeEnabled: harness.enabled,
+      toHaveCount: (count: number, options: unknown) => harness.errorCount(target, count, options),
+    }),
+  };
 });
 
-vi.mock('../page-objects/login.page', () => ({
+// The three-way wait after a reload names the wallet button; the wait after a click does not.
+vi.mock('../page-objects/login.page', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../page-objects/login.page')>()),
   LoginPage: class {
     walletButton = { click: harness.walletClick };
-    refusal = harness.refusal;
+    error = harness.error;
+    refusal = (signedIn: Locator, timeout: number, signedOut?: Locator) =>
+      signedOut === undefined
+        ? harness.refusal(signedIn, timeout)
+        : harness.resumed(signedIn, timeout, signedOut);
   },
 }));
 
@@ -67,6 +83,7 @@ beforeEach(() => {
   vi.setSystemTime(1_000_000);
   vi.resetAllMocks();
   vi.spyOn(Math, 'random').mockReturnValue(0);
+  harness.resumed.mockResolvedValue(RETURNED_TO_SIGN_IN);
   harness.info.project.outputDir = mkdtempSync(join(tmpdir(), 'login-flow-'));
   harness.info.project.metadata = {};
   harness.info.annotations = [];
@@ -202,5 +219,56 @@ describe('the wallet login retry flow', () => {
     await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow('attempt 1 (refused)');
     expect(opened.calls.waitForTimeout).not.toHaveBeenCalled();
     expect(records()).toEqual([{ faults: [], result: 'refused' }]);
+  });
+
+  it('waits for the banner of an earlier refusal to clear before it reads the login', async () => {
+    const opened = page();
+    harness.errorCount.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    harness.refusal.mockResolvedValueOnce(null);
+    await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(3_000);
+    expect(harness.errorCount).toHaveBeenCalledExactlyOnceWith(harness.error, 0, {
+      timeout: 60_000,
+    });
+    const [cleared] = harness.errorCount.mock.invocationCallOrder;
+    const [read] = harness.refusal.mock.invocationCallOrder;
+    expect(cleared).toBeLessThan(read!);
+  });
+
+  it('records a recovery when the reload resumes the saved session', async () => {
+    const opened = page();
+    harness.refusal.mockResolvedValueOnce(NODE_FAILURE);
+    harness.resumed.mockResolvedValueOnce(null);
+    await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(0);
+    expect(opened.calls.reload).toHaveBeenCalledTimes(1);
+    expect(harness.walletClick).toHaveBeenCalledTimes(1);
+    expect(harness.resumed).toHaveBeenCalledExactlyOnceWith(
+      signedIn,
+      180_000,
+      expect.objectContaining({ click: harness.walletClick })
+    );
+    expect(records()).toEqual([
+      { faults: [{ fault: 'node-5xx', attempt: 1 }], result: 'recovered' },
+    ]);
+  });
+
+  it('takes a refusal of the resume after a reload as the refusal of that attempt', async () => {
+    const opened = page();
+    harness.refusal.mockResolvedValueOnce(NODE_FAILURE).mockResolvedValueOnce(null);
+    harness.resumed.mockResolvedValueOnce(POLY_FAILURE);
+    await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(0);
+    expect(opened.calls.reload).toHaveBeenCalledTimes(2);
+    expect(harness.walletClick).toHaveBeenCalledTimes(2);
+    expect(harness.refusal).toHaveBeenCalledTimes(2);
+    expect(records()).toEqual([
+      {
+        faults: [
+          { fault: 'node-5xx', attempt: 1 },
+          { fault: 'poly-commits', attempt: 2 },
+        ],
+        result: 'recovered',
+      },
+    ]);
   });
 });

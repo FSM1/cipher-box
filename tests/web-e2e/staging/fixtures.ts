@@ -15,7 +15,7 @@ import {
 } from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage } from '../page-objects/login.page';
+import { LoginPage, RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
 import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
@@ -213,16 +213,29 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     };
     page.on('response', noteRefused);
     let started = attemptStarted;
-    let refusal: string | null;
+    let refusal: string | null = RETURNED_TO_SIGN_IN;
     try {
-      if (attempt > 0) await page.reload({ timeout: checkBudget() });
-      await expect(login.walletButton).toBeEnabled({ timeout: Math.min(60_000, checkBudget()) });
-      started = Date.now();
-      await login.walletButton.click({ timeout: checkBudget() });
-      await page
-        .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
-        .click({ timeout: checkBudget() });
-      refusal = await login.refusal(signedIn, Math.min(300_000, checkBudget()));
+      if (attempt > 0) {
+        // The reload resumes any saved session, which can sign in or refuse on its own.
+        await page.reload({ timeout: checkBudget() });
+        started = Date.now();
+        refusal = await login.refusal(
+          signedIn,
+          Math.min(180_000, checkBudget()),
+          login.walletButton
+        );
+      }
+      if (refusal === RETURNED_TO_SIGN_IN) {
+        await expect(login.walletButton).toBeEnabled({ timeout: Math.min(60_000, checkBudget()) });
+        started = Date.now();
+        await login.walletButton.click({ timeout: checkBudget() });
+        await page
+          .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
+          .click({ timeout: checkBudget() });
+        // The banner of an earlier refusal stays until the login begins.
+        await expect(login.error).toHaveCount(0, { timeout: Math.min(60_000, checkBudget()) });
+        refusal = await login.refusal(signedIn, Math.min(300_000, checkBudget()));
+      }
     } catch (error) {
       if (Date.now() >= deadline) {
         annotate(stop);
