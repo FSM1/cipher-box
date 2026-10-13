@@ -10,6 +10,8 @@ export interface SyncTimingProfile {
   recordTtlMs: number;
   pollCadenceMs: number;
   staleAfterMs: number;
+  /** How long a pass may run before the engine answers its refreshes overdue. Uncompressed in CI. */
+  refreshDeadlineMs: number;
 }
 
 /** Mirrors `SyncTimingProfile::CI`. Only an `e2e-hook` build runs under it. */
@@ -17,6 +19,7 @@ export const CI_PROFILE: SyncTimingProfile = {
   recordTtlMs: 2_000,
   pollCadenceMs: 1_000,
   staleAfterMs: 3_000,
+  refreshDeadlineMs: 30_000,
 };
 
 /** Mirrors `SyncTimingProfile::PRODUCTION`. Only the soak leg runs under it. */
@@ -24,6 +27,7 @@ export const PRODUCTION_PROFILE: SyncTimingProfile = {
   recordTtlMs: 60_000,
   pollCadenceMs: 30_000,
   staleAfterMs: 90_000,
+  refreshDeadlineMs: 30_000,
 };
 
 export interface Deadlines {

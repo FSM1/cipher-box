@@ -297,6 +297,32 @@ describe('poll', () => {
     expect(reads).toBe(1);
   });
 
+  it('starts no read when an interval wait ends on the deadline before the alarm fires', async () => {
+    const clock = fakeClock();
+    let reads = 0;
+    let released = false;
+
+    const failure = await poll(
+      () => (reads++ === 0 ? 'opening' : new Promise<string>(() => undefined)),
+      () => false,
+      {
+        what: 'the mount to open',
+        timeoutMs: 100,
+        intervalMs: 100,
+        clock,
+        release: async () => {
+          released = true;
+        },
+      }
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PollTimeout);
+    expect((failure as PollTimeout).stalled).toBe(false);
+    expect((failure as PollTimeout).last).toBe('opening');
+    expect(reads).toBe(1);
+    expect(released).toBe(false);
+  });
+
   it('reports the deadline when the release never settles', async () => {
     const clock = fakeClock();
     let released = false;
