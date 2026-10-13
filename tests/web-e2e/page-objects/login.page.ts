@@ -1,7 +1,19 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-/** The refusal {@link LoginPage.refusal} answers when `signedOut` shows with no banner. */
+/** The refusal text of a `signed-out` outcome. */
 export const RETURNED_TO_SIGN_IN = 'returned to sign-in without an error';
+
+/** Where a sign-in or a session resume settled. */
+export type SignInOutcome =
+  | { readonly kind: 'signed-in' }
+  | { readonly kind: 'signed-out' }
+  | { readonly kind: 'refused'; readonly text: string };
+
+/** A disabled button belongs to a resume or a login still in flight. */
+async function enabled(locator: Locator): Promise<boolean> {
+  if (!(await locator.isVisible())) return false;
+  return locator.isEnabled({ timeout: 1_000 }).catch(() => false);
+}
 
 /** The front door: the Core Kit methods plus the SIWE secondary. */
 export class LoginPage {
@@ -24,29 +36,53 @@ export class LoginPage {
     return this.page.getByTestId('login-error');
   }
 
+  /** The refusal banners on the page, in order. */
+  async banners(): Promise<string[]> {
+    return (await this.error.allInnerTexts()).map((text) => text.trim()).filter(Boolean);
+  }
+
   /**
-   * Waits until the tab either shows `signedIn` or draws a refusal. Answers
-   * with the refusal text, or `null` once the sign-in won. A visible
-   * `signedOut` without a banner is a refusal too.
+   * Waits until the banners differ from `stale`: the login cleared them or drew
+   * a new one. Banners that outlast `timeout` are read as they stand.
    */
-  async refusal(signedIn: Locator, timeout: number, signedOut?: Locator): Promise<string | null> {
-    let refused: string | null = null;
+  async replaced(stale: readonly string[], timeout: number): Promise<void> {
+    if (stale.length === 0) return;
+    const same = (now: readonly string[]) =>
+      now.length === stale.length && now.every((text, i) => text === stale[i]);
+    await expect
+      .poll(async () => same(await this.banners()), { timeout, intervals: [100] })
+      .toBe(false)
+      .catch(() => undefined);
+  }
+
+  /**
+   * Waits until the tab shows `signedIn`, draws a refusal, or offers an enabled
+   * `signedOut` with no banner.
+   */
+  async outcome(signedIn: Locator, timeout: number, signedOut?: Locator): Promise<SignInOutcome> {
+    const seen: { outcome?: SignInOutcome } = {};
     await expect
       .poll(
         async () => {
-          if (await signedIn.isVisible()) return true;
-          const banner = this.error.first();
-          if ((await banner.count()) > 0) {
-            refused = (await banner.innerText()).trim();
+          if (await signedIn.isVisible()) {
+            seen.outcome = { kind: 'signed-in' };
             return true;
           }
-          if (!(await signedOut?.isVisible())) return false;
-          refused = RETURNED_TO_SIGN_IN;
+          // The button first: one update draws a refusal's banner with its button.
+          const out = signedOut !== undefined && (await enabled(signedOut));
+          const banners = await this.banners();
+          if (banners.length > 0) {
+            seen.outcome = { kind: 'refused', text: banners.join(' | ') };
+            return true;
+          }
+          if (!out) return false;
+          seen.outcome = { kind: 'signed-out' };
           return true;
         },
         { timeout, intervals: [2_000], message: 'neither signed in nor refused' }
       )
       .toBe(true);
-    return refused;
+    if (seen.outcome === undefined) throw new Error('neither signed in nor refused');
+    return seen.outcome;
   }
 }

@@ -15,7 +15,7 @@ import {
 } from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage, RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
+import { LoginPage, RETURNED_TO_SIGN_IN, type SignInOutcome } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
 import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
@@ -173,9 +173,14 @@ export async function signIn(page: Page): Promise<number> {
  * The auth network refuses a login under its own load, which the panel draws as
  * a banner and not as a navigation. {@link nextStep} decides whether a refusal
  * reloads the same address, fragment included, and tries again. The thrown
- * error is redacted, since it lands in a public log.
+ * error is redacted, since it lands in a public log. `firstRefusal` is the
+ * refusal of a session resume, which counts as the first refused attempt.
  */
-export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
+export async function signInWithWallet(
+  page: Page,
+  signedIn: Locator,
+  firstRefusal?: string
+): Promise<number> {
   const login = new LoginPage(page);
   const info = test.info();
   const outputDir = info.project.outputDir;
@@ -213,28 +218,31 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     };
     page.on('response', noteRefused);
     let started = attemptStarted;
-    let refusal: string | null = RETURNED_TO_SIGN_IN;
+    let outcome: SignInOutcome = { kind: 'signed-out' };
     try {
-      if (attempt > 0) {
+      if (attempt === 0 && firstRefusal !== undefined) {
+        outcome = { kind: 'refused', text: firstRefusal };
+      } else if (attempt > 0) {
         // The reload resumes any saved session, which can sign in or refuse on its own.
         await page.reload({ timeout: checkBudget() });
         started = Date.now();
-        refusal = await login.refusal(
+        outcome = await login.outcome(
           signedIn,
           Math.min(180_000, checkBudget()),
           login.walletButton
         );
       }
-      if (refusal === RETURNED_TO_SIGN_IN) {
+      if (outcome.kind === 'signed-out') {
         await expect(login.walletButton).toBeEnabled({ timeout: Math.min(60_000, checkBudget()) });
+        const stale = await login.banners();
         started = Date.now();
         await login.walletButton.click({ timeout: checkBudget() });
         await page
           .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
           .click({ timeout: checkBudget() });
         // The banner of an earlier refusal stays until the login begins.
-        await expect(login.error).toHaveCount(0, { timeout: Math.min(60_000, checkBudget()) });
-        refusal = await login.refusal(signedIn, Math.min(300_000, checkBudget()));
+        await login.replaced(stale, Math.min(60_000, checkBudget()));
+        outcome = await login.outcome(signedIn, Math.min(300_000, checkBudget()));
       }
     } catch (error) {
       if (Date.now() >= deadline) {
@@ -245,10 +253,11 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     } finally {
       page.off('response', noteRefused);
     }
-    if (refusal === null) {
+    if (outcome.kind === 'signed-in') {
       annotate(faults.length === 0 ? 'signed-in' : 'recovered');
       return Date.now() - started;
     }
+    const refusal = outcome.kind === 'refused' ? outcome.text : RETURNED_TO_SIGN_IN;
 
     const now = Date.now();
     const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted, Math.random());

@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { FilesPage } from '../page-objects/files.page';
-import { LoginPage } from '../page-objects/login.page';
+import { LoginPage, RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
 import { signInWithWallet } from './fixtures';
 import { redact } from './forensics';
 import { devnetFault } from './loginRetry';
@@ -14,21 +14,28 @@ function notRestored(refusal: string): Error {
   );
 }
 
+/** Waits for the resume on `page` to settle: `null` once it reaches `signedIn`, else its refusal. */
+async function resumed(page: Page, signedIn: Locator, timeout: number): Promise<string | null> {
+  const login = new LoginPage(page);
+  const outcome = await login.outcome(signedIn, timeout, login.walletButton);
+  if (outcome.kind === 'signed-in') return null;
+  return outcome.kind === 'refused' ? outcome.text : RETURNED_TO_SIGN_IN;
+}
+
 /**
  * Waits for the session resume on `page` to reach `signedIn`. A devnet fault
- * of the resume signs in again through {@link signInWithWallet}; any other
- * refusal throws, since a new login would hide a lost session.
+ * of the resume is the first refused attempt of {@link signInWithWallet}; any
+ * other refusal throws, since a new login would hide a lost session.
  */
 export async function resumeSession(
   page: Page,
   signedIn: Locator,
   timeout = 180_000
 ): Promise<void> {
-  const login = new LoginPage(page);
-  const refusal = await login.refusal(signedIn, timeout, login.walletButton);
+  const refusal = await resumed(page, signedIn, timeout);
   if (refusal === null) return;
   if (devnetFault(refusal) === null) throw notRestored(refusal);
-  await signInWithWallet(page, signedIn);
+  await signInWithWallet(page, signedIn, refusal);
 }
 
 /** A return from offline must restore the saved session before the vault can be used. */
@@ -40,11 +47,10 @@ export async function restoreVault(page: Page, timeout = 180_000): Promise<Files
 }
 
 /** A reload must keep the session: any refused resume throws, with no new login. */
-export async function reloadVault(page: Page, timeout = 180_000): Promise<FilesPage> {
+export async function reloadVault(page: Page): Promise<FilesPage> {
   await page.reload();
   const files = new FilesPage(page);
-  const login = new LoginPage(page);
-  const refusal = await login.refusal(files.browser, timeout, login.walletButton);
+  const refusal = await resumed(page, files.browser, 180_000);
   if (refusal !== null) throw notRestored(refusal);
   return files;
 }

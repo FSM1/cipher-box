@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RETURNED_TO_SIGN_IN } from '../page-objects/login.page';
 import { signInWithWallet } from './fixtures';
 import { reloadVault, restoreVault, resumeSession } from './restoreVault';
 
@@ -11,21 +12,20 @@ const POLY_FAILURE = 'master poly commits inconsistent with tssPubKey';
 
 function browser() {
   const visible = new Map<string, string>();
+  const disabled = new Set<string>();
   const calls = {
     goto: vi.fn(),
     reload: vi.fn(),
     getByTestId(id: string) {
-      const locator = {
+      return {
         id,
-        first: () => locator,
-        count: async () => (visible.has(id) ? 1 : 0),
         isVisible: async () => visible.has(id),
-        innerText: async () => visible.get(id) ?? '',
+        isEnabled: async () => !disabled.has(id),
+        allInnerTexts: async () => (visible.has(id) ? [visible.get(id)!] : []),
       };
-      return locator;
     },
   };
-  return { visible, calls, page: calls as unknown as Page };
+  return { visible, disabled, calls, page: calls as unknown as Page };
 }
 
 beforeEach(() => {
@@ -67,15 +67,27 @@ describe('returning to the vault with a saved session', () => {
 
     expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(
       b.page,
-      expect.objectContaining({ id: 'file-browser' })
+      expect.objectContaining({ id: 'file-browser' }),
+      POLY_FAILURE
     );
+  });
+
+  it('waits out a disabled wallet button while the resume runs', async () => {
+    const b = browser();
+    b.visible.set('wallet-login-button', '');
+    b.disabled.add('wallet-login-button');
+    setTimeout(() => b.visible.set('file-browser', ''), 100);
+
+    await restoreVault(b.page);
+
+    expect(signInWithWallet).not.toHaveBeenCalled();
   });
 
   it('reports a lost session even if the sign-in page has no error', async () => {
     const b = browser();
     b.visible.set('wallet-login-button', '');
 
-    await expect(restoreVault(b.page)).rejects.toThrow('returned to sign-in without an error');
+    await expect(restoreVault(b.page)).rejects.toThrow(RETURNED_TO_SIGN_IN);
     expect(signInWithWallet).not.toHaveBeenCalled();
   });
 
@@ -105,7 +117,7 @@ describe('resuming a session on a page that is already open', () => {
 
     await resumeSession(b.page, joinable);
 
-    expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(b.page, joinable);
+    expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(b.page, joinable, POLY_FAILURE);
     expect(b.calls.goto).not.toHaveBeenCalled();
   });
 
@@ -133,12 +145,11 @@ describe('reloading the vault', () => {
     [POLY_FAILURE, 'poly-commits'],
     ["Cannot read properties of undefined (reading 'ciphertext')", 'rss-envelope'],
     ['the engine refused the vault anchor at its cold start', 'none'],
-    ['returned to sign-in without an error', 'none'],
   ])(
     'fails with the full refusal and its fault class, with no new login: %s',
     async (refusal, fault) => {
       const b = browser();
-      if (refusal !== 'returned to sign-in without an error') b.visible.set('login-error', refusal);
+      b.visible.set('login-error', refusal);
       b.visible.set('wallet-login-button', '');
 
       await expect(reloadVault(b.page)).rejects.toThrow(
@@ -147,4 +158,14 @@ describe('reloading the vault', () => {
       expect(signInWithWallet).not.toHaveBeenCalled();
     }
   );
+
+  it('fails a reload that returns to sign-in with no banner, with no new login', async () => {
+    const b = browser();
+    b.visible.set('wallet-login-button', '');
+
+    await expect(reloadVault(b.page)).rejects.toThrow(
+      `the saved session did not restore: ${RETURNED_TO_SIGN_IN}; devnet fault: none`
+    );
+    expect(signInWithWallet).not.toHaveBeenCalled();
+  });
 });

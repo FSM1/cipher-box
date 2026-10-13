@@ -23,11 +23,11 @@ const harness = vi.hoisted(() => {
   return {
     info,
     enabled: vi.fn(),
-    errorCount: vi.fn(),
+    banners: vi.fn(),
+    replaced: vi.fn(),
     walletClick: vi.fn(),
     refusal: vi.fn(),
     resumed: vi.fn(),
-    error: { testId: 'login-error' },
   };
 });
 
@@ -35,25 +35,31 @@ vi.mock('@playwright/test', () => {
   const test = { extend: () => test, info: () => harness.info };
   return {
     test,
-    expect: (target: unknown) => ({
-      toBeEnabled: harness.enabled,
-      toHaveCount: (count: number, options: unknown) => harness.errorCount(target, count, options),
-    }),
+    expect: () => ({ toBeEnabled: harness.enabled }),
   };
 });
 
+// The mocks answer a refusal text: `null` signs in, and RETURNED_TO_SIGN_IN is signed out.
 // The three-way wait after a reload names the wallet button; the wait after a click does not.
-vi.mock('../page-objects/login.page', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../page-objects/login.page')>()),
-  LoginPage: class {
-    walletButton = { click: harness.walletClick };
-    error = harness.error;
-    refusal = (signedIn: Locator, timeout: number, signedOut?: Locator) =>
-      signedOut === undefined
-        ? harness.refusal(signedIn, timeout)
-        : harness.resumed(signedIn, timeout, signedOut);
-  },
-}));
+vi.mock('../page-objects/login.page', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../page-objects/login.page')>();
+  return {
+    ...real,
+    LoginPage: class {
+      walletButton = { click: harness.walletClick };
+      banners = harness.banners;
+      replaced = harness.replaced;
+      outcome = async (signedIn: Locator, timeout: number, signedOut?: Locator) => {
+        const text: string | null = await (signedOut === undefined
+          ? harness.refusal(signedIn, timeout)
+          : harness.resumed(signedIn, timeout, signedOut));
+        if (text === null) return { kind: 'signed-in' };
+        if (text === real.RETURNED_TO_SIGN_IN) return { kind: 'signed-out' };
+        return { kind: 'refused', text };
+      };
+    },
+  };
+});
 
 const NODE_FAILURE = 'the request to node-1.dev-node.web3auth.io failed with status 500';
 const POLY_FAILURE = 'master poly commits inconsistent with tssPubKey';
@@ -84,6 +90,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.spyOn(Math, 'random').mockReturnValue(0);
   harness.resumed.mockResolvedValue(RETURNED_TO_SIGN_IN);
+  harness.banners.mockResolvedValue([]);
   harness.info.project.outputDir = mkdtempSync(join(tmpdir(), 'login-flow-'));
   harness.info.project.metadata = {};
   harness.info.annotations = [];
@@ -223,15 +230,14 @@ describe('the wallet login retry flow', () => {
 
   it('waits for the banner of an earlier refusal to clear before it reads the login', async () => {
     const opened = page();
-    harness.errorCount.mockImplementationOnce(async () => {
+    harness.banners.mockResolvedValueOnce([POLY_FAILURE]);
+    harness.replaced.mockImplementationOnce(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     harness.refusal.mockResolvedValueOnce(null);
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(3_000);
-    expect(harness.errorCount).toHaveBeenCalledExactlyOnceWith(harness.error, 0, {
-      timeout: 60_000,
-    });
-    const [cleared] = harness.errorCount.mock.invocationCallOrder;
+    expect(harness.replaced).toHaveBeenCalledExactlyOnceWith([POLY_FAILURE], 60_000);
+    const [cleared] = harness.replaced.mock.invocationCallOrder;
     const [read] = harness.refusal.mock.invocationCallOrder;
     expect(cleared).toBeLessThan(read!);
   });
@@ -270,5 +276,35 @@ describe('the wallet login retry flow', () => {
         result: 'recovered',
       },
     ]);
+  });
+
+  it('takes a refused resume as the first attempt: the backoff, the reload and the record', async () => {
+    const opened = page();
+    harness.resumed.mockResolvedValueOnce(null);
+    await expect(signInWithWallet(opened.page, signedIn, POLY_FAILURE)).resolves.toBe(0);
+    expect(harness.walletClick).not.toHaveBeenCalled();
+    expect(opened.calls.waitForTimeout).toHaveBeenCalledExactlyOnceWith(15_000);
+    expect(opened.calls.reload).toHaveBeenCalledTimes(1);
+    expect(records()).toEqual([
+      { faults: [{ fault: 'poly-commits', attempt: 1 }], result: 'recovered' },
+    ]);
+  });
+
+  it('bounds the resume wait after a reload at the sign-in deadline', async () => {
+    const opened = page();
+    harness.refusal.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+      return NODE_FAILURE;
+    });
+    harness.resumed.mockImplementationOnce(async (_signedIn: Locator, timeoutMs: number) => {
+      expect(timeoutMs).toBe(SIGN_IN_RETRY_BUDGET_MS - 315_000);
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      throw new Error('locator timed out');
+    });
+    await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow(
+      'attempt 2: sign-in-budget'
+    );
+    expect(harness.resumed).toHaveBeenCalledTimes(1);
+    expect(records().map(({ result }) => result)).toEqual(['sign-in-budget']);
   });
 });

@@ -24,7 +24,8 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
   ['node-busy', /all auth network nodes are currently busy/i],
   ['key-assign', /failed to fetch key assign result/i],
-  // The RSS client decrypts a node's round answer that lacks its share encryption.
+  // The Torus SDK decrypt helper got no share envelope: from rss-client round 1 or
+  // recover, or @tkey/tss getTSSShare. A persistent one still stops at the sign-in budget.
   ['rss-envelope', /reading 'ciphertext'/i],
 ];
 
