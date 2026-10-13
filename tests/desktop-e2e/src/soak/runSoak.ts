@@ -53,6 +53,7 @@ import {
   type SoakBudgets,
 } from './plan';
 import { Recorder } from './recorder';
+import { refreshPastOverdue } from './refresh';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
@@ -168,31 +169,37 @@ async function writeSummary(recorder: Recorder): Promise<void> {
 async function runLeg(context: LegContext): Promise<void> {
   const { leg, recorder, budgets } = context;
 
-  const writer = await step(context, 'sign-in', 'sign-in-failed', budgets.signInMs, async () => {
-    const stack = remoteStack(process.env);
-    const devKey = loginSecret(process.env);
-    // The host inherits this environment. The secret reaches it on standard
-    // input alone, so no soak secret stays behind for the child to read.
-    const kept = withoutSoakVars(process.env);
-    for (const name of Object.keys(process.env)) {
-      if (!(name in kept)) delete process.env[name];
-    }
-    await poll(
-      () => serves(stack.apiUrl),
-      (up) => up,
-      {
-        what: 'the API to serve a login',
-        timeoutMs: context.deadlines.apiReadyMs,
-        intervalMs: context.deadlines.intervalMs,
+  const writer = await step(
+    context,
+    'sign-in',
+    'sign-in-failed',
+    budgets.signInMs,
+    async (until) => {
+      const stack = remoteStack(process.env);
+      const devKey = loginSecret(process.env);
+      // The host inherits this environment. The secret reaches it on standard
+      // input alone, so no soak secret stays behind for the child to read.
+      const kept = withoutSoakVars(process.env);
+      for (const name of Object.keys(process.env)) {
+        if (!(name in kept)) delete process.env[name];
       }
-    );
-    const instance = await open(context, 'writer', devKey);
-    await instance.refresh();
-    return { instance, devKey };
-  });
+      await poll(
+        () => serves(stack.apiUrl),
+        (up) => up,
+        {
+          what: 'the API to serve a login',
+          timeoutMs: context.deadlines.apiReadyMs,
+          intervalMs: context.deadlines.intervalMs,
+        }
+      );
+      const instance = await open(context, 'writer', devKey);
+      await refreshOf(context, instance, until);
+      return { instance, devKey };
+    }
+  );
 
-  const ledger = await step(context, 'ledger', 'ledger-unreadable', budgets.ledgerMs, () =>
-    readGranteeLedger(context, writer.instance)
+  const ledger = await step(context, 'ledger', 'ledger-unreadable', budgets.ledgerMs, (until) =>
+    readGranteeLedger(context, writer.instance, until)
   );
 
   const read = await markerReads(context, writer.instance, ledger).catch((error: unknown) => {
@@ -205,27 +212,33 @@ async function runLeg(context: LegContext): Promise<void> {
   // the next night has one to read. A stalled read or a step bound takes the
   // writer away, so a new writer writes it then.
   const markerWriter = writer.instance.abandoned
-    ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async () => {
+    ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async (until) => {
         const instance = await open(context, 'writer-reopened', writer.devKey);
-        await instance.refresh();
+        await refreshOf(context, instance, until);
         return instance;
       })
     : writer.instance;
 
   const today: LegMarker = { leg, date: utcDay(new Date()) };
-  await step(context, 'marker write', 'desktop-marker-unpublished', budgets.writeMs, async () => {
-    await requireLiveMount(markerWriter);
-    await writeMarker(markerWriter, today);
-  });
+  await step(
+    context,
+    'marker write',
+    'desktop-marker-unpublished',
+    budgets.writeMs,
+    async (until) => {
+      await requireLiveMount(markerWriter);
+      await writeMarker(context, markerWriter, today, until);
+    }
+  );
 
   const reader = await step(
     context,
     'cold sign-in',
     'sign-in-failed',
     budgets.signInMs,
-    async () => {
+    async (until) => {
       const instance = await open(context, 'reader', writer.devKey);
-      await instance.refresh();
+      await refreshOf(context, instance, until);
       return instance;
     }
   );
@@ -235,8 +248,8 @@ async function runLeg(context: LegContext): Promise<void> {
     'marker published',
     'desktop-marker-unpublished',
     budgets.publishMs,
-    async () => {
-      await servesMarker(context, reader, today);
+    async (until) => {
+      await servesMarker(context, reader, today, until);
       const settled = await markerWriter.status();
       if (settled.deadLetters > 0) {
         throw new SoakFailure(
@@ -248,19 +261,24 @@ async function runLeg(context: LegContext): Promise<void> {
   );
 }
 
-/** One recorded step, bounded by its budget; the bound releases as `withDeadline` does. */
+/**
+ * One recorded step, bounded by its budget; the bound releases as `withDeadline`
+ * does. The body gets the time its budget ends.
+ */
 function step<T>(
   context: LegContext,
   name: string,
   reason: FailureReason,
   budgetMs: number,
-  body: () => Promise<T>
+  body: (untilMs: number) => Promise<T>
 ): Promise<T> {
   const check = `${context.leg} ${name}`;
   const started = Date.now();
   return context.recorder
     .check(check, reason, () =>
-      withDeadline(body(), budgetMs + STEP_GRACE_MS, `the ${check} step`, () => release(context))
+      withDeadline(body(started + budgetMs), budgetMs + STEP_GRACE_MS, `the ${check} step`, () =>
+        release(context)
+      )
     )
     .then(
       (value) => {
@@ -328,12 +346,16 @@ async function open(context: LegContext, name: string, devKey: string): Promise<
   return instance;
 }
 
-async function readGranteeLedger(context: LegContext, instance: Instance): Promise<Ledger> {
+async function readGranteeLedger(
+  context: LegContext,
+  instance: Instance,
+  untilMs: number
+): Promise<Ledger> {
   const path = join(instance.mountRoot, ...granteeLedgerPath());
   try {
     return ledgerFrom(
       await poll(
-        refreshingAfterFirst(instance, () => readOrErrno(path)),
+        refreshingAfterFirst(context, instance, untilMs, () => readOrErrno(path)),
         (seen): seen is Buffer => Buffer.isBuffer(seen),
         {
           what: `${instance.name}: the grantee ledger to open`,
@@ -382,11 +404,11 @@ async function markerReads(
   );
   const toRead = markersToRead(ledger, listed, leg);
   const budget = readBudget(budgets, toRead.length);
-  return step(context, 'markers', 'desktop-marker-missing', budget, async () => {
+  return step(context, 'markers', 'desktop-marker-missing', budget, async (until) => {
     const unread = new Map(toRead.map((marker) => [ledgerLine(marker), marker]));
     try {
       await poll(
-        refreshingAfterFirst(instance, async () => {
+        refreshingAfterFirst(context, instance, until, async () => {
           const seen: Record<string, MarkerState> = {};
           for (const [line, marker] of unread) {
             const state = await markerState(
@@ -427,7 +449,12 @@ async function listLegFolders(instance: Instance): Promise<Partial<Record<Marker
 }
 
 /** The marker of today and its ledger line, each written once on a rerun of the day. */
-async function writeMarker(instance: Instance, today: LegMarker): Promise<void> {
+async function writeMarker(
+  context: LegContext,
+  instance: Instance,
+  today: LegMarker,
+  untilMs: number
+): Promise<void> {
   await mkdir(join(instance.mountRoot, ...DESKTOP_FOLDER, today.leg), { recursive: true });
   const path = join(instance.mountRoot, ...markerPath(today));
   if ((await markerState(path, today.date)) !== 'served') {
@@ -436,7 +463,7 @@ async function writeMarker(instance: Instance, today: LegMarker): Promise<void> 
 
   // The ledger as it is now, not as the leg read it before the marker reads.
   const ledgerAt = join(instance.mountRoot, ...granteeLedgerPath());
-  await instance.refresh();
+  await refreshOf(context, instance, untilMs);
   const ledger = ledgerFrom(await readOrErrno(ledgerAt));
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
@@ -454,13 +481,14 @@ async function writeMarker(instance: Instance, today: LegMarker): Promise<void> 
 async function servesMarker(
   context: LegContext,
   reader: Instance,
-  today: LegMarker
+  today: LegMarker,
+  untilMs: number
 ): Promise<void> {
   const markerAt = join(reader.mountRoot, ...markerPath(today));
   const ledgerAt = join(reader.mountRoot, ...granteeLedgerPath());
   const line = ledgerLine(today);
   await poll(
-    refreshingAfterFirst(reader, async () => {
+    refreshingAfterFirst(context, reader, untilMs, async () => {
       const marker = await markerState(markerAt, today.date);
       const ledger = await readOrErrno(ledgerAt);
       return {
@@ -505,12 +533,27 @@ async function readOrErrno(path: string): Promise<Buffer | Errno> {
 }
 
 /** `probe`, with a nocache refresh before every call after the first. */
-function refreshingAfterFirst<T>(instance: Instance, probe: () => Promise<T>): () => Promise<T> {
+function refreshingAfterFirst<T>(
+  context: LegContext,
+  instance: Instance,
+  untilMs: number,
+  probe: () => Promise<T>
+): () => Promise<T> {
   let calls = 0;
   return async () => {
-    if (calls++ > 0) await instance.refresh();
+    if (calls++ > 0) await refreshOf(context, instance, untilMs);
     return probe();
   };
+}
+
+/** A nocache refresh that sends an overdue one again until the step budget ends. */
+function refreshOf(context: LegContext, instance: Instance, untilMs: number): Promise<void> {
+  return refreshPastOverdue(() => instance.refresh(), {
+    name: instance.name,
+    untilMs,
+    intervalMs: context.deadlines.intervalMs,
+    log: (line) => process.stdout.write(line),
+  });
 }
 
 async function listOrEmpty(path: string): Promise<string[]> {

@@ -210,6 +210,12 @@ export async function sendOrThrow(
  */
 export const NO_SESSION = 'no session is live on this device';
 
+/**
+ * The refusal of a refresh whose pass ran past the engine's refresh deadline.
+ * The engine calls it availability: the pass runs on, and a later refresh may land.
+ */
+export const REFRESH_OVERDUE = 'refresh failed: the pass did not land within the refresh deadline';
+
 /** The status, or null while the shell holds no session yet. */
 export async function statusOrPending(
   endpoint: ControlEndpoint,
