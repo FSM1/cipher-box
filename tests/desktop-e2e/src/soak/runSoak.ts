@@ -193,7 +193,7 @@ async function runLeg(context: LegContext): Promise<void> {
         }
       );
       const instance = await open(context, 'writer', devKey);
-      await refreshWithinBudget(context, instance, until);
+      await refreshWithinBudget(instance, until);
       return { instance, devKey };
     }
   );
@@ -214,7 +214,7 @@ async function runLeg(context: LegContext): Promise<void> {
   const markerWriter = writer.instance.abandoned
     ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async (until) => {
         const instance = await open(context, 'writer-reopened', writer.devKey);
-        await refreshWithinBudget(context, instance, until);
+        await refreshWithinBudget(instance, until);
         return instance;
       })
     : writer.instance;
@@ -227,7 +227,7 @@ async function runLeg(context: LegContext): Promise<void> {
     budgets.writeMs,
     async (until) => {
       await requireLiveMount(markerWriter);
-      await writeMarker(context, markerWriter, today, until);
+      await writeMarker(markerWriter, today, until);
     }
   );
 
@@ -238,7 +238,7 @@ async function runLeg(context: LegContext): Promise<void> {
     budgets.signInMs,
     async (until) => {
       const instance = await open(context, 'reader', writer.devKey);
-      await refreshWithinBudget(context, instance, until);
+      await refreshWithinBudget(instance, until);
       return instance;
     }
   );
@@ -355,7 +355,7 @@ async function readGranteeLedger(
   try {
     return ledgerFrom(
       await poll(
-        refreshingAfterFirst(context, instance, untilMs, () => readOrErrno(path)),
+        refreshingAfterFirst(instance, untilMs, () => readOrErrno(path)),
         (seen): seen is Buffer => Buffer.isBuffer(seen),
         {
           what: `${instance.name}: the grantee ledger to open`,
@@ -408,7 +408,7 @@ async function markerReads(
     const unread = new Map(toRead.map((marker) => [ledgerLine(marker), marker]));
     try {
       await poll(
-        refreshingAfterFirst(context, instance, until, async () => {
+        refreshingAfterFirst(instance, until, async () => {
           const seen: Record<string, MarkerState> = {};
           for (const [line, marker] of unread) {
             const state = await markerState(
@@ -449,12 +449,7 @@ async function listLegFolders(instance: Instance): Promise<Partial<Record<Marker
 }
 
 /** The marker of today and its ledger line, each written once on a rerun of the day. */
-async function writeMarker(
-  context: LegContext,
-  instance: Instance,
-  today: LegMarker,
-  untilMs: number
-): Promise<void> {
+async function writeMarker(instance: Instance, today: LegMarker, untilMs: number): Promise<void> {
   await mkdir(join(instance.mountRoot, ...DESKTOP_FOLDER, today.leg), { recursive: true });
   const path = join(instance.mountRoot, ...markerPath(today));
   if ((await markerState(path, today.date)) !== 'served') {
@@ -463,7 +458,7 @@ async function writeMarker(
 
   // The ledger as it is now, not as the leg read it before the marker reads.
   const ledgerAt = join(instance.mountRoot, ...granteeLedgerPath());
-  await refreshWithinBudget(context, instance, untilMs);
+  await refreshWithinBudget(instance, untilMs);
   const ledger = ledgerFrom(await readOrErrno(ledgerAt));
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
@@ -488,7 +483,7 @@ async function servesMarker(
   const ledgerAt = join(reader.mountRoot, ...granteeLedgerPath());
   const line = ledgerLine(today);
   await poll(
-    refreshingAfterFirst(context, reader, untilMs, async () => {
+    refreshingAfterFirst(reader, untilMs, async () => {
       const marker = await markerState(markerAt, today.date);
       const ledger = await readOrErrno(ledgerAt);
       return {
@@ -534,28 +529,23 @@ async function readOrErrno(path: string): Promise<Buffer | Errno> {
 
 /** `probe`, with a nocache refresh before every call after the first. */
 function refreshingAfterFirst<T>(
-  context: LegContext,
   instance: Instance,
   untilMs: number,
   probe: () => Promise<T>
 ): () => Promise<T> {
   let calls = 0;
   return async () => {
-    if (calls++ > 0) await refreshWithinBudget(context, instance, untilMs);
+    if (calls++ > 0) await refreshWithinBudget(instance, untilMs);
     return probe();
   };
 }
 
 /** A nocache refresh that sends an overdue one again until the step budget ends. */
-function refreshWithinBudget(
-  context: LegContext,
-  instance: Instance,
-  untilMs: number
-): Promise<void> {
+function refreshWithinBudget(instance: Instance, untilMs: number): Promise<void> {
   return refreshPastOverdue(() => instance.refresh(), {
     name: instance.name,
     untilMs,
-    waitMs: context.deadlines.readIntervalMs,
+    waitMs: PRODUCTION_PROFILE.pollCadenceMs,
     refreshDeadlineMs: PRODUCTION_PROFILE.refreshDeadlineMs,
     log: (line) => process.stdout.write(line),
   });

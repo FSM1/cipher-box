@@ -78,14 +78,13 @@ function run(fake: ReturnType<typeof fakeClock>, refresh: () => Promise<void>, u
   return { done, lines };
 }
 
-async function overdueFailure(done: Promise<void>): Promise<ControlRefusal> {
+async function overdueFailure(done: Promise<void>): Promise<void> {
   const failure = await done.then(
     () => undefined,
     (error: unknown) => error
   );
   expect(failure).toBeInstanceOf(ControlRefusal);
   expect((failure as ControlRefusal).refusal).toBe(OVERDUE_TEXT);
-  return failure as ControlRefusal;
 }
 
 describe('a soak refresh', () => {

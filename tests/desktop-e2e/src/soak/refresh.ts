@@ -40,36 +40,43 @@ export async function refreshPastOverdue(
   const { name, untilMs, waitMs, refreshDeadlineMs, log } = options;
   const clock = options.clock ?? REAL_CLOCK;
   const started = clock.now();
-  let overdue: ControlRefusal | undefined;
+  const send = async (): Promise<ControlRefusal | undefined> => {
+    try {
+      await refresh();
+      return undefined;
+    } catch (error) {
+      if (!isOverdue(error)) throw error;
+      return error;
+    }
+  };
+
+  const first = await send();
+  if (!first) return;
+  let overdue: ControlRefusal = first;
+  log(
+    `  ${name}: refresh 1 was overdue after ${clock.now() - started}ms; it retries every ${waitMs}ms\n`
+  );
   const spent = (attempts: number, last: string): ControlRefusal => {
     log(
       `  ${name}: refresh ${last} on attempt ${attempts}, ${clock.now() - started}ms ` +
         `after the first; the step budget is spent\n`
     );
-    return overdue as ControlRefusal;
+    return overdue;
   };
 
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await refresh();
-    } catch (error) {
-      if (!isOverdue(error)) throw error;
-      if (!overdue) {
-        log(
-          `  ${name}: refresh 1 was overdue after ${clock.now() - started}ms; ` +
-            `it retries every ${waitMs}ms\n`
-        );
-      }
-      overdue = error;
-      if (untilMs - clock.now() <= waitMs + refreshDeadlineMs) throw spent(attempt, 'was overdue');
-      await clock.wait(waitMs);
-      if (untilMs - clock.now() <= refreshDeadlineMs) throw spent(attempt, 'was overdue');
+  for (let attempts = 1; ; ) {
+    if (untilMs - clock.now() <= waitMs + refreshDeadlineMs) throw spent(attempts, 'was overdue');
+    await clock.wait(waitMs);
+    if (untilMs - clock.now() <= refreshDeadlineMs) throw spent(attempts, 'was overdue');
+    const next = await send();
+    attempts += 1;
+    if (next) {
+      overdue = next;
       continue;
     }
-    if (!overdue) return;
-    if (clock.now() > untilMs) throw spent(attempt, 'landed late');
+    if (clock.now() > untilMs) throw spent(attempts, 'landed late');
     log(
-      `  ${name}: refresh landed on attempt ${attempt}, ${clock.now() - started}ms after the first\n`
+      `  ${name}: refresh landed on attempt ${attempts}, ${clock.now() - started}ms after the first\n`
     );
     return;
   }
