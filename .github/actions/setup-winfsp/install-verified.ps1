@@ -6,13 +6,13 @@ param(
   [Parameter(Mandatory = $true)][string]$OutFile,
   [Parameter(Mandatory = $true)][string]$Sha256,
   [Parameter(Mandatory = $true)][scriptblock]$Install,
-  [int]$Attempts = 3,
   [int]$BackoffSec = 10,
   # Bounds the connection and the response headers. A stalled body falls to
   # the .NET read timeout of 300 s.
   [int]$TimeoutSec = 120
 )
 $ErrorActionPreference = 'Stop'
+$Attempts = 3
 
 for ($i = 1; ; $i++) {
   try {
