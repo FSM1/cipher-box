@@ -2622,6 +2622,42 @@ mod tests {
         });
     }
 
+    /// An entry the count cap would evict stays past the cap while its name
+    /// does not read, and no debt journals. Once the read heals, the trim
+    /// drops it under its recorded name.
+    #[test]
+    fn an_entry_whose_name_does_not_read_stays_past_the_count_cap() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let park_node = async |node: u8| {
+                let (blocks, root_block, staged) =
+                    framed_keyed(b"forty bytes of content ------------------", node);
+                put_blocks(&store, &blocks, &root_block, &staged).await;
+                let record = encode_op_record(seal(node), &content_op(node, staged)).unwrap();
+                park_named(&store, &record).await;
+                record
+            };
+            let mut records = Vec::new();
+            for node in 1..=MAX_PRESERVED_DEAD_LETTERS as u8 {
+                records.push(park_node(node).await);
+            }
+            store.fail_staged_reads_under(&name_key(record_op_id(&records[0])));
+            records.push(park_node(MAX_PRESERVED_DEAD_LETTERS as u8 + 1).await);
+
+            assert_eq!(kept_records(&store).await, records);
+            assert!(owed_by_owner(&store).await.is_empty());
+
+            store.heal_staged_reads();
+            reconcile(&store, bounds(ROOMY)).await;
+
+            assert_eq!(kept_records(&store).await, records[1..].to_vec());
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())]
+            );
+        });
+    }
+
     /// A trimmed version whose debt did not reach the ledger is reported, not
     /// dropped in silence.
     #[test]
