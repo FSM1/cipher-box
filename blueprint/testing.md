@@ -320,7 +320,8 @@ scenario fails the meta-test):
   keeps the name while the queue holds its op id (`sync::staging`); the body
   round-trips, reads a body of another op or version, a bad name, trailing
   bytes or an unknown version as no name, and decodes the core KAT body
-  (`sync::dead_letter_name`); the encode refuses a name that is not an IPNS
+  (`sync::dead_letter_name`); a create records the name under the end of
+  its parent (`sync::drain`); the encode refuses a name that is not an IPNS
   name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at

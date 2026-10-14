@@ -1694,6 +1694,17 @@ impl<'a> DrainScope<'a> {
         })
     }
 
+    /// The end whose records `op`'s version joins. A node joins the scope of
+    /// the parent that names it, and the base links a created node only once
+    /// that parent publishes, so a create resolves through its parent.
+    fn joined_end(&self, base: &Snapshot, op: &Op) -> Result<ScopeEnd<'a>, Halt> {
+        let anchor = match &op.kind {
+            OpKind::Create { parent, .. } => *parent,
+            _ => op.target,
+        };
+        self.end_of(base, anchor)
+    }
+
     /// The end rooted at `root`, if this scope holds one.
     fn end_rooted_at(&self, root: NodeId) -> Option<ScopeEnd<'a>> {
         if self.source.root == root {
@@ -9772,7 +9783,7 @@ where
     /// name or does not read, since the version may have charged there.
     async fn joined_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<IpnsName> {
         let name = scope
-            .end_of(&self.cells.base.borrow(), op.target)
+            .joined_end(&self.cells.base.borrow(), op)
             .ok()?
             .write_name(&op.target.0);
         match self
@@ -11295,6 +11306,41 @@ mod tests {
             epoch_skew(&scope, &destination.end()),
             Halt::UploadAttempt,
             "a second end's is the walk's, and no retry of this pass refreshes it"
+        );
+    }
+
+    /// A create below the destination root joins the destination end, though
+    /// the base does not link the new node yet.
+    #[test]
+    fn a_create_joins_the_end_of_its_parent() {
+        let seams = OwnerSeams::new();
+        let (source, destination) = ends();
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT];
+        let scope = two_ended(&seams, &source, &destination, &roots);
+        let base = Snapshot::new(SOURCE_ROOT);
+        let create = Op::create(
+            NodeId([0x64; 16]),
+            DESTINATION_ROOT,
+            "new",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        assert_eq!(
+            scope.joined_end(&base, &create).map(|end| end.root),
+            Ok(DESTINATION_ROOT)
+        );
+        let beside = Op::create(
+            NodeId([0x65; 16]),
+            SOURCE_ROOT,
+            "beside",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        assert_eq!(
+            scope.joined_end(&base, &beside).map(|end| end.root),
+            Ok(SOURCE_ROOT)
         );
     }
 
