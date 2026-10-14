@@ -98,6 +98,20 @@ pub(crate) struct OwedMoveLeg<'a> {
     pub(crate) root_name: Option<&'a IpnsName>,
 }
 
+impl OwedMoveLeg<'_> {
+    /// The owned scope a [`ChildAdopter`] binds.
+    pub(crate) fn to_scope(self) -> OwedMoveScope {
+        OwedMoveScope {
+            scope_id: self.scope_id,
+            read_seed: self.read_seed.map(|seed| StampedSeed {
+                seed: seed.seed.clone(),
+                stamp: seed.stamp,
+            }),
+            root_name: self.root_name.cloned(),
+        }
+    }
+}
+
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
 /// seed is borrowed and never zeroized here.
@@ -319,14 +333,7 @@ where
             node.0,
         )
         .with_seed_stamp(self.seed_stamp)
-        .with_owed_move(self.owed_move.map(|owed| OwedMoveScope {
-            scope_id: owed.scope_id,
-            read_seed: owed.read_seed.map(|seed| StampedSeed {
-                seed: seed.seed.clone(),
-                stamp: seed.stamp,
-            }),
-            root_name: owed.root_name.cloned(),
-        }));
+        .with_owed_move(self.owed_move.map(OwedMoveLeg::to_scope));
         let read = resolve_child_record(
             self.transport,
             self.snapshot_cache,

@@ -85,9 +85,9 @@ use crate::net::retire::{
 use crate::net::signed_data;
 use crate::net::{
     Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
-    HeldRecord, HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_answered, fanout_get_classified, fanout_get_verify,
-    observed_at, resolve, resolve_gated,
+    HeldRecord, HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome,
+    RootAdopter, assemble_head_envelope, fanout_get_answered, fanout_get_classified,
+    fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -1766,6 +1766,9 @@ pub(crate) struct TickInputs<'a> {
     /// The scopes this device owes an interior move at (ADR 0063), or `None`
     /// when the owed record did not read.
     pub(crate) owed_moves: Option<&'a [NodeId]>,
+    /// Each owed interior move's scope root, with the scope its folder left,
+    /// which a child read under that root also binds (ADR 0072 D1).
+    pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -4161,6 +4164,13 @@ where
             node.0,
         )
         .with_seed_stamp(Some(plane.epoch))
+        .with_owed_move(
+            self.inputs
+                .owed_move_reads
+                .iter()
+                .find(|(root, _)| *root == plane.end.root)
+                .map(|(_, left)| left.to_scope()),
+        )
     }
 
     /// One end's scope root as the record plane now serves it, resolved through
@@ -11908,6 +11918,7 @@ mod tests {
                     bin_retention_days: self.bin_retention_days,
                     retention: RetentionPolicy::KeepAll,
                     owed_moves: Some(&[]),
+                    owed_move_reads: &[],
                 },
             )
         }

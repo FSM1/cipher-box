@@ -1329,10 +1329,36 @@ where
                 }),
             })
             .collect();
-        let owed_moves: Option<Vec<NodeId>> = self
-            .owed_moves(state, pass)
-            .await
-            .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
+        let owed = self.owed_moves(state, pass).await;
+        let owed_moves: Option<Vec<NodeId>> = owed
+            .as_ref()
+            .map(|moves| moves.iter().map(|(scope, _)| *scope).collect());
+        let leg_scopes = LegScopes::new(&scopes.proved, &state.minted_scope_roots.borrow(), owed);
+        let sharers = state.grafted_sharers.borrow().clone();
+        let legs = ScopeLegContext {
+            floors: &self.seams.floors,
+            sharers: &sharers,
+            contact_label_seed: &pass.contact_label_seed,
+            own_root: self.root_id,
+            own: &leg_scopes.own,
+            unproved: &scopes.unproved,
+            base: &state.snapshot,
+            root_name: Some(&pass.root_name),
+        };
+        let mut owed_legs = Vec::new();
+        for (&root, &left) in &leg_scopes.owed_moves {
+            if let Ok(leg) = legs
+                .leg_material(root, Some(left), &state.scope_read_seeds)
+                .await
+                && leg.scope == root
+            {
+                owed_legs.push(leg);
+            }
+        }
+        let owed_move_reads: Vec<(NodeId, OwedMoveLeg<'_>)> = owed_legs
+            .iter()
+            .filter_map(|leg| Some((leg.scope, leg.owed_move_leg()?)))
+            .collect();
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1342,6 +1368,7 @@ where
                 bin_retention_days: owner_bin_retention_days(&state.settings_summary),
                 retention: owner_retention(&state.settings_summary),
                 owed_moves: owed_moves.as_deref(),
+                owed_move_reads: &owed_move_reads,
             },
         );
         drain
