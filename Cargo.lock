@@ -816,6 +816,7 @@ dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
  "cipherbox-fuse",
+ "cipherbox-mount-table",
  "cipherbox-win-security",
  "fs4",
  "fuser",
@@ -842,6 +843,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "cipherbox-mount-table"
+version = "0.0.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

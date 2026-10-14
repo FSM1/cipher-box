@@ -16,7 +16,7 @@ pub use cipherbox_fuse::KernelOp;
 /// What the mounting thread hands back: the mount it made, or why it made none.
 pub type Landing = Result<Mount, String>;
 
-/// Shown once the kernel session has ended under a live app — an unmount from a
+/// Shown once the mount has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
 /// projected again by signing in again, not by re-mounting under it.
 const ENDED: &str = "the vault was unmounted outside CipherBox; sign out and back in to mount it";
@@ -136,6 +136,7 @@ impl Projection {
                 },
                 Publication::Pending => MountStatus::Opening,
                 Publication::Refused => MountStatus::refused(NOT_PUBLISHED),
+                Publication::Unmounted => MountStatus::refused(ENDED),
             },
         }
     }
@@ -189,7 +190,7 @@ impl Projection {
         }
     }
 
-    /// The kernel session has ended — an unmount from outside the app. Only the
+    /// The mount has ended — an unmount from outside the app. Only the
     /// mount is dropped here, so this stays a plain wake;
     /// [`quiesce_detached`](Self::quiesce_detached) is what releases the rest.
     fn detach(&mut self) {

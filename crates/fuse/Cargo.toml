@@ -55,6 +55,8 @@ futures-core.workspace = true
 # The mount's own uid/gid, without `unsafe` — the crate forbids it. Same
 # version fuser already resolves, so this costs no extra tree.
 nix = { version = "0.29", features = ["user"] }
+# The mount table the macOS unmount watch reads, outside this crate's `forbid(unsafe_code)`.
+cipherbox-mount-table = { path = "../mount-table" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The one vendored copy, carrying the socket-read patch (blueprint/desktop.md

@@ -1,0 +1,14 @@
+# The one place the macOS mount needs `unsafe`, held apart from the
+# projection that forbids it (`crates/fuse` is `#![forbid(unsafe_code)]`).
+# What it carries and why is in `src/lib.rs`.
+[package]
+name = "cipherbox-mount-table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
