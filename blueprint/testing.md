@@ -426,7 +426,11 @@ scenario fails the meta-test):
   (`tests/owner_actions.rs`); an unread owed record leaves the legs on the
   proved and minted scope roots, and a leg whose root holds no seed reads a
   record of the left scope and waits on a record of the root (`sync::pass`,
-  `net::focus`).
+  `net::focus`). A read cut while a link mint's interior move is owed: the
+  cut's sweep settles with the unmoved node at the old epoch, and the
+  re-drive that lands the move files the sweep run that reports no node at the
+  old epoch, and a re-drive at the mint epoch files no sweep
+  (`tests/owner_actions.rs`).
   A grantee with no write seed after a write cut (ADR 0074): a personal read
   grantee and a downgraded writer each follow the scope pointer to the moved
   root and list a folder the owner adds after the cut (`tests/owner_actions.rs`

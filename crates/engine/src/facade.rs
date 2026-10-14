@@ -178,6 +178,7 @@ use crate::sync::owed_rotation::{
     OWED_ROTATION_PREFIX, OwedCell, OwedEntry, OwedRotation, OwedStep,
 };
 use crate::sync::pass::{LegScopes, ScopeLegContext, TickPass};
+use crate::sync::pass_timing::PassEventSink;
 use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, PointerFetch, vault_pointer_name};
 use crate::sync::project::{map_kind, project_child_version};
 use crate::sync::provision::{
@@ -5747,6 +5748,8 @@ pub struct Engine<T: SeamTypes> {
     /// The resolve tick's second wake source, shared with the spawned loop:
     /// [`Command::ManualRefresh`] files a request here and awaits its verdict.
     manual_refresh: ManualRefresh,
+    /// Where each pass reports its leg durations, when the host asked.
+    pass_events: Option<PassEventSink>,
     /// The cold-start session identity, derived from the login secret at
     /// [`start`](Self::start). `None` until then; the single place derived key
     /// material lives once the engine is live. The resolve/publish/rotation
@@ -5808,6 +5811,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus_hinted: Cell::new(None),
                 alive: Rc::new(Cell::new(true)),
                 manual_refresh: ManualRefresh::default(),
+                pass_events: None,
                 session: None,
                 tick_loop_spawner: RefCell::new(None),
                 api: None,
@@ -5825,6 +5829,14 @@ impl<T: SeamTypes> Engine<T> {
     pub fn with_deadlines(mut self, deadlines: DeadlinePolicy) -> Self {
         self.deadlines = deadlines;
         self.gateway.deadlines = deadlines;
+        self
+    }
+
+    /// Send each leg of every sync pass to `sink` as it ends. Call it before
+    /// [`start`](Self::start), which builds the tick loop.
+    #[must_use]
+    pub fn with_pass_events(mut self, sink: PassEventSink) -> Self {
+        self.pass_events = Some(sink);
         self
     }
 
@@ -7628,7 +7640,8 @@ where {
         let root_id = self.state.snapshot.borrow().root.0;
 
         let manual = self.manual_refresh.clone();
-        let pass = TickPass::new(seams, secrets, alive, manual, owner_identity, root_id);
+        let pass = TickPass::new(seams, secrets, alive, manual, owner_identity, root_id)
+            .with_pass_events(self.pass_events.clone());
 
         Some(Box::new(move || {
             pass.manual.arm();

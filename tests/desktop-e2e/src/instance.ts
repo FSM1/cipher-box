@@ -105,6 +105,16 @@ export class Instance {
     await forceUnmount(this.mountRoot);
   }
 
+  /**
+   * Unmounts the vault the way a member at a terminal does, and leaves the
+   * shell running. Throws where the host has no such tool, or the tool fails.
+   */
+  async unmountExternally(): Promise<void> {
+    const tool = unmountTool(this.mountRoot);
+    if (!tool) throw new Error(`${process.platform} has no tool to unmount from outside the app`);
+    await run(tool.command, tool.args, { timeout: UNMOUNT_WITHIN_MS });
+  }
+
   /** Ends the instance, and never leaves a mount for the next scenario. */
   async stop(): Promise<void> {
     if (this.shell.exit) return;
@@ -249,14 +259,18 @@ async function tailOf(path: string): Promise<string> {
   }
 }
 
+/** The tool a member unmounts with from outside the app, where one exists. */
+function unmountTool(mountRoot: string): { command: string; args: string[] } | null {
+  return process.platform === 'darwin'
+    ? { command: 'diskutil', args: ['unmount', 'force', mountRoot] }
+    : process.platform === 'linux'
+      ? { command: 'fusermount3', args: ['-u', mountRoot] }
+      : null;
+}
+
 /** Best effort: the kernel can keep the mount after a killed shell. */
 async function forceUnmount(mountRoot: string): Promise<void> {
-  const tool =
-    process.platform === 'darwin'
-      ? { command: 'diskutil', args: ['unmount', 'force', mountRoot] }
-      : process.platform === 'linux'
-        ? { command: 'fusermount3', args: ['-u', mountRoot] }
-        : null;
+  const tool = unmountTool(mountRoot);
   if (!tool) return;
   try {
     await run(tool.command, tool.args, { timeout: UNMOUNT_WITHIN_MS });

@@ -3,16 +3,20 @@
  * The TypeORM CLI needs ts-node, which the production image does not carry.
  */
 import dataSource from './data-source';
+import { runMigrationsLocked } from './migration-runner';
 
 async function run(): Promise<void> {
   await dataSource.initialize();
-  const applied = await dataSource.runMigrations();
-  console.log(
-    applied.length === 0
-      ? 'No pending migrations.'
-      : `Applied ${applied.length} migration(s): ${applied.map((m) => m.name).join(', ')}`
-  );
-  await dataSource.destroy();
+  try {
+    const applied = await runMigrationsLocked(dataSource);
+    console.log(
+      applied.length === 0
+        ? 'No pending migrations.'
+        : `Applied ${applied.length} migration(s): ${applied.map((m) => m.name).join(', ')}`
+    );
+  } finally {
+    await dataSource.destroy();
+  }
 }
 
 run().catch((error: unknown) => {

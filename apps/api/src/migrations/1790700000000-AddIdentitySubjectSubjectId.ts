@@ -5,9 +5,6 @@ export class AddIdentitySubjectSubjectId1790700000000 implements MigrationInterf
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `SELECT pg_advisory_xact_lock(hashtext('migration:AddIdentitySubjectSubjectId'))`
-    );
-    await queryRunner.query(
       `ALTER TABLE "identity_subjects" ADD COLUMN IF NOT EXISTS "subject_id" uuid`
     );
     // Every row before this migration is a first sight, so its subject is its own id.
