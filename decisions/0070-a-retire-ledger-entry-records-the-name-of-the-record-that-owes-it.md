@@ -36,7 +36,9 @@ each new debt, with the name of the record whose history dropped the target. The
 a name that is not a well-formed IPNS name, and the decode reads such bytes as unwritten
 (AGENTS.md rule 8). Amended on 2026-10-03: the discard of a preserved dead letter and the
 preserved-set trim write a version 2 entry with no name, because no write seed of the op scope
-is in hand there; such a debt keeps the derived name and the wait rule.
+is in hand there; such a debt keeps the derived name and the wait rule. Amended by ADR 0075 D1
+on 2026-10-14: the drain records the name when it parks a version, and the two sites journal
+version 3 with that name.
 
 **D2 — The settle retires under the recorded name.** For a version 3 entry, the settle uses the
 recorded name for the retire and for the live-record read, and it does not derive a name from the
