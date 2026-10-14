@@ -290,15 +290,19 @@ scenario fails the meta-test):
   scope, reads its live record and spares what it names, and waits when the
   record does not pass the gate (`sync::drain`); a named debt of a deleted
   node that a folder the device never opened links does not settle, a
-  descent past its per-tick read cap settles on a later tick, and a move into
-  a folder the descent already read keeps the debt (`tests/renewal_walk.rs`);
-  a refused folder holds the descent and reports once, a folder that never
-  answers restarts it, and a descent proves only after its second sweep
-  (`sync::drain`); a debt journaled before a write grant moved its node
-  settles under the old name and spares the kept version
-  (`tests/write_plane.rs`); a hard-delete debt settles after a write cut once
-  every scope is reached and waits with a scope unreached, and a debt below a
-  read-granted scope spares the live record (`tests/owner_actions.rs`);
+  descent past its per-tick read cap settles on a later tick, a descent
+  resumes across ledger pages and settles under a one-page ledger, and a move
+  into a folder the descent already read keeps the debt
+  (`tests/renewal_walk.rs`); a refused folder holds the descent and reports
+  once, a refused folder that became a scope root restarts it, a folder that
+  never answers restarts it, a descent proves only after its second sweep, and
+  a complete descent proves again with one confirm sweep (`sync::drain`); a
+  keyless descendant leaves a scope unreached (`sync::pass`); a debt journaled
+  before a write grant moved its node settles under the old name and spares
+  the kept version (`tests/write_plane.rs`); a hard-delete debt settles after
+  a write cut once every scope is reached and waits with a scope unreached,
+  and a debt below a read-granted scope spares the live record, also when the
+  scope's write plane is dark (`tests/owner_actions.rs`);
 - the recorded dead-letter name (ADR 0075) — a discard journals a version 3
   entry under the name that the drain recorded, also after a share moves the
   file to a new scope and name; a discard whose name does not read fails and

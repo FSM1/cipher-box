@@ -49,13 +49,17 @@ waits. Amended on 2026-10-14 (FSM1/cipher-box#2259, owner option 1): the base is
 device, so before it settles a retired node that the base links nowhere, the settle reads the
 folder records of each held scope whose write seed derives the name (a read grant keeps its
 parent's seed) from the scope root, live and not from the cache. It settles only when no folder
-links the node. A folder that links the node counts as a base link. A per-tick read cap bounds
-the read, which continues on the next tick, and the debts of one tick in that scope share it. A
-read that spans ticks proves nothing until a second sweep reads each folder to the same record.
-The entry waits while a folder does not answer, while the gate refuses a folder, and for the
-session once a scope passes the node bound of the read. A name that no held end derives, as
-after a write cut, settles with no live record only when the tick reached every scope and no
-rotation work is owed; otherwise the entry waits.
+links the node. A folder that links the node counts as a base link. The read passes over the root
+of a scope that the tick holds a pass for, and over a read-only graft of another vault. Any other
+scope root makes the read blind, and the entry waits. A per-tick read cap bounds the read, and
+each held end of one debt takes an even share of it. The read resumes on a later tick that
+reaches the debt. A tick drops a read that it did not step only after a pass over the whole
+ledger. A read that spans ticks proves nothing until a second sweep reads each folder to the same
+record. A later tick proves a complete read again with one more sweep. The entry waits while
+a folder does not answer, while the gate refuses a folder, and while a read that passed its node
+bound stays carried. A refused folder that becomes a scope root starts the read again. A name
+that no held end derives, as after a write cut, settles with no live record only when the tick
+holds a pass for every scope and no rotation work is owed; otherwise the entry waits.
 Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
 a write grant re-seals the record at the recorded name under the new scope root. When the scope
 binding refuses that record, the settle reads it again at the same name under the held end whose

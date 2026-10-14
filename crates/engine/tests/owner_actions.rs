@@ -7225,64 +7225,76 @@ fn a_hard_delete_debt_settles_after_a_write_cut_once_every_scope_is_reached() {
 /// A read grant keeps its parent's write seed, so the vault end and the
 /// granted scope both derive the names below it. A node another device moved
 /// under a folder of that scope that this device never opened is linked, and
-/// its debt retires nothing that the live record names.
+/// its debt retires nothing that the live record names. The same holds when
+/// the granted scope's write plane is dark, so the tick holds no pass for it.
 #[test]
 fn a_debt_of_a_node_below_a_read_granted_scope_spares_the_live_record() {
-    let mut fx = GrantScenario::new();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    for _ in 0..2 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    let folder = fx.folder;
-    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
-    write_version(
-        &mut fx,
-        WriteTarget::NewFile {
-            parent: inner,
-            name: "clip.bin".into(),
-        },
-        &[1u8; 200],
-    );
-    let child = block_on(fx.engine.snapshot(inner))
-        .expect("the folder opens")
-        .children
-        .into_iter()
-        .find(|child| child.name == "clip.bin")
-        .expect("the file is listed");
-    let file = child.id;
-    let head = encode_content_cid_str(&child.content_cid.expect("the file has a head"));
-    let name = write_name(file);
+    for dark in [false, true] {
+        let mut fx = GrantScenario::new();
+        assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+        for _ in 0..2 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        let folder = fx.folder;
+        let inner =
+            create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+        write_version(
+            &mut fx,
+            WriteTarget::NewFile {
+                parent: inner,
+                name: "clip.bin".into(),
+            },
+            &[1u8; 200],
+        );
+        let child = block_on(fx.engine.snapshot(inner))
+            .expect("the folder opens")
+            .children
+            .into_iter()
+            .find(|child| child.name == "clip.bin")
+            .expect("the file is listed");
+        let file = child.id;
+        let head = encode_content_cid_str(&child.content_cid.expect("the file has a head"));
+        let name = write_name(file);
 
-    let later = fx.world.device(b"a later owner session");
-    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &later);
-    tick(&fx.world, &engine, &mut tasks);
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(10));
-    let ledger =
-        StagingRetireLedger::new(&later.staging_store, BookkeepingSeal::new(&enc, &entropy));
-    block_on(ledger.tombstone(&owner_tag(&enc), file.0)).expect("the tombstone holds");
-    block_on(ledger.owe(
-        &owner_tag(&enc),
-        &[OwedRetire {
-            node: file.0,
-            target: head.clone(),
-            owed_bytes: 1,
-            manifest_bytes: 1,
-            origin: DebtOrigin::DroppedRoot,
-            name: Some(name.as_str().to_owned()),
-        }],
-    ))
-    .expect("the debt journals");
-    for _ in 0..4 {
+        if dark {
+            let pointer =
+                scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &folder.0);
+            fx.world.record_store.fail_get_for(pointer.as_str());
+        }
+        let later = fx.world.device(b"a later owner session");
+        let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &later);
         tick(&fx.world, &engine, &mut tasks);
-    }
+        let enc = kdf::enc_subkey(&SECRET);
+        let entropy = RefCell::new(SeededEntropy::new(10));
+        let ledger =
+            StagingRetireLedger::new(&later.staging_store, BookkeepingSeal::new(&enc, &entropy));
+        block_on(ledger.tombstone(&owner_tag(&enc), file.0)).expect("the tombstone holds");
+        block_on(ledger.owe(
+            &owner_tag(&enc),
+            &[OwedRetire {
+                node: file.0,
+                target: head.clone(),
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::DroppedRoot,
+                name: Some(name.as_str().to_owned()),
+            }],
+        ))
+        .expect("the debt journals");
+        for _ in 0..4 {
+            tick(&fx.world, &engine, &mut tasks);
+        }
 
-    assert!(
-        retire_entries(&later)
-            .iter()
-            .all(|(_, targets)| !targets.contains(&head)),
-        "no retire names the head that the live record names"
-    );
+        assert!(
+            retire_entries(&later)
+                .iter()
+                .all(|(_, targets)| !targets.contains(&head)),
+            "no retire names the head that the live record names, dark {dark}"
+        );
+        if dark {
+            assert!(engine.pending_reclaim_bytes() > 0, "the debt waits");
+        }
+    }
 }
 
 /// A delete below a promoted scope root is journaled under that scope, and only

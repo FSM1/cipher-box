@@ -7,7 +7,7 @@ use core::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::content::{decode_content_cid_str, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -1720,6 +1720,77 @@ fn a_retire_descent_past_its_read_cap_resumes_on_the_next_tick() {
         retired_under(&device, &name),
         "the third tick completes both sweeps and the debt settles"
     );
+}
+
+/// Journal `count` pruned-version debts of nodes the base does not hold. Each
+/// waits with no read, so the debts only page the ledger.
+fn owe_fillers(device: &FakeDevice, template: &str, count: usize) {
+    let mut cid = decode_content_cid_str(template).expect("a content id");
+    let len = cid.len();
+    let entries: Vec<OwedRetire> = (0..count)
+        .map(|index| {
+            let [high, low] = u16::try_from(index).expect("a small count").to_be_bytes();
+            cid[len - 3] = 0xA5;
+            cid[len - 2] = high;
+            cid[len - 1] = low;
+            OwedRetire {
+                node: [0x77, high, low, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+                target: encode_content_cid_str(&cid),
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::Prune,
+                name: None,
+            }
+        })
+        .collect();
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .owe(&owner_tag(&enc), &entries),
+    )
+    .expect("the fillers journal");
+}
+
+/// Whether the debt of a node no folder of a 70-folder vault links settles
+/// within `ticks`, with `fillers` other debts in the ledger.
+fn paged_descent_settles(fillers: usize, ticks: usize) -> bool {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        for folder in 0..70 {
+            create_folder(&world, engine, tasks, ROOT, &format!("folder {folder}"));
+        }
+        vec![write_file(&world, engine, tasks, ROOT, "kept.txt")]
+    });
+    let target = newest_content_cid(&world, &blocks, nodes[0]);
+    let unlinked = NodeId([0x5C; 16]);
+    let name = write_name(unlinked);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, unlinked);
+    owe_named_debt(&device, unlinked, target.clone(), &name);
+    owe_fillers(&device, &target, fillers);
+    (0..ticks).any(|_| {
+        tick(&world, &engine, &mut tasks);
+        retired_under(&device, &name)
+    })
+}
+
+/// A ledger of two pages reaches the debt on every other tick. Its descent
+/// waits through the ticks that do not reach it, and the debt settles.
+#[test]
+fn a_retire_descent_resumes_across_ledger_pages() {
+    assert!(
+        paged_descent_settles(511, 12),
+        "the descent resumes on each tick that reaches the debt"
+    );
+}
+
+/// The control: a ledger of one page reaches the debt on each tick.
+#[test]
+fn a_retire_descent_settles_under_a_one_page_ledger() {
+    assert!(paged_descent_settles(200, 6));
 }
 
 /// A descent that spans ticks reads each folder a second time. A node that

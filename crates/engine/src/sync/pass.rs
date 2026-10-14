@@ -1433,9 +1433,7 @@ where
             .collect();
         let every_scope_reached = vault.is_some()
             && scopes.unproved.is_empty()
-            && descendants
-                .iter()
-                .all(|scope| !matches!(scope.write, Err(WritePlaneDark::Unavailable)))
+            && every_descendant_held(&descendants)
             && state
                 .bookmarked_permissions
                 .borrow()
@@ -2008,6 +2006,13 @@ fn vault_source<'a>(
         ascent_node_seed: None,
         floor_namespace: FloorNamespace::Own,
     }
+}
+
+/// Whether this tick holds a pass for every proved descendant. A keyless one
+/// may be a copy recovered after a refusal or a write cut that did not finish,
+/// and the names its write seed derives can still link a node.
+fn every_descendant_held(descendants: &[DescendantScopeRoot]) -> bool {
+    descendants.iter().all(|scope| scope.write.is_ok())
 }
 
 /// A proved descendant scope root's end, under the read seed the walk
@@ -2675,6 +2680,30 @@ mod tests {
             let end = vault_source(NodeId(SHARED), &name, &read, &write);
 
             assert_eq!(end.read_seed_stamp, Some(5));
+        }
+
+        /// A descendant with no write plane leaves a scope unreached, whether
+        /// it is unavailable or keyless (ADR 0070 D2).
+        #[test]
+        fn a_keyless_descendant_leaves_a_scope_unreached() {
+            let held = || {
+                proved(Ok(ScopeWritePlane {
+                    seed: Zeroizing::new(WRITE_SCOPE_SEED),
+                    epoch: 1,
+                }))
+            };
+            assert!(every_descendant_held(&[held()]));
+            let recovered = DescendantScopeRoot {
+                recovered_after_rejection: true,
+                ..proved(Err(WritePlaneDark::Keyless))
+            };
+            let cut = DescendantScopeRoot {
+                write_cut_unfinished: true,
+                ..proved(Err(WritePlaneDark::Keyless))
+            };
+            for dark in [recovered, cut, proved(Err(WritePlaneDark::Unavailable))] {
+                assert!(!every_descendant_held(&[held(), dark]));
+            }
         }
 
         /// A descendant scope's end is stamped at the epoch of the record the

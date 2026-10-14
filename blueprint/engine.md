@@ -363,13 +363,19 @@ bytes (FSM1/cipher-box-next#28 D2).
   scope. A retired node that the base links nowhere settles only after a live
   read of the folder records of each held scope whose write seed derives its
   name, from the scope root, finds no folder that links it; a folder that
-  links it counts as a base link. A per-tick read cap bounds that read, which
-  continues on the next tick, and the debts of one tick share it. A read that
+  links it counts as a base link. The read passes over the root of a scope
+  that the tick holds a pass for and over a read-only graft of another vault;
+  any other scope root makes it blind, and the debt waits. A per-tick read cap
+  bounds that read, and each held end of one debt takes an even share. The
+  read resumes on a later tick that reaches the debt, and a tick drops a read
+  that it did not step only after a pass over the whole ledger. A read that
   spans ticks proves nothing until a second sweep reads each folder to the
-  same record. The debt waits while a folder does not answer or the gate
-  refuses one, and for the session once a scope passes the read's node bound.
-  A name that no held end derives settles with no live record only when the
-  tick reached every scope and no rotation work is owed. A record at the
+  same record. A later tick proves a complete read again with one more
+  sweep. The debt waits while a folder does not answer or the gate refuses
+  one, and while a read past its node bound stays carried. A refused folder
+  that becomes a scope root starts the read again. A name that no held end
+  derives settles with no live record only when the tick holds a pass for
+  every scope and no rotation work is owed. A record at the
   recorded name that the scope binding refuses
   is read again under the held end whose root its tag names (ADR 0072 D1), and
   the retire stays under that name. An entry with no name derives it from
