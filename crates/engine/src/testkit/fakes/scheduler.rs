@@ -22,6 +22,8 @@ struct Inner {
     next_sleep_id: u64,
     sleepers: Vec<Sleeper>,
     tasks: Vec<BoxedTask>,
+    /// How many times a seam caller read the clock.
+    now_reads: u64,
 }
 
 impl Inner {
@@ -98,6 +100,7 @@ impl VirtualScheduler {
                 next_sleep_id: 0,
                 sleepers: Vec::new(),
                 tasks: Vec::new(),
+                now_reads: 0,
             })),
         }
     }
@@ -112,7 +115,12 @@ impl VirtualScheduler {
     /// Moves virtual time forward by `duration`, waking every sleep whose
     /// deadline is reached.
     pub fn advance(&self, duration: Duration) {
-        let target = self.now().saturating_add(duration);
+        let target = self
+            .inner
+            .lock()
+            .expect("lock")
+            .now
+            .saturating_add(duration);
         self.advance_to(target);
     }
 
@@ -133,6 +141,11 @@ impl VirtualScheduler {
     /// decides when (and whether) to drive them.
     pub fn take_spawned_tasks(&self) -> Vec<BoxedTask> {
         std::mem::take(&mut self.inner.lock().expect("lock").tasks)
+    }
+
+    /// How many times a caller read the clock through [`Scheduler::now`].
+    pub fn now_reads(&self) -> u64 {
+        self.inner.lock().expect("lock").now_reads
     }
 
     /// How many sleeps are currently parked (manual mode introspection).
@@ -189,7 +202,9 @@ impl Future for SleepFuture {
 
 impl Scheduler for VirtualScheduler {
     fn now(&self) -> UnixMillis {
-        self.inner.lock().expect("lock").now
+        let mut inner = self.inner.lock().expect("lock");
+        inner.now_reads += 1;
+        inner.now
     }
 
     async fn sleep(&self, duration: Duration) {

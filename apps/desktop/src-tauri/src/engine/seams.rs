@@ -21,13 +21,37 @@ pub type HostCredentialStore = cipherbox_desktop_seams::KeyringCredentialStore;
 #[cfg(feature = "e2e-hook")]
 pub type HostCredentialStore = crate::e2e::MemoryCredentialStore;
 
+/// The record transport and HTTP seams this host injects.
+#[cfg(not(feature = "e2e-hook"))]
+type HostTransport<S> = S;
+
+/// The record transport and HTTP seams this host injects, each slow request
+/// reported (`crate::e2e::diagnostics`).
+#[cfg(feature = "e2e-hook")]
+type HostTransport<S> = cipherbox_desktop_seams::Timed<S>;
+
+#[cfg(not(feature = "e2e-hook"))]
+fn host_transport<S>(seam: S) -> HostTransport<S> {
+    seam
+}
+
+#[cfg(feature = "e2e-hook")]
+fn host_transport<S>(seam: S) -> HostTransport<S> {
+    use crate::e2e::diagnostics;
+    cipherbox_desktop_seams::Timed::new(
+        seam,
+        diagnostics::SLOW_REQUEST,
+        diagnostics::slow_requests(),
+    )
+}
+
 /// The desktop host's concrete seam family.
 pub struct DesktopSeamTypes;
 
 impl SeamTypes for DesktopSeamTypes {
     type FloorStore = FileFloorStore;
-    type RecordTransport = ReqwestRecordTransport;
-    type Http = ReqwestHttp;
+    type RecordTransport = HostTransport<ReqwestRecordTransport>;
+    type Http = HostTransport<ReqwestHttp>;
     type Scheduler = TokioScheduler;
     type StagingStore = FileStagingStore;
     type SnapshotCache = FileSnapshotCache;
@@ -45,11 +69,11 @@ pub fn seam_set(
 ) -> SeamResult<SeamSet<DesktopSeamTypes>> {
     Ok(SeamSet::<DesktopSeamTypes> {
         floor_store: OwnerScopedFloorStore::new(FileFloorStore::open(account_dir.join("floors"))?),
-        record_transport: ReqwestRecordTransport::new(
+        record_transport: host_transport(ReqwestRecordTransport::new(
             config.record_endpoints.clone(),
             config.record_accelerator_url.clone(),
-        )?,
-        http: ReqwestHttp::new()?,
+        )?),
+        http: host_transport(ReqwestHttp::new()?),
         scheduler: TokioScheduler::new(),
         staging_store: QueueGenerationStore::new(FileStagingStore::open(
             account_dir.join("staging"),
