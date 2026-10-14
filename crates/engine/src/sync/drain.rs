@@ -1769,6 +1769,9 @@ pub(crate) struct TickInputs<'a> {
     /// Each owed interior move's scope root, with the scope its folder left,
     /// which a child read under that root also binds (ADR 0072 D1).
     pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
+    /// The scopes whose last pointer follow found the write-epoch floor raise
+    /// deferred, so their floor can still lack a flip.
+    pub(crate) deferred_raises: &'a [NodeId],
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -3230,7 +3233,16 @@ where
                     {
                         KeptVerdict::Expired
                     } else {
-                        kept_verdict(&note, place, now)
+                        // A deferred raise can hide a flip, so the bound
+                        // waits for the next pass's raise (ADR 0069 D5).
+                        let deferred = note
+                            .scope
+                            .or_else(|| place.root())
+                            .is_some_and(|root| self.inputs.deferred_raises.contains(&root));
+                        match kept_verdict(&note, place, now) {
+                            KeptVerdict::Expired if deferred => KeptVerdict::Stay,
+                            verdict => verdict,
+                        }
                     }
                 } else {
                     KeptVerdict::Expired
@@ -11895,6 +11907,7 @@ mod tests {
         scope_roots: Vec<NodeId>,
         known_scope_roots: Vec<NodeId>,
         granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
+        deferred_raises: Vec<NodeId>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -11919,6 +11932,7 @@ mod tests {
                     retention: RetentionPolicy::KeepAll,
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
+                    deferred_raises: &self.deferred_raises,
                 },
             )
         }
@@ -12092,6 +12106,7 @@ mod tests {
             scope_roots: vec![HARNESS_ROOT],
             known_scope_roots: vec![HARNESS_ROOT],
             granted_namespaces: Vec::new(),
+            deferred_raises: Vec::new(),
             keyless_roots: Vec::new(),
             enc_secret,
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)

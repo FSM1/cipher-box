@@ -38,8 +38,8 @@ use cipherbox_engine::testkit::account::{
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
-    without_scope_pointer_names,
+    SeededEntropy, block_on, block_on_while_ticking, hold_write_epoch_lease,
+    poll_tasks_until_parked, without_scope_pointer_names,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
@@ -3008,86 +3008,164 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
     assert_eq!(status.dead_letters.len(), 1, "and the member can name it");
 }
 
+/// The two sessions of a surviving write grantee's kept create that the name
+/// wave of an owner write cut did not carry.
+struct SurvivingGrantee {
+    world: FakeWorld,
+    _blocks: Blocks,
+    engine_t: Engine<FakeSeamTypes>,
+    tasks_t: Vec<BoxedTask>,
+    engine_r: Engine<FakeSeamTypes>,
+    events_r: EventStream,
+    tasks_r: Vec<BoxedTask>,
+    recipient: FakeDevice,
+    shared: NodeId,
+    child: NodeId,
+}
+
+impl SurvivingGrantee {
+    /// A grantee's create lands in the old tree after the name wave of an
+    /// owner write cut read the folder, so the moved tree does not carry it.
+    fn after_the_cut() -> Self {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+        let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+        let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
+        import_recipient(&mut engine_t);
+        grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+        let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+        let (mut engine_r, mut events_r, mut tasks_r) =
+            recipient_on_with_the_share(&world, &blocks, &recipient);
+        block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
+            .expect("the grantee opens the folder");
+        tick_n(&world, &engine_r, &mut tasks_r, 2);
+        let endpoints = world.record_store.endpoints();
+        let walked: std::collections::BTreeMap<String, Vec<u8>> = world
+            .record_store
+            .routing_keys(&endpoints[0])
+            .into_iter()
+            .filter_map(|key| {
+                let record = world.record_store.record_at(&endpoints[0], &key)?;
+                Some((key, record))
+            })
+            .collect();
+        block_on(engine_r.command(Command::Create {
+            parent: child,
+            name: "late".into(),
+            kind: NodeKind::Folder,
+        }))
+        .expect("the grantee's create stages");
+        tick_n(&world, &engine_r, &mut tasks_r, 2);
+        assert_eq!(queued(&recipient), 0, "the create published");
+        let written: Vec<(String, Vec<u8>)> = walked
+            .into_iter()
+            .filter(|(key, record)| {
+                world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
+            })
+            .collect();
+        assert!(!written.is_empty(), "the create moved a folder record");
+
+        for (key, record) in &written {
+            world.record_store.serve_gets_for_after(
+                key,
+                0,
+                endpoints.len() * 8,
+                Some(record.clone()),
+            );
+        }
+        assert_eq!(
+            block_on(engine_t.command(Command::RotateWriteNow { node: shared })),
+            Ok(CommandOutcome::Done)
+        );
+        for (key, _) in &written {
+            world.record_store.serve_gets_for_after(key, 0, 0, None);
+        }
+        block_on(engine_t.command(Command::SetFocus { node: Some(child) }))
+            .expect("the owner opens the folder");
+        tick_n(&world, &engine_t, &mut tasks_t, 4);
+        assert!(
+            !listed_names(&engine_t, child).contains(&"late".to_owned()),
+            "the moved tree does not carry the create"
+        );
+        let _ = events_so_far(&mut events_r);
+        Self {
+            world,
+            _blocks: blocks,
+            engine_t,
+            tasks_t,
+            engine_r,
+            events_r,
+            tasks_r,
+            recipient,
+            shared,
+            child,
+        }
+    }
+
+    /// Whether the moved tree lists the create, after the owner reads it.
+    fn moved_tree_lists_the_create(&mut self) -> bool {
+        tick_n(&self.world, &self.engine_t, &mut self.tasks_t, 4);
+        listed_names(&self.engine_t, self.child).contains(&"late".to_owned())
+    }
+
+    /// The ops in the grantee's queue, kept ones included.
+    fn queued_ops(&self) -> usize {
+        block_on(self.recipient.staging_store.queued_ops())
+            .expect("the queue reads")
+            .len()
+    }
+}
+
 /// A surviving write grantee's create lands in the old tree after the name
 /// wave of an owner write cut read the folder. The grantee sees the cut as a
 /// flip in its sharer's floor namespace, so the kept create waits past the
 /// bound and applies again at the moved tree (ADR 0069 D3, D5).
 #[test]
 fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_bound() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_vault(&world, &blocks);
-    let tab = world.device(&owner_identity().verifying_key().to_sec1());
-    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
-    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
-    let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
-    import_recipient(&mut engine_t);
-    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+    let mut fx = SurvivingGrantee::after_the_cut();
 
-    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
-    let (mut engine_r, mut events_r, mut tasks_r) =
-        recipient_on_with_the_share(&world, &blocks, &recipient);
-    block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
-        .expect("the grantee opens the folder");
-    tick_n(&world, &engine_r, &mut tasks_r, 2);
-    let endpoints = world.record_store.endpoints();
-    let walked: std::collections::BTreeMap<String, Vec<u8>> = world
-        .record_store
-        .routing_keys(&endpoints[0])
-        .into_iter()
-        .filter_map(|key| {
-            let record = world.record_store.record_at(&endpoints[0], &key)?;
-            Some((key, record))
-        })
-        .collect();
-    block_on(engine_r.command(Command::Create {
-        parent: child,
-        name: "late".into(),
-        kind: NodeKind::Folder,
-    }))
-    .expect("the grantee's create stages");
-    tick_n(&world, &engine_r, &mut tasks_r, 2);
-    assert_eq!(queued(&recipient), 0, "the create published");
-    let written: Vec<(String, Vec<u8>)> = walked
-        .into_iter()
-        .filter(|(key, record)| {
-            world.record_store.record_at(&endpoints[0], key).as_ref() != Some(record)
-        })
-        .collect();
-    assert!(!written.is_empty(), "the create moved a folder record");
-
-    for (key, record) in &written {
-        world
-            .record_store
-            .serve_gets_for_after(key, 0, endpoints.len() * 8, Some(record.clone()));
-    }
-    assert_eq!(
-        block_on(engine_t.command(Command::RotateWriteNow { node: shared })),
-        Ok(CommandOutcome::Done)
-    );
-    for (key, _) in &written {
-        world.record_store.serve_gets_for_after(key, 0, 0, None);
-    }
-    block_on(engine_t.command(Command::SetFocus { node: Some(child) }))
-        .expect("the owner opens the folder");
-    tick_n(&world, &engine_t, &mut tasks_t, 4);
-    assert!(
-        !listed_names(&engine_t, child).contains(&"late".to_owned()),
-        "the moved tree does not carry the create"
-    );
-    let _ = events_so_far(&mut events_r);
-
-    world.scheduler.advance(KEPT_OP_BOUND);
-    tick_n(&world, &engine_r, &mut tasks_r, 10);
-    tick_n(&world, &engine_t, &mut tasks_t, 4);
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
 
     assert!(
-        dead_letter_events(&mut events_r).is_empty(),
+        fx.moved_tree_lists_the_create(),
+        "the create applied again at the moved tree"
+    );
+    assert!(
+        dead_letter_events(&mut fx.events_r).is_empty(),
         "the create does not dead-letter"
     );
+}
+
+/// A publish of the scope on this device holds the write-epoch lease during
+/// the pointer follow of the first pass after the bound, so the raise defers.
+/// The kept create waits one more pass, and applies again once the raise
+/// lands (ADR 0069 D5).
+#[test]
+fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
+    let mut fx = SurvivingGrantee::after_the_cut();
+    let kept = fx.queued_ops();
+    assert_eq!(kept, 1, "the create stays queued as a kept op");
+
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    let lease = hold_write_epoch_lease(&fx.shared.0).expect("the scope starts free");
+    tick(&fx.world, &fx.engine_r, &mut fx.tasks_r);
+    drop(lease);
+    assert_eq!(fx.queued_ops(), kept, "the kept create waits");
+
+    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+
     assert!(
-        listed_names(&engine_t, child).contains(&"late".to_owned()),
+        fx.moved_tree_lists_the_create(),
         "the create applied again at the moved tree"
+    );
+    assert!(
+        dead_letter_events(&mut fx.events_r).is_empty(),
+        "the create does not dead-letter"
     );
 }
 

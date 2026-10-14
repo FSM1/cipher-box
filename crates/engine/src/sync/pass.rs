@@ -148,6 +148,8 @@ struct Assembly {
     proved_roots: Vec<NodeId>,
     granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
     descendants: Vec<DescendantScopeRoot>,
+    /// [`ScopeRender::deferred_raises`].
+    deferred_raises: Vec<NodeId>,
 }
 
 /// The scope roots this pass's focus legs grouped by: the proved set and the
@@ -1151,6 +1153,7 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            deferred_raises: state.deferred_raises.borrow().iter().copied().collect(),
         }
     }
 
@@ -1189,6 +1192,7 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            deferred_raises,
         } = assembly;
         let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
         let drivable: Vec<_> = descendants
@@ -1369,6 +1373,7 @@ where
                 retention: owner_retention(&state.settings_summary),
                 owed_moves: owed_moves.as_deref(),
                 owed_move_reads: &owed_move_reads,
+                deferred_raises: &deferred_raises,
             },
         );
         drain
@@ -1616,6 +1621,7 @@ where
             permissions: &state.bookmarked_permissions,
             claims: &state.grafted_claims,
             pointer_pins: &state.pointer_pins,
+            deferred_raises: &state.deferred_raises,
             root_sequences: &state.root_sequences,
             events: &self.seams.events,
         }

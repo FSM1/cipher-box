@@ -60,7 +60,7 @@ use super::grafted::{
 };
 use super::invite::EphemeralInvitee;
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
-use super::link_read::{committed_link_entry, held_scope_root};
+use super::link_read::{committed_link_entry, held_scope_pointer};
 use super::received_share_store::StagingReceivedShareStore;
 use super::revocation::{ResolutionClass, ResolutionFacts, classify};
 
@@ -142,6 +142,10 @@ pub(crate) struct ScopeRender<'a> {
     /// The withheld-update hold on each held bookmark's scope pointer, by
     /// pointer name.
     pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
+    /// Each scope whose last pointer follow found its write-epoch floor raise
+    /// deferred by a write-epoch lease. Its floor can lack the vouched epoch,
+    /// so the next pass follows it again and the drain keeps its kept ops.
+    pub deferred_raises: &'a RefCell<BTreeSet<NodeId>>,
     /// The sequence this pass gated at each grafted root, which a navigation
     /// measures that root against.
     pub root_sequences: &'a RefCell<RootSequences>,
@@ -517,8 +521,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
 
+        let deferred = render.deferred_raises.borrow().clone();
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
+                || received
+                    .find(key)
+                    .is_some_and(|share| deferred.contains(&NodeId(share.scope_id)))
                 || on_access_refresh_due(
                     now,
                     verdicts.borrow().get(key).map(|held| held.at),
@@ -549,7 +557,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             })
             .collect();
         let (pointers, heals, pin_reads) = self
-            .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
+            .follow_held_pointers(
+                &received,
+                &by_identity,
+                &scheduled,
+                render.events,
+                render.deferred_raises,
+            )
             .await;
         if !heals.is_empty() {
             // The list as it stands after the pointer reads: an accept can add
@@ -936,14 +950,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
     /// verdict, the scope root each vouched-for bookmark must move to, and
-    /// every scheduled read for the pin pass. A refused re-point object is a
-    /// trust verdict, reported here.
+    /// every scheduled read for the pin pass, and records in `deferred`
+    /// whether each followed scope's floor raise deferred. A refused re-point
+    /// object is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
         by_identity: &BTreeMap<[u8; IDENTITY_PUBLIC_LEN], &Contact>,
         scheduled: &BTreeSet<BookmarkKey>,
         events: &mpsc::UnboundedSender<Event>,
+        deferred: &RefCell<BTreeSet<NodeId>>,
     ) -> (
         BTreeMap<BookmarkKey, PointerVerdict>,
         Vec<(BookmarkKey, Vec<u8>)>,
@@ -961,7 +977,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             ) else {
                 continue;
             };
-            let verdict = match held_scope_root(
+            deferred.borrow_mut().remove(&NodeId(share.scope_id));
+            let verdict = match held_scope_pointer(
                 self.transport,
                 &self.sharer_floors(share),
                 share,
@@ -970,8 +987,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             )
             .await
             {
-                Ok(Some(root)) => {
-                    let root = root.as_str().as_bytes();
+                Ok(Some(held)) => {
+                    if held.deferred {
+                        deferred.borrow_mut().insert(NodeId(share.scope_id));
+                    }
+                    let root = held.root.as_str().as_bytes();
                     if root != share.scope_root_name {
                         heals.push((key, root.to_vec()));
                     }
@@ -2770,6 +2790,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
+                        deferred_raises: &RefCell::default(),
                         root_sequences: &RefCell::default(),
                         events,
                     },
@@ -2820,6 +2841,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
+                        deferred_raises: &RefCell::default(),
                         root_sequences: &RefCell::default(),
                         events: &events,
                     },
@@ -3805,6 +3827,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
+                        deferred_raises: &RefCell::default(),
                         root_sequences: &RefCell::default(),
                         events: &events,
                     },
@@ -4184,6 +4207,7 @@ mod tests {
                 permissions: &permissions,
                 claims: &claims,
                 pointer_pins: &pointer_pins,
+                deferred_raises: &RefCell::default(),
                 root_sequences: &RefCell::default(),
                 events: &events,
             },
