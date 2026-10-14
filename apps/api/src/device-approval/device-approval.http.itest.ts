@@ -134,12 +134,13 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   const http = () => ctx.http;
 
-  /** Block until a backend waits on another transaction, as an insert does on an uncommitted key. */
-  async function waitForRowLockWait(timeoutMs = 5000): Promise<void> {
+  /** Block until backend `pid` waits on another transaction, as an insert does on an uncommitted key. */
+  async function waitForRowLockWait(pid: number, timeoutMs = 5000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const waiting = await db.dataSource.query(
-        `SELECT 1 FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted LIMIT 1`
+        `SELECT 1 FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted AND pid = $1 LIMIT 1`,
+        [pid]
       );
       if (waiting.length > 0) return;
       if (Date.now() > deadline) throw new Error('timed out waiting for the second spend to block');
@@ -594,8 +595,10 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       const verified = await identityTokens.verify(account.subjectToken);
       let commitFirst!: () => void;
       let firstSpent!: () => void;
+      let secondPid!: (pid: number) => void;
       const firstMayCommit = new Promise<void>((resolve) => (commitFirst = resolve));
       const firstHasSpent = new Promise<void>((resolve) => (firstSpent = resolve));
+      const secondBackend = new Promise<number>((resolve) => (secondPid = resolve));
 
       // The first spend inserts and holds its transaction open; the second then
       // waits on the first's primary-key row and must refuse once it commits.
@@ -604,12 +607,21 @@ describe('device-approval HTTP surface (real Postgres)', () => {
         firstSpent();
         await firstMayCommit;
       });
-      await firstHasSpent;
-      const second = db.dataSource.transaction((manager) =>
-        identityTokens.spend(manager, verified)
-      );
-      await waitForRowLockWait();
-      commitFirst();
+      let second: Promise<void> | undefined;
+      try {
+        await Promise.race([firstHasSpent, first]);
+        second = db.dataSource.transaction(async (manager) => {
+          const [{ pid }]: { pid: number }[] = await manager.query(
+            'SELECT pg_backend_pid() AS pid'
+          );
+          secondPid(pid);
+          await identityTokens.spend(manager, verified);
+        });
+        await waitForRowLockWait(await Promise.race([secondBackend, second.then(() => -1)]));
+      } finally {
+        commitFirst();
+        await Promise.allSettled([first, second]);
+      }
 
       await expect(first).resolves.toBeUndefined();
       await expect(second).rejects.toBeInstanceOf(UnauthorizedException);
