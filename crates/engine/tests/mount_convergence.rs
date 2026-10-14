@@ -3017,7 +3017,7 @@ fn a_downgraded_grantees_write_the_wave_did_not_carry_dead_letters() {
 /// wave of an owner write cut did not carry.
 struct SurvivingGrantee {
     world: FakeWorld,
-    _blocks: Blocks,
+    blocks: Blocks,
     engine_t: Engine<FakeSeamTypes>,
     tasks_t: Vec<BoxedTask>,
     engine_r: Engine<FakeSeamTypes>,
@@ -3055,12 +3055,7 @@ impl SurvivingGrantee {
         let (mut engine_r, mut events_r, mut tasks_r) =
             recipient_on_with_the_share(&world, &blocks, &recipient);
         let mid = nested.then_some(parent);
-        let path = if nested {
-            vec![parent, child]
-        } else {
-            vec![child]
-        };
-        for folder in path {
+        for folder in mid.into_iter().chain([child]) {
             block_on(engine_r.command(Command::SetFocus { node: Some(folder) }))
                 .expect("the grantee opens the folder");
             tick_n(&world, &engine_r, &mut tasks_r, 2);
@@ -3127,7 +3122,7 @@ impl SurvivingGrantee {
         let _ = events_so_far(&mut events_r);
         Self {
             world,
-            _blocks: blocks,
+            blocks,
             engine_t,
             tasks_t,
             engine_r,
@@ -3173,7 +3168,7 @@ impl SurvivingGrantee {
     /// The grantee's session again, over the same device.
     fn restart_the_grantee(&mut self) {
         let (engine_r, events_r, tasks_r) =
-            recipient_on_with_the_share(&self.world, &self._blocks, &self.recipient);
+            recipient_on_with_the_share(&self.world, &self.blocks, &self.recipient);
         self.engine_r = engine_r;
         self.events_r = events_r;
         self.tasks_r = tasks_r;
@@ -3298,10 +3293,7 @@ fn a_deferred_raise_keeps_the_kept_write_while_the_pointer_lands_no_raise() {
                 fx.world.record_store.lapse(pointer.as_str());
             }
             _ => {
-                let sequence = IpnsRecord::unmarshal(&served)
-                    .and_then(|record| record.verify(&pointer))
-                    .expect("the pointer verifies")
-                    .sequence;
+                let sequence = record_sequence(&pointer, &served);
                 let refused = IpnsRecord::create_v2(
                     &scope_pointer_signer(
                         kdf::owner_pointer_seed(&SECRET).as_bytes(),

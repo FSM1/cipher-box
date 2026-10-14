@@ -1769,8 +1769,7 @@ pub(crate) struct TickInputs<'a> {
     /// Each owed interior move's scope root, with the scope its folder left,
     /// which a child read under that root also binds (ADR 0072 D1).
     pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
-    /// The scopes whose last pointer follow found the write-epoch floor raise
-    /// deferred, so their floor can still lack a flip.
+    /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     pub(crate) deferred_raises: &'a [NodeId],
 }
 
@@ -3203,32 +3202,29 @@ where
                     // base after a cold start lacks deep folders, so absence
                     // alone shows nothing.
                     let mut gone = false;
-                    // Any other kept op whose folder a read of this session
-                    // saw unlinked at its live parent name, under a root this
-                    // pass proved and writes, has no pass that can check it,
-                    // so a flip ends it in a dead letter (ADR 0069 D5).
+                    // ADR 0069 D5: a flip dead-letters any other kept op whose
+                    // folder a read of this session saw unlinked at its live
+                    // parent name, under a proved root.
                     let mut unanchored = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
                     {
-                        let anchored = self
-                            .cells
-                            .base
-                            .borrow()
-                            .contains(kept_anchor(&op, note.parent));
+                        let anchor = kept_anchor(&op, note.parent);
+                        let anchored = self.cells.base.borrow().contains(anchor);
                         let proved = scope.scope_roots.contains(&root);
                         let delete = matches!(op.kind, OpKind::Delete { .. });
                         if !delete || anchored || !proved {
-                            if !delete && !anchored && proved {
-                                unanchored = self
+                            unanchored = !delete
+                                && !anchored
+                                && proved
+                                && self
                                     .unlinked_at_its_live_name(
                                         scope,
                                         root,
-                                        kept_anchor(&op, note.parent),
+                                        anchor,
                                         note.write_epoch,
                                     )
                                     .await?;
-                            }
                             place = self.unchecked_place(scope, root).await?;
                         } else if let Some(folder) =
                             note.parent.filter(|_| reads_kept_parent(&op, note.parent))
@@ -3271,10 +3267,9 @@ where
                                     .await
                                 {
                                     notes.remove(op_id);
-                                } else {
-                                    kept.push(op_id);
+                                    continue;
                                 }
-                                continue;
+                                KeptVerdict::Stay
                             }
                             verdict => verdict,
                         }
@@ -9369,7 +9364,8 @@ where
     /// Abandon one op with its staged version preserved and its name left
     /// standing: the halt that took it gives no ground to believe no published
     /// record names the op's target, and cutting a name a live record carries
-    /// would leave a reference outliving its referent.
+    /// would leave a reference outliving its referent. Returns whether the op
+    /// left the queue.
     async fn abandon_keeping_its_name(
         &self,
         scope: &DrainScope<'_>,

@@ -525,12 +525,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
 
-        let deferred = render.deferred_raises.borrow().clone();
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
-                || received
-                    .find(key)
-                    .is_some_and(|share| deferred.contains(&NodeId(share.scope_id)))
+                || render.deferred_raises.borrow().contains(&NodeId(key.1))
                 || on_access_refresh_due(
                     now,
                     verdicts.borrow().get(key).map(|held| held.at),
