@@ -164,13 +164,48 @@ jobs:
       - name: Build the desktop binary with the e2e hook
         run: cargo build -p cipherbox-desktop --features e2e-hook
 
+      # On Windows the action installs from the Chocolatey community feed,
+      # which fails often. The Windows leg uses the server the image ships.
       - name: Setup PostgreSQL
+        if: runner.os != 'Windows'
         uses: ikalnytskyi/action-setup-postgres@c4dda34aae1c821e3a771b68b73b13af3198a7ee # v8
         with:
           username: postgres
           password: postgres
           database: cipherbox_test
           postgres-version: '16'
+
+      # The image ships PostgreSQL 17 with its service disabled
+      # (actions/runner-images, images/windows/Windows2025-VS2026-Readme.md).
+      # The suite reads no server version, so the major difference is moot.
+      # A fresh cluster in the temp dir gives the credentials the job env
+      # names; the image's own cluster has other credentials.
+      - name: Setup PostgreSQL
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          PG_BIN="$(cygpath "$PGBIN")"
+          if [ ! -x "$PG_BIN/pg_ctl.exe" ]; then
+            echo "::error::No PostgreSQL server at PGBIN=$PGBIN on this runner image."
+            exit 1
+          fi
+          "$PG_BIN/pg_config.exe" --version
+          PG_DATA="$RUNNER_TEMP/pgdata"
+          PW_FILE="$RUNNER_TEMP/pgpw"
+          echo "$DB_PASSWORD" > "$PW_FILE"
+          "$PG_BIN/initdb.exe" --pgdata="$PG_DATA" --username="$DB_USERNAME" \
+            --pwfile="$PW_FILE" --auth=scram-sha-256 --encoding=UTF-8 \
+            --locale=en_US.UTF-8 --no-instructions
+          rm -f "$PW_FILE"
+          echo "port = $DB_PORT" >> "$PG_DATA/postgresql.conf"
+          "$PG_BIN/pg_ctl.exe" start --pgdata="$PG_DATA" --wait \
+            --log="$RUNNER_TEMP/postgres.log"
+          "$PG_BIN/createdb.exe" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" \
+            -O "$DB_USERNAME" "$DB_DATABASE"
+          echo "$PG_BIN" >> "$GITHUB_PATH"
 
       - name: Start Kubo
         shell: bash
