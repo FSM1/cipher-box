@@ -361,9 +361,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   a scope whose end derives that name is read as published, so the retire
   spares what its live record names, and it waits when its links prove no held
   scope. An entry with no name derives it from where the base places the node
-  (ADR 0070). A discard of a preserved dead letter and the preserved-set trim
-  use the name that the drain recorded when it parked the version, and with no
-  recorded name they journal with no name (ADR 0075). One residual stands: two
+  (ADR 0070). A discard of a preserved dead letter, the preserved-set trim and
+  an eviction past the count cap use the name that the drain recorded when it
+  parked the version, and with no recorded name they journal with no name
+  (ADR 0075). One residual stands: two
   debts for one content id under two record names share one ledger slot, so the
   second record's references stay charged (a leak, not a loss). A publish that
   fails **before the

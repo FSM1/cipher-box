@@ -2787,7 +2787,9 @@ where
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
-            let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
+            let preserved = self
+                .preserve_dead_letter(scope, *op_id, op, *reason)
+                .await?;
             self.abandon(scope, *op_id, op).await?;
             // The abandonment retired what the op registered.
             if preserved == Preservation::Refused {
@@ -3007,7 +3009,8 @@ where
                     }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await
+                else {
                     return;
                 };
                 let handed_back = if owes_its_name {
@@ -3037,7 +3040,8 @@ where
             // which for a restored replay keeps the resurrection candidate alive
             // at the owner's own expense.
             Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
-                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await
+                else {
                     return;
                 };
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
@@ -9271,21 +9275,15 @@ where
         &self,
         scope: &DrainScope<'_>,
         op_id: OpId,
+        op: &Op,
         reason: DeadLetterReason,
     ) -> Result<Preservation, Halt> {
         let queued = self.seams.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
+        let name = self.joined_name(scope, op);
         let reader = RecordReader::new(scope.enc_secret);
-        let name = match reader.classify(record) {
-            crate::sync::record::RecordClass::Mine(op) => scope
-                .end_of(&self.cells.base.borrow(), op.target)
-                .ok()
-                .map(|end| end.write_name(&op.target.0)),
-            _ => None,
-        };
-        let names = self.dropped_version_debts(scope, &reader).names();
         preserve_dead_letter(
             &self.seams.staging,
             &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, scope.enc_secret),
@@ -9293,10 +9291,19 @@ where
             reason,
             record,
             self.seams.scheduler.now(),
-            name.as_ref().map(|name| (&names, name)),
+            Some((&self.dropped_version_debts(scope, &reader), name.as_ref())),
         )
         .await
         .map_err(seam)
+    }
+
+    /// The `ipnsName` of the record `op`'s version would join at this tick, or
+    /// `None` when the drain derives no end for its target (ADR 0075 D1).
+    fn joined_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<IpnsName> {
+        scope
+            .end_of(&self.cells.base.borrow(), op.target)
+            .ok()
+            .map(|end| end.write_name(&op.target.0))
     }
 
     /// Drop the version no preserved entry holds — [`Preservation::Refused`]
@@ -9309,10 +9316,7 @@ where
     async fn release_unpreserved(&self, scope: &DrainScope<'_>, preserved: Preservation, op: &Op) {
         if preserved != Preservation::Kept {
             let reader = RecordReader::new(scope.enc_secret);
-            let name = scope
-                .end_of(&self.cells.base.borrow(), op.target)
-                .ok()
-                .map(|end| end.write_name(&op.target.0));
+            let name = self.joined_name(scope, op);
             self.dropped_version_debts(scope, &reader)
                 .drop_version(op, name.as_ref().map(IpnsName::as_str))
                 .await;
@@ -9331,7 +9335,7 @@ where
         reason: DeadLetterReason,
         report: &mut DrainReport,
     ) {
-        let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+        let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
             return;
         };
         if self.dequeue_op(op_id).await.is_ok() {

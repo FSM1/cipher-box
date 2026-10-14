@@ -9615,6 +9615,7 @@ fn build_owner_local_accept() -> Vec<OwnerLocalAcceptVector> {
             std::array::from_fn(|j| (0xa1 + i * 8 + j) as u8),
             &match kind {
                 OwnerLocalKind::OwedRotation => owed_rotation_body(OWED_ROTATION_V2),
+                OwnerLocalKind::DeadLetterNames => dead_letter_names_body(),
                 _ => owner_local_state_body(),
             },
         ));
@@ -9649,6 +9650,19 @@ fn owed_rotation_body(format: u8) -> Vec<u8> {
     }
     body.extend_from_slice(&[2, 2, 3]);
     body.extend_from_slice(&4u64.to_be_bytes());
+    body
+}
+
+/// The engine's `dead-letter-names` body: format 1, op id 7, the binary
+/// content CID of the parked root, and a well-formed IPNS name behind its
+/// length byte (ADR 0075 D2).
+fn dead_letter_names_body() -> Vec<u8> {
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0xd1; 32]).verifying_key());
+    let mut body = vec![1];
+    body.extend_from_slice(&7u64.to_be_bytes());
+    body.extend_from_slice(&compute_cid(CONTENT_CID_CODEC, b"a parked version root"));
+    body.push(u8::try_from(name.as_str().len()).expect("an IPNS name fits its length byte"));
+    body.extend_from_slice(name.as_str().as_bytes());
     body
 }
 

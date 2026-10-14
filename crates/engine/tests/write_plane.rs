@@ -12840,6 +12840,136 @@ fn a_discarded_dead_letter_journals_under_the_name_its_drain_recorded() {
     );
 }
 
+/// A discard whose name does not read fails, and leaves the preserved entry,
+/// its blocks and its name, with no debt. Once the read heals, the discard
+/// journals under the recorded name.
+#[test]
+fn a_discard_whose_name_does_not_read_keeps_the_dead_letter() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+    let staged_before = block_on(alice.staging_store.staged_keys()).expect("keys list");
+    alice
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(DEAD_LETTER_NAME_PREFIX);
+
+    assert!(block_on(engine.command(Command::DiscardDeadLetter { op_id })).is_err());
+    assert!(owed_names(&alice).is_empty());
+    assert_eq!(
+        block_on(alice.staging_store.staged_keys()).expect("keys list"),
+        staged_before,
+        "the entry, its blocks and its name stay"
+    );
+
+    alice.staging_store.inner().heal_staged_reads();
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    assert_eq!(
+        owed_names(&alice),
+        vec![Some(write_name(node).as_str().to_owned())]
+    );
+}
+
+/// A file whose folder the owner shares after the drain parked its edit moves
+/// to a new scope and a new name. The discard journals under the name of the
+/// record the version would have joined, not the new one (ADR 0075 D1).
+#[test]
+fn a_discard_after_a_share_moves_the_file_journals_under_the_old_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &tab, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder create lands");
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create lands");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, folder, "clip.bin");
+    let old_name = write_name(file);
+
+    world.record_store.drop_puts();
+    let op_id = write_file(&mut engine, version(file), &[2u8; 200]).expect("the edit lands");
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    world.record_store.keep_puts();
+
+    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
+    let contact_code =
+        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
+    block_on(engine.command(Command::ImportContact { contact_code }))
+        .expect("the recipient's code imports");
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: folder,
+            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the grant cuts the folder into a scope root of its own"
+    );
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    // The file's current name is the one the next edit publishes at.
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let puts = || -> BTreeMap<String, usize> {
+        world
+            .record_store
+            .routing_keys(&endpoint)
+            .into_iter()
+            .map(|key| {
+                let count = world.record_store.put_count(&key);
+                (key, count)
+            })
+            .collect()
+    };
+    let before = puts();
+    write_file(&mut engine, version(file), &[3u8; 200]).expect("the next edit lands");
+    tick(&world, &engine, &mut tasks);
+    let after = puts();
+    let new_names: Vec<String> = after
+        .iter()
+        .filter(|(key, count)| before.get(*key) != Some(*count))
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert!(!new_names.is_empty(), "the next edit publishes");
+    assert!(
+        !new_names.contains(&old_name.as_str().to_owned()),
+        "the share moved the file off its old name"
+    );
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    let names = owed_names(&tab);
+    assert!(
+        names.contains(&Some(old_name.as_str().to_owned())),
+        "{names:?}"
+    );
+    assert!(
+        new_names
+            .iter()
+            .all(|new| !names.contains(&Some(new.clone()))),
+        "{names:?}"
+    );
+}
+
 /// A preserved set the previous release wrote has no name key, so it still
 /// reads and its discard journals a version 2 entry (ADR 0020 D5).
 #[test]

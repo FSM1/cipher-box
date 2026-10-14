@@ -1,7 +1,7 @@
 //! The name a preserved dead letter records: the `ipnsName` of the record its
 //! version would have joined, so a discard and a trim journal the dropped
 //! version under that name (ADR 0075). One sealed `dead-letter-names` value per
-//! op, beside the preserved set, which keeps its format.
+//! op, beside the preserved set.
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::OwnerLocalKind;
@@ -118,18 +118,23 @@ impl<'a, S: StagingStore> DeadLetterNames<'a, S> {
             .and_then(|body| decode_dead_letter_name(&body, op_id, root_cid)))
     }
 
-    /// Remove the name `op_id` recorded. Best-effort: orphan GC collects a key
-    /// that stays.
+    /// Remove the name `op_id` recorded.
+    pub(crate) async fn remove(&self, op_id: OpId) -> SeamResult<()> {
+        self.store
+            .remove_staged_bytes(&dead_letter_name_key(&self.owner_tag, op_id)?)
+            .await
+    }
+
+    /// [`Self::remove`], best-effort: orphan GC collects a key that stays.
     pub(crate) async fn forget(&self, op_id: OpId) {
-        if let Ok(key) = dead_letter_name_key(&self.owner_tag, op_id) {
-            let _ = self.store.remove_staged_bytes(&key).await;
-        }
+        let _ = self.remove(op_id).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     const ROOT: &[u8] = b"a binary root cid";
@@ -173,6 +178,29 @@ mod tests {
         for damaged in [trailing, unknown, bad_name, short, Vec::new()] {
             assert_eq!(decode_dead_letter_name(&damaged, OpId(7), ROOT), None);
         }
+    }
+
+    /// The `dead-letter-names` body the core KAT pins decodes to the name it
+    /// spells, so a layout change on one side fails here.
+    #[test]
+    fn the_kat_dead_letter_names_body_decodes() {
+        let vectors: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../core/kat/vectors/owner_local/owner_local_accept.json"
+        ))
+        .expect("the KAT file parses");
+        let body = vectors
+            .iter()
+            .find(|vector| vector["name"] == "dead-letter-names-body")
+            .and_then(|vector| vector["body"].as_str())
+            .map(|hex| hex::decode(hex).expect("the KAT body is hex"))
+            .expect("the KAT pins the body");
+        let root = compute_cid(CONTENT_CID_CODEC, b"a parked version root");
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0xd1; 32]).verifying_key());
+
+        assert_eq!(
+            decode_dead_letter_name(&body, OpId(7), &root).as_deref(),
+            Some(name.as_str())
+        );
     }
 
     #[test]

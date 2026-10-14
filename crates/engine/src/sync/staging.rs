@@ -510,8 +510,10 @@ impl Preservation {
 /// abandonment and reports it — and the second keeps the version unjudged.
 /// Only a seam failure is an `Err`, and only that retries.
 ///
-/// `name` is the record the version would have joined. It is written before
-/// the set, so the set write commits both (ADR 0075 D2).
+/// With `named`, the name of the record the version would have joined is
+/// written, or a stale one removed when the drain derived none, before the
+/// set, so the set write commits both (ADR 0075 D2). An entry the count cap
+/// evicts then journals its dropped version under its own recorded name.
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
     notices_key: &[u8],
@@ -519,7 +521,7 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     reason: DeadLetterReason,
     record: &[u8],
     now: UnixMillis,
-    name: Option<(&DeadLetterNames<'_, S>, &IpnsName)>,
+    named: Option<(&DroppedVersionDebts<'_, S>, Option<&IpnsName>)>,
 ) -> SeamResult<Preservation> {
     let root = record_content_root_cid(record)
         .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
@@ -556,14 +558,41 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
         preserved_at: now,
         record: record.to_vec(),
     });
-    // Oldest-first, the order the byte and age bounds evict in. Their blocks go
-    // unreferenced by this write, so the same tick's sweep reclaims them.
+    // Oldest-first, the order the byte and age bounds evict in. An evicted
+    // entry this session opens journals its debt after the write; the blocks
+    // of any other go unreferenced, so the same tick's sweep reclaims them.
     let over = kept.len().saturating_sub(MAX_PRESERVED_DEAD_LETTERS);
-    kept.drain(..over);
-    if let Some((names, name)) = name {
-        names.record(op_id, &root, name).await?;
+    let evicted: Vec<PreservedDeadLetter> = kept.drain(..over).collect();
+    let Some((debts, name)) = named else {
+        write_preserved_dead_letters(store, &kept).await?;
+        return Ok(Preservation::Kept);
+    };
+    let names = debts.names();
+    let mut dropped = Vec::with_capacity(evicted.len());
+    let mut held = Vec::new();
+    for entry in evicted {
+        let Some((op, root)) = debts
+            .opens(&entry.record)
+            .zip(record_content_root_cid(&entry.record).ok().flatten())
+        else {
+            continue;
+        };
+        // A name that does not read keeps the entry past the cap, for the trim.
+        match names.read(entry.op_id, &root).await {
+            Ok(recorded) => dropped.push((entry.op_id, op, recorded)),
+            Err(_) => held.push(entry),
+        }
+    }
+    kept.splice(..0, held);
+    match name {
+        Some(name) => names.record(op_id, &root, name).await?,
+        None => names.remove(op_id).await?,
     }
     write_preserved_dead_letters(store, &kept).await?;
+    for (evicted_id, op, recorded) in dropped {
+        debts.drop_version(&op, recorded.as_deref()).await;
+        names.forget(evicted_id).await;
+    }
     Ok(Preservation::Kept)
 }
 
@@ -695,10 +724,11 @@ fn trim_preserved(sized: &[SizedEntry], bounds: PreservedBounds) -> Vec<bool> {
     keep
 }
 
-/// One preserved entry's place in the set, in order: one this session does not
-/// open stays as it is; an opened one is the next [`SizedEntry`].
+/// One preserved entry's place in the set, in order: one this pass keeps as it
+/// is (this session does not open it, or its name does not read); an opened
+/// one is the next [`SizedEntry`].
 enum Slot {
-    Foreign(PreservedDeadLetter),
+    Held(PreservedDeadLetter),
     Opened,
 }
 
@@ -1047,13 +1077,14 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
         return;
     }
     let staged: StagedKeys = staged.iter().map(Vec::as_slice).collect();
+    let names = debts.names();
     let before = kept.len();
     let mut slots = Vec::with_capacity(before);
     let mut sized = Vec::with_capacity(before);
     let mut gone = Vec::new();
     for entry in kept {
         let Some(op) = debts.opens(&entry.record) else {
-            slots.push(Slot::Foreign(entry));
+            slots.push(Slot::Held(entry));
             continue;
         };
         let Ok(Some(root)) = record_content_root_cid(&entry.record) else {
@@ -1065,7 +1096,11 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
                 (Some(block), bytes)
             }
             Ok(OpenedVersion::Gone) => {
-                gone.push((entry.op_id, op, root));
+                // A name that does not read keeps the entry for the next pass.
+                match names.read(entry.op_id, &root).await {
+                    Ok(name) => gone.push((entry.op_id, op, root, name)),
+                    Err(_) => slots.push(Slot::Held(entry)),
+                }
                 continue;
             }
             // A root this build cannot decode, or a store that cannot answer,
@@ -1088,15 +1123,18 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     let mut dropped = Vec::new();
     for slot in slots {
         match slot {
-            Slot::Foreign(entry) => live.push(entry),
+            Slot::Held(entry) => live.push(entry),
             Slot::Opened => {
                 let Some((parked, kept)) = opened.next() else {
                     break;
                 };
                 if kept {
                     live.push(parked.entry);
-                } else {
-                    dropped.push(parked);
+                    continue;
+                }
+                match names.read(parked.entry.op_id, &parked.root).await {
+                    Ok(name) => dropped.push((parked, name)),
+                    Err(_) => live.push(parked.entry),
                 }
             }
         }
@@ -1104,24 +1142,10 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     if live.len() == before {
         return;
     }
-    let names = debts.names();
-    let mut recorded = Vec::with_capacity(dropped.len() + gone.len());
-    for (op_id, root) in dropped
-        .iter()
-        .map(|parked| (parked.entry.op_id, &parked.root))
-        .chain(gone.iter().map(|(op_id, _, root)| (*op_id, root)))
-    {
-        let Ok(name) = names.read(op_id, root).await else {
-            return;
-        };
-        recorded.push(name);
-    }
     if write_preserved_dead_letters(store, &live).await.is_err() {
         return;
     }
-    let mut recorded = recorded.into_iter();
-    for parked in dropped {
-        let name = recorded.next().flatten();
+    for (parked, name) in dropped {
         debts
             .drop_staged(
                 &parked.op,
@@ -1132,8 +1156,7 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
             .await;
         names.forget(parked.entry.op_id).await;
     }
-    for (op_id, op, root) in gone {
-        let name = recorded.next().flatten();
+    for (op_id, op, root, name) in gone {
         debts.drop_staged(&op, name.as_deref(), &root, None).await;
         names.forget(op_id).await;
     }
@@ -1385,25 +1408,43 @@ mod tests {
         IpnsName::from_public_key(&Ed25519Signer::from_seed([0x6b; 32]).verifying_key())
     }
 
-    /// [`park`], with [`recorded_name`] recorded under [`OWNER`]'s custody.
-    async fn park_named<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
+    /// Parks `record` as `op_id` the way the drain does, under [`OWNER`]'s
+    /// custody, with `name` as the end the drain derived.
+    async fn park_as<S: StagingStore>(
+        store: &S,
+        op_id: OpId,
+        record: &[u8],
+        name: Option<&IpnsName>,
+    ) -> SeamResult<Preservation> {
         let entropy = RefCell::new(SeededEntropy::new(9));
-        let names = DeadLetterNames::new(
+        let reader = RecordReader::new(&OWNER);
+        let foreign = RefCell::new(BTreeSet::new());
+        let (events, _sent) = mpsc::unbounded();
+        let debts = DroppedVersionDebts::new(
             store,
+            &reader,
             BookkeepingSeal::new(&OWNER, &entropy),
-            RecordReader::new(&OWNER).owner_tag(),
+            &ContentProfile::CI,
+            &foreign,
+            &events,
         );
         preserve_dead_letter(
             store,
             NOTICES_KEY,
-            record_op_id(record),
+            op_id,
             DeadLetterReason::AttemptsExhausted,
             record,
             NOW,
-            Some((&names, &recorded_name())),
+            Some((&debts, name)),
         )
         .await
-        .unwrap()
+    }
+
+    /// [`park`], with [`recorded_name`] as the end the drain derived.
+    async fn park_named<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
+        park_as(store, record_op_id(record), record, Some(&recorded_name()))
+            .await
+            .unwrap()
     }
 
     /// The name keys the store holds.
@@ -2359,6 +2400,230 @@ mod tests {
             .unwrap();
             let key = dead_letter_name_key(&RecordReader::new(&OWNER).owner_tag(), queued).unwrap();
             assert!(!sweep(&store, &[]).await.unwrap().contains(&key));
+        });
+    }
+
+    /// The key of the name [`OWNER`] records for `op_id`.
+    fn name_key(op_id: OpId) -> Vec<u8> {
+        dead_letter_name_key(&RecordReader::new(&OWNER).owner_tag(), op_id).unwrap()
+    }
+
+    /// The names of what [`OWNER`] owes the registry.
+    async fn owed_names<S: StagingStore>(store: &S) -> Vec<Option<String>> {
+        owed_by_owner(store)
+            .await
+            .into_iter()
+            .map(|debt| debt.name)
+            .collect()
+    }
+
+    /// A trim of a set the previous release wrote, with no name key, journals
+    /// with no name (ADR 0020 D5).
+    #[test]
+    fn a_trimmed_version_with_no_name_key_journals_with_no_name() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            reconcile(&store, expired).await;
+
+            assert_eq!(owed_names(&store).await, vec![None]);
+        });
+    }
+
+    /// A name that does not read keeps its one entry, with its blocks, its name
+    /// and no debt, while the trim still drops the other entries. Once the read
+    /// heals, the entry journals under its recorded name.
+    #[test]
+    fn a_name_that_does_not_read_keeps_its_entry_and_the_trim_goes_on() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let mut parked = Vec::new();
+            for node in [1u8, 2] {
+                let (blocks, root_block, staged) =
+                    framed_keyed(b"forty bytes of content ------------------", node);
+                put_blocks(&store, &blocks, &root_block, &staged).await;
+                let root = staged.root_cid.clone();
+                let record = encode_op_record(seal(node), &content_op(node, staged)).unwrap();
+                park_named(&store, &record).await;
+                parked.push((record_op_id(&record), record, root));
+            }
+            let (stuck, stuck_record, stuck_root) = parked[0].clone();
+            store.fail_staged_reads_under(&name_key(stuck));
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            reconcile(&store, expired).await;
+
+            assert_eq!(kept_records(&store).await, vec![stuck_record]);
+            assert!(store.staged_bytes(&stuck_root).await.unwrap().is_some());
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())],
+                "the other entry is trimmed in the same pass"
+            );
+            assert!(store.staged_bytes(&parked[1].2).await.unwrap().is_none());
+
+            store.heal_staged_reads();
+            assert_eq!(name_keys(&store).await, vec![name_key(stuck)]);
+            reconcile(&store, expired).await;
+
+            assert!(kept_records(&store).await.is_empty());
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned()); 2]
+            );
+            assert!(name_keys(&store).await.is_empty());
+        });
+    }
+
+    /// The same for an entry whose root is gone.
+    #[test]
+    fn a_name_that_does_not_read_keeps_a_gone_entry() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park_named(&store, &record).await;
+            store.remove_staged_bytes(&root_cid).await.unwrap();
+            store.fail_staged_reads_under(&name_key(record_op_id(&record)));
+            reconcile(&store, bounds(ROOMY)).await;
+
+            assert_eq!(kept_records(&store).await, vec![record.clone()]);
+            assert!(owed_by_owner(&store).await.is_empty());
+
+            store.heal_staged_reads();
+            reconcile(&store, bounds(ROOMY)).await;
+
+            assert!(kept_records(&store).await.is_empty());
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())]
+            );
+        });
+    }
+
+    /// A tick that records a name and then fails the set write leaves the op
+    /// queued. A later tick that derives no end removes that name, so the
+    /// dropped version journals with no name (ADR 0075 D1).
+    #[test]
+    fn a_later_tick_that_derives_no_end_removes_the_earlier_name() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let op = content_op(1, staged);
+            let op_id = stage_op(&store, seal(1), &op).await.unwrap();
+            let record = encode_op_record(seal(1), &op).unwrap();
+
+            store.fail_staged_writes_at(PRESERVED_DEAD_LETTERS_KEY);
+            assert!(
+                park_as(&store, op_id, &record, Some(&recorded_name()))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(name_keys(&store).await, vec![name_key(op_id)]);
+            store.heal_staged_writes();
+            assert_eq!(
+                park_as(&store, op_id, &record, None).await.unwrap(),
+                Preservation::Kept
+            );
+
+            assert!(name_keys(&store).await.is_empty());
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            reconcile(&store, expired).await;
+            assert_eq!(owed_names(&store).await, vec![None]);
+        });
+    }
+
+    /// A failed name write stops the preservation before the set write: the
+    /// queue, the set and the blocks stay as they were.
+    #[test]
+    fn a_failed_name_write_preserves_nothing_and_keeps_the_op_queued() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            let op = content_op(1, staged);
+            let op_id = stage_op(&store, seal(1), &op).await.unwrap();
+            let record = encode_op_record(seal(1), &op).unwrap();
+            store.fail_staged_writes_at(&name_key(op_id));
+
+            assert!(
+                park_as(&store, op_id, &record, Some(&recorded_name()))
+                    .await
+                    .is_err()
+            );
+            assert!(kept_records(&store).await.is_empty());
+            assert_eq!(store.queued_ops().await.unwrap().len(), 1);
+            assert!(store.staged_bytes(&root_cid).await.unwrap().is_some());
+            assert!(name_keys(&store).await.is_empty());
+        });
+    }
+
+    /// A failed set write after the name write leaves the op queued, and orphan
+    /// GC keeps the name while the queue holds the op.
+    #[test]
+    fn a_failed_set_write_keeps_the_name_while_the_op_is_queued() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let op = content_op(1, staged);
+            let op_id = stage_op(&store, seal(1), &op).await.unwrap();
+            let record = encode_op_record(seal(1), &op).unwrap();
+            store.fail_staged_writes_at(PRESERVED_DEAD_LETTERS_KEY);
+
+            assert!(
+                park_as(&store, op_id, &record, Some(&recorded_name()))
+                    .await
+                    .is_err()
+            );
+            assert!(kept_records(&store).await.is_empty());
+            assert_eq!(name_keys(&store).await, vec![name_key(op_id)]);
+            assert!(sweep(&store, &[]).await.unwrap().is_empty());
+        });
+    }
+
+    /// An entry the count cap evicts journals its dropped version under its
+    /// own recorded name, and its name goes with it.
+    #[test]
+    fn an_entry_the_count_cap_evicts_journals_under_its_recorded_name() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let mut records = Vec::new();
+            for node in 1..=MAX_PRESERVED_DEAD_LETTERS as u8 + 1 {
+                let (blocks, root_block, staged) =
+                    framed_keyed(b"forty bytes of content ------------------", node);
+                put_blocks(&store, &blocks, &root_block, &staged).await;
+                let record = encode_op_record(seal(node), &content_op(node, staged)).unwrap();
+                park_named(&store, &record).await;
+                records.push(record);
+            }
+
+            assert_eq!(kept_records(&store).await, records[1..].to_vec());
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())]
+            );
+            assert!(
+                !name_keys(&store)
+                    .await
+                    .contains(&name_key(record_op_id(&records[0])))
+            );
         });
     }
 
