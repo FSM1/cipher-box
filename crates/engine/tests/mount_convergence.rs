@@ -3181,6 +3181,30 @@ fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
     );
 }
 
+/// A grantee that sees the cut and starts again holds a base that lacks the
+/// folder of its kept create, which the moved tree still holds. The op waits
+/// for a pass that reads the folder and applies again, with no notice.
+#[test]
+fn a_kept_write_after_a_restart_over_a_cut_applies_again_with_no_notice() {
+    let mut fx = SurvivingGrantee::after_the_cut(None);
+    let (engine_r, events_r, tasks_r) =
+        recipient_on_with_the_share(&fx.world, &fx._blocks, &fx.recipient);
+    fx.engine_r = engine_r;
+    fx.events_r = events_r;
+    fx.tasks_r = tasks_r;
+
+    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+
+    assert!(
+        dead_letter_events(&mut fx.events_r).is_empty(),
+        "the create does not dead-letter"
+    );
+    assert!(
+        fx.moved_tree_lists_the_create(),
+        "the create applied again at the moved tree"
+    );
+}
+
 /// The owner deletes the folder that a surviving grantee's kept create writes
 /// under, after the cut. The walk proves the root, and no pass can check the
 /// op, so it dead-letters with a notice that the member can still recover
