@@ -74,6 +74,7 @@ use crate::sync::kept_op::keeps;
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
+use crate::sync::pass_timing::{LegClock, PassEventSink};
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
 use crate::sync::rebase::{DropReason, QueueScanMemo, replay};
@@ -99,6 +100,9 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     root_id: [u8; 16],
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
+    pass_events: Option<PassEventSink>,
+    /// Passes run under `pass_events`, so each event names its pass.
+    passes: Cell<u64>,
 }
 
 /// What one pass reports to the loop that ran it.
@@ -365,7 +369,15 @@ where
             root_id,
             settings_rechecked,
             link_swept,
+            pass_events: None,
+            passes: Cell::new(0),
         }
+    }
+
+    /// Send each pass's legs to `sink` as they end.
+    pub(crate) fn with_pass_events(mut self, sink: Option<PassEventSink>) -> Self {
+        self.pass_events = sink;
+        self
     }
 
     /// One tick, and its report: a stopped one once the session is gone.
@@ -373,13 +385,29 @@ where
         let Some(mut pass) = self.loop_gate(state, cause) else {
             return PassReport::STOPPED;
         };
+        let scheduler = &self.seams.scheduler;
+        let mut clock = self.pass_events.as_ref().map(|sink| {
+            self.passes.set(self.passes.get() + 1);
+            LegClock::start(sink, self.passes.get(), cause, scheduler.now())
+        });
+        // One lap per entry of `PASS_LEGS`, in that order.
+        let mut lap = || {
+            if let Some(clock) = clock.as_mut() {
+                clock.lap(scheduler.now());
+            }
+        };
         let Some(decision) = self.redecide_settings(state, &pass).await else {
             return PassReport::STOPPED;
         };
+        lap();
         self.consult_scope_pointers(state, &mut pass).await;
+        lap();
         let followed = self.follow_received_pointers(state, &pass).await;
+        lap();
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
+        lap();
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
+        lap();
         pass.root_reconciled = resolved.as_ref().is_ok_and(|resolved| {
             matches!(
                 resolved.outcome,
@@ -390,19 +418,27 @@ where
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
         let descendants = self.walk_scopes(state, &pass, recovered_root).await;
+        lap();
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
+        lap();
         let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
             .assemble_scopes(state, &pass, &scopes, descendants)
             .await;
+        lap();
         let boundaries = self
             .drain(state, &pass, &decision, &read_seed, &scopes, assembly)
             .await;
+        lap();
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
+        lap();
         self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
             .await;
+        lap();
         self.repost_claims(state, &pass).await;
+        lap();
         self.refresh_received_shares(state, &pass, followed).await;
+        lap();
         PassReport {
             verdict,
             stop: false,

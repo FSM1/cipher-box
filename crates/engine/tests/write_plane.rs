@@ -10,6 +10,7 @@ use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -88,11 +89,11 @@ use cipherbox_engine::{
     CommandOutcome, CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter,
     DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event,
     EventStream, GatewayConfig, LapsedHead, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
-    Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
-    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index,
-    reseal_scope_root, stage_op,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, PASS_LEGS, PassEvent,
+    Permission, Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason,
+    RecordReader, RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy,
+    SyncTimingProfile, TickCause, Unopened, WriteHistory, WriteTarget, decode_queue,
+    load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -936,6 +937,114 @@ fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
         started_at,
         "the pass ran on the request, not on the poll cadence"
     );
+}
+
+/// A booted session whose engine sends its pass events to the returned list,
+/// when `observed`.
+fn boot_observed(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    observed: bool,
+) -> (
+    Engine<FakeSeamTypes>,
+    Vec<BoxedTask>,
+    Rc<RefCell<Vec<PassEvent>>>,
+) {
+    serve_http(device, blocks, 400);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (mut engine, _stream) = engine_on(device, 42);
+    if observed {
+        let into = events.clone();
+        engine = engine.with_pass_events(Rc::new(move |event: &PassEvent| {
+            into.borrow_mut().push(*event);
+        }));
+    }
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, tasks, events)
+}
+
+#[test]
+fn a_host_that_asks_for_pass_timings_gets_each_leg_as_it_ends() {
+    const HELD: u64 = 7_000;
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut tasks, events) = boot_observed(&world, &blocks, &alice, true);
+
+    // The next poll pass parks in its root read.
+    world
+        .record_store
+        .stall_gets_for_after(root_name.as_str(), 0);
+    tick(&world, &engine, &mut tasks);
+    let held: Vec<PassEvent> = events.borrow().clone();
+    assert_eq!(
+        held.first(),
+        Some(&PassEvent::Started {
+            pass: 1,
+            cause: TickCause::Poll
+        })
+    );
+    assert!(
+        matches!(
+            held.last(),
+            Some(PassEvent::LegEnded {
+                leg: "floors",
+                next: Some("root"),
+                ..
+            })
+        ),
+        "the last event names the leg the pass is in: {held:?}"
+    );
+
+    world.scheduler.advance(Duration::from_millis(HELD));
+    world.record_store.release_gets_for(root_name.as_str());
+    poll_tasks_until_parked(&mut tasks);
+
+    let events = events.borrow();
+    let legs: Vec<(&str, u64)> = events
+        .iter()
+        .filter_map(|event| match event {
+            PassEvent::LegEnded {
+                pass: 1,
+                leg,
+                millis,
+                ..
+            } => Some((*leg, *millis)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<(&str, u64)> = PASS_LEGS
+        .iter()
+        .map(|leg| (*leg, if *leg == "root" { HELD } else { 0 }))
+        .collect();
+    assert_eq!(legs, expected, "only the held leg used the clock");
+    assert!(events.contains(&PassEvent::LegEnded {
+        pass: 1,
+        leg: "received-shares",
+        millis: 0,
+        next: None
+    }));
+}
+
+#[test]
+fn a_pass_sink_adds_one_clock_read_per_leg_and_one_per_pass() {
+    let reads = |observed: bool| {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let (engine, mut tasks, _events) = boot_observed(&world, &blocks, &alice, observed);
+        let before = world.scheduler.now_reads();
+        tick(&world, &engine, &mut tasks);
+        world.scheduler.now_reads() - before
+    };
+    // One read at the start of the pass and one at the end of each leg.
+    let laps = u64::try_from(PASS_LEGS.len()).expect("a small count") + 1;
+    assert_eq!(reads(true) - reads(false), laps);
 }
 
 #[test]

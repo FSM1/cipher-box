@@ -1,11 +1,13 @@
 use super::*;
 use crate::grants::mint_grant_row;
 use crate::testkit::{SeededEntropy, padding};
+use cipherbox_core::ipns::MAX_IPNS_NAME_BYTES;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantSetEntry, GranteeName, MAX_DIRECT_CHILD_SCOPES, MAX_GRANTEE_NAME_BYTES,
-    MAX_WRITE_BODY_BYTES, NameSource, encode_grant_section, open_ascent_link, open_grant_blob,
-    open_history_link, open_owner_blob, open_owner_history_link, open_owner_write_blob,
-    sign_grant_set, sign_recipient_binding, verify_recipient_binding, verify_structure,
+    ChildScopeRef, GrantSetEntry, GranteeName, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_SECTION_BYTES,
+    MAX_GRANTEE_NAME_BYTES, MAX_WRITE_BODY_BYTES, NameSource, decode_grant_section,
+    encode_grant_section, open_ascent_link, open_grant_blob, open_history_link, open_owner_blob,
+    open_owner_history_link, open_owner_write_blob, sign_grant_set, sign_recipient_binding,
+    verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -130,13 +132,19 @@ impl Fixture {
         row
     }
 
-    /// A read row at its widest wire form, a via-link and a maximal grantee
-    /// name, attested at `b"n"`.
-    fn widest_row(&self, recipient_enc_pk: [u8; 32], tag: [u8; 32]) -> GrantLedgerEntry {
+    /// A row at its widest wire form, a via-link and a maximal grantee name,
+    /// attested at `ipns_name`.
+    fn widest_row(
+        &self,
+        recipient_enc_pk: [u8; 32],
+        tag: [u8; 32],
+        permission: Permission,
+        ipns_name: &[u8],
+    ) -> GrantLedgerEntry {
         let mut row = GrantLedgerEntry::new(
             [0x02; 33],
             recipient_enc_pk,
-            Permission::Read,
+            permission,
             tag,
             [0u8; ECDSA_SIG_LEN],
         );
@@ -145,7 +153,7 @@ impl Fixture {
             GranteeName::new("a".repeat(MAX_GRANTEE_NAME_BYTES), NameSource::Claimant)
                 .expect("a name at the bound"),
         );
-        row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, b"n", &row).to_compact();
+        row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, ipns_name, &row).to_compact();
         row
     }
 
@@ -747,6 +755,38 @@ fn real_chain_at(v: u64, newest: u64) -> Vec<SignedSealed> {
         .collect()
 }
 
+/// [`real_chain`] with each link padded through its payload's preserved
+/// fields to exactly [`MAX_RETAINED_HISTORY_LINK_BYTES`]: the widest link a
+/// re-seal keeps, and one the walk still opens.
+fn widest_chain(newest: u64) -> Vec<SignedSealed> {
+    (2..=newest)
+        .map(|e| {
+            let key = kdf::structure_key(&chain_seed(e), STRUCT_TAG_HISTORY_LINK);
+            let ctx = ctx_for(V, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
+            let seal_padded = |pad| {
+                let mut payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
+                payload.unknown = padding(pad);
+                seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap()
+            };
+            // A byte string of 24 to 255 bytes has a 2-byte CBOR header, so in
+            // that range the sealed link grows one byte for each pad byte.
+            let probe = 24;
+            let sealed =
+                seal_padded(probe + MAX_RETAINED_HISTORY_LINK_BYTES - seal_padded(probe).len());
+            assert_eq!(
+                sealed.len(),
+                MAX_RETAINED_HISTORY_LINK_BYTES,
+                "the padding seals the link at the retained bound exactly"
+            );
+            SignedSealed {
+                sealed,
+                signature: [0x01; 64],
+                unknown: PreservedFields::new(),
+            }
+        })
+        .collect()
+}
+
 /// Re-seal at `newest + 1`, carrying `carried`.
 fn reseal_over_chain(
     fx: &Fixture,
@@ -876,6 +916,89 @@ fn a_carried_set_past_the_codec_bound_fails_closed_before_any_seal() {
     assert_eq!(err.check(), "rot-reseal-too-many-history-links");
 }
 
+/// A gate-passed root's committed set with every count axis at its ceiling at
+/// once, since only the joint maximum can exhaust a bound: [`MAX_GRANT_BLOBS`]
+/// honestly minted write rows at full width (a via-link and a maximal grantee
+/// name) and [`MAX_DIRECT_CHILD_SCOPES`] child refs at [`MAX_IPNS_NAME_BYTES`],
+/// each with a padded unknown map the re-seal must drop.
+struct MaximalSet {
+    commitment: GrantSetCommitment,
+    sig: [u8; ECDSA_SIG_LEN],
+    ledger: Vec<GrantLedgerEntry>,
+    children: Vec<ChildScopeRef>,
+}
+
+impl MaximalSet {
+    fn new(fx: &Fixture) -> Self {
+        let rows: Vec<_> = (0..MAX_GRANT_BLOBS)
+            .map(|i| {
+                // A write grant blob also carries `writeScopeSeed`, so it is
+                // the wider blob.
+                let recipient = Fixture::nth_recipient(i).public();
+                let row = mint_grant_row(
+                    &fx.owner_ecdsa,
+                    &fx.owner_enc,
+                    &fx.pointer_read_key,
+                    [0x02; 33],
+                    &recipient,
+                    &SCOPE,
+                    MINTED_NAME,
+                    Permission::Write,
+                )
+                .expect("a contributory recipient key");
+                let widest = fx.widest_row(
+                    recipient.to_bytes(),
+                    row.tag,
+                    Permission::Write,
+                    MINTED_NAME,
+                );
+                (row.commitment_entry, widest)
+            })
+            .collect();
+        let commitment = GrantSetCommitment {
+            ipns_name: MINTED_NAME.to_vec(),
+            owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
+            entries: rows.iter().map(|(entry, _)| entry.clone()).collect(),
+            unknown: PreservedFields::new(),
+        };
+        let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
+            .expect("the owner signs the maximal set")
+            .to_compact();
+        let ledger = rows
+            .into_iter()
+            .map(|(_, row)| GrantLedgerEntry {
+                unknown: padding(1024),
+                ..row
+            })
+            .collect();
+        let children = (0..MAX_DIRECT_CHILD_SCOPES)
+            .map(|i| {
+                let mut scope_id = [0u8; 16];
+                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                ChildScopeRef {
+                    scope_id,
+                    ipns_name: vec![b'k'; MAX_IPNS_NAME_BYTES],
+                    unknown: padding(1024),
+                }
+            })
+            .collect();
+        Self {
+            commitment,
+            sig,
+            ledger,
+            children,
+        }
+    }
+
+    fn committed(&self) -> CommittedSet<'_> {
+        CommittedSet {
+            direct_child_scope_index: &self.children,
+            ..committed_set(&self.commitment, &self.sig, &self.ledger)
+        }
+    }
+}
+
 #[test]
 fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
     // The other half of the coordination `net/author.rs` enforces: the
@@ -904,7 +1027,7 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
                     Permission::Read,
                     [0x02; 32],
                 ),
-                fx.widest_row(recipient, tag),
+                fx.widest_row(recipient, tag, Permission::Read, b"n"),
             )
         })
         .collect();
@@ -958,6 +1081,95 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
         size + 64 * 1024 <= budget,
         "a maximal re-seal is {size} bytes against a {budget}-byte budget"
     );
+}
+
+/// No over-cap re-seal outcome is reachable from a gate-passed root: at every
+/// frozen maximum the re-seal mints bytes inside every bound its own decoder
+/// holds, on a write cut and on a read cut with a carried write plane. A
+/// re-seal field that pushes the maximum past a bound fails here, before an
+/// owner rotation can stop on it. The sweep path, which keeps every carried
+/// link, is not covered.
+#[test]
+fn a_maximal_gate_passed_root_re_seals_inside_every_bound() {
+    let fx = Fixture::new();
+    let owner_pub = fx.owner_enc.public();
+    let set = MaximalSet::new(&fx);
+    let id = ScopeRootIdentity {
+        owner_enc_secret: Some(&fx.owner_enc),
+        ..identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed))
+    };
+    let newest = MAX_HISTORY_LINKS as u64 + 1;
+    let carried = widest_chain(newest);
+    assert_eq!(carried.len(), MAX_HISTORY_LINKS);
+    let head = chain_seed(newest);
+    let fresh = chain_seed(newest + 1);
+    let carried_write_link = vec![0x5d; MAX_WRITE_HISTORY_LINK_BYTES];
+    let runs = [
+        (
+            "write cut",
+            WriteHistory::Cut(PrevEpochSeed {
+                seed: &RETIRING_WRITE_SCOPE_SEED,
+                epoch: 4,
+            }),
+        ),
+        ("read cut", WriteHistory::Carried(&carried_write_link)),
+    ];
+    for (run, write_history) in runs {
+        let carries_write_link = matches!(write_history, WriteHistory::Carried(_));
+        let s = ResealSeeds {
+            override_seed: &fresh,
+            read_epoch: newest + 1,
+            prev: Some(PrevEpochSeed {
+                seed: &head,
+                epoch: newest,
+            }),
+            write_scope_seed: &FRESH_WRITE_SCOPE_SEED,
+            write_epoch: 5,
+            write_history,
+            pointer_read_key: &fx.pointer_read_key,
+        };
+        let section = reseal_scope_root(
+            &mut SeededEntropy::new(5),
+            &id,
+            &s,
+            &set.committed(),
+            &carried,
+        )
+        .unwrap_or_else(|e| panic!("{run}: a maximal root re-seals: {}", e.check()));
+
+        let section_bytes = encode_grant_section(&section).expect("encodes");
+        assert!(
+            section_bytes.len() <= MAX_GRANT_SECTION_BYTES,
+            "{run}: section {} > {MAX_GRANT_SECTION_BYTES}",
+            section_bytes.len()
+        );
+        assert!(
+            section_bytes.len() <= resealable_section_bytes(MAX_GRANT_BLOBS),
+            "{run}: section {} past the re-seal budget",
+            section_bytes.len()
+        );
+        decode_grant_section(&section_bytes).expect("the decoder admits the minted section");
+        assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
+        assert_eq!(
+            section.history_links.len(),
+            MAX_RETAINED_HISTORY_LINKS,
+            "{run}"
+        );
+
+        let plaintext = opened_write_body_bytes(&section, &FRESH_WRITE_SCOPE_SEED, 5);
+        assert!(
+            plaintext.len() <= MAX_WRITE_BODY_BYTES,
+            "{run}: write body {} > {MAX_WRITE_BODY_BYTES}",
+            plaintext.len()
+        );
+        let body = cipherbox_core::seal::decode_write_body(&plaintext)
+            .expect("the decoder admits the minted write body");
+        assert_eq!(body.grant_ledger.len(), MAX_GRANT_BLOBS);
+        assert_eq!(body.direct_child_scope_index.len(), MAX_DIRECT_CHILD_SCOPES);
+        if carries_write_link {
+            assert_eq!(body.write_history_link, carried_write_link, "{run}");
+        }
+    }
 }
 
 #[test]
@@ -1821,18 +2033,27 @@ fn cut_seeds<'a>(
     }
 }
 
-/// The write-body a section publishes, opened as any write-key holder does.
+/// The write-body plaintext a section publishes, opened as any write-key
+/// holder does.
+fn opened_write_body_bytes(
+    section: &GrantSection,
+    write_scope_seed: &[u8; 32],
+    write_epoch: u64,
+) -> Vec<u8> {
+    let write_seed = kdf::write_seed(write_scope_seed, &SCOPE);
+    let write_key = kdf::write_key(write_seed.as_bytes());
+    let ctx = ctx_for(V, SCOPE, write_epoch, STRUCT_TAG_WRITE_BODY);
+    cipherbox_core::seal::unseal(write_key.as_bytes(), &ctx, &section.write_body.sealed)
+        .expect("the write body opens under the fresh write key")
+}
+
+/// The write-body a section publishes, decoded.
 fn opened_write_body(
     section: &GrantSection,
     write_scope_seed: &[u8; 32],
     write_epoch: u64,
 ) -> cipherbox_core::seal::WriteBody {
-    let write_seed = kdf::write_seed(write_scope_seed, &SCOPE);
-    let write_key = kdf::write_key(write_seed.as_bytes());
-    let ctx = ctx_for(V, SCOPE, write_epoch, STRUCT_TAG_WRITE_BODY);
-    let plaintext =
-        cipherbox_core::seal::unseal(write_key.as_bytes(), &ctx, &section.write_body.sealed)
-            .expect("the write body opens under the fresh write key");
+    let plaintext = opened_write_body_bytes(section, write_scope_seed, write_epoch);
     cipherbox_core::seal::decode_write_body(&plaintext).expect("decodes")
 }
 

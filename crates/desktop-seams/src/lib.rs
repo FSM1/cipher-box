@@ -48,6 +48,7 @@ mod scheduler;
 mod snapshot_cache;
 mod staging_store;
 mod storage_policy;
+mod timed;
 
 pub use core_kit_store::SealedCoreKitStore;
 pub use credential_store::{CoreKitWrappingKey, KeyringCredentialStore};
@@ -59,6 +60,7 @@ pub use scheduler::TokioScheduler;
 pub use snapshot_cache::FileSnapshotCache;
 pub use staging_store::FileStagingStore;
 pub use storage_policy::measured_storage_policy;
+pub use timed::{SlowRequest, SlowRequestSink, Timed};
 
 #[cfg(feature = "test-support")]
 pub use credential_store::FileCredentialStore;

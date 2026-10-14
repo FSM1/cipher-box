@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,6 +12,7 @@ import { IdentityTokenService } from '../auth/services/identity-token.service';
 import { AcceleratorToken } from '../auth/entities/accelerator-token.entity';
 import { AcceleratorTokenService } from '../auth/services/accelerator-token.service';
 import { TokenService } from '../auth/services/token.service';
+import { SpentIdentityTokenSweepTask } from '../auth/tasks/spent-identity-token-sweep.task';
 import { Clock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
 import { createTestDeviceKey, TestDeviceKey } from '../testing/device-keys';
@@ -131,6 +133,20 @@ describe('device-approval HTTP surface (real Postgres)', () => {
   });
 
   const http = () => ctx.http;
+
+  /** Block until backend `pid` waits on another transaction, as an insert does on an uncommitted key. */
+  async function waitForRowLockWait(pid: number, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const waiting = await db.dataSource.query(
+        `SELECT 1 FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted AND pid = $1 LIMIT 1`,
+        [pid]
+      );
+      if (waiting.length > 0) return;
+      if (Date.now() > deadline) throw new Error('timed out waiting for the second spend to block');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
 
   /**
    * A token for a subject this API has resolved, as `POST /auth/identity/*`
@@ -574,6 +590,46 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       expect(await db.dataSource.getRepository(AccountDevice).count()).toBe(1);
     });
 
+    it('lets exactly one of two concurrent spends of one token commit, with no advisory lock between them', async () => {
+      const account = await boundAccount();
+      const verified = await identityTokens.verify(account.subjectToken);
+      let commitFirst!: () => void;
+      let firstSpent!: () => void;
+      let secondPid!: (pid: number) => void;
+      const firstMayCommit = new Promise<void>((resolve) => (commitFirst = resolve));
+      const firstHasSpent = new Promise<void>((resolve) => (firstSpent = resolve));
+      const secondBackend = new Promise<number>((resolve) => (secondPid = resolve));
+
+      // The first spend inserts and holds its transaction open; the second then
+      // waits on the first's primary-key row and must refuse once it commits.
+      const first = db.dataSource.transaction(async (manager) => {
+        await identityTokens.spend(manager, verified);
+        firstSpent();
+        await firstMayCommit;
+      });
+      let second: Promise<void> | undefined;
+      try {
+        await Promise.race([firstHasSpent, first]);
+        second = db.dataSource.transaction(async (manager) => {
+          const [{ pid }]: { pid: number }[] = await manager.query(
+            'SELECT pg_backend_pid() AS pid'
+          );
+          secondPid(pid);
+          await identityTokens.spend(manager, verified);
+        });
+        await waitForRowLockWait(await Promise.race([secondBackend, second.then(() => -1)]));
+      } finally {
+        commitFirst();
+        await Promise.allSettled([first, second]);
+      }
+
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(
+        await db.dataSource.getRepository(SpentIdentityToken).countBy({ tokenId: verified.tokenId })
+      ).toBe(1);
+    });
+
     it('reclaims a spent row past its grace, and keeps one its token could still pass', async () => {
       const spent = db.dataSource.getRepository(SpentIdentityToken);
       const stale = randomUUID();
@@ -583,14 +639,65 @@ describe('device-approval HTTP surface (real Postgres)', () => {
         { tokenId: recent, expiresAt: new Date(clock.now().getTime() - 1_000) },
       ]);
 
+      await new SpentIdentityTokenSweepTask(identityTokens, fakeConfig({}).service).runOnce();
+
+      expect((await spent.find()).map((row) => row.tokenId)).toEqual([recent]);
+    });
+
+    it('sweeps in batches up to the exact grace cutoff, and skips a row another transaction locks', async () => {
+      const sweeper = new IdentityTokenService(
+        fakeConfig({ SPENT_IDENTITY_TOKEN_SWEEP_BATCH_SIZE: '2' }).service,
+        clock,
+        new SystemEntropy(),
+        db.dataSource
+      );
+      const spent = db.dataSource.getRepository(SpentIdentityToken);
+      const cutoff = clock.now().getTime() - 60_000;
+      const stale = Array.from({ length: 5 }, (_, i) => ({
+        tokenId: randomUUID(),
+        expiresAt: new Date(cutoff - (i + 1) * 1000),
+      }));
+      const atCutoff = { tokenId: randomUUID(), expiresAt: new Date(cutoff) };
+      const insideGrace = { tokenId: randomUUID(), expiresAt: new Date(cutoff + 1) };
+      const locked = { tokenId: randomUUID(), expiresAt: new Date(cutoff - 10_000) };
+      await spent.insert([...stale, atCutoff, insideGrace, locked]);
+
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query('SELECT 1 FROM spent_identity_tokens WHERE token_id = $1 FOR UPDATE', [
+          locked.tokenId,
+        ]);
+        // Three full batches of two, then a short one.
+        expect(await sweeper.sweepExpired()).toBe(6);
+        expect((await spent.find()).map((row) => row.tokenId).sort()).toEqual(
+          [insideGrace.tokenId, locked.tokenId].sort()
+        );
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
+
+      expect(await sweeper.sweepExpired()).toBe(1);
+      expect((await spent.find()).map((row) => row.tokenId)).toEqual([insideGrace.tokenId]);
+    });
+
+    it('refuses a replay that verified before expiry and spends after the sweep took its row', async () => {
       const account = await boundAccount();
       const token = account.subjectToken;
+      const verified = await identityTokens.verify(token);
       await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
 
-      const kept = (await spent.find()).map((row) => row.tokenId);
-      expect(kept).not.toContain(stale);
-      expect(kept).toContain(recent);
-      expect(kept).toHaveLength(2);
+      // The replay waits past expiry plus the grace, and the sweep deletes the row.
+      clock.advanceMs(verified.expiresAt.getTime() - clock.now().getTime() + 61_000);
+      await new SpentIdentityTokenSweepTask(identityTokens, fakeConfig({}).service).runOnce();
+      expect(await db.dataSource.getRepository(SpentIdentityToken).count()).toBe(0);
+
+      await expect(
+        db.dataSource.transaction((manager) => identityTokens.spend(manager, verified))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(await db.dataSource.getRepository(SpentIdentityToken).count()).toBe(0);
     });
   });
 

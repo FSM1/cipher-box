@@ -605,6 +605,9 @@ async fn start_engine(
         session.config.api_base_url.clone(),
         session.config.gateway.clone(),
     );
+    if let Some(sink) = pass_events() {
+        engine = engine.with_pass_events(sink);
+    }
 
     // The engine copies the secret into its own zeroizing store; this frame's
     // owner scrubs on drop, whichever way the start goes.
@@ -613,6 +616,18 @@ async fn start_engine(
         .await
         .map_err(|error| error.to_string())?;
     Ok((engine, events))
+}
+
+/// Where each sync pass reports its leg durations: standard error in an
+/// `e2e-hook` build, nowhere in a shipped one.
+#[cfg(feature = "e2e-hook")]
+fn pass_events() -> Option<cipherbox_engine::PassEventSink> {
+    Some(crate::e2e::diagnostics::pass_events())
+}
+
+#[cfg(not(feature = "e2e-hook"))]
+fn pass_events() -> Option<cipherbox_engine::PassEventSink> {
+    None
 }
 
 /// What woke the session loop. One loop and one owner: the projection holds the
@@ -800,6 +815,18 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(feature = "e2e-hook")]
+    #[test]
+    fn an_e2e_hook_build_reports_pass_events() {
+        assert!(pass_events().is_some());
+    }
+
+    #[cfg(not(feature = "e2e-hook"))]
+    #[test]
+    fn a_shipped_build_reports_no_pass_events() {
+        assert!(pass_events().is_none());
+    }
 
     /// A session loop under a counting repaint seam: `painted` rises once per
     /// rebuild the window is asked for.
