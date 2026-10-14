@@ -11967,6 +11967,8 @@ struct OwedMove {
     deep: NodeId,
     /// The name whose publish stopped the handover.
     stopped_at: IpnsName,
+    /// Whether the handover resealed `inner` under the new scope.
+    inner_moved: bool,
     /// Whether the handover resealed `deep` under the new scope.
     deep_moved: bool,
 }
@@ -12028,6 +12030,7 @@ impl OwedMove {
             inner,
             deep,
             stopped_at: failing,
+            inner_moved: expected.0,
             deep_moved: expected.1,
         }
     }
@@ -12050,16 +12053,21 @@ impl OwedMove {
     /// Another device adds a folder `added` named `name` to `deep`, sealed
     /// where `deep` is sealed now.
     fn add_to_deep(&self, added: NodeId, name: &str) {
-        let (read_key, scope) = if self.deep_moved {
+        self.add_to(self.deep, self.deep_moved, added, name);
+    }
+
+    /// [`Self::add_to_deep`] for `folder`, which the handover `moved` or not.
+    fn add_to(&self, folder: NodeId, moved: bool, added: NodeId, name: &str) {
+        let (read_key, scope) = if moved {
             let (seed, _) = scope_material_of(&self.fx.world, &self.fx.blocks, self.fx.folder);
-            (read_key_under(&seed, self.deep), self.fx.folder.0)
+            (read_key_under(&seed, folder), self.fx.folder.0)
         } else {
-            (read_key_of(self.deep), SCOPE)
+            (read_key_of(folder), SCOPE)
         };
         concurrent_add(
             &self.fx.world,
             &self.fx.blocks,
-            self.deep,
+            folder,
             &read_key,
             scope,
             named_child(added, name, &write_name(added)),
@@ -12078,12 +12086,6 @@ impl OwedMove {
             .children(folder)
             .iter()
             .any(|child| child.name == name)
-    }
-
-    /// Whether the rendered view lists the interior: `inner` in the granted
-    /// folder and `deep` in `inner`.
-    fn lists_interior(&self) -> bool {
-        self.lists(self.fx.folder, "inner") && self.lists(self.inner, "deep")
     }
 
     /// The abuse the navigation into `deep` reports.
@@ -12141,12 +12143,21 @@ fn an_owed_interior_move_reads_each_interior_node_under_the_scope_it_names() {
 /// record of it as a child, and lists its interior (ADR 0072 D1).
 #[test]
 fn an_owed_interior_move_holds_its_root_after_a_restart() {
-    for stop in [HandoverStop::Reseal, HandoverStop::ParentIndex] {
+    for stop in [
+        HandoverStop::Reseal,
+        HandoverStop::PartialReseal,
+        HandoverStop::ParentIndex,
+    ] {
         let mut restarted = OwedMove::stalled(stop).restarted();
+        let (folder, inner) = (restarted.fx.folder, restarted.inner);
         assert_eq!(
             restarted.tick(),
             Vec::<String>::new(),
             "{stop:?}: first tick"
+        );
+        assert!(
+            restarted.lists(folder, "inner"),
+            "{stop:?}: the tick lists the root"
         );
         restarted.add_to_deep(NodeId([0xa1; 16]), "seen at navigation");
         assert_eq!(
@@ -12155,23 +12166,120 @@ fn an_owed_interior_move_holds_its_root_after_a_restart() {
             "{stop:?}: navigation"
         );
         assert!(
-            restarted.lists_interior(),
-            "{stop:?}: the navigation lists the interior"
+            restarted.lists(inner, "deep"),
+            "{stop:?}: the navigation lists `inner`"
         );
         assert!(
             restarted.deep_lists("seen at navigation"),
             "{stop:?}: the navigation adopts the folder"
         );
+        restarted.add_to(
+            inner,
+            restarted.inner_moved,
+            NodeId([0xa3; 16]),
+            "added at the tick",
+        );
         restarted.add_to_deep(NodeId([0xa2; 16]), "seen at the tick");
         assert_eq!(restarted.tick(), Vec::<String>::new(), "{stop:?}: tick");
         assert!(
-            restarted.lists_interior(),
-            "{stop:?}: the tick lists the interior"
+            restarted.lists(inner, "added at the tick"),
+            "{stop:?}: the tick lists `inner`"
         );
         assert!(
             restarted.deep_lists("seen at the tick"),
             "{stop:?}: the tick adopts the folder"
         );
+    }
+}
+
+/// A share that stops before its root lands, as a crash between the owed entry
+/// write and the root publish leaves it: the root PUT fails, the clear of the
+/// entry is interrupted, and with `floor_seeded` false the promotion's floor
+/// seed fails too, so no root PUT goes out.
+fn stop_a_share_before_its_root(fx: &mut GrantScenario, floor_seeded: bool) {
+    if !floor_seeded {
+        fx.owner_device
+            .floor_store
+            .fail_floor_raises_for(&floor_label(&write_epoch_floor_key(&fx.folder.0)));
+    }
+    fx.world
+        .record_store
+        .fail_put_for(write_name(fx.folder).as_str());
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_removal_after(&owed_rotation_key(&kdf::enc_subkey(&SECRET)), 0);
+    assert!(fx.grant_folder_to_recipient().is_err(), "the share stops");
+    fx.owner_device.floor_store.heal_floors();
+}
+
+/// The folder of a share that stopped before its root landed is still the
+/// folder's own record, so the walk reports no trust violation and a move
+/// queues. With no write-epoch floor this device sent no root PUT, and the
+/// entry drops; with the floor the entry stays owed (ADR 0063 D5).
+#[test]
+fn a_share_that_stops_before_its_root_lands_is_no_trust_violation() {
+    for restart in [false, true] {
+        for floor_seeded in [false, true] {
+            let case = format!("restart {restart}, floor seeded {floor_seeded}");
+            let mut fx = GrantScenario::new();
+            let moved =
+                create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "moved");
+            let there =
+                create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "there");
+            stop_a_share_before_its_root(&mut fx, floor_seeded);
+            if restart {
+                let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+                fx.engine = engine;
+                fx._events = events;
+                fx._tasks = tasks;
+            }
+            events_so_far(&mut fx._events);
+            for _ in 0..2 {
+                tick(&fx.world, &fx.engine, &mut fx._tasks);
+            }
+            let events = events_so_far(&mut fx._events);
+            let abuse: Vec<&Event> = events
+                .iter()
+                .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+                .collect();
+            assert!(abuse.is_empty(), "{case}: {abuse:?}");
+            let dropped: Vec<(NodeId, String)> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::RotationWorkAbandoned { scope_root, detail } => {
+                        Some((*scope_root, detail.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let owed = events.iter().any(|event| {
+                matches!(event, Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder)
+            });
+            if floor_seeded {
+                assert!(dropped.is_empty(), "{case}: {dropped:?}");
+                assert!(owed, "{case}: the entry stays owed");
+            } else {
+                assert_eq!(
+                    dropped,
+                    vec![(
+                        fx.folder,
+                        "owed-interior-move-share-not-completed".to_owned()
+                    )],
+                    "{case}"
+                );
+            }
+            assert!(
+                block_on(fx.engine.command(Command::Move {
+                    node: moved,
+                    new_parent: there,
+                    new_name: "moved".into(),
+                    replacing: None,
+                }))
+                .is_ok(),
+                "{case}: the move queues"
+            );
+        }
     }
 }
 
@@ -17444,8 +17552,19 @@ fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
 }
 
 /// Seal `record` as the owner's owed rotation record on the owner device, for
-/// the next session to read.
+/// the next session to read. Each owed interior move gets the write-epoch
+/// floor its promotion seeds before the root PUT.
 fn stage_owed_record(fx: &GrantScenario, record: &OwedRecord) {
+    for (scope, entry) in record {
+        if entry.interior_move_source().is_some() {
+            block_on(floor::advance_write_epoch_on_sight(
+                &fx.owner_device.floors(&SECRET),
+                &scope.0,
+                1,
+            ))
+            .expect("the floor store answers");
+        }
+    }
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(11));
     let blob =

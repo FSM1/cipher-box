@@ -66,6 +66,12 @@ The published cut cannot be taken back, so `Err` would state that the command di
 engine sends `Event::RotationWorkOwed` at once and on each pass while the entry stands. The same
 command on the same scope while its entry stands re-drives the entry. It does not report
 `rot-revoke-not-granted`. A failure before the first publish returns `Err` and leaves no entry.
+Amended on 2026-10-14 (owner ruling on FSM1/cipher-box#2295): a crash, or a refused clear, after
+the entry write and before the promotion PUT leaves an interior-move entry over a folder that is
+no scope root. The promotion seeds the write-epoch floor at the folder's id before its root PUT, so
+when the re-drive finds no grant section and no such floor, this device sent no PUT: the entry
+drops with `Event::RotationWorkAbandoned`, as the share did not complete. With the floor, the entry
+stays owed.
 
 ## Alternatives considered
 

@@ -1750,10 +1750,15 @@ where
     /// children out of its write body. Every verdict short of a gate pass is
     /// classified rather than dropped, because the two classes end differently
     /// at the tick ([`WalkFailure`]).
+    ///
+    /// `owed_from` is the scope an owed interior move left, for a root that no
+    /// index names. A refused record there that is the folder's own record
+    /// under that scope is a promotion not published yet: availability.
     async fn descend(
         &self,
         parent_read_scope_seed: &[u8; SECRET_LEN],
         child: &ChildScopeRef,
+        owed_from: Option<[u8; 16]>,
     ) -> Result<(DescendantScopeRoot, Vec<ChildScopeRef>), WalkFailure> {
         let name = scope_name(&child.ipns_name).map_err(|_| WalkFailure::Rejected {
             scope_id: child.scope_id,
@@ -1802,10 +1807,22 @@ where
                 (root, record_data, None, true)
             }
             Err(verdict) => {
-                return Err(walk_verdict(
-                    verdict.after_fanout(fetch.endpoint_failed),
-                    child.scope_id,
-                ));
+                let met = walk_verdict(verdict.after_fanout(fetch.endpoint_failed), child.scope_id);
+                if let (WalkFailure::Rejected { .. }, Some(left)) = (met, owed_from) {
+                    if self
+                        .is_unpromoted_folder(
+                            parent_read_scope_seed,
+                            left,
+                            child,
+                            &name,
+                            &record_bytes,
+                        )
+                        .await
+                    {
+                        return Err(WalkFailure::Unavailable);
+                    }
+                }
+                return Err(met);
             }
         };
         let (write, grandchildren) = self
@@ -1845,6 +1862,28 @@ where
             },
             grandchildren,
         ))
+    }
+
+    /// Whether `record_bytes` at `name` pass the child gate as `child`'s own
+    /// record under `left`, at the floor or above it. Moves no floor.
+    async fn is_unpromoted_folder(
+        &self,
+        left_read_scope_seed: &[u8; SECRET_LEN],
+        left: [u8; 16],
+        child: &ChildScopeRef,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> bool {
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            left,
+            Zeroizing::new(*left_read_scope_seed),
+            child.scope_id,
+        );
+        adopter.adopt(name, record_bytes).await.is_ok()
+            || adopter.open_at_floor(name, record_bytes).await.is_ok()
     }
 
     /// A gated scope root's own write plane and the `directChildScopeIndex` it
@@ -2010,17 +2049,19 @@ where
     /// different `ipnsName`s costs that level rather than binding either
     /// ([`bind_child_labels`]).
     ///
-    /// `owed` names, with the scope each left, the roots whose interior move is
-    /// owed: no index names such a root until the move lands, so the level of
-    /// the scope it left descends into it as well, through the same gate. Only
-    /// a rejection of one costs the walk, as it names no index entry.
+    /// `owed` names each root whose interior move is owed, after the scope it
+    /// left. No index names such a root until the move lands, so the level of
+    /// the scope it left descends into it as well, at the name that level's
+    /// write seed derives and through the same gate. A rejection of one costs
+    /// the walk; an unavailable one, or one whose record is still the folder's
+    /// own ([`Self::descend`]), costs nothing, as it names no index entry.
     pub(crate) async fn descendant_scope_roots(
         &self,
         root_scope_id: [u8; 16],
         root_name: &IpnsName,
         root_record_bytes: &[u8],
         use_confirmed_root: bool,
-        owed: &[([u8; 16], ChildScopeRef)],
+        owed: &[([u8; 16], [u8; 16])],
     ) -> Result<WalkedBoundaries, WalkFailure> {
         let adopter = RootAdopter::new(
             self.gateway,
@@ -2063,17 +2104,28 @@ where
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
         let mut refused = BTreeSet::new();
-        let mut frontier = vec![(root_scope_id, gated.read_scope_seed, index)];
+        let root_write_seed = root_write.as_ref().ok().map(|write| write.seed.clone());
+        let mut frontier = vec![(root_scope_id, gated.read_scope_seed, root_write_seed, index)];
         while !frontier.is_empty() {
             let mut next = Vec::new();
-            for (scope_id, parent_read_scope_seed, index) in frontier {
-                let owed_here: Vec<ChildScopeRef> = owed
+            for (scope_id, parent_read_scope_seed, write_seed, index) in frontier {
+                let owed_here: Vec<ChildScopeRef> = write_seed
                     .iter()
-                    .filter(|(left, root)| {
-                        *left == scope_id
-                            && !index.iter().any(|entry| entry.scope_id == root.scope_id)
+                    .flat_map(|seed| {
+                        owed.iter()
+                            .filter(|(left, root)| {
+                                *left == scope_id
+                                    && !index.iter().any(|entry| entry.scope_id == *root)
+                            })
+                            .map(|(_, root)| ChildScopeRef {
+                                scope_id: *root,
+                                ipns_name: derive_write_name(seed, root)
+                                    .as_str()
+                                    .as_bytes()
+                                    .to_vec(),
+                                unknown: PreservedFields::default(),
+                            })
                     })
-                    .map(|(_, root)| root.clone())
                     .collect();
                 // The map grows with the index each level names, and the
                 // descents below spend the same budget, so a level it cannot
@@ -2100,9 +2152,10 @@ where
                 }
                 let children = canonicalize(&index)
                     .into_iter()
-                    .map(|child| (child, false))
-                    .chain(owed_here.into_iter().map(|child| (child, true)));
-                for (child, owed) in children {
+                    .map(|child| (child, None))
+                    .chain(owed_here.into_iter().map(|child| (child, Some(scope_id))));
+                for (child, owed_from) in children {
+                    let owed = owed_from.is_some();
                     // Ahead of both bounds: a back-edge to a scope this walk
                     // already visited costs no descent and leaves no boundary
                     // unnamed, so charging the bound for it would report a
@@ -2122,7 +2175,10 @@ where
                         }
                         continue;
                     }
-                    match self.descend(&parent_read_scope_seed, &child).await {
+                    match self
+                        .descend(&parent_read_scope_seed, &child, owed_from)
+                        .await
+                    {
                         Ok((descendant, grandchildren)) => {
                             if descendant.recovered_after_rejection {
                                 // The durable copy proves nothing about the record.
@@ -2144,6 +2200,11 @@ where
                             next.push((
                                 descendant.scope_id,
                                 descendant.read_scope_seed.clone(),
+                                descendant
+                                    .write
+                                    .as_ref()
+                                    .ok()
+                                    .map(|write| write.seed.clone()),
                                 grandchildren,
                             ));
                             descendants.push(descendant);
@@ -7224,6 +7285,16 @@ mod tests {
             cache: &InMemorySnapshotCache,
             root: &OwnerRootFixture,
         ) -> Result<WalkedBoundaries, WalkFailure> {
+            self.walk_owed(cache, root, &[])
+        }
+
+        /// [`Self::walk_boundaries`] with the owed interior moves `owed`.
+        fn walk_owed(
+            &self,
+            cache: &InMemorySnapshotCache,
+            root: &OwnerRootFixture,
+            owed: &[([u8; 16], [u8; 16])],
+        ) -> Result<WalkedBoundaries, WalkFailure> {
             block_on(
                 ScopeWalk {
                     owner_seed_cache: None,
@@ -7242,7 +7313,7 @@ mod tests {
                     &root.name,
                     &record_for(&SCOPE, &root.head_cid_str, 1),
                     false,
-                    &[],
+                    owed,
                 ),
             )
         }
@@ -7254,6 +7325,77 @@ mod tests {
                 .iter()
                 .map(|scope| scope.scope_id)
                 .collect()
+        }
+    }
+
+    /// An owed interior move's root that no index names: the walk descends into
+    /// it at the name the vault root's write seed derives. A refusal of a record
+    /// that is neither a valid root nor the folder's own record is a trust
+    /// verdict; an unavailable root, or the folder's own record, costs nothing.
+    #[test]
+    fn the_walk_descends_into_an_owed_root_that_no_index_names() {
+        let owed = [(SCOPE, CHILD_SCOPE)];
+        type Stage = fn(&Harness<InMemoryRecordStore>);
+        let cases: [(&str, Stage); 5] = [
+            ("a valid root", |harness| {
+                let (child, _, _) = one_level();
+                harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+                harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+            }),
+            ("no record", |_| {}),
+            ("the folder's own record", |harness| {
+                stage_node(harness, CHILD_SCOPE, &folder(Vec::new()));
+            }),
+            ("a root with no ascent link", |harness| {
+                let planted = vault_root(CHILD_SCOPE, Vec::new());
+                harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+            }),
+            ("a folder record under another key", |harness| {
+                stage_node_sealed_at(
+                    harness,
+                    CHILD_SCOPE,
+                    &folder(Vec::new()),
+                    1,
+                    (OWNER_ROOT_EPOCH, &[0x99; 32]),
+                );
+            }),
+        ];
+        for (case, stage) in cases {
+            let root = vault_root(SCOPE, Vec::new());
+            let harness = Harness::plain();
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            stage(&harness);
+            let walked = harness
+                .walk_owed(&InMemorySnapshotCache::default(), &root, &owed)
+                .expect("the vault root gates");
+            let proved: Vec<[u8; 16]> = walked.proved.iter().map(|s| s.scope_id).collect();
+            assert!(walked.unproved.is_empty(), "{case}");
+            match case {
+                "a valid root" => {
+                    assert_eq!(proved, vec![CHILD_SCOPE, GRANDCHILD_SCOPE], "{case}");
+                    assert_eq!(walked.failure, None, "{case}");
+                }
+                "no record" | "the folder's own record" => {
+                    assert!(proved.is_empty(), "{case}");
+                    assert_eq!(walked.failure, None, "{case}");
+                    assert!(walked.refused.is_empty(), "{case}");
+                }
+                _ => {
+                    assert!(proved.is_empty(), "{case}");
+                    assert_eq!(
+                        walked.failure,
+                        Some(WalkFailure::Rejected {
+                            scope_id: CHILD_SCOPE
+                        }),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        walked.refused,
+                        BTreeSet::from([NodeId(CHILD_SCOPE)]),
+                        "{case}"
+                    );
+                }
+            }
         }
     }
 

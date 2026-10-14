@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-use cipherbox_core::seal::{ChildScopeRef, Permission as CommittedPermission, PreservedFields};
+use cipherbox_core::seal::Permission as CommittedPermission;
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
@@ -1235,29 +1235,21 @@ where
         .ok()
     }
 
-    /// The roots of the owed interior moves this session did not mint, at the
-    /// names the base holds, with the scope each left, for the walk to descend
-    /// into. A root this session minted holds its listing and seeds already.
+    /// The scope each owed interior move left, with its root, for the walk to
+    /// descend into. A root this session minted holds its listing and seeds
+    /// already. A root no listing holds is left out, as a soft delete re-keys
+    /// its record out of every scope.
     async fn owed_scope_roots(
         &self,
         state: &SessionState,
         pass: &Pass,
-    ) -> Vec<([u8; 16], ChildScopeRef)> {
+    ) -> Vec<([u8; 16], [u8; 16])> {
         let owed = self.owed_moves(state, pass).await.unwrap_or_default();
-        let base = state.snapshot.borrow();
         let minted = state.minted_scope_roots.borrow();
+        let base = state.snapshot.borrow();
         owed.into_iter()
-            .filter(|(root, _)| !minted.contains(root))
-            .filter_map(|(root, left)| {
-                Some((
-                    left.0,
-                    ChildScopeRef {
-                        scope_id: root.0,
-                        ipns_name: base.node(root)?.ipns_name.clone()?,
-                        unknown: PreservedFields::default(),
-                    },
-                ))
-            })
+            .filter(|(root, _)| !minted.contains(root) && base.contains(*root))
+            .map(|(root, left)| (left.0, root.0))
             .collect()
     }
 
