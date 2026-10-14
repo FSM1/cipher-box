@@ -763,15 +763,21 @@ fn widest_chain(newest: u64) -> Vec<SignedSealed> {
         .map(|e| {
             let key = kdf::structure_key(&chain_seed(e), STRUCT_TAG_HISTORY_LINK);
             let ctx = ctx_for(V, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
-            let sealed = (0..MAX_RETAINED_HISTORY_LINK_BYTES)
-                .find_map(|pad| {
-                    let mut payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
-                    payload.unknown = padding(pad);
-                    let sealed =
-                        seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap();
-                    (sealed.len() == MAX_RETAINED_HISTORY_LINK_BYTES).then_some(sealed)
-                })
-                .expect("a padding seals the link at the retained bound exactly");
+            let seal_padded = |pad| {
+                let mut payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
+                payload.unknown = padding(pad);
+                seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap()
+            };
+            // A byte string of 24 to 255 bytes has a 2-byte CBOR header, so in
+            // that range the sealed link grows one byte for each pad byte.
+            let probe = 24;
+            let sealed =
+                seal_padded(probe + MAX_RETAINED_HISTORY_LINK_BYTES - seal_padded(probe).len());
+            assert_eq!(
+                sealed.len(),
+                MAX_RETAINED_HISTORY_LINK_BYTES,
+                "the padding seals the link at the retained bound exactly"
+            );
             SignedSealed {
                 sealed,
                 signature: [0x01; 64],
