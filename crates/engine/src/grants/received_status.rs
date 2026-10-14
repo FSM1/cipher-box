@@ -1007,13 +1007,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// Fold each named bookmark's pointer read into its hold. A pointer that no
     /// endpoint answers is the pointer-plane suppression the escalation bounds
-    /// (blueprint/engine.md "Withheld-update escalation"); any answer ends the
-    /// hold. Rebuilt each pass, so a hold lives while its bookmark keeps the name.
+    /// (blueprint/engine.md "Withheld-update escalation"); any other answer
+    /// ends the hold. Rebuilt each pass, so a hold lives while its bookmark
+    /// keeps the name.
     ///
-    /// A scope pointer exists only after a re-point, and a read that one
-    /// endpoint fails and another answers "no record" is also unanswered. So
-    /// only a scope whose write-epoch floor shows a pointer this device saw
-    /// opens a hold.
+    /// A scope pointer exists only after a re-point, and is re-pointed, never
+    /// deleted. So only a scope whose write-epoch floor shows a pointer this
+    /// device saw opens a hold, and for such a scope a "no record" answer also
+    /// holds.
     async fn observe_pointer_pins(
         &self,
         received: &ReceivedSharesList,
@@ -1028,11 +1029,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 continue;
             };
             let read = match pin_reads.get(&key) {
-                Some(PointerVerdict::Unavailable) => {
+                Some(verdict @ (PointerVerdict::Unavailable | PointerVerdict::Absent)) => {
                     match floor::write_epoch_floor(&self.sharer_floors(share), &share.scope_id)
                         .await
                     {
                         Ok(Some(_)) => PinRead::Withheld,
+                        Ok(None) if *verdict == PointerVerdict::Absent => PinRead::Reached,
                         Ok(None) | Err(_) => PinRead::Unread,
                     }
                 }
@@ -5091,6 +5093,25 @@ mod tests {
                 fx.forced_pass(at);
             }
             assert_eq!(pointer_escalations(&fx), 0);
+        }
+
+        /// A pointer this device saw is re-pointed, never deleted, so "no
+        /// record" from every endpoint is a withheld update: one escalation
+        /// after the window, and no trust event.
+        #[test]
+        fn a_known_pointer_every_endpoint_answers_absent_escalates_once_past_the_window() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.lapse(pointer_name().as_str());
+
+            fx.forced_pass(1_000);
+            fx.forced_pass(5_999);
+            assert_eq!(pointer_escalations(&fx), 0, "inside the window");
+            fx.forced_pass(6_000);
+            assert_eq!(pointer_escalations(&fx), 1);
+            assert!(!fx.reported.get(), "the escalation is no trust verdict");
+
+            fx.forced_pass(60_000);
+            assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
         }
 
         /// An answer ends the hold, so a new hold measures a new window.

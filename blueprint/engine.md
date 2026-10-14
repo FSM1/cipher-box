@@ -1205,7 +1205,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
-  plane (FSM1/cipher-box-next#38 D2).
+  plane (FSM1/cipher-box-next#38 D2). A scope pointer that this device saw (its write-epoch
+  floor is set) and that every endpoint answers as absent past the window is withheld too: a
+  pointer is re-pointed, never deleted. The pin stays open and escalates one time. An absent
+  pointer with no floor is an answer (owner ruling, 2026-10-14).
 
 Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 
