@@ -21,6 +21,7 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use cipherbox_core::content::{encode_content_cid_str, verify_cid};
+use cipherbox_core::ipns::IpnsName;
 
 use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
@@ -41,6 +42,7 @@ use crate::seams::{
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
+use crate::sync::dead_letter_name::{DeadLetterNames, dead_letter_name_op};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
 use crate::sync::kept_op::KEPT_OP_NOTES_PREFIX;
@@ -371,6 +373,11 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         }
     }
 
+    /// The names this session's preserved dead letters record.
+    pub(crate) fn names(&self) -> DeadLetterNames<'a, S> {
+        DeadLetterNames::new(self.store, self.seal, self.reader.owner_tag())
+    }
+
     /// Journal and release the version `op` staged. `name` is the record the
     /// version would have joined.
     pub(crate) async fn drop_version(&self, op: &Op, name: Option<&str>) {
@@ -502,6 +509,9 @@ impl Preservation {
 /// [`Preservation::Refused`] — permanent, so the caller finishes the
 /// abandonment and reports it — and the second keeps the version unjudged.
 /// Only a seam failure is an `Err`, and only that retries.
+///
+/// `name` is the record the version would have joined. It is written before
+/// the set, so the set write commits both (ADR 0075 D2).
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
     notices_key: &[u8],
@@ -509,6 +519,7 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     reason: DeadLetterReason,
     record: &[u8],
     now: UnixMillis,
+    name: Option<(&DeadLetterNames<'_, S>, &IpnsName)>,
 ) -> SeamResult<Preservation> {
     let root = record_content_root_cid(record)
         .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
@@ -549,6 +560,9 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     // unreferenced by this write, so the same tick's sweep reclaims them.
     let over = kept.len().saturating_sub(MAX_PRESERVED_DEAD_LETTERS);
     kept.drain(..over);
+    if let Some((names, name)) = name {
+        names.record(op_id, &root, name).await?;
+    }
     write_preserved_dead_letters(store, &kept).await?;
     Ok(Preservation::Kept)
 }
@@ -1051,7 +1065,7 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
                 (Some(block), bytes)
             }
             Ok(OpenedVersion::Gone) => {
-                gone.push((op, root));
+                gone.push((entry.op_id, op, root));
                 continue;
             }
             // A root this build cannot decode, or a store that cannot answer,
@@ -1090,16 +1104,38 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     if live.len() == before {
         return;
     }
+    let names = debts.names();
+    let mut recorded = Vec::with_capacity(dropped.len() + gone.len());
+    for (op_id, root) in dropped
+        .iter()
+        .map(|parked| (parked.entry.op_id, &parked.root))
+        .chain(gone.iter().map(|(op_id, _, root)| (*op_id, root)))
+    {
+        let Ok(name) = names.read(op_id, root).await else {
+            return;
+        };
+        recorded.push(name);
+    }
     if write_preserved_dead_letters(store, &live).await.is_err() {
         return;
     }
+    let mut recorded = recorded.into_iter();
     for parked in dropped {
+        let name = recorded.next().flatten();
         debts
-            .drop_staged(&parked.op, None, &parked.root, parked.block.as_deref())
+            .drop_staged(
+                &parked.op,
+                name.as_deref(),
+                &parked.root,
+                parked.block.as_deref(),
+            )
             .await;
+        names.forget(parked.entry.op_id).await;
     }
-    for (op, root) in gone {
-        debts.drop_staged(&op, None, &root, None).await;
+    for (op_id, op, root) in gone {
+        let name = recorded.next().flatten();
+        debts.drop_staged(&op, name.as_deref(), &root, None).await;
+        names.forget(op_id).await;
     }
 }
 
@@ -1115,6 +1151,9 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
 /// handle**'s blocks are staged before any op is journaled, so they are
 /// unreferenced by construction and must be passed in as `live`; collecting them
 /// mid-write would publish a version whose manifest names blocks nothing holds.
+///
+/// A preserved dead letter's name key is referenced while the preserved set or
+/// the queue holds its op id.
 ///
 /// A version's upload mark is referenced by that version alone, so a mark whose
 /// root nothing references is collected with it — which is what keeps the
@@ -1151,6 +1190,17 @@ pub async fn orphan_staging_keys<S: StagingStore>(
         return Ok(Vec::new());
     };
     let queued = store.queued_ops().await?;
+    let held: HashSet<OpId> = preserved
+        .iter()
+        .map(|entry| entry.op_id)
+        .chain(queued.iter().map(|(op_id, _)| *op_id))
+        .collect();
+    referenced.extend(
+        candidates
+            .iter()
+            .filter(|key| dead_letter_name_op(key).is_some_and(|op_id| held.contains(&op_id)))
+            .map(|key| key.to_vec()),
+    );
     let mut roots = Vec::new();
     for record in preserved
         .iter()
@@ -1193,12 +1243,14 @@ mod tests {
     use crate::facade::NodeId;
     use crate::seams::UnixMillis;
     use crate::settings::Placement;
+    use crate::sync::dead_letter_name::{DEAD_LETTER_NAME_PREFIX, dead_letter_name_key};
     use crate::sync::op::{NewNode, StagedContent};
     use crate::sync::record::{RecordClass, RecordReader};
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{SeededEntropy, block_on, frame_version, frame_version_with};
     use cipherbox_core::content::{compute_cid, decode_content_cid_str};
     use cipherbox_core::suite::aead::KEY_LEN;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::sync::LazyLock;
     use zeroize::Zeroizing;
@@ -1322,9 +1374,47 @@ mod tests {
             DeadLetterReason::AttemptsExhausted,
             record,
             NOW,
+            None,
         )
         .await
         .unwrap()
+    }
+
+    /// The name a drain records for the version it parks.
+    fn recorded_name() -> IpnsName {
+        IpnsName::from_public_key(&Ed25519Signer::from_seed([0x6b; 32]).verifying_key())
+    }
+
+    /// [`park`], with [`recorded_name`] recorded under [`OWNER`]'s custody.
+    async fn park_named<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
+        let entropy = RefCell::new(SeededEntropy::new(9));
+        let names = DeadLetterNames::new(
+            store,
+            BookkeepingSeal::new(&OWNER, &entropy),
+            RecordReader::new(&OWNER).owner_tag(),
+        );
+        preserve_dead_letter(
+            store,
+            NOTICES_KEY,
+            record_op_id(record),
+            DeadLetterReason::AttemptsExhausted,
+            record,
+            NOW,
+            Some((&names, &recorded_name())),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The name keys the store holds.
+    async fn name_keys<S: StagingStore>(store: &S) -> Vec<Vec<u8>> {
+        store
+            .staged_keys()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|key| key.starts_with(DEAD_LETTER_NAME_PREFIX))
+            .collect()
     }
 
     fn record_op_id(record: &[u8]) -> OpId {
@@ -2186,6 +2276,92 @@ mod tests {
         });
     }
 
+    /// A trimmed version journals at version 3 under the name its drain
+    /// recorded, and the trim removes the name (ADR 0075 D1).
+    #[test]
+    fn a_trimmed_version_journals_under_the_name_its_drain_recorded() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            assert_eq!(park_named(&store, &record).await, Preservation::Kept);
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            reconcile(&store, expired).await;
+
+            let names: Vec<_> = owed_by_owner(&store)
+                .await
+                .into_iter()
+                .map(|debt| debt.name)
+                .collect();
+            assert_eq!(names, vec![Some(recorded_name().as_str().to_owned())]);
+            assert!(name_keys(&store).await.is_empty());
+        });
+    }
+
+    /// The same name on a version the trim drops because its root is gone.
+    #[test]
+    fn a_gone_version_journals_under_the_name_its_drain_recorded() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park_named(&store, &record).await;
+            store.remove_staged_bytes(&root_cid).await.unwrap();
+            reconcile(&store, bounds(ROOMY)).await;
+
+            let names: Vec<_> = owed_by_owner(&store)
+                .await
+                .into_iter()
+                .map(|debt| debt.name)
+                .collect();
+            assert_eq!(names, vec![Some(recorded_name().as_str().to_owned())]);
+            assert!(name_keys(&store).await.is_empty());
+        });
+    }
+
+    /// A name key stays while the preserved set or the queue holds its op id,
+    /// and orphan GC collects it after (ADR 0075 D2).
+    #[test]
+    fn a_name_key_is_referenced_while_its_op_is_parked_or_queued() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged.clone())).unwrap();
+            park_named(&store, &record).await;
+            let parked = name_keys(&store).await;
+            assert_eq!(parked.len(), 1);
+            assert!(sweep(&store, &[]).await.unwrap().is_empty());
+
+            take_preserved_dead_letter(&store, record_op_id(&record))
+                .await
+                .unwrap()
+                .expect("the entry was parked");
+            assert!(sweep(&store, &[]).await.unwrap().contains(&parked[0]));
+
+            let queued = stage_op(&store, seal(2), &content_op(2, staged.clone()))
+                .await
+                .unwrap();
+            let entropy = RefCell::new(SeededEntropy::new(10));
+            DeadLetterNames::new(
+                &store,
+                BookkeepingSeal::new(&OWNER, &entropy),
+                RecordReader::new(&OWNER).owner_tag(),
+            )
+            .record(queued, &staged.root_cid, &recorded_name())
+            .await
+            .unwrap();
+            let key = dead_letter_name_key(&RecordReader::new(&OWNER).owner_tag(), queued).unwrap();
+            assert!(!sweep(&store, &[]).await.unwrap().contains(&key));
+        });
+    }
+
     /// A trimmed version whose debt did not reach the ledger is reported, not
     /// dropped in silence.
     #[test]
@@ -2366,6 +2542,7 @@ mod tests {
             reason,
             &versionless_record(op),
             NOW,
+            None,
         )
         .await
         .unwrap()
@@ -2569,6 +2746,7 @@ mod tests {
                     DeadLetterReason::BaseSuperseded,
                     &record,
                     NOW,
+                    None,
                 )
                 .await
                 .unwrap(),
@@ -2676,6 +2854,7 @@ mod tests {
                     DeadLetterReason::AttemptsExhausted,
                     record,
                     NOW,
+                    None,
                 )
                 .await
                 .unwrap();

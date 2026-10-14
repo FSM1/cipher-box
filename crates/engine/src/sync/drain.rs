@@ -9277,6 +9277,15 @@ where
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
+        let reader = RecordReader::new(scope.enc_secret);
+        let name = match reader.classify(record) {
+            crate::sync::record::RecordClass::Mine(op) => scope
+                .end_of(&self.cells.base.borrow(), op.target)
+                .ok()
+                .map(|end| end.write_name(&op.target.0)),
+            _ => None,
+        };
+        let names = self.dropped_version_debts(scope, &reader).names();
         preserve_dead_letter(
             &self.seams.staging,
             &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, scope.enc_secret),
@@ -9284,6 +9293,7 @@ where
             reason,
             record,
             self.seams.scheduler.now(),
+            name.as_ref().map(|name| (&names, name)),
         )
         .await
         .map_err(seam)

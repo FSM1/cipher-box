@@ -56,13 +56,14 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, Scheduler, SeamError,
-    SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, RetireLedger,
+    Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
     publish_settings, settings_name,
 };
+use cipherbox_engine::sync::dead_letter_name::{DEAD_LETTER_NAME_PREFIX, dead_letter_name_key};
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -9597,7 +9598,7 @@ fn relink_whose_source_remove_is_refused(
     world: &FakeWorld,
     blocks: &Blocks,
     engine: &mut Engine<FakeSeamTypes>,
-    tasks: &mut Vec<BoxedTask>,
+    tasks: &mut [BoxedTask],
     refusal: impl Fn() -> SeamResult<HttpResponse> + Send + 'static,
 ) -> OpId {
     let (photos, moved) = seed_folder_and_file(world, engine, tasks);
@@ -12771,6 +12772,96 @@ fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
         "nothing the acknowledged create names is retired"
     );
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// The names of the debts this device's retire ledger holds, as the settle
+/// reads them. A name rides only a version 3 entry.
+fn owed_names(device: &FakeDevice) -> Vec<Option<String>> {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .owed(&owner_tag(&enc), None),
+    )
+    .expect("the ledger reads")
+    .entries
+    .into_iter()
+    .map(|entry| entry.name)
+    .collect()
+}
+
+/// An edit that dead-letters with its version preserved, on a device whose
+/// endpoints serve none of its puts.
+fn parked_edit(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, OpId) {
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create lands");
+    tick(world, engine, tasks);
+    let node = child_id(engine, ROOT, "clip.bin");
+    world.record_store.drop_puts();
+    let op_id = write_file(engine, version(node), &[2u8; 200]).expect("the edit lands");
+    tick_until_dead_lettered(world, engine, tasks);
+    (node, op_id)
+}
+
+/// The discard journals the dropped version at version 3, under the name the
+/// drain recorded when it parked the version (ADR 0075 D1).
+#[test]
+fn a_discarded_dead_letter_journals_under_the_name_its_drain_recorded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert_eq!(
+        owed_names(&alice),
+        vec![Some(write_name(node).as_str().to_owned())]
+    );
+    let keys = block_on(alice.staging_store.staged_keys()).expect("keys list");
+    assert!(
+        !keys
+            .iter()
+            .any(|key| key.starts_with(DEAD_LETTER_NAME_PREFIX)),
+        "the discard removes the recorded name"
+    );
+}
+
+/// A preserved set the previous release wrote has no name key, so it still
+/// reads and its discard journals a version 2 entry (ADR 0020 D5).
+#[test]
+fn a_discarded_dead_letter_the_previous_release_parked_journals_with_no_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (_, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+    let key = dead_letter_name_key(&owner_tag(&kdf::enc_subkey(&SECRET)), op_id).expect("a key");
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&key))
+            .expect("reads")
+            .is_some(),
+        "the drain recorded the name"
+    );
+    block_on(alice.staging_store.remove_staged_bytes(&key)).expect("removes");
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert_eq!(owed_names(&alice), vec![None]);
 }
 
 /// A mark that will not read may hide any sequence, so the next publish at the

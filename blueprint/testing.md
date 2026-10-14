@@ -289,6 +289,15 @@ scenario fails the meta-test):
   base links again at that name, in the vault scope or below an interior
   scope, reads its live record and spares what it names, and waits when the
   record does not pass the gate (`sync::drain`);
+- the recorded dead-letter name (ADR 0075) — a discard journals a version 3
+  entry under the name that the drain recorded, and a preserved set with no
+  name key (ADR 0020 D5) journals with no name (`tests/write_plane.rs`); a
+  trimmed version and a version whose root is gone journal under the recorded
+  name, and orphan GC keeps a name key while the preserved set or the queue
+  holds its op id (`sync::staging`); the body round-trips and reads a body of
+  another op or version, a bad name, trailing bytes or an unknown version as
+  no name (`sync::dead_letter_name`); the encode refuses a name that is not an
+  IPNS name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2

@@ -40,6 +40,7 @@ use cipherbox_engine::seams::{
     BoxedTask, DebtOrigin, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger,
     StagingStore, UnixMillis,
 };
+use cipherbox_engine::sync::dead_letter_name::{decode_dead_letter_name, encode_dead_letter_name};
 use cipherbox_engine::sync::kept_op::{KeptNote, KeptNoteError, KeptNotes, KeptResult};
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -106,6 +107,23 @@ fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
         assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
     }
     assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
+}
+
+/// The decoder reads a recorded dead-letter name that is not an IPNS name as no
+/// name, so the encode refuses it (ADR 0075 D2).
+#[test]
+fn a_dead_letter_name_the_decoder_reads_as_no_name_is_refused() {
+    let root = compute_cid(DAG_ROOT_CODEC, b"a parked root");
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x72; 32]).verifying_key());
+    let body = encode_dead_letter_name(OpId(9), &root, name.as_str()).expect("a name encodes");
+    assert_eq!(
+        decode_dead_letter_name(&body, OpId(9), &root).as_deref(),
+        Some(name.as_str())
+    );
+    let long = "k".repeat(256);
+    for refused in ["", "k51qzowningrecord", long.as_str()] {
+        assert!(encode_dead_letter_name(OpId(9), &root, refused).is_err());
+    }
 }
 
 /// The kept-op note decoder reads a body with a name or a content CID past
