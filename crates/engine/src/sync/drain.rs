@@ -3214,8 +3214,7 @@ where
                         let proved = scope.scope_roots.contains(&root);
                         let delete = matches!(op.kind, OpKind::Delete { .. });
                         if !delete || anchored || !proved {
-                            unanchored = !delete
-                                && !anchored
+                            unanchored = !anchored
                                 && proved
                                 && self
                                     .unlinked_at_its_live_name(

@@ -1170,7 +1170,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   move that re-seals into another scope, leaves at its publish. With no flip, a kept op waits at its write epoch
   for at most T = 7 days, and longer while a write-epoch lease deferred the
   floor raise of its root's pointer follow, which can hide a flip: the root is
-  followed on each pass until a follow lands the raise. At a flip (a new write epoch or a new nearest scope
+  followed on each pass until a follow lands the raise. The record of a
+  deferred raise lasts for one session and holds only granted scopes. The
+  withheld-update escalation covers only a scope with a floor. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
   decides: a landed op drops, and a lost op applies again under the new seed.
   A content edit reads its file's live record first, and it landed when the

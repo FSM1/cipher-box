@@ -558,13 +558,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             })
             .collect();
         let (pointers, heals, pin_reads) = self
-            .follow_held_pointers(
-                &received,
-                &by_identity,
-                &scheduled,
-                render.events,
-                render.deferred_raises,
-            )
+            .follow_held_pointers(&received, &by_identity, &scheduled, render)
             .await;
         if !heals.is_empty() {
             // The list as it stands after the pointer reads: an accept can add
@@ -951,16 +945,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// Follow the scope pointer of every scheduled bookmark that holds a scope
     /// pointer name (ADR 0024 D5 step 3, ADR 0074 D1). Answers each one's
     /// verdict, the scope root each vouched-for bookmark must move to, and
-    /// every scheduled read for the pin pass, and records in `deferred`
-    /// whether each followed scope's floor raise deferred. A refused re-point
-    /// object is a trust verdict, reported here.
+    /// every scheduled read for the pin pass, and records in
+    /// `render.deferred_raises` whether each followed scope's floor raise
+    /// deferred. A refused re-point object is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
         received: &ReceivedSharesList,
         by_identity: &BTreeMap<[u8; IDENTITY_PUBLIC_LEN], &Contact>,
         scheduled: &BTreeSet<BookmarkKey>,
-        events: &mpsc::UnboundedSender<Event>,
-        deferred: &RefCell<BTreeSet<NodeId>>,
+        render: &ScopeRender<'_>,
     ) -> (
         BTreeMap<BookmarkKey, PointerVerdict>,
         Vec<(BookmarkKey, Vec<u8>)>,
@@ -989,11 +982,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             {
                 Ok(Some(held)) => {
                     // Only a raise that lands ends the deferral: any other
-                    // answer leaves the floor short of the vouched epoch.
-                    if held.deferred {
-                        deferred.borrow_mut().insert(NodeId(share.scope_id));
+                    // answer leaves the floor short of the vouched epoch. A
+                    // sharer authors the id, so it never names an own scope.
+                    let scope = NodeId(share.scope_id);
+                    let own = is_own_scope(
+                        render.own_root,
+                        &render.own_descendants.borrow(),
+                        &share.scope_id,
+                    );
+                    if held.deferred && !own {
+                        render.deferred_raises.borrow_mut().insert(scope);
                     } else {
-                        deferred.borrow_mut().remove(&NodeId(share.scope_id));
+                        render.deferred_raises.borrow_mut().remove(&scope);
                     }
                     let root = held.root.as_str().as_bytes();
                     if root != share.scope_root_name {
@@ -1005,7 +1005,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 Err(PointerConsultError::Unavailable) => PointerVerdict::Unavailable,
                 Err(PointerConsultError::Rejected) => {
                     emit_trust_violation(
-                        events,
+                        render.events,
                         grafted_root_name(&share.display_name, NodeId(share.scope_id)).as_str(),
                         "the scope pointer's re-point object was refused",
                     );
@@ -2529,6 +2529,7 @@ mod tests {
         /// The names each withheld-update escalation named, across passes.
         escalations: RefCell<Vec<Vec<u8>>>,
         pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
+        deferred_raises: RefCell<BTreeSet<NodeId>>,
         /// What the pass reports about its vault root resolve.
         root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
@@ -2587,6 +2588,7 @@ mod tests {
                 reported: Cell::new(false),
                 escalations: RefCell::new(Vec::new()),
                 pointer_pins: RefCell::new(BTreeMap::new()),
+                deferred_raises: RefCell::new(BTreeSet::new()),
                 root_reconciled: Cell::new(true),
                 list_lock: ReceivedSharesLock::new(()),
             };
@@ -2794,7 +2796,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
-                        deferred_raises: &RefCell::default(),
+                        deferred_raises: &self.deferred_raises,
                         root_sequences: &RefCell::default(),
                         events,
                     },
@@ -2845,7 +2847,7 @@ mod tests {
                         permissions: &self.permissions,
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
-                        deferred_raises: &RefCell::default(),
+                        deferred_raises: &self.deferred_raises,
                         root_sequences: &RefCell::default(),
                         events: &events,
                     },
@@ -5008,6 +5010,38 @@ mod tests {
                 "no root the pointer did not vouch for is read"
             );
             assert!(!fx.reported.get(), "availability accuses nobody");
+        }
+
+        /// The first pointer follow of a held bookmark in a vault anchored at
+        /// `vault_root`, with the write-epoch lease of the scope held, so the
+        /// floor raise defers. Returns the deferred-raise record.
+        fn follow_under_a_held_lease(vault_root: [u8; 16]) -> BTreeSet<NodeId> {
+            let mut fx = RenderedScope::rooted_at(Vec::new(), vault_root);
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            let lease = floor::acquire_write_epoch_lease(&SCOPE).expect("the scope starts free");
+            fx.forced_pass(0);
+            drop(lease);
+            fx.deferred_raises.borrow().clone()
+        }
+
+        /// A deferred raise of a granted scope is recorded, so the drain keeps
+        /// its kept ops past the bound.
+        #[test]
+        fn a_deferred_raise_of_a_granted_scope_is_recorded() {
+            assert_eq!(
+                follow_under_a_held_lease(VAULT_ROOT),
+                BTreeSet::from([NodeId(SCOPE)])
+            );
+        }
+
+        /// A sharer authors the id it bookmarks under, so a bookmark that names
+        /// a scope this vault owns records no deferred raise: it cannot hold
+        /// this vault's own kept ops past the bound.
+        #[test]
+        fn a_bookmark_that_names_an_own_scope_records_no_deferred_raise() {
+            assert!(follow_under_a_held_lease(SCOPE).is_empty());
         }
 
         /// A held bookmark whose scope root opened, in a vault anchored at
