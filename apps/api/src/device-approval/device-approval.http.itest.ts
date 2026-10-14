@@ -134,6 +134,19 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   const http = () => ctx.http;
 
+  /** Block until a backend waits on another transaction, as an insert does on an uncommitted key. */
+  async function waitForRowLockWait(timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const waiting = await db.dataSource.query(
+        `SELECT 1 FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted LIMIT 1`
+      );
+      if (waiting.length > 0) return;
+      if (Date.now() > deadline) throw new Error('timed out waiting for the second spend to block');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
   /**
    * A token for a subject this API has resolved, as `POST /auth/identity/*`
    * always mints: `account_devices.identity_subject_id` references the row.
@@ -574,6 +587,35 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
       expect(results.map((res) => res.status).sort()).toEqual([201, 401]);
       expect(await db.dataSource.getRepository(AccountDevice).count()).toBe(1);
+    });
+
+    it('lets exactly one of two concurrent spends of one token commit, with no advisory lock between them', async () => {
+      const account = await boundAccount();
+      const verified = await identityTokens.verify(account.subjectToken);
+      let commitFirst!: () => void;
+      let firstSpent!: () => void;
+      const firstMayCommit = new Promise<void>((resolve) => (commitFirst = resolve));
+      const firstHasSpent = new Promise<void>((resolve) => (firstSpent = resolve));
+
+      // The first spend inserts and holds its transaction open; the second then
+      // waits on the first's primary-key row and must refuse once it commits.
+      const first = db.dataSource.transaction(async (manager) => {
+        await identityTokens.spend(manager, verified);
+        firstSpent();
+        await firstMayCommit;
+      });
+      await firstHasSpent;
+      const second = db.dataSource.transaction((manager) =>
+        identityTokens.spend(manager, verified)
+      );
+      await waitForRowLockWait();
+      commitFirst();
+
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(
+        await db.dataSource.getRepository(SpentIdentityToken).countBy({ tokenId: verified.tokenId })
+      ).toBe(1);
     });
 
     it('reclaims a spent row past its grace, and keeps one its token could still pass', async () => {
