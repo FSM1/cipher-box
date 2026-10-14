@@ -78,9 +78,11 @@ higher floor sends the op to D3 at any time, and a kept delete to the read of it
 Time enters through the clock seam. Proposed: a
 note time later than the clock reads as the clock. A nearest scope root other than the note's is
 also a flip, and a flip waits for its check with no limit, as a flip at T would lose the write.
-Amended on 2026-10-14 (owner ruling on FSM1/cipher-box#2332, option A): when the walk proves the
-root and the base still does not hold the folder that the op writes under, the flip ends the op in
-a dead letter with a notice, which keeps its staged bytes for a recover.
+Amended on 2026-10-14 (owner ruling on FSM1/cipher-box#2332, option A): when the op is not a
+delete, the walk proves its root, the pass writes that root, and a read of this session at the live
+parent name saw the folder that the op writes under unlinked, the flip ends the op in a dead letter
+with a notice, which keeps its staged bytes for a recover. A base that does not hold the folder is
+no such evidence, because a base after a cold start lacks deep folders.
 
 **D6 — The test "visible from the live root" is the standard rebase onto the live tree.** An op that
 the rebase reads as already satisfied leaves the queue. A kept op with no note gets a note at write

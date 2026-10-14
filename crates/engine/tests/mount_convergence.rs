@@ -27,10 +27,15 @@ use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::published_override_seed;
-use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
+use cipherbox_engine::seams::{
+    BoxedTask, ContactLabel, FloorStore, OpId, RecordTransport, SharerScopedFloorStore,
+    StagingStore,
+};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::kept_op::KEPT_OP_BOUND;
-use cipherbox_engine::sync::pointer::{scope_pointer_name, seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::pointer::{
+    scope_pointer_name, scope_pointer_signer, seal_repoint, vault_pointer_name,
+};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
     owner_identity, serve_http,
@@ -3020,30 +3025,46 @@ struct SurvivingGrantee {
     tasks_r: Vec<BoxedTask>,
     recipient: FakeDevice,
     shared: NodeId,
+    /// The folder between the shared root and `child`, when nested.
+    mid: Option<NodeId>,
     child: NodeId,
 }
 
 impl SurvivingGrantee {
     /// A grantee's create lands in the old tree after the name wave of an
     /// owner write cut read the folder, so the moved tree does not carry it.
-    /// The create is a folder, or a file of `file` bytes.
-    fn after_the_cut(file: Option<&[u8]>) -> Self {
+    /// The create is a folder, or a file of `file` bytes. With `nested`, the
+    /// folder is two levels below the shared root.
+    fn after_the_cut(file: Option<&[u8]>, nested: bool) -> Self {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         seed_vault(&world, &blocks);
         let tab = world.device(&owner_identity().verifying_key().to_sec1());
         let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
         let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
-        let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "child");
+        let parent = if nested {
+            create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "mid")
+        } else {
+            shared
+        };
+        let child = create_published_folder(&world, &mut engine_t, &mut tasks_t, parent, "child");
         import_recipient(&mut engine_t);
         grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
 
         let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
         let (mut engine_r, mut events_r, mut tasks_r) =
             recipient_on_with_the_share(&world, &blocks, &recipient);
-        block_on(engine_r.command(Command::SetFocus { node: Some(child) }))
-            .expect("the grantee opens the folder");
-        tick_n(&world, &engine_r, &mut tasks_r, 2);
+        let mid = nested.then_some(parent);
+        let path = if nested {
+            vec![parent, child]
+        } else {
+            vec![child]
+        };
+        for folder in path {
+            block_on(engine_r.command(Command::SetFocus { node: Some(folder) }))
+                .expect("the grantee opens the folder");
+            tick_n(&world, &engine_r, &mut tasks_r, 2);
+        }
         let endpoints = world.record_store.endpoints();
         let walked: std::collections::BTreeMap<String, Vec<u8>> = world
             .record_store
@@ -3114,6 +3135,7 @@ impl SurvivingGrantee {
             tasks_r,
             recipient,
             shared,
+            mid,
             child,
         }
     }
@@ -3130,6 +3152,50 @@ impl SurvivingGrantee {
             .expect("the queue reads")
             .len()
     }
+
+    /// The grantee's write-epoch floor of the shared scope, in its sharer's
+    /// namespace.
+    fn write_floor(&self) -> Option<u64> {
+        let floors = self.recipient.floors(&RECIPIENT_SECRET);
+        block_on(floor::write_epoch_floor(
+            &SharerScopedFloorStore::granted_by(
+                &floors,
+                ContactLabel::of(
+                    &kdf::contact_label_seed(&RECIPIENT_SECRET),
+                    &owner_identity().verifying_key().to_sec1(),
+                ),
+            ),
+            &self.shared.0,
+        ))
+        .expect("the floor reads")
+    }
+
+    /// The grantee's session again, over the same device.
+    fn restart_the_grantee(&mut self) {
+        let (engine_r, events_r, tasks_r) =
+            recipient_on_with_the_share(&self.world, &self._blocks, &self.recipient);
+        self.engine_r = engine_r;
+        self.events_r = events_r;
+        self.tasks_r = tasks_r;
+    }
+
+    /// The scope pointer of the shared scope.
+    fn pointer(&self) -> IpnsName {
+        scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &self.shared.0)
+    }
+
+    /// One pass past the bound with the write-epoch lease held, so the
+    /// follow sees the cut and its floor raise defers.
+    fn defer_the_raise_past_the_bound(&mut self) -> u64 {
+        let before = self.write_floor().expect("the floor stands");
+        self.world.scheduler.advance(KEPT_OP_BOUND);
+        let lease = hold_write_epoch_lease(&self.shared.0).expect("the scope starts free");
+        tick(&self.world, &self.engine_r, &mut self.tasks_r);
+        drop(lease);
+        assert_eq!(self.write_floor(), Some(before), "the raise deferred");
+        assert_eq!(self.queued_ops(), 1, "the kept create waits");
+        before
+    }
 }
 
 /// A surviving write grantee's create lands in the old tree after the name
@@ -3138,7 +3204,7 @@ impl SurvivingGrantee {
 /// bound and applies again at the moved tree (ADR 0069 D3, D5).
 #[test]
 fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_bound() {
-    let mut fx = SurvivingGrantee::after_the_cut(None);
+    let mut fx = SurvivingGrantee::after_the_cut(None, false);
 
     fx.world.scheduler.advance(KEPT_OP_BOUND);
     tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
@@ -3159,16 +3225,14 @@ fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_boun
 /// lands (ADR 0069 D5).
 #[test]
 fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
-    let mut fx = SurvivingGrantee::after_the_cut(None);
-    let kept = fx.queued_ops();
-    assert_eq!(kept, 1, "the create stays queued as a kept op");
+    let mut fx = SurvivingGrantee::after_the_cut(None, false);
+    let before = fx.defer_the_raise_past_the_bound();
 
-    fx.world.scheduler.advance(KEPT_OP_BOUND);
-    let lease = hold_write_epoch_lease(&fx.shared.0).expect("the scope starts free");
     tick(&fx.world, &fx.engine_r, &mut fx.tasks_r);
-    drop(lease);
-    assert_eq!(fx.queued_ops(), kept, "the kept create waits");
-
+    assert!(
+        fx.write_floor() > Some(before),
+        "the next poll follows the pointer again and lands the raise"
+    );
     tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
 
     assert!(
@@ -3186,55 +3250,170 @@ fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
 /// for a pass that reads the folder and applies again, with no notice.
 #[test]
 fn a_kept_write_after_a_restart_over_a_cut_applies_again_with_no_notice() {
-    let mut fx = SurvivingGrantee::after_the_cut(None);
-    let (engine_r, events_r, tasks_r) =
-        recipient_on_with_the_share(&fx.world, &fx._blocks, &fx.recipient);
-    fx.engine_r = engine_r;
-    fx.events_r = events_r;
-    fx.tasks_r = tasks_r;
+    for nested in [false, true] {
+        let mut fx = SurvivingGrantee::after_the_cut(None, nested);
+        fx.restart_the_grantee();
 
-    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+        tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+        if nested {
+            // A cold base lacks the deep folder until a leg reads it.
+            for folder in [fx.mid.expect("a nested fixture"), fx.child] {
+                block_on(
+                    fx.engine_r
+                        .command(Command::SetFocus { node: Some(folder) }),
+                )
+                .expect("the grantee opens the folder");
+                tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 4);
+            }
+        }
 
-    assert!(
-        dead_letter_events(&mut fx.events_r).is_empty(),
-        "the create does not dead-letter"
-    );
-    assert!(
-        fx.moved_tree_lists_the_create(),
-        "the create applied again at the moved tree"
-    );
+        assert!(
+            dead_letter_events(&mut fx.events_r).is_empty(),
+            "nested={nested}: the create does not dead-letter"
+        );
+        assert!(
+            fx.moved_tree_lists_the_create(),
+            "nested={nested}: the create applied again at the moved tree"
+        );
+    }
+}
+
+/// A deferred raise, then a follow that lands no raise: the floor still lacks
+/// the flip, so the kept create stays past the bound until a follow lands it.
+#[test]
+fn a_deferred_raise_keeps_the_kept_write_while_the_pointer_lands_no_raise() {
+    for case in ["unavailable", "absent", "rejected"] {
+        let mut fx = SurvivingGrantee::after_the_cut(None, false);
+        let before = fx.defer_the_raise_past_the_bound();
+        let pointer = fx.pointer();
+        let endpoints = fx.world.record_store.endpoints();
+        let served = fx
+            .world
+            .record_store
+            .record_at(&endpoints[0], pointer.as_str())
+            .expect("the pointer is published");
+        match case {
+            "unavailable" => fx.world.record_store.fail_get_for(pointer.as_str()),
+            "absent" => {
+                fx.world.record_store.lapse(pointer.as_str());
+            }
+            _ => {
+                let sequence = IpnsRecord::unmarshal(&served)
+                    .and_then(|record| record.verify(&pointer))
+                    .expect("the pointer verifies")
+                    .sequence;
+                let refused = IpnsRecord::create_v2(
+                    &scope_pointer_signer(
+                        kdf::owner_pointer_seed(&SECRET).as_bytes(),
+                        &fx.shared.0,
+                    ),
+                    b"not a sealed re-point",
+                    sequence + 1,
+                    TTL_NANOS,
+                    EOL,
+                )
+                .marshal();
+                for endpoint in &endpoints {
+                    fx.world
+                        .record_store
+                        .seed_record(endpoint, pointer.as_str(), refused.clone());
+                }
+            }
+        }
+
+        tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 4);
+        assert_eq!(fx.write_floor(), Some(before), "{case}: no raise landed");
+        assert_eq!(
+            fx.queued_ops(),
+            1,
+            "{case}: the kept create waits past the bound"
+        );
+
+        fx.world.record_store.heal_get_for(pointer.as_str());
+        let healed = IpnsRecord::unmarshal(&served)
+            .and_then(|record| record.verify(&pointer))
+            .expect("the pointer verifies");
+        let republished = IpnsRecord::create_v2(
+            &scope_pointer_signer(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.shared.0),
+            &healed.value,
+            healed.sequence + 2,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        for endpoint in &endpoints {
+            fx.world
+                .record_store
+                .seed_record(endpoint, pointer.as_str(), republished.clone());
+        }
+        tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+
+        assert!(fx.write_floor() > Some(before), "{case}: the raise landed");
+        assert!(
+            fx.moved_tree_lists_the_create(),
+            "{case}: the create applied again at the moved tree"
+        );
+        assert!(
+            dead_letter_events(&mut fx.events_r).is_empty(),
+            "{case}: the create does not dead-letter"
+        );
+    }
+}
+
+/// A bookmark that leaves the received list takes its deferred raise with it:
+/// the kept create under its root leaves at the bound again.
+#[test]
+fn a_removed_bookmark_drops_its_deferred_raise() {
+    let mut fx = SurvivingGrantee::after_the_cut(None, false);
+    fx.defer_the_raise_past_the_bound();
+    let entropy = RefCell::new(SeededEntropy::new(37));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    block_on(
+        StagingReceivedShareStore::new(&fx.recipient.staging_store, &enc, &entropy)
+            .persist(&ReceivedSharesList::new()),
+    )
+    .expect("the emptied list persists");
+
+    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 4);
+
+    assert_eq!(fx.queued_ops(), 0, "the kept create left at the bound");
 }
 
 /// The owner deletes the folder that a surviving grantee's kept create writes
-/// under, after the cut. The walk proves the root, and no pass can check the
-/// op, so it dead-letters with a notice that the member can still recover
-/// (ADR 0069 D5).
+/// under, after the cut. A read below a grafted root records no unlink, so no
+/// read of this session shows the folder gone: the op waits with no notice
+/// and keeps its staged version (ADR 0069 D5).
 #[test]
-fn a_kept_write_under_a_folder_the_moved_tree_lost_dead_letters_with_a_notice() {
-    let mut fx = SurvivingGrantee::after_the_cut(Some(&[7; 96]));
+fn a_grantees_kept_write_under_a_folder_the_owner_deleted_waits_with_no_notice() {
+    let mut fx = SurvivingGrantee::after_the_cut(Some(&[7; 96]), false);
+    let raw =
+        block_on(StagingStore::queued_ops(&fx.recipient.staging_store)).expect("the queue reads");
+    let root_cid = decode_queue(
+        &RecordReader::new(&kdf::enc_subkey(&RECIPIENT_SECRET)),
+        &raw,
+    )
+    .mine
+    .into_iter()
+    .find_map(|(_, op)| Some(op.staged_content()?.root_cid.clone()))
+    .expect("the kept create stages a version");
     block_on(fx.engine_t.command(Command::Delete { node: fx.child }))
         .expect("the owner's delete stages");
     tick_n(&fx.world, &fx.engine_t, &mut fx.tasks_t, 4);
+    block_on(fx.engine_r.command(Command::SetFocus {
+        node: Some(fx.shared),
+    }))
+    .expect("the grantee opens the shared folder");
 
     tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
 
-    assert_eq!(
-        dead_letter_events(&mut fx.events_r).len(),
-        1,
-        "the create dead-letters with a notice"
+    assert!(dead_letter_events(&mut fx.events_r).is_empty(), "no notice");
+    assert_eq!(fx.queued_ops(), 1, "the kept create waits");
+    assert!(
+        block_on(fx.recipient.staging_store.staged_bytes(&root_cid))
+            .expect("the store reads")
+            .is_some(),
+        "its staged version is still held"
     );
-    assert_eq!(fx.queued_ops(), 0, "the op left the queue");
-    let parked = block_on(fx.engine_r.status())
-        .expect("the session status reads")
-        .dead_letters;
-    assert_eq!(
-        parked.iter().map(|dead| dead.reason).collect::<Vec<_>>(),
-        vec![DeadLetterReason::TargetGone]
-    );
-    block_on(fx.engine_r.command(Command::RecoverDeadLetter {
-        op_id: parked[0].op_id,
-    }))
-    .expect("the parked op re-queues");
 }
 
 /// A surviving write grantee's kept create, under a root that an owner write

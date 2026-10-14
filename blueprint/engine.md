@@ -1168,9 +1168,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   format version 2; a version 1 note reads with no folder and no result, and
   a kind that needs a result leaves with none. Every other op kind, and a
   move that re-seals into another scope, leaves at its publish. With no flip, a kept op waits at its write epoch
-  for at most T = 7 days, and longer while the last pointer follow of its
-  root found the floor raise deferred by a write-epoch lease, which can hide a
-  flip. At a flip (a new write epoch or a new nearest scope
+  for at most T = 7 days, and longer while a write-epoch lease deferred the
+  floor raise of its root's pointer follow, which can hide a flip: the root is
+  followed on each pass until a follow lands the raise. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
   decides: a landed op drops, and a lost op applies again under the new seed.
   A content edit reads its file's live record first, and it landed when the
@@ -1189,10 +1189,12 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. A kept op other than a delete whose folder the base does not hold, under
-  a root that the walk proved and this pass writes, has no pass that can check
-  it: at a flip it dead-letters as `targetGone` with a notice, and its staged
-  version stays recoverable. At a flip, a kept delete whose note names its folder waits for one
+  it. A kept op other than a delete, under a root that the walk proved and
+  this pass writes, whose folder a read of this session at the live parent
+  name saw unlinked, has no pass that can check it: at a flip it dead-letters
+  as `targetGone` with a notice, and its staged version stays recoverable. A
+  base that does not hold the folder shows nothing, and a read below a grafted
+  root records no unlink, so such an op waits. At a flip, a kept delete whose note names its folder waits for one
   read of that folder at its live name, which the drain makes before the
   rebase: a live node applies the delete again, and a node gone ends the op
   with no notice. A folder that a read of this session at the live parent

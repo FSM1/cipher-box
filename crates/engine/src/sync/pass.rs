@@ -187,6 +187,20 @@ impl LegScopes {
     }
 }
 
+/// [`LegScopes::new`] over this pass's proved roots and this session's
+/// minted ones.
+fn leg_scopes(
+    state: &SessionState,
+    scopes: &ScopeSets,
+    owed_moves: Option<Vec<(NodeId, NodeId)>>,
+) -> LegScopes {
+    LegScopes::new(
+        &scopes.proved,
+        &state.minted_scope_roots.borrow(),
+        owed_moves,
+    )
+}
+
 /// One scope leg's material, with the second scope that an owed interior move
 /// binds to it.
 pub(crate) struct LegMaterial<'a, F> {
@@ -837,11 +851,7 @@ where
             unproved: state.unproved_scope_roots.borrow().clone(),
         };
         let owed_moves = self.owed_moves(state, pass).await;
-        let leg_scopes = LegScopes::new(
-            &scopes.proved,
-            &state.minted_scope_roots.borrow(),
-            owed_moves,
-        );
+        let leg_scopes = leg_scopes(state, &scopes, owed_moves);
         let own = &leg_scopes.own;
         let focus_scope_ids = focus_scope_roots(own, &scopes.unproved);
         let mut by_scope = focus_by_scope(
@@ -876,16 +886,7 @@ where
             .flat_map(|targets| targets.folders.iter().chain(&targets.files).copied())
             .collect();
         let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
-        let legs = ScopeLegContext {
-            floors: &self.seams.floors,
-            sharers: grafted,
-            contact_label_seed: &pass.contact_label_seed,
-            own_root: self.root_id,
-            own,
-            unproved: &scopes.unproved,
-            base: &state.snapshot,
-            root_name: Some(&pass.root_name),
-        };
+        let legs = self.leg_context(state, pass, grafted, &leg_scopes, &scopes.unproved);
         for (scope_root, targets) in by_scope {
             let left = leg_scopes.owed_moves.get(&scope_root).copied();
             let leg = match legs
@@ -1157,6 +1158,27 @@ where
         }
     }
 
+    /// What every scope leg of this pass reads alike.
+    fn leg_context<'a>(
+        &'a self,
+        state: &'a SessionState,
+        pass: &'a Pass,
+        sharers: &'a GraftedSharers,
+        leg_scopes: &'a LegScopes,
+        unproved: &'a BTreeSet<NodeId>,
+    ) -> ScopeLegContext<'a, F> {
+        ScopeLegContext {
+            floors: &self.seams.floors,
+            sharers,
+            contact_label_seed: &pass.contact_label_seed,
+            own_root: self.root_id,
+            own: &leg_scopes.own,
+            unproved,
+            base: &state.snapshot,
+            root_name: Some(&pass.root_name),
+        }
+    }
+
     /// Each owed interior move's scope root, with the scope its folder left,
     /// or `None` when the owed record does not read.
     async fn owed_moves(&self, state: &SessionState, pass: &Pass) -> Option<Vec<(NodeId, NodeId)>> {
@@ -1337,18 +1359,9 @@ where
         let owed_moves: Option<Vec<NodeId>> = owed
             .as_ref()
             .map(|moves| moves.iter().map(|(scope, _)| *scope).collect());
-        let leg_scopes = LegScopes::new(&scopes.proved, &state.minted_scope_roots.borrow(), owed);
+        let leg_scopes = leg_scopes(state, scopes, owed);
         let sharers = state.grafted_sharers.borrow().clone();
-        let legs = ScopeLegContext {
-            floors: &self.seams.floors,
-            sharers: &sharers,
-            contact_label_seed: &pass.contact_label_seed,
-            own_root: self.root_id,
-            own: &leg_scopes.own,
-            unproved: &scopes.unproved,
-            base: &state.snapshot,
-            root_name: Some(&pass.root_name),
-        };
+        let legs = self.leg_context(state, pass, &sharers, &leg_scopes, &scopes.unproved);
         let mut owed_legs = Vec::new();
         for (&root, &left) in &leg_scopes.owed_moves {
             if let Ok(leg) = legs

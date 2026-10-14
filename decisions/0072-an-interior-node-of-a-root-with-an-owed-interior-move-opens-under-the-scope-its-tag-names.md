@@ -40,7 +40,7 @@ The seal's AAD binds the scope, so a record whose tag names the wrong scope does
 the seed that it names, and a hostile record stays exactly one trust violation. The rule applies
 to every read leg that picks the read seed of an interior node by its scope, with one shared
 rule: the tick focus leg, the navigation leg, and the file legs that they run. Amended on
-2026-10-14: the drain's read of an interior node that it authors onto is such a leg too. When no owed
+2026-10-14: every child read of the drain under that root is such a leg too. When no owed
 entry holds the interior move, the read takes the scope root of the node as before. The entry is
 durable, so the rule also holds after a restart, and it covers a partial reseal. No durable
 shape changes.

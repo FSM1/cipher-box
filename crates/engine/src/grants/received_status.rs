@@ -142,9 +142,9 @@ pub(crate) struct ScopeRender<'a> {
     /// The withheld-update hold on each held bookmark's scope pointer, by
     /// pointer name.
     pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
-    /// Each scope whose last pointer follow found its write-epoch floor raise
-    /// deferred by a write-epoch lease. Its floor can lack the vouched epoch,
-    /// so the next pass follows it again and the drain keeps its kept ops.
+    /// Each bookmarked scope whose floor raise a write-epoch lease deferred,
+    /// until a follow lands the raise. Its floor can lack the vouched epoch,
+    /// so each pass follows it again and the drain keeps its kept ops.
     pub deferred_raises: &'a RefCell<BTreeSet<NodeId>>,
     /// The sequence this pass gated at each grafted root, which a navigation
     /// measures that root against.
@@ -502,6 +502,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let Ok(received) = store.load().await else {
             return prior;
         };
+        render
+            .deferred_raises
+            .borrow_mut()
+            .retain(|root| received.iter().any(|share| share.scope_id == root.0));
         let fresh: Vec<BookmarkKey> = received
             .iter()
             .map(ReceivedShare::key)
@@ -977,7 +981,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             ) else {
                 continue;
             };
-            deferred.borrow_mut().remove(&NodeId(share.scope_id));
             let verdict = match held_scope_pointer(
                 self.transport,
                 &self.sharer_floors(share),
@@ -988,8 +991,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .await
             {
                 Ok(Some(held)) => {
+                    // Only a raise that lands ends the deferral: any other
+                    // answer leaves the floor short of the vouched epoch.
                     if held.deferred {
                         deferred.borrow_mut().insert(NodeId(share.scope_id));
+                    } else {
+                        deferred.borrow_mut().remove(&NodeId(share.scope_id));
                     }
                     let root = held.root.as_str().as_bytes();
                     if root != share.scope_root_name {
@@ -5117,6 +5124,14 @@ mod tests {
                 fx.forced_pass(at);
             }
             assert_eq!(pointer_escalations(&fx), 0);
+            assert!(!pointer_pinned(&fx), "no hold opens");
+        }
+
+        /// Whether a hold stands on the scope pointer.
+        fn pointer_pinned(fx: &RenderedScope) -> bool {
+            fx.pointer_pins
+                .borrow()
+                .contains_key(pointer_name().as_str().as_bytes())
         }
 
         /// A pointer this device saw is re-pointed, never deleted, so "no
@@ -5128,6 +5143,7 @@ mod tests {
             fx.records.lapse(pointer_name().as_str());
 
             fx.forced_pass(1_000);
+            assert!(pointer_pinned(&fx), "the hold opens");
             fx.forced_pass(5_999);
             assert_eq!(pointer_escalations(&fx), 0, "inside the window");
             fx.forced_pass(6_000);
@@ -5136,6 +5152,28 @@ mod tests {
 
             fx.forced_pass(60_000);
             assert_eq!(pointer_escalations(&fx), 1, "one time per hold");
+            assert!(pointer_pinned(&fx), "the hold stays open");
+        }
+
+        /// An absent pointer whose floor does not read is unread: the open
+        /// hold stays, and nothing escalates until a read answers.
+        #[test]
+        fn an_absent_pointer_whose_floor_does_not_read_keeps_the_hold() {
+            let fx = granted_link(VAULT_ROOT);
+            fx.records.lapse(pointer_name().as_str());
+            fx.forced_pass(1_000);
+            assert!(pointer_pinned(&fx), "the hold opens");
+
+            fx.floors.fail_floor_reads();
+            fx.forced_pass(6_000);
+            fx.forced_pass(60_000);
+
+            assert!(pointer_pinned(&fx), "the hold stays open");
+            assert_eq!(
+                pointer_escalations(&fx),
+                0,
+                "an unread pass escalates nothing"
+            );
         }
 
         /// An answer ends the hold, so a new hold measures a new window.

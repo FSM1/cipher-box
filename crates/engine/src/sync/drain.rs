@@ -1465,12 +1465,6 @@ impl<'a> DrainScope<'a> {
         }
     }
 
-    /// Whether this pass writes the scope rooted at `root`, at either end.
-    fn writes_root(&self, root: NodeId) -> bool {
-        self.source.root == root
-            || matches!(self.second_end(), Ok(Some(destination)) if destination.end.root == root)
-    }
-
     /// The end rooted at `root`, at the read epoch its records bind: `epoch` for
     /// the source end, which the pass proves from its own scope root record, and
     /// a destination end's own for that one. `None` names neither end.
@@ -3209,9 +3203,10 @@ where
                     // base after a cold start lacks deep folders, so absence
                     // alone shows nothing.
                     let mut gone = false;
-                    // Any other kept op whose anchor the base lacks under a
-                    // root this pass proved and writes has no pass that can
-                    // check it, so a flip ends it in a dead letter (D5).
+                    // Any other kept op whose folder a read of this session
+                    // saw unlinked at its live parent name, under a root this
+                    // pass proved and writes, has no pass that can check it,
+                    // so a flip ends it in a dead letter (ADR 0069 D5).
                     let mut unanchored = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
@@ -3222,8 +3217,18 @@ where
                             .borrow()
                             .contains(kept_anchor(&op, note.parent));
                         let proved = scope.scope_roots.contains(&root);
-                        if !matches!(op.kind, OpKind::Delete { .. }) || anchored || !proved {
-                            unanchored = !anchored && proved && scope.writes_root(root);
+                        let delete = matches!(op.kind, OpKind::Delete { .. });
+                        if !delete || anchored || !proved {
+                            if !delete && !anchored && proved {
+                                unanchored = self
+                                    .unlinked_at_its_live_name(
+                                        scope,
+                                        root,
+                                        kept_anchor(&op, note.parent),
+                                        note.write_epoch,
+                                    )
+                                    .await?;
+                            }
                             place = self.unchecked_place(scope, root).await?;
                         } else if let Some(folder) =
                             note.parent.filter(|_| reads_kept_parent(&op, note.parent))
@@ -3244,7 +3249,8 @@ where
                         KeptVerdict::Expired
                     } else {
                         // A deferred raise can hide a flip, so the bound
-                        // waits for the next pass's raise (ADR 0069 D5).
+                        // waits for a follow that lands it (blueprint/engine.md
+                        // "kept op").
                         let deferred = note
                             .scope
                             .or_else(|| place.root())
@@ -12795,15 +12801,33 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// The walk proved the root past a cut, and the base does not hold the
-    /// folder a kept create writes under, so no pass can check the op. It
-    /// dead-letters with a notice before the bound (ADR 0069 D5).
-    #[test]
-    fn a_kept_create_under_a_parent_a_proved_root_lacks_dead_letters() {
+    /// A kept create under `HARNESS_ROOT` past a cut, whose folder this
+    /// session saw unlinked from its parent: at the parent's live name with
+    /// `live`, and at an old name without. A pass anchored at `pass_root`
+    /// reads the queue.
+    fn kept_create_under_an_unlinked_folder(
+        live: bool,
+        pass_root: NodeId,
+    ) -> (Op, OpId, Queue, DrainReport) {
         let harness = drain_harness(Some(harness_root_envelope()));
+        let folder = NodeId([0x63; 16]);
+        let old_parent = NodeId([0x68; 16]);
+        let mut unlinked = UnlinkedChild {
+            parent: old_parent,
+            ..capture_of(&[0; 32], folder)
+        };
+        unlinked.parent_name = if live {
+            harness.scope().source.write_name(&old_parent.0)
+        } else {
+            derive_write_name(&[0; 32], &old_parent.0)
+        }
+        .as_str()
+        .as_bytes()
+        .to_vec();
+        *harness.state.observed_unlinks.borrow_mut() = vec![unlinked];
         let op = Op::create(
             NodeId([0x62; 16]),
-            NodeId([0x63; 16]),
+            folder,
             "late",
             NewNode::Folder,
             1,
@@ -12811,9 +12835,22 @@ mod tests {
         );
         let op_id = kept_op_after_a_cut(&harness, &op, HARNESS_ROOT, FloorNamespace::Own, None);
         let mut report = DrainReport::default();
+        let queue = block_on(
+            harness
+                .drain()
+                .queued_ops(&harness.own_scope_at(pass_root), &mut report),
+        )
+        .expect("the queue reads");
+        (op, op_id, queue, report)
+    }
 
-        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
-            .expect("the queue reads");
+    /// A read of this session at the live parent name saw the folder a kept
+    /// create writes under unlinked, past a cut, under a root the walk proved
+    /// and this pass writes. No pass can check the op, so it dead-letters with
+    /// a notice before the bound (ADR 0069 D5).
+    #[test]
+    fn a_kept_create_under_a_folder_this_session_saw_unlinked_dead_letters() {
+        let (op, op_id, queue, report) = kept_create_under_an_unlinked_folder(true, HARNESS_ROOT);
 
         assert!(queue.kept.is_empty() && queue.mine.is_empty());
         assert_eq!(
@@ -12821,33 +12858,19 @@ mod tests {
             vec![(op_id, op.target, DeadLetterReason::TargetGone)],
             "with a notice"
         );
-        assert!(!harness.queued_op_ids().contains(&op_id));
     }
 
-    /// The same op under a root another pass writes waits: that pass decides.
+    /// A folder that the base lacks with no such read shows nothing: a cold
+    /// base lacks deep folders. An unlink read at an old name, or a pass that
+    /// does not write the root, keeps the op too.
     #[test]
-    fn a_kept_create_under_a_parent_the_base_lacks_waits_for_the_pass_of_its_root() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let op = Op::create(
-            NodeId([0x62; 16]),
-            NodeId([0x63; 16]),
-            "late",
-            NewNode::Folder,
-            1,
-            UnixMillis(0),
-        );
-        let op_id = kept_op_after_a_cut(&harness, &op, HARNESS_ROOT, FloorNamespace::Own, None);
-        let mut report = DrainReport::default();
+    fn a_kept_create_under_a_folder_with_no_live_unlink_waits() {
+        for (live, pass_root) in [(false, HARNESS_ROOT), (true, NodeId([0x70; 16]))] {
+            let (_, op_id, queue, report) = kept_create_under_an_unlinked_folder(live, pass_root);
 
-        let queue = block_on(
-            harness
-                .drain()
-                .queued_ops(&harness.own_scope_at(NodeId([0x70; 16])), &mut report),
-        )
-        .expect("the queue reads");
-
-        assert_eq!(queue.kept, vec![op_id]);
-        assert!(report.dead_letters.is_empty());
+            assert_eq!(queue.kept, vec![op_id], "live={live}: the op waits");
+            assert!(report.dead_letters.is_empty());
+        }
     }
 
     /// A granted root that no one granting identity names has no floor this
