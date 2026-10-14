@@ -9,7 +9,7 @@
   record reads the previous release),
   [ADR 0030](./0030-a-record-the-owner-alone-authors-and-that-seals-hpke-to-the-owner-seals-in-auth-mode.md)
   D11 (a per-owner staging surface seals under its own kind), ADR 0047 (a dropped version
-  journals its debt)
+  journals its debt), ADR 0054 D2 (the acknowledged mark)
 - **Implemented by:** not landed
 - **Amends:** ADR 0070 D1, as the amendment of 2026-10-03 states it
 
@@ -27,11 +27,14 @@ name, or it waits, and the rows of the old record stay charged.
 
 **D1 — The drain records the name when it parks the version.** When the drain preserves a dead
 letter that staged a version, it records the `ipnsName` of the record that the version would
-have joined. The name is the write name of the end that the drain derives for the op target at
-that tick, the same name that `release_unpreserved` journals for a version that it does not
-preserve. When the drain derives no end, it records no name. A discard, a trim and an eviction
-past the count cap journal a version 3 entry with the recorded name. With no recorded name,
-they journal a version 2 entry, as before.
+have joined. The name is the marked name: the write name of the end that the drain derives for
+the op target at that tick, unless the node's acknowledged mark (ADR 0054 D2) is held at another
+name. At that tick the drain reads the node's acknowledged slot. When the mark is held at another
+name, or the slot does not read, the version may have charged under that other name, so the
+drain records no name and the debt takes the wait rule. When the drain derives no end, it
+records no name. `release_unpreserved` journals a version that it does not preserve under the
+same rule. A discard, a trim and an eviction past the count cap journal a version 3 entry with
+the recorded name. With no recorded name, they journal a version 2 entry, as before.
 
 **D2 — The name has its own sealed staging key, and the preserved set keeps its format.** The
 key is `cbx/dn/ | ownerTagLen(1) | ownerTag | opId(8, big-endian)`. The value seals under a new
@@ -85,11 +88,9 @@ more entry past the cap for each such dead letter, and no ceiling holds that gro
 - `blueprint/engine.md` "Retirement" says that a discard, a trim and a cap eviction use the recorded
   name, in
   the code PR.
-- `blueprint/testing.md` names the tests for each site, the previous-release read, the
-  round-trip, and the encode refusal, in the code PR.
+- `blueprint/testing.md` names the tests for each site, a mark held at another name, the
+  previous-release read, the round-trip, and the encode refusal, in the code PR.
 
 ## Residuals
 
-- An op that exhausts its attempts records the end of its final tick. If the node moved between
-  two attempts, the name is the one of the last attempt. Is that the record that the version
-  charged, or must the drain record the name at the first attempt?
+None.
