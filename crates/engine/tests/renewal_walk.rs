@@ -7,6 +7,7 @@ use core::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -23,8 +24,8 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, RetireLedger,
-    Scheduler, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, DebtOrigin, FloorStore, HttpMethod, HttpRequest, HttpResponse, OwedRetire,
+    RecordTransport, RetireLedger, Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{VaultSettings, settings_name};
 use cipherbox_engine::sync::owed_rotation::owed_rotation_key;
@@ -1603,6 +1604,135 @@ fn a_tombstoned_node_a_folder_the_device_never_opened_links_still_renews() {
     tombstone(&device, nodes[0]);
     tick(&world, &engine, &mut tasks);
     assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// The root content CID of the newest version `file`'s record names.
+fn newest_content_cid(world: &FakeWorld, blocks: &Blocks, file: NodeId) -> String {
+    let current = record_at(world, &write_name(file));
+    let head_cid = core::str::from_utf8(&current.value)
+        .expect("utf8 value")
+        .strip_prefix("/ipfs/")
+        .expect("an /ipfs/ pointer")
+        .to_owned();
+    let envelope =
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
+    let read_key = *kdf::read_key(kdf::node_seed(&READ_SCOPE_SEED, &file.0).as_bytes()).as_bytes();
+    let ReadBody::File { versions, .. } = open_read_body(&envelope, &read_key).expect("opens")
+    else {
+        panic!("a file body");
+    };
+    encode_content_cid_str(&versions.last().expect("a version").content_cid)
+}
+
+/// A device that holds a tombstone and a named debt for a node that a folder
+/// it never opened links does not settle the debt: the live folder record
+/// names the node, so the retire would unpin content that the live record
+/// names. The walk renews the record in the same pass.
+#[test]
+fn a_tombstoned_debt_of_a_node_a_folder_the_device_never_opened_links_does_not_settle() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let folder = create_folder(&world, engine, tasks, ROOT, "moved-to");
+        vec![write_file(&world, engine, tasks, folder, "moved.txt")]
+    });
+    let file = nodes[0];
+    let name = write_name(file);
+    let target = newest_content_cid(&world, &blocks, file);
+    let before = record_at(&world, &name);
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, file);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
+            &owner_tag(&enc),
+            &[OwedRetire {
+                node: file.0,
+                target: target.clone(),
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::DroppedRoot,
+                name: Some(name.as_str().to_owned()),
+            }],
+        ),
+    )
+    .expect("the debt journals");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !device.http.requests().iter().any(|request| {
+            request.url.ends_with("/registry/retire")
+                && request.body.as_deref().is_some_and(|body| {
+                    body.windows(name.as_str().len())
+                        .any(|w| w == name.as_str().as_bytes())
+                })
+        }),
+        "no retire names the record that a live folder links"
+    );
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// Whether a retire this device sent names the record at `name`.
+fn retired_under(device: &FakeDevice, name: &IpnsName) -> bool {
+    device.http.requests().iter().any(|request| {
+        request.url.ends_with("/registry/retire")
+            && request.body.as_deref().is_some_and(|body| {
+                body.windows(name.as_str().len())
+                    .any(|w| w == name.as_str().as_bytes())
+            })
+    })
+}
+
+/// The live descent reads a bounded number of folders on each tick. A scope
+/// with more folders than that settles the debt of a node no folder links on
+/// a later tick, where the descent resumes.
+#[test]
+fn a_retire_descent_past_its_read_cap_resumes_on_the_next_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        for folder in 0..70 {
+            create_folder(&world, engine, tasks, ROOT, &format!("folder {folder}"));
+        }
+        vec![write_file(&world, engine, tasks, ROOT, "kept.txt")]
+    });
+    let target = newest_content_cid(&world, &blocks, nodes[0]);
+    let unlinked = NodeId([0x5C; 16]);
+    let name = write_name(unlinked);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, unlinked);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
+            &owner_tag(&enc),
+            &[OwedRetire {
+                node: unlinked.0,
+                target,
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::DroppedRoot,
+                name: Some(name.as_str().to_owned()),
+            }],
+        ),
+    )
+    .expect("the debt journals");
+
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !retired_under(&device, &name),
+        "the first tick reads too few folders to prove the node unlinked"
+    );
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_under(&device, &name),
+        "the next tick completes the descent and the debt settles"
+    );
 }
 
 #[test]

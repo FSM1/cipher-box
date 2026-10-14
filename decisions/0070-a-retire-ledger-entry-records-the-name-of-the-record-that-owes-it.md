@@ -45,12 +45,19 @@ wait rule of FSM1/cipher-box#2191 for a node that the base links. Amended on 202
 version 3 entry of a retired node that the base links again is read as published when the end
 of the scope that its links prove derives the recorded name, so the retire spares the CIDs that
 the live record names; with no record to read, or when its links prove no held scope, the entry
-waits.
+waits. Amended on 2026-10-14 (FSM1/cipher-box#2259, owner option 1): the base is local to the
+device, so before it settles a retired node that the base links nowhere, the settle reads the
+folder records of the scope that derives the name from the scope root, live and not from the
+cache. It settles only when no folder links the node. A folder that links the node counts as a
+base link. A per-tick read cap bounds the read, which continues on the next tick, and the debts
+of one tick in that scope share it. Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
+a write grant re-seals the record at the recorded name under the new scope root. When the scope
+binding refuses that record, the settle reads it again at the same name under the held end whose
+root the record's tag names, as ADR 0072 D1 does. The retire stays under the recorded name.
 
-**D3 — One release carries the change.** The new release reads all three shapes. A
-previous-release build reads a version 3 entry as unwritten, and its `owe` can overwrite the entry
-with a version 2 entry for the same content id; the debt then settles under the derived name with
-the wait rule.
+**D3 — One release carries the change.** The new release reads all three shapes. Corrected on
+2026-10-14: the previous release, v2.13.1, also reads a version 3 entry, so its `owe` keeps a held
+version 3 entry and does not overwrite it with a version 2 entry.
 
 ## Alternatives considered
 

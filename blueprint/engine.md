@@ -353,17 +353,27 @@ bytes (FSM1/cipher-box-next#28 D2).
   version — a discard, a refused preserved entry, or the preserved-set trim —
   journals every row the version charged to the retire ledger first, and the
   settle retires them once the name holds a record above the sequence its PUT
-  was acknowledged at (ADR 0054). A drop whose staged root is gone, fails its
+  was acknowledged at (ADR 0054). A PUT that no endpoint acknowledged holds
+  the same mark, and a mark at any name of the node stops an empty name from
+  settling the debt. A drop whose staged root is gone, fails its
   own CID, or does not decode journals the same debt from the root CID the op
   record names (ADR 0059). An entry that records the `ipnsName` of the
   record that owes it is read and retired under that name, wherever the base
   places the node at settle time; a retired node that the base links again in
   a scope whose end derives that name is read as published, so the retire
   spares what its live record names, and it waits when its links prove no held
-  scope. An entry with no name derives it from where the base places the node
-  (ADR 0070). A discard of a preserved dead letter, the preserved-set trim and
-  an eviction past the count cap use the name that the drain recorded when it
-  parked the version, and with no recorded name they journal with no name
+  scope. A retired node that the base links nowhere settles only after a live
+  read of the folder records of its scope from the scope root finds no folder
+  that links it; a folder that links it counts as a base link. A per-tick read
+  cap bounds that read, which continues on the next tick, and the debts of one
+  tick share it. A record at the recorded name that the scope binding refuses
+  is read again under the held end whose root its tag names (ADR 0072 D1), and
+  the retire stays under that name. An entry with no name derives it from
+  where the base places the node (ADR 0070). A discard of a preserved dead
+  letter, the preserved-set trim and an eviction past the count cap use the
+  name that the drain recorded when it parked the version, and with no
+  recorded name they journal with no name. The drain records no name when the
+  node's acknowledged mark is held at another name or does not read
   (ADR 0075). One residual stands: two
   debts for one content id under two record names share one ledger slot, so the
   second record's references stay charged (a leak, not a loss). A publish that

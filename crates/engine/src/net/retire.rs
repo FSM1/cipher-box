@@ -240,6 +240,38 @@ pub enum Acknowledged {
     Unreadable,
 }
 
+/// A node's acknowledged-sequence slot, whatever name its mark is held at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcknowledgedSlot {
+    /// No mark is held for the node.
+    Empty,
+    /// A mark is held.
+    Marked {
+        /// The name the mark is held at.
+        name: Vec<u8>,
+        /// The highest sequence acknowledged at `name`.
+        sequence: u64,
+    },
+    /// A value is held under the node's key that this identity cannot open
+    /// or read.
+    Unreadable,
+}
+
+impl AcknowledgedSlot {
+    /// The slot as a read at `name` sees it. A mark at another name reads as
+    /// nothing (ADR 0054, consequence 5).
+    pub(crate) fn at(&self, name: &str) -> Acknowledged {
+        match self {
+            Self::Marked {
+                name: held,
+                sequence,
+            } if held == name.as_bytes() => Acknowledged::At(*sequence),
+            Self::Empty | Self::Marked { .. } => Acknowledged::Nothing,
+            Self::Unreadable => Acknowledged::Unreadable,
+        }
+    }
+}
+
 impl<St: StagingStore> StagingRetireLedger<'_, St> {
     /// The highest sequence at which a PUT of this device's at `name`, `node`'s
     /// write-plane name, was acknowledged but never confirmed. A record at or
@@ -252,15 +284,24 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
         node: [u8; 16],
         name: &str,
     ) -> SeamResult<Acknowledged> {
+        Ok(self.acknowledged_slot(owner_tag, node).await?.at(name))
+    }
+
+    /// `node`'s acknowledged-sequence slot, at whatever name it is held.
+    pub async fn acknowledged_slot(
+        &self,
+        owner_tag: &[u8],
+        node: [u8; 16],
+    ) -> SeamResult<AcknowledgedSlot> {
         let key = Self::acknowledged_key(owner_tag, node)?;
         let Some(blob) = self.staging.staged_bytes(&key).await? else {
-            return Ok(Acknowledged::Nothing);
+            return Ok(AcknowledgedSlot::Empty);
         };
         Ok(self
             .seal
             .open(OwnerLocalKind::RetireLedger, &blob)
-            .map_or(Acknowledged::Unreadable, |body| {
-                decode_acked(&body, node, name)
+            .map_or(AcknowledgedSlot::Unreadable, |body| {
+                decode_acked(&body, node)
             }))
     }
 
@@ -304,22 +345,20 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
     }
 }
 
-/// A stored acknowledged sequence at `name`. The node and the name ride inside
-/// the seal as the bound tail, for the reason an entry's CID does. A mark for a
-/// name the node no longer publishes under reads as nothing; a value that is
-/// not `node`'s mark reads as unreadable.
-fn decode_acked(body: &[u8], node: [u8; 16], name: &str) -> Acknowledged {
+/// A stored acknowledged sequence and its name. The node and the name ride
+/// inside the seal as the bound tail, for the reason an entry's CID does. A
+/// value that is not `node`'s mark reads as unreadable.
+fn decode_acked(body: &[u8], node: [u8; 16]) -> AcknowledgedSlot {
     let Some((sequence, stored_name)) = body
         .strip_prefix(&[ACKED_V1])
         .and_then(|rest| rest.strip_prefix(&node))
         .and_then(|rest| rest.split_first_chunk::<{ size_of::<u64>() }>())
     else {
-        return Acknowledged::Unreadable;
+        return AcknowledgedSlot::Unreadable;
     };
-    if stored_name == name.as_bytes() {
-        Acknowledged::At(u64::from_be_bytes(*sequence))
-    } else {
-        Acknowledged::Nothing
+    AcknowledgedSlot::Marked {
+        name: stored_name.to_vec(),
+        sequence: u64::from_be_bytes(*sequence),
     }
 }
 

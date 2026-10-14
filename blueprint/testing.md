@@ -288,11 +288,19 @@ scenario fails the meta-test):
   own name (`tests/owner_actions.rs`); a named debt of a deleted node that the
   base links again at that name, in the vault scope or below an interior
   scope, reads its live record and spares what it names, and waits when the
-  record does not pass the gate (`sync::drain`);
+  record does not pass the gate (`sync::drain`); a named debt of a deleted
+  node that a folder the device never opened links does not settle, and a
+  descent past its per-tick read cap settles on the next tick
+  (`tests/renewal_walk.rs`); a debt journaled before a write grant moved its
+  node settles under the old name and spares the kept version; a dropped
+  version whose PUT landed with no ack retires nothing its record names, and
+  a dropped create with a mark at another name retires nothing on vacancy
+  (ADR 0054 D2) (`tests/write_plane.rs`);
 - the recorded dead-letter name (ADR 0075) — a discard journals a version 3
   entry under the name that the drain recorded, also after a share moves the
   file to a new scope and name; a discard whose name does not read fails and
-  keeps the entry, its blocks and its name; a preserved set with no name key
+  keeps the entry, its blocks and its name; a mark held at an old name
+  records no name; a preserved set with no name key
   (ADR 0020 D5) journals with no name (`tests/write_plane.rs`); a trimmed
   version, a version whose root is gone, and an entry that the count cap
   evicts journal under the recorded name, and a set with no name key with no
