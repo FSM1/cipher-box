@@ -81,7 +81,8 @@ also a flip, and a flip waits for its check with no limit, as a flip at T would 
 Amended on 2026-10-14 (FSM1/cipher-box#2332, a narrowed form of owner option A): a flip ends a kept
 op in a dead letter with a notice, which keeps its staged bytes for a recover, when all of these
 are true. The op is not a delete. The walk proves its root, and the pass writes that root. A read
-of this session at the live parent name saw the folder that the op writes under unlinked. No
+of this session at the live parent name saw the folder that the op writes under unlinked, or the
+file of an edit or a version restore. No
 write-epoch lease deferred the floor raise of the root. Any other such op waits. A base that does
 not hold the folder is no such evidence, because a base after a cold start lacks deep folders. So
 after a restart, and for a write grantee, the op waits. The owner confirms this narrowed rule.

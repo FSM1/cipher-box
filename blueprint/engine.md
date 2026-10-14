@@ -1192,8 +1192,8 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
   it. A kept op other than a delete, under a root that the walk proved and
-  this pass writes, whose folder a read of this session at the live parent
-  name saw unlinked, has no pass that can check it: at a flip it dead-letters
+  this pass writes, whose folder (or the file of an edit or a version
+  restore) a read of this session at the live parent name saw unlinked, has no pass that can check it: at a flip it dead-letters
   as `targetGone` with a notice, and its staged version stays recoverable. A
   base that does not hold the folder shows nothing, and a read below a grafted
   root records no unlink, so such an op waits. At a flip, a kept delete whose note names its folder waits for one
