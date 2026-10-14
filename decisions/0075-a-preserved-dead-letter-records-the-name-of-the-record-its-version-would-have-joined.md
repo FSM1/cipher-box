@@ -40,7 +40,11 @@ CID of the parked version. A body whose op id or root CID is not the one of its 
 preserved entry reads as no name. The encode refuses a name that is not a well-formed IPNS name,
 and the decode reads such bytes as no name (AGENTS.md rule 8). The name key is written before
 the preserved set, so the set write commits both. Orphan GC keeps a name key while the preserved
-set holds its op id, and collects it after that.
+set or the op queue holds its op id, and collects it after that. The queue clause covers the
+time between the name write and the set write. When the drain derives no end for a version, it
+removes any name key of that op before the set write, so a name from an earlier tick does not
+stay. A name key that the discard or the trim cannot read keeps that one preserved entry in
+place for the pass, and the pass does not journal its debt.
 
 ## Alternatives considered
 
