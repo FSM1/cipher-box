@@ -9657,7 +9657,7 @@ fn owed_rotation_body(format: u8) -> Vec<u8> {
 /// content CID of the parked root, and a well-formed IPNS name behind its
 /// length byte (ADR 0075 D2).
 fn dead_letter_names_body() -> Vec<u8> {
-    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0xd1; 32]).verifying_key());
+    let name = ipns_name_of(0xd1);
     let mut body = vec![1];
     body.extend_from_slice(&7u64.to_be_bytes());
     body.extend_from_slice(&compute_cid(CONTENT_CID_CODEC, b"a parked version root"));

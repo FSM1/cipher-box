@@ -1201,7 +1201,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
         PRESERVED_DEAD_LETTERS_KEY.to_vec(),
     ]);
     referenced.extend(live.iter().cloned());
-    let candidates: Vec<&[u8]> = staged
+    let mut candidates: Vec<&[u8]> = staged
         .iter()
         .map(Vec::as_slice)
         .filter(|key| !referenced.contains(*key) && !is_bookkeeping(key))
@@ -1218,12 +1218,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
         .map(|entry| entry.op_id)
         .chain(queued.iter().map(|(op_id, _)| *op_id))
         .collect();
-    referenced.extend(
-        candidates
-            .iter()
-            .filter(|key| dead_letter_name_op(key).is_some_and(|op_id| held.contains(&op_id)))
-            .map(|key| key.to_vec()),
-    );
+    candidates.retain(|key| !dead_letter_name_op(key).is_some_and(|op_id| held.contains(&op_id)));
     let mut roots = Vec::new();
     for record in preserved
         .iter()
@@ -2333,12 +2328,10 @@ mod tests {
             };
             reconcile(&store, expired).await;
 
-            let names: Vec<_> = owed_by_owner(&store)
-                .await
-                .into_iter()
-                .map(|debt| debt.name)
-                .collect();
-            assert_eq!(names, vec![Some(recorded_name().as_str().to_owned())]);
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())]
+            );
             assert!(name_keys(&store).await.is_empty());
         });
     }
@@ -2356,12 +2349,10 @@ mod tests {
             store.remove_staged_bytes(&root_cid).await.unwrap();
             reconcile(&store, bounds(ROOMY)).await;
 
-            let names: Vec<_> = owed_by_owner(&store)
-                .await
-                .into_iter()
-                .map(|debt| debt.name)
-                .collect();
-            assert_eq!(names, vec![Some(recorded_name().as_str().to_owned())]);
+            assert_eq!(
+                owed_names(&store).await,
+                vec![Some(recorded_name().as_str().to_owned())]
+            );
             assert!(name_keys(&store).await.is_empty());
         });
     }
@@ -2398,8 +2389,12 @@ mod tests {
             .record(queued, &staged.root_cid, &recorded_name())
             .await
             .unwrap();
-            let key = dead_letter_name_key(&RecordReader::new(&OWNER).owner_tag(), queued).unwrap();
-            assert!(!sweep(&store, &[]).await.unwrap().contains(&key));
+            assert!(
+                !sweep(&store, &[])
+                    .await
+                    .unwrap()
+                    .contains(&name_key(queued))
+            );
         });
     }
 
