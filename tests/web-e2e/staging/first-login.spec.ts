@@ -7,6 +7,7 @@
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { expect, published, signIn, test } from './fixtures';
+import { reloadVault } from './restoreVault';
 
 test('a fresh identity mints a vault, and the session survives a reload', async ({ page }) => {
   const files = new FilesPage(page);
@@ -21,8 +22,7 @@ test('a fresh identity mints a vault, and the session survives a reload', async 
   await expect(files.row(marker)).toBeVisible();
   await published(page);
 
-  await page.reload();
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
+  await reloadVault(page);
   await expect(files.row(marker)).toBeVisible({ timeout: 180_000 });
 
   await files.signOut();

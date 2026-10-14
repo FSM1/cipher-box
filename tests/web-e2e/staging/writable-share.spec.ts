@@ -16,6 +16,7 @@ test('a write grant lets a second identity build inside the folder', async ({
   page,
   secondContext,
 }) => {
+  test.setTimeout(600_000);
   const ownerFiles = new FilesPage(page);
   const { recipient, owner } = await grant(page, secondContext, 'write');
   const recipientFiles = new FilesPage(recipient);

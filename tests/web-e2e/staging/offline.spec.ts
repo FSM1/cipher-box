@@ -7,6 +7,7 @@
 import { FilesPage } from '../page-objects/files.page';
 import { expect, published, signIn, test } from './fixtures';
 import { routingOrigin, watchRoutingFront } from './frontContract';
+import { reloadVault } from './restoreVault';
 
 const QUEUED = 'queued-while-offline';
 
@@ -34,7 +35,6 @@ test('a write made offline publishes when the network returns', async ({ page, b
 
   expect(log.publishes.length, 'the reconnect published the queued write').toBeGreaterThan(0);
 
-  await page.reload();
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
+  await reloadVault(page);
   await expect(files.row(QUEUED)).toBeVisible({ timeout: 180_000 });
 });
