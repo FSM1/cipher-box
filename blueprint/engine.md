@@ -1189,7 +1189,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. At a flip, a kept delete whose note names its folder waits for one
+  it. A kept op other than a delete whose folder the base does not hold, under
+  a root that the walk proved and this pass writes, has no pass that can check
+  it: at a flip it dead-letters as `targetGone` with a notice, and its staged
+  version stays recoverable. At a flip, a kept delete whose note names its folder waits for one
   read of that folder at its live name, which the drain makes before the
   rebase: a live node applies the delete again, and a node gone ends the op
   with no notice. A folder that a read of this session at the live parent

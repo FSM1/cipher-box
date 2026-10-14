@@ -1465,6 +1465,12 @@ impl<'a> DrainScope<'a> {
         }
     }
 
+    /// Whether this pass writes the scope rooted at `root`, at either end.
+    fn writes_root(&self, root: NodeId) -> bool {
+        self.source.root == root
+            || matches!(self.second_end(), Ok(Some(destination)) if destination.end.root == root)
+    }
+
     /// The end rooted at `root`, at the read epoch its records bind: `epoch` for
     /// the source end, which the pass proves from its own scope root record, and
     /// a destination end's own for that one. `None` names neither end.
@@ -3203,17 +3209,21 @@ where
                     // base after a cold start lacks deep folders, so absence
                     // alone shows nothing.
                     let mut gone = false;
+                    // Any other kept op whose anchor the base lacks under a
+                    // root this pass proved and writes has no pass that can
+                    // check it, so a flip ends it in a dead letter (D5).
+                    let mut unanchored = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
                     {
-                        if !matches!(op.kind, OpKind::Delete { .. })
-                            || self
-                                .cells
-                                .base
-                                .borrow()
-                                .contains(kept_anchor(&op, note.parent))
-                            || !scope.scope_roots.contains(&root)
-                        {
+                        let anchored = self
+                            .cells
+                            .base
+                            .borrow()
+                            .contains(kept_anchor(&op, note.parent));
+                        let proved = scope.scope_roots.contains(&root);
+                        if !matches!(op.kind, OpKind::Delete { .. }) || anchored || !proved {
+                            unanchored = !anchored && proved && scope.writes_root(root);
                             place = self.unchecked_place(scope, root).await?;
                         } else if let Some(folder) =
                             note.parent.filter(|_| reads_kept_parent(&op, note.parent))
@@ -3241,6 +3251,25 @@ where
                             .is_some_and(|root| self.inputs.deferred_raises.contains(&root));
                         match kept_verdict(&note, place, now) {
                             KeptVerdict::Expired if deferred => KeptVerdict::Stay,
+                            KeptVerdict::Stay
+                                if unanchored && !deferred && shows_a_flip(&note, place) =>
+                            {
+                                if self
+                                    .abandon_keeping_its_name(
+                                        scope,
+                                        op_id,
+                                        &op,
+                                        DeadLetterReason::TargetGone,
+                                        report,
+                                    )
+                                    .await
+                                {
+                                    notes.remove(op_id);
+                                } else {
+                                    kept.push(op_id);
+                                }
+                                continue;
+                            }
                             verdict => verdict,
                         }
                     }
@@ -9342,16 +9371,18 @@ where
         op: &Op,
         reason: DeadLetterReason,
         report: &mut DrainReport,
-    ) {
+    ) -> bool {
         let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
-            return;
+            return false;
         };
-        if self.dequeue_op(op_id).await.is_ok() {
-            self.release_unpreserved(scope, preserved, op).await;
-            report
-                .dead_letters
-                .push((op_id, op.target, preserved.observed(reason)));
+        if self.dequeue_op(op_id).await.is_err() {
+            return false;
         }
+        self.release_unpreserved(scope, preserved, op).await;
+        report
+            .dead_letters
+            .push((op_id, op.target, preserved.observed(reason)));
+        true
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
@@ -12762,6 +12793,61 @@ mod tests {
 
         assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
         assert!(report.dropped.is_empty());
+    }
+
+    /// The walk proved the root past a cut, and the base does not hold the
+    /// folder a kept create writes under, so no pass can check the op. It
+    /// dead-letters with a notice before the bound (ADR 0069 D5).
+    #[test]
+    fn a_kept_create_under_a_parent_a_proved_root_lacks_dead_letters() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let op = Op::create(
+            NodeId([0x62; 16]),
+            NodeId([0x63; 16]),
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        let op_id = kept_op_after_a_cut(&harness, &op, HARNESS_ROOT, FloorNamespace::Own, None);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(harness.drain().queued_ops(&harness.scope(), &mut report))
+            .expect("the queue reads");
+
+        assert!(queue.kept.is_empty() && queue.mine.is_empty());
+        assert_eq!(
+            report.dead_letters,
+            vec![(op_id, op.target, DeadLetterReason::TargetGone)],
+            "with a notice"
+        );
+        assert!(!harness.queued_op_ids().contains(&op_id));
+    }
+
+    /// The same op under a root another pass writes waits: that pass decides.
+    #[test]
+    fn a_kept_create_under_a_parent_the_base_lacks_waits_for_the_pass_of_its_root() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let op = Op::create(
+            NodeId([0x62; 16]),
+            NodeId([0x63; 16]),
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        let op_id = kept_op_after_a_cut(&harness, &op, HARNESS_ROOT, FloorNamespace::Own, None);
+        let mut report = DrainReport::default();
+
+        let queue = block_on(
+            harness
+                .drain()
+                .queued_ops(&harness.own_scope_at(NodeId([0x70; 16])), &mut report),
+        )
+        .expect("the queue reads");
+
+        assert_eq!(queue.kept, vec![op_id]);
+        assert!(report.dead_letters.is_empty());
     }
 
     /// A granted root that no one granting identity names has no floor this

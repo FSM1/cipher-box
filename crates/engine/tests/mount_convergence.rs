@@ -3026,7 +3026,8 @@ struct SurvivingGrantee {
 impl SurvivingGrantee {
     /// A grantee's create lands in the old tree after the name wave of an
     /// owner write cut read the folder, so the moved tree does not carry it.
-    fn after_the_cut() -> Self {
+    /// The create is a folder, or a file of `file` bytes.
+    fn after_the_cut(file: Option<&[u8]>) -> Self {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         seed_vault(&world, &blocks);
@@ -3053,12 +3054,23 @@ impl SurvivingGrantee {
                 Some((key, record))
             })
             .collect();
-        block_on(engine_r.command(Command::Create {
+        let target = WriteTarget::NewFile {
             parent: child,
             name: "late".into(),
-            kind: NodeKind::Folder,
-        }))
-        .expect("the grantee's create stages");
+        };
+        match file {
+            Some(bytes) => {
+                write_file(&mut engine_r, target, bytes).expect("the grantee's write stages");
+            }
+            None => {
+                block_on(engine_r.command(Command::Create {
+                    parent: child,
+                    name: "late".into(),
+                    kind: NodeKind::Folder,
+                }))
+                .expect("the grantee's create stages");
+            }
+        }
         tick_n(&world, &engine_r, &mut tasks_r, 2);
         assert_eq!(queued(&recipient), 0, "the create published");
         let written: Vec<(String, Vec<u8>)> = walked
@@ -3126,7 +3138,7 @@ impl SurvivingGrantee {
 /// bound and applies again at the moved tree (ADR 0069 D3, D5).
 #[test]
 fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_bound() {
-    let mut fx = SurvivingGrantee::after_the_cut();
+    let mut fx = SurvivingGrantee::after_the_cut(None);
 
     fx.world.scheduler.advance(KEPT_OP_BOUND);
     tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
@@ -3147,7 +3159,7 @@ fn a_surviving_grantees_write_the_wave_did_not_carry_applies_again_past_the_boun
 /// lands (ADR 0069 D5).
 #[test]
 fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
-    let mut fx = SurvivingGrantee::after_the_cut();
+    let mut fx = SurvivingGrantee::after_the_cut(None);
     let kept = fx.queued_ops();
     assert_eq!(kept, 1, "the create stays queued as a kept op");
 
@@ -3167,6 +3179,38 @@ fn a_kept_write_under_a_deferred_floor_raise_waits_past_the_bound() {
         dead_letter_events(&mut fx.events_r).is_empty(),
         "the create does not dead-letter"
     );
+}
+
+/// The owner deletes the folder that a surviving grantee's kept create writes
+/// under, after the cut. The walk proves the root, and no pass can check the
+/// op, so it dead-letters with a notice that the member can still recover
+/// (ADR 0069 D5).
+#[test]
+fn a_kept_write_under_a_folder_the_moved_tree_lost_dead_letters_with_a_notice() {
+    let mut fx = SurvivingGrantee::after_the_cut(Some(&[7; 96]));
+    block_on(fx.engine_t.command(Command::Delete { node: fx.child }))
+        .expect("the owner's delete stages");
+    tick_n(&fx.world, &fx.engine_t, &mut fx.tasks_t, 4);
+
+    tick_n(&fx.world, &fx.engine_r, &mut fx.tasks_r, 10);
+
+    assert_eq!(
+        dead_letter_events(&mut fx.events_r).len(),
+        1,
+        "the create dead-letters with a notice"
+    );
+    assert_eq!(fx.queued_ops(), 0, "the op left the queue");
+    let parked = block_on(fx.engine_r.status())
+        .expect("the session status reads")
+        .dead_letters;
+    assert_eq!(
+        parked.iter().map(|dead| dead.reason).collect::<Vec<_>>(),
+        vec![DeadLetterReason::TargetGone]
+    );
+    block_on(fx.engine_r.command(Command::RecoverDeadLetter {
+        op_id: parked[0].op_id,
+    }))
+    .expect("the parked op re-queues");
 }
 
 /// A surviving write grantee's kept create, under a root that an owner write
