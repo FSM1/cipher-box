@@ -309,7 +309,8 @@ scenario fails the meta-test):
   evicts journal under the recorded name, and a set with no name key with no
   name; a name that does not read keeps its one entry while the trim drops
   the others, and an entry past the count cap whose name does not read stays
-  with no debt until the read heals; a later tick that derives no end removes the earlier name; a
+  with no debt until the read heals; a later tick that derives no end
+  removes the earlier name; a
   failed name write preserves nothing, and after a failed set write orphan GC
   keeps the name while the queue holds its op id (`sync::staging`); the body
   round-trips, reads a body of another op or version, a bad name, trailing

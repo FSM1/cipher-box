@@ -241,8 +241,8 @@ pub enum Acknowledged {
 }
 
 /// A node's acknowledged-sequence slot, whatever name its mark is held at.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AcknowledgedSlot {
+#[derive(Debug)]
+pub(crate) enum AcknowledgedSlot {
     /// No mark is held for the node.
     Empty,
     /// A mark is held.
@@ -288,7 +288,7 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
     }
 
     /// `node`'s acknowledged-sequence slot, at whatever name it is held.
-    pub async fn acknowledged_slot(
+    pub(crate) async fn acknowledged_slot(
         &self,
         owner_tag: &[u8],
         node: [u8; 16],

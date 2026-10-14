@@ -9707,7 +9707,7 @@ fn relink_whose_source_remove_is_refused(
     world: &FakeWorld,
     blocks: &Blocks,
     engine: &mut Engine<FakeSeamTypes>,
-    tasks: &mut [BoxedTask],
+    tasks: &mut Vec<BoxedTask>,
     refusal: impl Fn() -> SeamResult<HttpResponse> + Send + 'static,
 ) -> OpId {
     let (photos, moved) = seed_folder_and_file(world, engine, tasks);
@@ -12883,6 +12883,34 @@ fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
 }
 
+/// Grant `folder` to the recipient with write permission, which cuts it into a
+/// scope root of its own, and tick the cut out.
+fn grant_write_to_recipient(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    folder: NodeId,
+) {
+    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
+    let contact_code =
+        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
+    block_on(engine.command(Command::ImportContact { contact_code }))
+        .expect("the recipient's code imports");
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: folder,
+            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the grant cuts the folder into a scope root of its own"
+    );
+    for _ in 0..4 {
+        tick(world, engine, tasks);
+    }
+}
+
 /// The names of the debts this device's retire ledger holds, as the settle
 /// reads them. A name rides only a version 3 entry.
 fn owed_names(device: &FakeDevice) -> Vec<Option<String>> {
@@ -13018,24 +13046,7 @@ fn a_discard_after_a_share_moves_the_file_journals_under_the_old_name() {
     tick_until_dead_lettered(&world, &engine, &mut tasks);
     world.record_store.keep_puts();
 
-    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
-    let contact_code =
-        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
-    block_on(engine.command(Command::ImportContact { contact_code }))
-        .expect("the recipient's code imports");
-    assert_eq!(
-        block_on(engine.command(Command::Grant {
-            node: folder,
-            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
-            permission: Permission::Write,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done),
-        "the grant cuts the folder into a scope root of its own"
-    );
-    for _ in 0..4 {
-        tick(&world, &engine, &mut tasks);
-    }
+    grant_write_to_recipient(&world, &mut engine, &mut tasks, folder);
     // The file's current name is the one the next edit publishes at.
     let endpoint = world.record_store.endpoints()[0].clone();
     let puts = || -> BTreeMap<String, usize> {
@@ -18827,24 +18838,7 @@ fn a_debt_journaled_before_a_write_grant_moved_its_node_settles() {
         "the debt is journaled under the vault-scope name"
     );
 
-    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
-    let contact_code =
-        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
-    block_on(engine.command(Command::ImportContact { contact_code }))
-        .expect("the recipient's code imports");
-    assert_eq!(
-        block_on(engine.command(Command::Grant {
-            node: folder,
-            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
-            permission: Permission::Write,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done),
-        "the grant cuts the folder into a scope root of its own"
-    );
-    for _ in 0..4 {
-        tick(&world, &engine, &mut tasks);
-    }
+    grant_write_to_recipient(&world, &mut engine, &mut tasks, folder);
 
     blocks.refuse_retire(false);
     for _ in 0..4 {

@@ -369,7 +369,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   same record. The debt waits while a folder does not answer or the gate
   refuses one, and for the session once a scope passes the read's node bound.
   A name that no held end derives settles with no live record only when the
-  tick reached every scope and no rotation work is owed. A record at the recorded name that the scope binding refuses
+  tick reached every scope and no rotation work is owed. A record at the
+  recorded name that the scope binding refuses
   is read again under the held end whose root its tag names (ADR 0072 D1), and
   the retire stays under that name. An entry with no name derives it from
   where the base places the node (ADR 0070). A discard of a preserved dead

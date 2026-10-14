@@ -1297,11 +1297,13 @@ impl RetireDescent {
             }
         }
         if self.seen.len() + self.linked.len() > MAX_RETIRE_DESCENT_NODES {
-            *self = Self {
-                overflowed: true,
-                pending: Vec::new(),
-                ..Self::new(NodeId([0; 16]))
-            };
+            self.overflowed = true;
+            self.pending = Vec::new();
+            self.seen = BTreeSet::new();
+            self.linked = BTreeSet::new();
+            self.read = Vec::new();
+            self.confirmed = 0;
+            self.anchor = None;
         }
     }
 }
@@ -2731,23 +2733,12 @@ where
             bookkeeping.ledger = pass.cursor;
             bookkeeping.ledger_partial = pass.partial;
         }
-        // A descent this tick finished served its debts, and one that must
-        // start again goes; the rest resume on the next tick.
-        *self.cells.retire_descents.borrow_mut() = self
-            .retire_descents
-            .take()
-            .into_iter()
-            .filter(|(_, descent)| descent.carried())
-            .map(|(root, descent)| {
-                (
-                    root,
-                    RetireDescent {
-                        stopped: false,
-                        ..descent
-                    },
-                )
-            })
-            .collect();
+        let mut descents = self.retire_descents.take();
+        descents.retain(|_, descent| descent.carried());
+        for descent in descents.values_mut() {
+            descent.stopped = false;
+        }
+        *self.cells.retire_descents.borrow_mut() = descents;
         reconcile_staging_over(
             &self.seams.staging,
             self.cells.live_blocks,
@@ -8457,15 +8448,14 @@ where
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
-        let slot = match owing {
+        let acked = match owing {
             OwingRecord::Unconfirmed => self
                 .retire_ledger(scope)
-                .acknowledged_slot(&owner_tag(scope.enc_secret), node)
+                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
                 .await
                 .ok()?,
-            _ => AcknowledgedSlot::Empty,
+            _ => Acknowledged::Nothing,
         };
-        let acked = slot.at(write_name.as_str());
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
@@ -12330,7 +12320,6 @@ mod tests {
         sharer_enc: X25519Public,
         bookmarked_roots: BookmarkedScopeRoots,
         contested: ContestedNodes,
-        every_scope_reached: bool,
     }
 
     impl DrainHarness {
@@ -12346,7 +12335,7 @@ mod tests {
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
                     deferred_raises: &self.deferred_raises,
-                    every_scope_reached: self.every_scope_reached,
+                    every_scope_reached: true,
                 },
             )
         }
@@ -12509,7 +12498,6 @@ mod tests {
                 storage_policy: StoragePolicy::CI,
                 content_profile: ContentProfile::CI,
             },
-            every_scope_reached: true,
             state: SessionState::new(),
             events: event_stream,
             placement: Ok(Placement::Hosted),
@@ -13970,6 +13958,7 @@ mod tests {
     fn step_retire_descent(harness: &DrainHarness, descent: &mut RetireDescent) {
         let scope = harness.scope();
         block_on(harness.drain().step_descent(&scope, &scope.source, descent));
+        descent.stopped = false;
     }
 
     /// A folder the gate refuses holds the retire descent: the debt waits, and
@@ -13990,7 +13979,6 @@ mod tests {
             step_retire_descent(&harness, &mut descent);
             assert_eq!(descent.verdict(node), None, "the debt waits");
             assert!(descent.carried(), "the next tick keeps the held descent");
-            descent.stopped = false;
         }
         assert_eq!(
             drain_events(&mut harness.events)
@@ -14015,7 +14003,6 @@ mod tests {
             step_retire_descent(&harness, &mut descent);
             assert_eq!(descent.verdict(NodeId([0x4E; 16])), None);
             assert_eq!(descent.carried(), attempt < MAX_CAPTURE_READ_ATTEMPTS);
-            descent.stopped = false;
         }
     }
 

@@ -55,7 +55,8 @@ read that spans ticks proves nothing until a second sweep reads each folder to t
 The entry waits while a folder does not answer, while the gate refuses a folder, and for the
 session once a scope passes the node bound of the read. A name that no held end derives, as
 after a write cut, settles with no live record only when the tick reached every scope and no
-rotation work is owed; otherwise the entry waits. Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
+rotation work is owed; otherwise the entry waits.
+Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
 a write grant re-seals the record at the recorded name under the new scope root. When the scope
 binding refuses that record, the settle reads it again at the same name under the held end whose
 root the record's tag names, as ADR 0072 D1 does. The retire stays under the recorded name.

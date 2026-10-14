@@ -1624,6 +1624,38 @@ fn newest_content_cid(world: &FakeWorld, blocks: &Blocks, file: NodeId) -> Strin
     encode_content_cid_str(&versions.last().expect("a version").content_cid)
 }
 
+/// Journal a debt for `node`'s version at `target`, owed by the record at
+/// `name`.
+fn owe_named_debt(device: &FakeDevice, node: NodeId, target: String, name: &IpnsName) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
+            &owner_tag(&enc),
+            &[OwedRetire {
+                node: node.0,
+                target,
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::DroppedRoot,
+                name: Some(name.as_str().to_owned()),
+            }],
+        ),
+    )
+    .expect("the debt journals");
+}
+
+/// Whether a retire this device sent names the record at `name`.
+fn retired_under(device: &FakeDevice, name: &IpnsName) -> bool {
+    device.http.requests().iter().any(|request| {
+        request.url.ends_with("/registry/retire")
+            && request.body.as_deref().is_some_and(|body| {
+                body.windows(name.as_str().len())
+                    .any(|w| w == name.as_str().as_bytes())
+            })
+    })
+}
+
 /// A device that holds a tombstone and a named debt for a node that a folder
 /// it never opened links does not settle the debt: the live folder record
 /// names the node, so the retire would unpin content that the live record
@@ -1645,46 +1677,14 @@ fn a_tombstoned_debt_of_a_node_a_folder_the_device_never_opened_links_does_not_s
     let device = world.device(b"a later session");
     let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     tombstone(&device, file);
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(10));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
-            &owner_tag(&enc),
-            &[OwedRetire {
-                node: file.0,
-                target: target.clone(),
-                owed_bytes: 1,
-                manifest_bytes: 1,
-                origin: DebtOrigin::DroppedRoot,
-                name: Some(name.as_str().to_owned()),
-            }],
-        ),
-    )
-    .expect("the debt journals");
+    owe_named_debt(&device, file, target, &name);
     tick(&world, &engine, &mut tasks);
     tick(&world, &engine, &mut tasks);
     assert!(
-        !device.http.requests().iter().any(|request| {
-            request.url.ends_with("/registry/retire")
-                && request.body.as_deref().is_some_and(|body| {
-                    body.windows(name.as_str().len())
-                        .any(|w| w == name.as_str().as_bytes())
-                })
-        }),
+        !retired_under(&device, &name),
         "no retire names the record that a live folder links"
     );
     assert_renewed_at_start(&world, &name, &before, started, "the file");
-}
-
-/// Whether a retire this device sent names the record at `name`.
-fn retired_under(device: &FakeDevice, name: &IpnsName) -> bool {
-    device.http.requests().iter().any(|request| {
-        request.url.ends_with("/registry/retire")
-            && request.body.as_deref().is_some_and(|body| {
-                body.windows(name.as_str().len())
-                    .any(|w| w == name.as_str().as_bytes())
-            })
-    })
 }
 
 /// The live descent reads a bounded number of folders on each tick, and each
@@ -1706,22 +1706,7 @@ fn a_retire_descent_past_its_read_cap_resumes_on_the_next_tick() {
     let device = world.device(b"a later session");
     let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     tombstone(&device, unlinked);
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(10));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
-            &owner_tag(&enc),
-            &[OwedRetire {
-                node: unlinked.0,
-                target,
-                owed_bytes: 1,
-                manifest_bytes: 1,
-                origin: DebtOrigin::DroppedRoot,
-                name: Some(name.as_str().to_owned()),
-            }],
-        ),
-    )
-    .expect("the debt journals");
+    owe_named_debt(&device, unlinked, target, &name);
 
     for _ in 0..2 {
         tick(&world, &engine, &mut tasks);
@@ -1764,22 +1749,7 @@ fn a_move_into_a_folder_the_descent_already_read_keeps_the_debt() {
     let device = world.device(b"the device that deleted");
     let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     tombstone(&device, file);
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(10));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
-            &owner_tag(&enc),
-            &[OwedRetire {
-                node: file.0,
-                target,
-                owed_bytes: 1,
-                manifest_bytes: 1,
-                origin: DebtOrigin::DroppedRoot,
-                name: Some(name.as_str().to_owned()),
-            }],
-        ),
-    )
-    .expect("the debt journals");
+    owe_named_debt(&device, file, target, &name);
     tick(&world, &engine, &mut tasks);
     assert!(
         !retired_under(&device, &name),

@@ -219,10 +219,10 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         // Transplant binding: the envelope must be exactly the expected node in
         // a scope this read binds (the read-key KDF does not bind the scope UUID, so the
         // scope check joins the same equivalence class as the root gate's).
-        if envelope.id == self.expected_node && !self.binds(&envelope.scope) {
-            self.unbound_scope.set(Some(envelope.scope));
-        }
         if envelope.id != self.expected_node || !self.binds(&envelope.scope) {
+            if envelope.id == self.expected_node {
+                self.unbound_scope.set(Some(envelope.scope));
+            }
             return Err(reject(
                 GateStage::Unseal,
                 TrustViolation::SealOpenFailed.into(),
