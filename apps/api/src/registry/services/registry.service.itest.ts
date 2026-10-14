@@ -11,6 +11,7 @@ import {
   IntegrationDatabase,
   waitForAdvisoryLockWait,
 } from '../../testing/integration-db';
+import { MAX_BATCH, MAX_REGISTER_CONTENT_CIDS_TOTAL } from '../dto/registry.dto';
 import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
@@ -537,6 +538,56 @@ describe('RegistryService concurrency (real Postgres)', () => {
         await holder.rollbackTransaction();
         await holder.release();
       }
+    });
+  });
+
+  describe('full lock table maps to 503', () => {
+    /** The largest batch the pipes admit: one lock per name, head and content CID. */
+    function maxSizeBatch() {
+      return Array.from({ length: MAX_BATCH }, () => ({
+        ipnsName: token(),
+        headCid: token(),
+        contentCids: Array.from({ length: MAX_REGISTER_CONTENT_CIDS_TOTAL / MAX_BATCH }, token),
+      }));
+    }
+
+    it('concurrent maximum-size registers that fill the shared lock table surface a retryable 503, not a 500', async () => {
+      // Each register holds its locks at the gate until the table is full; the
+      // default `max_locks_per_transaction` fills well inside this many.
+      const maxHolders = 8;
+      const gates: Gate[] = [];
+      const held: Promise<unknown>[] = [];
+      let refused: unknown;
+      try {
+        while (refused === undefined && held.length < maxHolders) {
+          const gate = makeGate();
+          gates.push(gate);
+          const registered = buildService(
+            gatedDataSource(db.dataSource, { afterUserRead: gate.onReach }),
+            new RecordingPinStore()
+          ).register(await seedAccount(false), maxSizeBatch());
+          const outcome = await Promise.race([
+            gate.reached.then(() => 'held' as const),
+            registered.then(
+              () => new Error('a register finished before its gate'),
+              (error: unknown) => error
+            ),
+          ]);
+          if (outcome === 'held') {
+            held.push(registered);
+          } else {
+            refused = outcome;
+          }
+        }
+      } finally {
+        for (const gate of gates) gate.release();
+        await Promise.allSettled(held);
+      }
+
+      expect(held.length).toBeGreaterThan(0);
+      expect(pgErrorCode(refused)).toBeUndefined();
+      expect(refused).toBeInstanceOf(ServiceUnavailableException);
+      await Promise.all(held);
     });
   });
 

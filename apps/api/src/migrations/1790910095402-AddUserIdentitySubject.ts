@@ -5,11 +5,6 @@ export class AddUserIdentitySubject1790910095402 implements MigrationInterface {
 
   // No backfill: an account binds at its next login that follows an exchange (ADR 0058).
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // Two runners that start together race the catalog; the transaction lock makes
-    // the second wait and then find the column and its constraints.
-    await queryRunner.query(
-      `SELECT pg_advisory_xact_lock(hashtext('migration:AddUserIdentitySubject'))`
-    );
     await queryRunner.query(
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "identity_subject_id" uuid`
     );
