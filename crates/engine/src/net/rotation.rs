@@ -1808,8 +1808,8 @@ where
             }
             Err(verdict) => {
                 let met = walk_verdict(verdict.after_fanout(fetch.endpoint_failed), child.scope_id);
-                if let (WalkFailure::Rejected { .. }, Some(left)) = (met, owed_from) {
-                    if self
+                if let (WalkFailure::Rejected { .. }, Some(left)) = (met, owed_from)
+                    && self
                         .is_unpromoted_folder(
                             parent_read_scope_seed,
                             left,
@@ -1818,9 +1818,8 @@ where
                             &record_bytes,
                         )
                         .await
-                    {
-                        return Err(WalkFailure::Unavailable);
-                    }
+                {
+                    return Err(WalkFailure::Unavailable);
                 }
                 return Err(met);
             }
@@ -2104,29 +2103,11 @@ where
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
         let mut refused = BTreeSet::new();
-        let root_write_seed = root_write.as_ref().ok().map(|write| write.seed.clone());
-        let mut frontier = vec![(root_scope_id, gated.read_scope_seed, root_write_seed, index)];
+        let root_owed = owed_children(owed, root_scope_id, root_write.as_ref().ok(), &index);
+        let mut frontier = vec![(root_scope_id, gated.read_scope_seed, index, root_owed)];
         while !frontier.is_empty() {
             let mut next = Vec::new();
-            for (scope_id, parent_read_scope_seed, write_seed, index) in frontier {
-                let owed_here: Vec<ChildScopeRef> = write_seed
-                    .iter()
-                    .flat_map(|seed| {
-                        owed.iter()
-                            .filter(|(left, root)| {
-                                *left == scope_id
-                                    && !index.iter().any(|entry| entry.scope_id == *root)
-                            })
-                            .map(|(_, root)| ChildScopeRef {
-                                scope_id: *root,
-                                ipns_name: derive_write_name(seed, root)
-                                    .as_str()
-                                    .as_bytes()
-                                    .to_vec(),
-                                unknown: PreservedFields::default(),
-                            })
-                    })
-                    .collect();
+            for (scope_id, parent_read_scope_seed, index, owed_here) in frontier {
                 // The map grows with the index each level names, and the
                 // descents below spend the same budget, so a level it cannot
                 // take costs that level.
@@ -2155,7 +2136,7 @@ where
                     .map(|child| (child, None))
                     .chain(owed_here.into_iter().map(|child| (child, Some(scope_id))));
                 for (child, owed_from) in children {
-                    let owed = owed_from.is_some();
+                    let is_owed = owed_from.is_some();
                     // Ahead of both bounds: a back-edge to a scope this walk
                     // already visited costs no descent and leaves no boundary
                     // unnamed, so charging the bound for it would report a
@@ -2163,14 +2144,14 @@ where
                     if !visited.insert(child.scope_id) {
                         continue;
                     }
-                    if !owed {
+                    if !is_owed {
                         unproved.insert(NodeId(child.scope_id));
                     }
                     if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS {
                         // The set this walk could still admit is incomplete, and
                         // a bound a legitimately wide vault reaches names no
                         // party: availability, never a trust verdict.
-                        if !owed {
+                        if !is_owed {
                             WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                         }
                         continue;
@@ -2197,19 +2178,21 @@ where
                                 descendant.write.as_ref().ok(),
                                 &grandchildren,
                             );
+                            let owed_below = owed_children(
+                                owed,
+                                descendant.scope_id,
+                                descendant.write.as_ref().ok(),
+                                &grandchildren,
+                            );
                             next.push((
                                 descendant.scope_id,
                                 descendant.read_scope_seed.clone(),
-                                descendant
-                                    .write
-                                    .as_ref()
-                                    .ok()
-                                    .map(|write| write.seed.clone()),
                                 grandchildren,
+                                owed_below,
                             ));
                             descendants.push(descendant);
                         }
-                        Err(WalkFailure::Unavailable) if owed => {}
+                        Err(WalkFailure::Unavailable) if is_owed => {}
                         Err(met) => {
                             if matches!(met, WalkFailure::Rejected { .. }) {
                                 refused.insert(NodeId(child.scope_id));
@@ -2228,6 +2211,32 @@ where
             refused,
         })
     }
+}
+
+/// Each owed root in `owed` that left `scope_id` and that `index` does not
+/// name, at the name `write`'s seed derives; none without a write plane.
+fn owed_children(
+    owed: &[([u8; 16], [u8; 16])],
+    scope_id: [u8; 16],
+    write: Option<&ScopeWritePlane>,
+    index: &[ChildScopeRef],
+) -> Vec<ChildScopeRef> {
+    let Some(write) = write else {
+        return Vec::new();
+    };
+    owed.iter()
+        .filter(|(left, root)| {
+            *left == scope_id && !index.iter().any(|entry| entry.scope_id == *root)
+        })
+        .map(|(_, root)| ChildScopeRef {
+            scope_id: *root,
+            ipns_name: derive_write_name(&write.seed, root)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            unknown: PreservedFields::default(),
+        })
+        .collect()
 }
 
 /// Unseal a gated scope root's write-body under the write scope seed the reader
@@ -7336,31 +7345,52 @@ mod tests {
     fn the_walk_descends_into_an_owed_root_that_no_index_names() {
         let owed = [(SCOPE, CHILD_SCOPE)];
         type Stage = fn(&Harness<InMemoryRecordStore>);
-        let cases: [(&str, Stage); 5] = [
-            ("a valid root", |harness| {
-                let (child, _, _) = one_level();
-                harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
-                harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
-            }),
-            ("no record", |_| {}),
-            ("the folder's own record", |harness| {
-                stage_node(harness, CHILD_SCOPE, &folder(Vec::new()));
-            }),
-            ("a root with no ascent link", |harness| {
-                let planted = vault_root(CHILD_SCOPE, Vec::new());
-                harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
-            }),
-            ("a folder record under another key", |harness| {
-                stage_node_sealed_at(
-                    harness,
-                    CHILD_SCOPE,
-                    &folder(Vec::new()),
-                    1,
-                    (OWNER_ROOT_EPOCH, &[0x99; 32]),
-                );
-            }),
+        enum Expect {
+            Proved,
+            Nothing,
+            Rejected,
+        }
+        let cases: [(&str, Stage, Expect); 5] = [
+            (
+                "a valid root",
+                |harness| {
+                    let (child, _, _) = one_level();
+                    harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+                    harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+                },
+                Expect::Proved,
+            ),
+            ("no record", |_| {}, Expect::Nothing),
+            (
+                "the folder's own record",
+                |harness| {
+                    stage_node(harness, CHILD_SCOPE, &folder(Vec::new()));
+                },
+                Expect::Nothing,
+            ),
+            (
+                "a root with no ascent link",
+                |harness| {
+                    let planted = vault_root(CHILD_SCOPE, Vec::new());
+                    harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+                },
+                Expect::Rejected,
+            ),
+            (
+                "a folder record under another key",
+                |harness| {
+                    stage_node_sealed_at(
+                        harness,
+                        CHILD_SCOPE,
+                        &folder(Vec::new()),
+                        1,
+                        (OWNER_ROOT_EPOCH, &[0x99; 32]),
+                    );
+                },
+                Expect::Rejected,
+            ),
         ];
-        for (case, stage) in cases {
+        for (case, stage, expect) in cases {
             let root = vault_root(SCOPE, Vec::new());
             let harness = Harness::plain();
             harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -7370,17 +7400,17 @@ mod tests {
                 .expect("the vault root gates");
             let proved: Vec<[u8; 16]> = walked.proved.iter().map(|s| s.scope_id).collect();
             assert!(walked.unproved.is_empty(), "{case}");
-            match case {
-                "a valid root" => {
+            match expect {
+                Expect::Proved => {
                     assert_eq!(proved, vec![CHILD_SCOPE, GRANDCHILD_SCOPE], "{case}");
                     assert_eq!(walked.failure, None, "{case}");
                 }
-                "no record" | "the folder's own record" => {
+                Expect::Nothing => {
                     assert!(proved.is_empty(), "{case}");
                     assert_eq!(walked.failure, None, "{case}");
                     assert!(walked.refused.is_empty(), "{case}");
                 }
-                _ => {
+                Expect::Rejected => {
                     assert!(proved.is_empty(), "{case}");
                     assert_eq!(
                         walked.failure,

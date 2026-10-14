@@ -1732,10 +1732,9 @@ surviving committed grants uniformly in the republish it already does.
   finds it in the owed entry: the boundary walk descends into it from the scope
   the folder left, at the name that scope's write seed derives, through the
   same root gate. A record that the root gate refuses but that passes the
-  child gate as the
-  folder's own record under that scope is a promotion not published yet, and it
-  costs the walk nothing, as an unavailable root does; any other refusal is a
-  trust violation. A re-drive that finds no grant section and no write-epoch
+  child gate as the folder's own record under that scope is a promotion not
+  published yet, and it costs the walk nothing, as an unavailable root does;
+  any other refusal is a trust violation. A re-drive that finds no grant section and no write-epoch
   floor at the folder's id drops the entry, because the promotion seeds that
   floor before its root PUT (ADR 0063 D5). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
