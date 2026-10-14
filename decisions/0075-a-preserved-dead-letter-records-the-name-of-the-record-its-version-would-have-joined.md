@@ -31,10 +31,12 @@ have joined. The name is the marked name: the write name of the end that the dra
 the op target at that tick, unless the node's acknowledged mark (ADR 0054 D2) is held at another
 name. At that tick the drain reads the node's acknowledged slot. When the mark is held at another
 name, or the slot does not read, the version may have charged under that other name, so the
-drain records no name and the debt takes the wait rule. When the drain derives no end, it
-records no name. `release_unpreserved` journals a version that it does not preserve under the
-same rule. A discard, a trim and an eviction past the count cap journal a version 3 entry with
-the recorded name. With no recorded name, they journal a version 2 entry, as before.
+drain records no name. When the drain derives no end, it records no name.
+`release_unpreserved` journals a version that it does not preserve under the same rule. A
+discard, a trim and an eviction past the count cap journal a version 3 entry with the recorded
+name. With no recorded name, they journal a version 2 entry, as before: such a debt waits while
+the base links the node, and otherwise it retires under the derived name, which can leave the
+rows of the other name charged (a leak, not a loss).
 
 **D2 — The name has its own sealed staging key, and the preserved set keeps its format.** The
 key is `cbx/dn/ | ownerTagLen(1) | ownerTag | opId(8, big-endian)`. The value seals under a new
