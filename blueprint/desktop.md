@@ -157,6 +157,13 @@ the [testing strategy](https://github.com/FSM1/cipher-box-next/issues/47).
   engine's stable node id; `kind` comes from the child ref (FSM1/cipher-box-next#27 D7), so
   listings never flip type.
 
+**Received shares.** The v2.0 mount has no received-share projection: a share
+that the member accepted does not show under the mount. The desktop has no
+accept command, and the received-shares list is device-local (ADR 0006), so a
+desktop that did not accept a share holds no row to project. A projection is a
+later enhancement
+([FSM1/cipher-box#2419](https://github.com/FSM1/cipher-box/issues/2419)).
+
 ## Reads, writes, and the never-block law
 
 **The law**: a kernel callback may block on **local durability** (op-queue

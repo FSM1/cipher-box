@@ -115,7 +115,7 @@ pub enum DropReason {
 #[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum DeadLetterReason {
-    /// A delete targets a scope root, whose material is not its parent's.
+    /// A delete targets a scope root, or a folder whose subtree holds one.
     TargetIsScopeRoot,
     /// The op's target/parent is absent from gate-passing state and cannot be
     /// recreated — its scope was revoked (or the node hard-deleted) while the

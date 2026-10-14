@@ -36,9 +36,9 @@ describe('how a share refusal reads to the member', () => {
 });
 
 describe('how a refused sharing command reads to the member', () => {
-  it('explains why a formerly shared folder still cannot be deleted', () => {
+  it('explains why a folder that is or holds a formerly shared folder cannot be deleted', () => {
     expect(refusalText('unsupported target: delete-target-is-a-scope-root')).toBe(
-      'this folder was shared and cannot be deleted, even after all access is revoked'
+      'this folder or a folder inside it was shared, so it cannot be deleted, even after all access is revoked'
     );
   });
 
