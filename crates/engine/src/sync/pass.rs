@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-use cipherbox_core::seal::Permission as CommittedPermission;
+use cipherbox_core::seal::{ChildScopeRef, Permission as CommittedPermission, PreservedFields};
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
@@ -784,8 +784,9 @@ where
                 .and_then(|record| record.verify(&name))
                 .ok()
                 .map(HeldRoot::from);
+            let owed = self.owed_scope_roots(state, pass).await;
             let walked = walk
-                .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
+                .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root, &owed)
                 .await;
             let failure = walked
                 .as_ref()
@@ -1232,6 +1233,32 @@ where
         .interior_moves()
         .await
         .ok()
+    }
+
+    /// The roots of the owed interior moves this session did not mint, at the
+    /// names the base holds, with the scope each left, for the walk to descend
+    /// into. A root this session minted holds its listing and seeds already.
+    async fn owed_scope_roots(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+    ) -> Vec<([u8; 16], ChildScopeRef)> {
+        let owed = self.owed_moves(state, pass).await.unwrap_or_default();
+        let base = state.snapshot.borrow();
+        let minted = state.minted_scope_roots.borrow();
+        owed.into_iter()
+            .filter(|(root, _)| !minted.contains(root))
+            .filter_map(|(root, left)| {
+                Some((
+                    left.0,
+                    ChildScopeRef {
+                        scope_id: root.0,
+                        ipns_name: base.node(root)?.ipns_name.clone()?,
+                        unknown: PreservedFields::default(),
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// The per-scope drain, and the boundaries the later stages read.

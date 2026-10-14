@@ -1727,7 +1727,10 @@ surviving committed grants uniformly in the republish it already does.
   write-scope cut or grant delivery is owed rotation work, which the sync
   pass re-drives through the resume path (ADR 0063 D1, D3). While the interior
   move is owed, the focus and navigation legs read each interior node under the
-  scope its epoch tag names (ADR 0072 D1). An **append**, on an existing
+  scope its epoch tag names (ADR 0072 D1). No index names the root until the
+  move lands, so a session that did not mint the root finds it in the owed
+  entry: the boundary walk descends into it from the scope the folder left,
+  through the same root gate, and only a rejection costs the walk. An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A

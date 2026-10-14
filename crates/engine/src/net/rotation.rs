@@ -1281,7 +1281,8 @@ pub(crate) struct ScopeWritePlane {
 pub(crate) struct DescendantScopeRoot {
     /// The scope id, which is also the promoted folder's node id.
     pub(crate) scope_id: [u8; 16],
-    /// The name the parent's index vouches for, which the descent gated at.
+    /// The name the parent's index or an owed interior move vouches for, which
+    /// the descent gated at.
     pub(crate) name: IpnsName,
     /// The signed `data` of the record the descent gated; empty when unknown.
     pub(crate) record_data: Vec<u8>,
@@ -2008,12 +2009,18 @@ where
     /// the walk is permutation-independent and a `scopeId` two parents name at
     /// different `ipnsName`s costs that level rather than binding either
     /// ([`bind_child_labels`]).
+    ///
+    /// `owed` names, with the scope each left, the roots whose interior move is
+    /// owed: no index names such a root until the move lands, so the level of
+    /// the scope it left descends into it as well, through the same gate. Only
+    /// a rejection of one costs the walk, as it names no index entry.
     pub(crate) async fn descendant_scope_roots(
         &self,
         root_scope_id: [u8; 16],
         root_name: &IpnsName,
         root_record_bytes: &[u8],
         use_confirmed_root: bool,
+        owed: &[([u8; 16], ChildScopeRef)],
     ) -> Result<WalkedBoundaries, WalkFailure> {
         let adopter = RootAdopter::new(
             self.gateway,
@@ -2056,14 +2063,27 @@ where
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
         let mut refused = BTreeSet::new();
-        let mut frontier = vec![(gated.read_scope_seed, index)];
+        let mut frontier = vec![(root_scope_id, gated.read_scope_seed, index)];
         while !frontier.is_empty() {
             let mut next = Vec::new();
-            for (parent_read_scope_seed, index) in frontier {
+            for (scope_id, parent_read_scope_seed, index) in frontier {
+                let owed_here: Vec<ChildScopeRef> = owed
+                    .iter()
+                    .filter(|(left, root)| {
+                        *left == scope_id
+                            && !index.iter().any(|entry| entry.scope_id == root.scope_id)
+                    })
+                    .map(|(_, root)| root.clone())
+                    .collect();
                 // The map grows with the index each level names, and the
                 // descents below spend the same budget, so a level it cannot
                 // take costs that level.
-                if labels.len().saturating_add(index.len()) > MAX_SCOPE_DESCENT_ATTEMPTS {
+                if labels
+                    .len()
+                    .saturating_add(index.len())
+                    .saturating_add(owed_here.len())
+                    > MAX_SCOPE_DESCENT_ATTEMPTS
+                {
                     WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                     continue;
                 }
@@ -2072,11 +2092,17 @@ where
                 // labels would otherwise bind whichever entry the writer put
                 // first, and first-entry-wins in a revocation cascade re-keys a
                 // dead name (`eager_set::ResolveFailure::ConflictingChildLabel`).
-                if bind_child_labels(&mut labels, index.iter(), root_scope_id).is_err() {
+                if bind_child_labels(&mut labels, index.iter().chain(&owed_here), root_scope_id)
+                    .is_err()
+                {
                     WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                     continue;
                 }
-                for child in canonicalize(&index) {
+                let children = canonicalize(&index)
+                    .into_iter()
+                    .map(|child| (child, false))
+                    .chain(owed_here.into_iter().map(|child| (child, true)));
+                for (child, owed) in children {
                     // Ahead of both bounds: a back-edge to a scope this walk
                     // already visited costs no descent and leaves no boundary
                     // unnamed, so charging the bound for it would report a
@@ -2084,12 +2110,16 @@ where
                     if !visited.insert(child.scope_id) {
                         continue;
                     }
-                    unproved.insert(NodeId(child.scope_id));
+                    if !owed {
+                        unproved.insert(NodeId(child.scope_id));
+                    }
                     if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS {
                         // The set this walk could still admit is incomplete, and
                         // a bound a legitimately wide vault reaches names no
                         // party: availability, never a trust verdict.
-                        WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
+                        if !owed {
+                            WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
+                        }
                         continue;
                     }
                     match self.descend(&parent_read_scope_seed, &child).await {
@@ -2111,9 +2141,14 @@ where
                                 descendant.write.as_ref().ok(),
                                 &grandchildren,
                             );
-                            next.push((descendant.read_scope_seed.clone(), grandchildren));
+                            next.push((
+                                descendant.scope_id,
+                                descendant.read_scope_seed.clone(),
+                                grandchildren,
+                            ));
                             descendants.push(descendant);
                         }
+                        Err(WalkFailure::Unavailable) if owed => {}
                         Err(met) => {
                             if matches!(met, WalkFailure::Rejected { .. }) {
                                 refused.insert(NodeId(child.scope_id));
@@ -7207,6 +7242,7 @@ mod tests {
                     &root.name,
                     &record_for(&SCOPE, &root.head_cid_str, 1),
                     false,
+                    &[],
                 ),
             )
         }
@@ -8847,7 +8883,7 @@ mod tests {
         };
         let root_record = record_for(&SCOPE, &root.head_cid_str, 1);
         let confirmed =
-            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, false))
+            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, false, &[]))
                 .unwrap();
         assert_eq!(confirmed.proved.len(), 2);
         assert!(confirmed.failure.is_none());
@@ -8891,7 +8927,8 @@ mod tests {
         serve_at(&harness, CHILD_SCOPE, &child, 2);
         block_on(harness.cache.clear()).unwrap();
         let restarted =
-            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, true)).unwrap();
+            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, true, &[]))
+                .unwrap();
         assert_eq!(
             restarted.failure,
             Some(WalkFailure::Rejected {

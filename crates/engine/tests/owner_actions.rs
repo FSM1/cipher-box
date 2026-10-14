@@ -12068,11 +12068,22 @@ impl OwedMove {
 
     /// Whether the rendered view lists `name` in `deep`.
     fn deep_lists(&self, name: &str) -> bool {
+        self.lists(self.deep, name)
+    }
+
+    /// Whether the rendered view lists `name` in `folder`.
+    fn lists(&self, folder: NodeId, name: &str) -> bool {
         block_on(self.fx.engine.view())
             .expect("a rendered view")
-            .children(self.deep)
+            .children(folder)
             .iter()
             .any(|child| child.name == name)
+    }
+
+    /// Whether the rendered view lists the interior: `inner` in the granted
+    /// folder and `deep` in `inner`.
+    fn lists_interior(&self) -> bool {
+        self.lists(self.fx.folder, "inner") && self.lists(self.inner, "deep")
     }
 
     /// The abuse the navigation into `deep` reports.
@@ -12126,8 +12137,8 @@ fn an_owed_interior_move_reads_each_interior_node_under_the_scope_it_names() {
 }
 
 /// The owed entry is durable, so a session that starts again over a move that
-/// is still owed holds the entry's root as a scope root at each leg, and reads
-/// no record of it as a child (ADR 0072 D1).
+/// is still owed holds the entry's root as a scope root at each leg, reads no
+/// record of it as a child, and lists its interior (ADR 0072 D1).
 #[test]
 fn an_owed_interior_move_holds_its_root_after_a_restart() {
     for stop in [HandoverStop::Reseal, HandoverStop::ParentIndex] {
@@ -12137,12 +12148,30 @@ fn an_owed_interior_move_holds_its_root_after_a_restart() {
             Vec::<String>::new(),
             "{stop:?}: first tick"
         );
+        restarted.add_to_deep(NodeId([0xa1; 16]), "seen at navigation");
         assert_eq!(
             restarted.navigate(),
             Vec::<String>::new(),
             "{stop:?}: navigation"
         );
+        assert!(
+            restarted.lists_interior(),
+            "{stop:?}: the navigation lists the interior"
+        );
+        assert!(
+            restarted.deep_lists("seen at navigation"),
+            "{stop:?}: the navigation adopts the folder"
+        );
+        restarted.add_to_deep(NodeId([0xa2; 16]), "seen at the tick");
         assert_eq!(restarted.tick(), Vec::<String>::new(), "{stop:?}: tick");
+        assert!(
+            restarted.lists_interior(),
+            "{stop:?}: the tick lists the interior"
+        );
+        assert!(
+            restarted.deep_lists("seen at the tick"),
+            "{stop:?}: the tick adopts the folder"
+        );
     }
 }
 
