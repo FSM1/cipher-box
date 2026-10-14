@@ -1234,6 +1234,20 @@ where
         .ok()
     }
 
+    /// Whether no owed rotation entry stands; `false` when the record does not
+    /// read.
+    async fn rotation_idle(&self, state: &SessionState, pass: &Pass) -> bool {
+        OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .scopes()
+        .await
+        .is_ok_and(|scopes| scopes.is_empty())
+    }
+
     /// The per-scope drain, and the boundaries the later stages read.
     async fn drain<'a>(
         &'a self,
@@ -1417,6 +1431,21 @@ where
             .iter()
             .filter_map(|leg| Some((leg.scope, leg.owed_move_leg()?)))
             .collect();
+        let every_scope_reached = vault.is_some()
+            && scopes.unproved.is_empty()
+            && descendants
+                .iter()
+                .all(|scope| !matches!(scope.write, Err(WritePlaneDark::Unavailable)))
+            && state
+                .bookmarked_permissions
+                .borrow()
+                .iter()
+                .filter(|(_, permission)| **permission == CommittedPermission::Write)
+                .all(|(scope_id, _)| {
+                    is_own_scope(&self.root_id, &scopes.proved, scope_id)
+                        || grafted.iter().any(|pass| pass.root.0 == *scope_id)
+                })
+            && self.rotation_idle(state, pass).await;
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1428,6 +1457,7 @@ where
                 owed_moves: owed_moves.as_deref(),
                 owed_move_reads: &owed_move_reads,
                 deferred_raises: &deferred_raises,
+                every_scope_reached,
             },
         );
         drain

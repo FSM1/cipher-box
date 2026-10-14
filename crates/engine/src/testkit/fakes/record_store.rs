@@ -52,9 +52,6 @@ pub struct InMemoryRecordStore {
     /// Endpoints that reject a PUT but still serve GET, so the harness can drive
     /// a lost CAS race from the transport rather than from the record.
     put_failing: Arc<Mutex<HashSet<EndpointId>>>,
-    /// Endpoints that store a PUT and then answer it with a transport error
-    /// ([`land_puts_unacked_at`](InMemoryRecordStore::land_puts_unacked_at)).
-    landing_unacked: Arc<Mutex<HashSet<EndpointId>>>,
     /// Routing keys whose PUT is refused at every endpoint, so one record of a
     /// multi-record plan can fail while the rest of the plan publishes.
     put_failing_keys: Arc<Mutex<HashSet<String>>>,
@@ -113,7 +110,6 @@ impl InMemoryRecordStore {
             inner: Arc::new(Mutex::new(inner)),
             failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing: Arc::new(Mutex::new(HashSet::new())),
-            landing_unacked: Arc::default(),
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             put_answers: Arc::default(),
             get_answers: Arc::default(),
@@ -304,19 +300,9 @@ impl InMemoryRecordStore {
             .insert(endpoint.clone());
     }
 
-    /// Make `endpoint` store every PUT and then answer it with a transport
-    /// error: the bytes land, and the caller sees no ack.
-    pub fn land_puts_unacked_at(&self, endpoint: &EndpointId) {
-        self.landing_unacked
-            .lock()
-            .expect("lock")
-            .insert(endpoint.clone());
-    }
-
     /// Restore `endpoint`'s PUT path.
     pub fn heal_put_endpoint(&self, endpoint: &EndpointId) {
         self.put_failing.lock().expect("lock").remove(endpoint);
-        self.landing_unacked.lock().expect("lock").remove(endpoint);
     }
 
     /// Refuse every PUT under `routing_key` while the rest of the name space
@@ -637,17 +623,6 @@ impl RecordTransport for InMemoryRecordStore {
             return Err(SeamError::new(format!("unknown endpoint: {}", endpoint.0)));
         }
         self.release_deferred(routing_key);
-        if self
-            .landing_unacked
-            .lock()
-            .expect("lock")
-            .contains(endpoint)
-        {
-            return Err(SeamError::new(format!(
-                "put landed, ack lost: {}",
-                endpoint.0
-            )));
-        }
         Ok(())
     }
 }

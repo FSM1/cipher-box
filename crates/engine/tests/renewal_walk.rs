@@ -1687,9 +1687,9 @@ fn retired_under(device: &FakeDevice, name: &IpnsName) -> bool {
     })
 }
 
-/// The live descent reads a bounded number of folders on each tick. A scope
-/// with more folders than that settles the debt of a node no folder links on
-/// a later tick, where the descent resumes.
+/// The live descent reads a bounded number of folders on each tick, and each
+/// folder twice. A scope with more folders than that settles the debt of a
+/// node no folder links on a later tick, where the descent resumes.
 #[test]
 fn a_retire_descent_past_its_read_cap_resumes_on_the_next_tick() {
     let world = FakeWorld::new();
@@ -1723,15 +1723,88 @@ fn a_retire_descent_past_its_read_cap_resumes_on_the_next_tick() {
     )
     .expect("the debt journals");
 
-    tick(&world, &engine, &mut tasks);
-    assert!(
-        !retired_under(&device, &name),
-        "the first tick reads too few folders to prove the node unlinked"
-    );
+    for _ in 0..2 {
+        tick(&world, &engine, &mut tasks);
+        assert!(
+            !retired_under(&device, &name),
+            "two ticks read too few folders to prove the node unlinked"
+        );
+    }
     tick(&world, &engine, &mut tasks);
     assert!(
         retired_under(&device, &name),
-        "the next tick completes the descent and the debt settles"
+        "the third tick completes both sweeps and the debt settles"
+    );
+}
+
+/// A descent that spans ticks reads each folder a second time. A node that
+/// another device moves into a folder the first tick already read, out of one
+/// that tick had not read, keeps its debt.
+#[test]
+fn a_move_into_a_folder_the_descent_already_read_keeps_the_debt() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let writer = world.device(b"the device that moves");
+    let (mut engine_w, _events_w, mut tasks_w) = boot(&world, &blocks, &writer, 1);
+    let source = create_folder(&world, &mut engine_w, &mut tasks_w, ROOT, "a source");
+    for folder in 0..70 {
+        create_folder(
+            &world,
+            &mut engine_w,
+            &mut tasks_w,
+            ROOT,
+            &format!("m folder {folder:02}"),
+        );
+    }
+    let destination = create_folder(&world, &mut engine_w, &mut tasks_w, ROOT, "z destination");
+    let file = write_file(&world, &mut engine_w, &mut tasks_w, source, "moved.txt");
+    let name = write_name(file);
+    let target = newest_content_cid(&world, &blocks, file);
+    let device = world.device(b"the device that deleted");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, file);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy)).owe(
+            &owner_tag(&enc),
+            &[OwedRetire {
+                node: file.0,
+                target,
+                owed_bytes: 1,
+                manifest_bytes: 1,
+                origin: DebtOrigin::DroppedRoot,
+                name: Some(name.as_str().to_owned()),
+            }],
+        ),
+    )
+    .expect("the debt journals");
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !retired_under(&device, &name),
+        "the first tick does not settle"
+    );
+
+    block_on(engine_w.command(Command::Move {
+        node: file,
+        new_parent: destination,
+        new_name: "moved.txt".into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    tick(&world, &engine_w, &mut tasks_w);
+    assert_eq!(
+        child_named(&engine_w, destination, "moved.txt"),
+        file,
+        "the move landed"
+    );
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert!(
+        !retired_under(&device, &name),
+        "no retire names the record that a live folder links"
     );
 }
 

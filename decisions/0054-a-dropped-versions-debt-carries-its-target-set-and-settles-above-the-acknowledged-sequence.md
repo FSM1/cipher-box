@@ -56,9 +56,7 @@ or while a mark exists that will not read. A confirmed publish above the mark re
 that will not read stands for any sequence, so the publish signs above the sequence floor plus the
 attempt budget. For a dropped create, the settle treats the name as holding nothing only when
 every endpoint answers that it holds no record, this device holds no sequence floor for the name,
-and no mark exists for the node; any other read waits. Amended on 2026-10-14 (owner ruling on
-FSM1/cipher-box#2421, item i): a PUT that no endpoint acknowledged also records its sequence,
-because no ack does not prove that nothing stored. Its halt stays an outage.
+and no mark exists for the node; any other read waits.
 
 ## Alternatives considered
 

@@ -2438,6 +2438,14 @@ mod tests {
     #[test]
     fn a_name_that_does_not_read_keeps_its_entry_and_the_trim_goes_on() {
         let store = InMemoryStagingStore::default();
+        let name_of = |node: u8| {
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([0x60 + node; 32]).verifying_key())
+        };
+        let debts = |owed: Vec<OwedRetire>| -> BTreeSet<([u8; 16], String, Option<String>)> {
+            owed.into_iter()
+                .map(|debt| (debt.node, debt.target, debt.name))
+                .collect()
+        };
         block_on(async {
             let mut parked = Vec::new();
             for node in [1u8, 2] {
@@ -2446,9 +2454,19 @@ mod tests {
                 put_blocks(&store, &blocks, &root_block, &staged).await;
                 let root = staged.root_cid.clone();
                 let record = encode_op_record(seal(node), &content_op(node, staged)).unwrap();
-                park_named(&store, &record).await;
+                park_as(&store, record_op_id(&record), &record, Some(&name_of(node)))
+                    .await
+                    .unwrap();
                 parked.push((record_op_id(&record), record, root));
             }
+            let debt_of = |at: usize| {
+                let node = [1u8, 2][at];
+                (
+                    id(node).0,
+                    encode_content_cid_str(&parked[at].2),
+                    Some(name_of(node).as_str().to_owned()),
+                )
+            };
             let (stuck, stuck_record, stuck_root) = parked[0].clone();
             store.fail_staged_reads_under(&name_key(stuck));
             let expired = PreservedBounds {
@@ -2460,9 +2478,9 @@ mod tests {
             assert_eq!(kept_records(&store).await, vec![stuck_record]);
             assert!(store.staged_bytes(&stuck_root).await.unwrap().is_some());
             assert_eq!(
-                owed_names(&store).await,
-                vec![Some(recorded_name().as_str().to_owned())],
-                "the other entry is trimmed in the same pass"
+                debts(owed_by_owner(&store).await),
+                BTreeSet::from([debt_of(1)]),
+                "the other entry is trimmed in the same pass, under its own name"
             );
             assert!(store.staged_bytes(&parked[1].2).await.unwrap().is_none());
 
@@ -2472,8 +2490,9 @@ mod tests {
 
             assert!(kept_records(&store).await.is_empty());
             assert_eq!(
-                owed_names(&store).await,
-                vec![Some(recorded_name().as_str().to_owned()); 2]
+                debts(owed_by_owner(&store).await),
+                BTreeSet::from([debt_of(0), debt_of(1)]),
+                "each debt keeps its own node, target and name"
             );
             assert!(name_keys(&store).await.is_empty());
         });

@@ -47,10 +47,15 @@ of the scope that its links prove derives the recorded name, so the retire spare
 the live record names; with no record to read, or when its links prove no held scope, the entry
 waits. Amended on 2026-10-14 (FSM1/cipher-box#2259, owner option 1): the base is local to the
 device, so before it settles a retired node that the base links nowhere, the settle reads the
-folder records of the scope that derives the name from the scope root, live and not from the
-cache. It settles only when no folder links the node. A folder that links the node counts as a
-base link. A per-tick read cap bounds the read, which continues on the next tick, and the debts
-of one tick in that scope share it. Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
+folder records of each held scope whose write seed derives the name (a read grant keeps its
+parent's seed) from the scope root, live and not from the cache. It settles only when no folder
+links the node. A folder that links the node counts as a base link. A per-tick read cap bounds
+the read, which continues on the next tick, and the debts of one tick in that scope share it. A
+read that spans ticks proves nothing until a second sweep reads each folder to the same record.
+The entry waits while a folder does not answer, while the gate refuses a folder, and for the
+session once a scope passes the node bound of the read. A name that no held end derives, as
+after a write cut, settles with no live record only when the tick reached every scope and no
+rotation work is owed; otherwise the entry waits. Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
 a write grant re-seals the record at the recorded name under the new scope root. When the scope
 binding refuses that record, the settle reads it again at the same name under the held end whose
 root the record's tag names, as ADR 0072 D1 does. The retire stays under the recorded name.
