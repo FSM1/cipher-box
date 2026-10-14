@@ -18,6 +18,7 @@ import type { Scenario, ScenarioContext } from './scenario';
 import { Stack, requireFile } from './stack';
 import { conflictOutcomes } from './scenarios/conflictOutcomes';
 import { crossClientConvergence } from './scenarios/crossClientConvergence';
+import { externalUnmount } from './scenarios/externalUnmount';
 import { mountLifecycle } from './scenarios/mountLifecycle';
 import { offlineReplay } from './scenarios/offlineReplay';
 import { writeRoundTrip } from './scenarios/writeRoundTrip';
@@ -29,6 +30,7 @@ const SCENARIOS: Scenario[] = [
   writeRoundTrip,
   conflictOutcomes,
   crossClientConvergence,
+  externalUnmount,
   offlineReplay,
 ];
 

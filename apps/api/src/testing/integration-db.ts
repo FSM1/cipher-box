@@ -84,6 +84,8 @@ export interface IntegrationDatabase {
 export interface IntegrationDatabaseOptions {
   /** Pool ceiling; small values make advisory-lock pool-saturation cheap to prove. */
   poolMax?: number;
+  /** `false` hands back an empty database, for a suite that runs the migrations itself. */
+  migrate?: boolean;
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -151,7 +153,9 @@ export async function createIntegrationDatabase(
 
   try {
     await dataSource.initialize();
-    await dataSource.runMigrations();
+    if (options.migrate !== false) {
+      await dataSource.runMigrations();
+    }
   } catch (error) {
     try {
       if (dataSource.isInitialized) {

@@ -1,11 +1,14 @@
 import { Injectable, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectDataSource } from '@nestjs/typeorm';
 import * as jose from 'jose';
 import { createPublicKey } from 'node:crypto';
-import { EntityManager } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { Clock } from '../../common/clock';
+import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { UUID_RE } from '../../common/patterns';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
 import {
   IDENTITY_SUBJECT_KINDS,
   type IdentitySubjectKind,
@@ -24,9 +27,6 @@ const TOKEN_TTL_SECONDS = 300;
 
 /** How far one instance's clock may run behind another's. */
 const CLOCK_SKEW_SECONDS = 60;
-
-/** Expired rows one spend reclaims; each spend adds one row, so the table tracks its live set. */
-const SPENT_SWEEP_BATCH = 100;
 
 /**
  * How long past its token's expiry a spent row survives, so an instance whose
@@ -54,12 +54,21 @@ export interface VerifiedIdentityToken extends IdentityTokenClaims {
 export class IdentityTokenService implements OnModuleInit {
   private signingKey!: jose.CryptoKey | jose.KeyObject;
   private publicJwk!: jose.JWK;
+  private readonly sweepBatchSize: number;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly clock: Clock,
-    private readonly entropy: Entropy
-  ) {}
+    private readonly entropy: Entropy,
+    @InjectDataSource()
+    private readonly dataSource: DataSource
+  ) {
+    this.sweepBatchSize = positiveIntConfig(
+      configService.get('SPENT_IDENTITY_TOKEN_SWEEP_BATCH_SIZE'),
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
+    );
+  }
 
   async onModuleInit(): Promise<void> {
     const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'development';
@@ -163,6 +172,10 @@ export class IdentityTokenService implements OnModuleInit {
    * concurrent spend of the same token wait for this one and then refuse.
    */
   async spend(manager: EntityManager, token: VerifiedIdentityToken): Promise<void> {
+    // After the caller's waits, so the sweep (SPENT_ROW_GRACE_MS) never took a live token's row.
+    if (token.expiresAt.getTime() <= this.clock.now().getTime()) {
+      throw new UnauthorizedException('Identity token expired');
+    }
     const inserted = await manager
       .createQueryBuilder()
       .insert()
@@ -174,14 +187,33 @@ export class IdentityTokenService implements OnModuleInit {
     if ((inserted.raw as unknown[]).length === 0) {
       throw new UnauthorizedException('Identity token already used');
     }
-    // Swept after the insert, so a replay never pays for a sweep. `SKIP LOCKED`
-    // yields rows a concurrent spend is already reclaiming.
-    await manager.query(
-      `DELETE FROM spent_identity_tokens WHERE ctid IN (
-         SELECT ctid FROM spent_identity_tokens WHERE expires_at <= $1
-         ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`,
-      [new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS), SPENT_SWEEP_BATCH]
-    );
+  }
+
+  /**
+   * Hard-delete every spent row past its grace, in batches, outside any
+   * request. Returns the total deleted.
+   */
+  async sweepExpired(): Promise<number> {
+    const cutoff = new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS);
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
+  }
+
+  /**
+   * Bounded by `ctid`s under the cutoff, as Postgres has no `DELETE ... LIMIT`;
+   * `idx_spent_identity_tokens_expires_at` drives the scan. `SKIP LOCKED`
+   * yields rows that a sweep on another instance is already deleting.
+   */
+  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
+    const result = await this.dataSource
+      .createQueryBuilder()
+      .delete()
+      .from(SpentIdentityToken)
+      .where(
+        'ctid IN (SELECT ctid FROM spent_identity_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
+        { cutoff, limit: this.sweepBatchSize }
+      )
+      .execute();
+    return result.affected ?? 0;
   }
 
   /**

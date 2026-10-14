@@ -33,6 +33,7 @@ import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
 import { AcceleratorTokenSweepTask } from './tasks/accelerator-token-sweep.task';
 import { RefreshTokenSweepTask } from './tasks/refresh-token-sweep.task';
+import { SpentIdentityTokenSweepTask } from './tasks/spent-identity-token-sweep.task';
 
 export function buildJwtOptions(configService: ConfigService) {
   const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
@@ -77,6 +78,7 @@ export function buildJwtOptions(configService: ConfigService) {
     AcceleratorTokenService,
     AcceleratorTokenSweepTask,
     RefreshTokenSweepTask,
+    SpentIdentityTokenSweepTask,
     ChallengeService,
     IdentityService,
     SiweService,
@@ -98,6 +100,7 @@ export class AuthModule implements OnModuleInit {
     private readonly scheduler: WorkerScheduler,
     private readonly acceleratorSweepTask: AcceleratorTokenSweepTask,
     private readonly refreshSweepTask: RefreshTokenSweepTask,
+    private readonly spentIdentityTokenSweepTask: SpentIdentityTokenSweepTask,
     private readonly configService: ConfigService
   ) {}
 
@@ -105,6 +108,7 @@ export class AuthModule implements OnModuleInit {
     // Opt-out (default on) for deployments that run a sweep out of process.
     this.registerSweep('ACCELERATOR_TOKEN_SWEEP_ENABLED', this.acceleratorSweepTask);
     this.registerSweep('REFRESH_TOKEN_SWEEP_ENABLED', this.refreshSweepTask);
+    this.registerSweep('SPENT_IDENTITY_TOKEN_SWEEP_ENABLED', this.spentIdentityTokenSweepTask);
   }
 
   private registerSweep(flag: string, task: PeriodicTask): void {

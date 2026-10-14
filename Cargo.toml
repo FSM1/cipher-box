@@ -10,6 +10,7 @@ members = [
     "crates/wasm",
     "crates/fuse",
     "crates/win-security",
+    "crates/mount-table",
     "crates/desktop-seams",
     "crates/contract",
     "crates/load",

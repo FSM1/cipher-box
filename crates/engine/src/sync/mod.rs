@@ -27,6 +27,7 @@ pub mod op;
 pub mod overlay;
 pub mod owed_rotation;
 pub(crate) mod pass;
+pub(crate) mod pass_timing;
 pub mod pointer;
 pub(crate) mod project;
 pub(crate) mod provision;
@@ -52,6 +53,7 @@ pub use drain::{
 pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
+pub use pass_timing::{PASS_LEGS, PassEvent, PassEventSink};
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, PointerRecord, SessionRole, VaultPointerAdoption,
     open_repoint, resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint,

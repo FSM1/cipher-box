@@ -83,7 +83,7 @@ jobs:
           if [ "${RUNNER_OS}" = 'Windows' ]; then
             cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-win-security --no-run
           else
-            cargo test -p cipherbox-fuse -p cipherbox-desktop-seams --no-run
+            cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-mount-table --no-run
           fi
 
   # The desktop shell matrix, whose release build is the slowest leg of the gate.

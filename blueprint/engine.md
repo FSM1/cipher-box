@@ -1328,7 +1328,13 @@ metadata only; content bytes are never re-encrypted by any rotation path
 it): the sweep runs as an idle-cadence Scheduler job (each run that returns
 an outcome reports `sweepConvergence`, in "Triggers"); idempotence plus CAS make
 concurrent sweepers safe — a lost race drops that node from the work-list on
-re-resolve.
+re-resolve. A node that an owed interior move (ADR 0063) has not moved yet
+still claims the scope the folder left, so the sweep of a cut taken in that
+window cannot open it and settles with it at the old epoch. The re-drive that
+lands the move therefore files the scope's sweep when the scope is past its
+mint epoch. A move that stalls on the content bucket lands only when the
+bucket refills, so for a subtree larger than the bucket the proof waits for the
+re-drive and not for the idle job.
 
 A **scope root** below its own read-epoch floor is not a sweep target and is
 never repaired. Rotations publish before they raise the floor, so the condition
