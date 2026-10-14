@@ -142,10 +142,11 @@ pub(crate) struct ScopeRender<'a> {
     /// The withheld-update hold on each held bookmark's scope pointer, by
     /// pointer name.
     pub pointer_pins: &'a RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
-    /// Each bookmarked scope whose floor raise a write-epoch lease deferred,
-    /// until a follow lands the raise. Its floor can lack the vouched epoch,
-    /// so each pass follows it again and the drain keeps its kept ops.
-    pub deferred_raises: &'a RefCell<BTreeSet<NodeId>>,
+    /// Each bookmark whose floor raise a write-epoch lease deferred, until a
+    /// follow lands the raise. Its floor can lack the vouched epoch, so each
+    /// pass follows it again and the drain keeps the kept ops of its scope.
+    /// A bookmark, not a scope id: each sharer's floors ratchet apart.
+    pub deferred_raises: &'a RefCell<BTreeSet<BookmarkKey>>,
     /// The sequence this pass gated at each grafted root, which a navigation
     /// measures that root against.
     pub root_sequences: &'a RefCell<RootSequences>,
@@ -505,7 +506,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         render
             .deferred_raises
             .borrow_mut()
-            .retain(|root| received.iter().any(|share| share.scope_id == root.0));
+            .retain(|key| received.iter().any(|share| share.key() == *key));
         let fresh: Vec<BookmarkKey> = received
             .iter()
             .map(ReceivedShare::key)
@@ -527,7 +528,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
-                || render.deferred_raises.borrow().contains(&NodeId(key.1))
+                || render.deferred_raises.borrow().contains(key)
                 || on_access_refresh_due(
                     now,
                     verdicts.borrow().get(key).map(|held| held.at),
@@ -984,16 +985,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     // Only a raise that lands ends the deferral: any other
                     // answer leaves the floor short of the vouched epoch. A
                     // sharer authors the id, so it never names an own scope.
-                    let scope = NodeId(share.scope_id);
                     let own = is_own_scope(
                         render.own_root,
                         &render.own_descendants.borrow(),
                         &share.scope_id,
                     );
                     if held.deferred && !own {
-                        render.deferred_raises.borrow_mut().insert(scope);
+                        render.deferred_raises.borrow_mut().insert(key);
                     } else {
-                        render.deferred_raises.borrow_mut().remove(&scope);
+                        render.deferred_raises.borrow_mut().remove(&key);
                     }
                     let root = held.root.as_str().as_bytes();
                     if root != share.scope_root_name {
@@ -2529,7 +2529,7 @@ mod tests {
         /// The names each withheld-update escalation named, across passes.
         escalations: RefCell<Vec<Vec<u8>>>,
         pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
-        deferred_raises: RefCell<BTreeSet<NodeId>>,
+        deferred_raises: RefCell<BTreeSet<BookmarkKey>>,
         /// What the pass reports about its vault root resolve.
         root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
@@ -5015,7 +5015,7 @@ mod tests {
         /// The first pointer follow of a held bookmark in a vault anchored at
         /// `vault_root`, with the write-epoch lease of the scope held, so the
         /// floor raise defers. Returns the deferred-raise record.
-        fn follow_under_a_held_lease(vault_root: [u8; 16]) -> BTreeSet<NodeId> {
+        fn follow_under_a_held_lease(vault_root: [u8; 16]) -> BTreeSet<BookmarkKey> {
             let mut fx = RenderedScope::rooted_at(Vec::new(), vault_root);
             join(&fx);
             serve_pointer(&fx, &sharer_signer(), 1);
@@ -5032,7 +5032,7 @@ mod tests {
         fn a_deferred_raise_of_a_granted_scope_is_recorded() {
             assert_eq!(
                 follow_under_a_held_lease(VAULT_ROOT),
-                BTreeSet::from([NodeId(SCOPE)])
+                BTreeSet::from([(sharer_signer().verifying_key().to_sec1(), SCOPE)])
             );
         }
 
@@ -5042,6 +5042,38 @@ mod tests {
         #[test]
         fn a_bookmark_that_names_an_own_scope_records_no_deferred_raise() {
             assert!(follow_under_a_held_lease(SCOPE).is_empty());
+        }
+
+        /// A deferral belongs to its bookmark: a raise that lands for one
+        /// sharer's bookmark keeps the deferral of another sharer's bookmark
+        /// of the same id.
+        #[test]
+        fn a_landed_raise_keeps_another_bookmarks_deferral_of_the_same_id() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            let mut list = block_on(
+                StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+            )
+            .expect("the list loads");
+            let other = ReceivedShare {
+                scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: other_sharer_signer().verifying_key().to_sec1(),
+                display_name: "photos-folder".to_owned(),
+                permission: Permission::Read,
+                pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                scope_pointer_name: Some(pointer_name()),
+            };
+            let other_key = other.key();
+            list.reconcile(other);
+            fx.persist(&list).expect("the second bookmark persists");
+            fx.deferred_raises.borrow_mut().insert(other_key);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+
+            fx.forced_pass(0);
+
+            assert_eq!(*fx.deferred_raises.borrow(), BTreeSet::from([other_key]));
         }
 
         /// A held bookmark whose scope root opened, in a vault anchored at

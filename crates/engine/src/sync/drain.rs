@@ -1769,6 +1769,7 @@ pub(crate) struct TickInputs<'a> {
     /// Each owed interior move's scope root, with the scope its folder left,
     /// which a child read under that root also binds (ADR 0072 D1).
     pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
+    /// The scope id of each bookmark in
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     pub(crate) deferred_raises: &'a [NodeId],
 }
@@ -3214,13 +3215,16 @@ where
                         let proved = scope.scope_roots.contains(&root);
                         let delete = matches!(op.kind, OpKind::Delete { .. });
                         if !delete || anchored || !proved {
+                            // An edit anchors at its file but writes under
+                            // the folder its note names.
+                            let folder = note.parent.unwrap_or(anchor);
                             unanchored = !anchored
                                 && proved
                                 && self
                                     .unlinked_at_its_live_name(
                                         scope,
                                         root,
-                                        anchor,
+                                        folder,
                                         note.write_epoch,
                                     )
                                     .await?;
@@ -12804,7 +12808,27 @@ mod tests {
         live: bool,
         pass_root: NodeId,
     ) -> (Op, OpId, Queue, DrainReport) {
+        let op = Op::create(
+            NodeId([0x62; 16]),
+            NodeId([0x63; 16]),
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
         let harness = drain_harness(Some(harness_root_envelope()));
+        kept_op_under_an_unlinked_folder(&harness, op, None, live, pass_root)
+    }
+
+    /// [`kept_create_under_an_unlinked_folder`] for any `op` that writes under
+    /// the folder, with `parent` in its note.
+    fn kept_op_under_an_unlinked_folder(
+        harness: &DrainHarness,
+        op: Op,
+        parent: Option<NodeId>,
+        live: bool,
+        pass_root: NodeId,
+    ) -> (Op, OpId, Queue, DrainReport) {
         let folder = NodeId([0x63; 16]);
         let old_parent = NodeId([0x68; 16]);
         let mut unlinked = UnlinkedChild {
@@ -12820,15 +12844,7 @@ mod tests {
         .as_bytes()
         .to_vec();
         *harness.state.observed_unlinks.borrow_mut() = vec![unlinked];
-        let op = Op::create(
-            NodeId([0x62; 16]),
-            folder,
-            "late",
-            NewNode::Folder,
-            1,
-            UnixMillis(0),
-        );
-        let op_id = kept_op_after_a_cut(&harness, &op, HARNESS_ROOT, FloorNamespace::Own, None);
+        let op_id = kept_op_after_a_cut(harness, &op, HARNESS_ROOT, FloorNamespace::Own, parent);
         let mut report = DrainReport::default();
         let queue = block_on(
             harness
@@ -12846,6 +12862,34 @@ mod tests {
     #[test]
     fn a_kept_create_under_a_folder_this_session_saw_unlinked_dead_letters() {
         let (op, op_id, queue, report) = kept_create_under_an_unlinked_folder(true, HARNESS_ROOT);
+
+        assert!(queue.kept.is_empty() && queue.mine.is_empty());
+        assert_eq!(
+            report.dead_letters,
+            vec![(op_id, op.target, DeadLetterReason::TargetGone)],
+            "with a notice"
+        );
+    }
+
+    /// A kept content edit writes under the folder its note names, not under
+    /// its file, so a live unlink of that folder dead-letters it too.
+    #[test]
+    fn a_kept_edit_under_a_folder_this_session_saw_unlinked_dead_letters() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let root_cid = compute_cid(DAG_ROOT_CODEC, b"edit");
+        block_on(harness.seams.staging.put_staged_bytes(&root_cid, b"edit"))
+            .expect("the block stages");
+        let content = StagedContent {
+            root_cid,
+            plaintext_size: 1,
+            sealed_content_key: vec![0x67; 4],
+            scope: HARNESS_ROOT,
+            epoch: 0,
+        };
+        let edit = Op::update_content(NodeId([0x62; 16]), content, None, 1, UnixMillis(0));
+        let folder = Some(NodeId([0x63; 16]));
+        let (op, op_id, queue, report) =
+            kept_op_under_an_unlinked_folder(&harness, edit, folder, true, HARNESS_ROOT);
 
         assert!(queue.kept.is_empty() && queue.mine.is_empty());
         assert_eq!(

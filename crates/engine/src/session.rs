@@ -39,7 +39,7 @@ use crate::facade::{
     ClaimCounts, EngineError, ForkSightings, LoginSecret, NodeId, RestoredCopies,
     RetainedDeadLetters, SyncStatus,
 };
-use crate::grants::accept::ReceivedSharesLock;
+use crate::grants::accept::{BookmarkKey, ReceivedSharesLock};
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, GraftedSharers,
 };
@@ -440,7 +440,7 @@ pub(crate) struct SessionState {
     pub(crate) pointer_pins: Rc<RefCell<BTreeMap<Vec<u8>, WithheldPin>>>,
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     /// In-memory.
-    pub(crate) deferred_raises: Rc<RefCell<BTreeSet<NodeId>>>,
+    pub(crate) deferred_raises: Rc<RefCell<BTreeSet<BookmarkKey>>>,
     /// Held across every load, change and persist of the received-shares list,
     /// so the join, the accept and the refresh never overwrite each other.
     pub(crate) received_shares_lock: Rc<ReceivedSharesLock>,

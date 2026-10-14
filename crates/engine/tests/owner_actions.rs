@@ -12214,8 +12214,20 @@ fn the_drain_reads_an_unmoved_interior_folder_of_an_owed_move_with_no_abuse() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
-    assert!(fx.owed_scopes().is_empty(), "the move landed");
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        "{events:?}"
+    );
+    assert_eq!(owed_entry(&fx), None, "the move landed");
     let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
     assert!(
         opens_under(&fx, inner, &read_key_under(&override_seed, inner)),

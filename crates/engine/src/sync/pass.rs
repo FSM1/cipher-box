@@ -148,7 +148,7 @@ struct Assembly {
     proved_roots: Vec<NodeId>,
     granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
     descendants: Vec<DescendantScopeRoot>,
-    /// [`ScopeRender::deferred_raises`].
+    /// The scope id of each bookmark in [`ScopeRender::deferred_raises`].
     deferred_raises: Vec<NodeId>,
 }
 
@@ -1154,7 +1154,12 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
-            deferred_raises: state.deferred_raises.borrow().iter().copied().collect(),
+            deferred_raises: state
+                .deferred_raises
+                .borrow()
+                .iter()
+                .map(|key| NodeId(key.1))
+                .collect(),
         }
     }
 
