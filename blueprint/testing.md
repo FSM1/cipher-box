@@ -428,7 +428,9 @@ scenario fails the meta-test):
   An owed interior move (ADR 0072): after a stop at the reseal, a partial
   reseal, or a stop at the parent index publish, the navigation leg and then
   the tick focus leg each adopt a changed interior folder with no abuse event;
-  a restart over a move still owed gives no abuse event at either leg; a
+  a restart over a move still owed gives no abuse event at either leg; the
+  drain's read of an unmoved interior folder on the tick after a stalled link
+  mint gives no abuse event, and a hostile record there gives exactly one; a
   record whose epoch tag names a bound scope that does not open it, and a
   record whose tag names a third scope, each give exactly one trust violation
   (`tests/owner_actions.rs`); an unread owed record leaves the legs on the

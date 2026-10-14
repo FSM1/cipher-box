@@ -1180,7 +1180,11 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   format version 2; a version 1 note reads with no folder and no result, and
   a kind that needs a result leaves with none. Every other op kind, and a
   move that re-seals into another scope, leaves at its publish. With no flip, a kept op waits at its write epoch
-  for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
+  for at most T = 7 days, and longer while a write-epoch lease deferred the
+  floor raise of its root's pointer follow, which can hide a flip: the root is
+  followed on each pass until a follow lands the raise. The record of a
+  deferred raise lasts for one session and holds only granted scopes. The
+  withheld-update escalation covers only a scope with a floor. At a flip (a new write epoch or a new nearest scope
   root), once the base read its node at the live name, the standard rebase
   decides: a landed op drops, and a lost op applies again under the new seed.
   A content edit reads its file's live record first, and it landed when the
@@ -1199,7 +1203,12 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one included) or another pass writes it, reads the durable write-epoch
   floor of the root: at the note's root and epoch the op waits out T, and a
   higher floor or another root keeps it with no bound until a pass can check
-  it. At a flip, a kept delete whose note names its folder waits for one
+  it. A kept op other than a delete, under a root that the walk proved and
+  this pass writes, whose folder (or the file of an edit or a version
+  restore) a read of this session at the live parent name saw unlinked, has no pass that can check it: at a flip it dead-letters
+  as `targetGone` with a notice, and its staged version stays recoverable. A
+  base that does not hold the folder shows nothing, and a read below a grafted
+  root records no unlink, so such an op waits. At a flip, a kept delete whose note names its folder waits for one
   read of that folder at its live name, which the drain makes before the
   rebase: a live node applies the delete again, and a node gone ends the op
   with no notice. A folder that a read of this session at the live parent
@@ -1217,7 +1226,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
-  plane (FSM1/cipher-box-next#38 D2).
+  plane (FSM1/cipher-box-next#38 D2). A scope pointer that this device saw (its write-epoch
+  floor is set) and that every endpoint answers as absent past the window is withheld too: a
+  pointer is re-pointed, never deleted. The pin stays open and escalates one time. An absent
+  pointer with no floor is an answer (owner ruling, 2026-10-14).
 
 Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 

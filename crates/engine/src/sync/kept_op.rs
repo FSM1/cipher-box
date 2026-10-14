@@ -695,6 +695,18 @@ pub(crate) enum KeptPlace {
     Elsewhere,
 }
 
+impl KeptPlace {
+    /// The scope root this place names, if any.
+    pub(crate) fn root(self) -> Option<NodeId> {
+        match self {
+            Self::Writes { root, .. } | Self::Keyless { root } | Self::Unchecked { root, .. } => {
+                Some(root)
+            }
+            Self::Unnamespaced | Self::Elsewhere => None,
+        }
+    }
+}
+
 /// What a pass does with one kept op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeptVerdict {

@@ -109,7 +109,17 @@ pub(crate) async fn held_scope_root<T: RecordTransport, F: FloorStore>(
 ) -> Result<Option<IpnsName>, PointerConsultError> {
     Ok(held_scope_pointer(transport, floors, share, name, owner)
         .await?
-        .map(|(root, _)| root))
+        .map(|held| held.root))
+}
+
+/// What [`held_scope_pointer`] read at one bookmark's scope pointer.
+pub(crate) struct HeldPointer {
+    /// The scope root the pointer vouches for now.
+    pub(crate) root: IpnsName,
+    /// The write-epoch floor in force once the consult ran.
+    pub(crate) write_floor: u64,
+    /// See [`ConsultedPointer::deferred`](crate::net::ConsultedPointer).
+    pub(crate) deferred: bool,
 }
 
 /// [`held_scope_root`], with the write-epoch floor in force once the consult
@@ -120,7 +130,7 @@ pub(crate) async fn held_scope_pointer<T: RecordTransport, F: FloorStore>(
     share: &ReceivedShare,
     name: &IpnsName,
     owner: &EcdsaVerifier,
-) -> Result<Option<(IpnsName, u64)>, PointerConsultError> {
+) -> Result<Option<HeldPointer>, PointerConsultError> {
     let keys = HeldPointerKeys {
         name,
         read_key: &share.pointer_read_key,
@@ -132,7 +142,11 @@ pub(crate) async fn held_scope_pointer<T: RecordTransport, F: FloorStore>(
     }
     .run(transport, floors, &share.scope_id)
     .await?
-    .map(|consulted| (consulted.current_root, consulted.write_floor)))
+    .map(|consulted| HeldPointer {
+        root: consulted.current_root,
+        write_floor: consulted.write_floor,
+        deferred: consulted.deferred,
+    }))
 }
 
 /// The owner-signed link entry at `tag`, or `None` when the commitment names

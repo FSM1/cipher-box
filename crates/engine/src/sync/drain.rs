@@ -85,9 +85,9 @@ use crate::net::retire::{
 use crate::net::signed_data;
 use crate::net::{
     Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
-    HeldRecord, HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_answered, fanout_get_classified, fanout_get_verify,
-    observed_at, resolve, resolve_gated,
+    HeldRecord, HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome,
+    RootAdopter, assemble_head_envelope, fanout_get_answered, fanout_get_classified,
+    fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -1848,6 +1848,12 @@ pub(crate) struct TickInputs<'a> {
     /// The scopes this device owes an interior move at (ADR 0063), or `None`
     /// when the owed record did not read.
     pub(crate) owed_moves: Option<&'a [NodeId]>,
+    /// Each owed interior move's scope root, with the scope its folder left,
+    /// which a child read under that root also binds (ADR 0072 D1).
+    pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
+    /// The scope id of each bookmark in
+    /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
+    pub(crate) deferred_raises: &'a [NodeId],
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -3307,23 +3313,35 @@ where
                     // base after a cold start lacks deep folders, so absence
                     // alone shows nothing.
                     let mut gone = false;
+                    // ADR 0069 D5: a flip dead-letters any other kept op whose
+                    // folder a read of this session saw unlinked at its live
+                    // parent name, under a proved root.
+                    let mut unanchored = false;
                     if place == KeptPlace::Elsewhere
                         && let Some(root) = note.scope
                     {
-                        if !matches!(op.kind, OpKind::Delete { .. })
-                            || self
-                                .cells
-                                .base
-                                .borrow()
-                                .contains(kept_anchor(&op, note.parent))
-                            || !scope.scope_roots.contains(&root)
-                        {
+                        let anchor = kept_anchor(&op, note.parent);
+                        let anchored = self.cells.base.borrow().contains(anchor);
+                        let proved = scope.scope_roots.contains(&root);
+                        let delete = matches!(op.kind, OpKind::Delete { .. });
+                        if !delete || anchored || !proved {
+                            let folder = kept_folder(&op, note.parent);
+                            unanchored = !anchored
+                                && proved
+                                && self
+                                    .unlinked_at_its_live_name(
+                                        scope,
+                                        root,
+                                        &[folder, anchor],
+                                        note.write_epoch,
+                                    )
+                                    .await?;
                             place = self.unchecked_place(scope, root).await?;
                         } else if let Some(folder) =
                             note.parent.filter(|_| reads_kept_parent(&op, note.parent))
                         {
                             gone = self
-                                .unlinked_at_its_live_name(scope, root, folder, note.write_epoch)
+                                .unlinked_at_its_live_name(scope, root, &[folder], note.write_epoch)
                                 .await?;
                         }
                     }
@@ -3337,7 +3355,35 @@ where
                     {
                         KeptVerdict::Expired
                     } else {
-                        kept_verdict(&note, place, now)
+                        // A deferred raise can hide a flip, so the bound
+                        // waits for a follow that lands it (blueprint/engine.md
+                        // "kept op").
+                        let deferred = note
+                            .scope
+                            .or_else(|| place.root())
+                            .is_some_and(|root| self.inputs.deferred_raises.contains(&root));
+                        match kept_verdict(&note, place, now) {
+                            KeptVerdict::Expired if deferred => KeptVerdict::Stay,
+                            KeptVerdict::Stay
+                                if unanchored && !deferred && shows_a_flip(&note, place) =>
+                            {
+                                if self
+                                    .abandon_keeping_its_name(
+                                        scope,
+                                        op_id,
+                                        &op,
+                                        DeadLetterReason::TargetGone,
+                                        report,
+                                    )
+                                    .await
+                                {
+                                    notes.remove(op_id);
+                                    continue;
+                                }
+                                KeptVerdict::Stay
+                            }
+                            verdict => verdict,
+                        }
                     }
                 } else {
                     KeptVerdict::Expired
@@ -3482,15 +3528,15 @@ where
         })
     }
 
-    /// Whether a read of this session at the live parent name saw `folder`
-    /// unlinked, past a flip of `root` above `note_epoch`. A read of the old
+    /// Whether a read of this session at the live parent name saw one of
+    /// `nodes` unlinked, past a flip of `root` above `note_epoch`. A read of the old
     /// tree at the parent's old name does not count: the wave can have carried
     /// the folder.
     async fn unlinked_at_its_live_name(
         &self,
         scope: &DrainScope<'_>,
         root: NodeId,
-        folder: NodeId,
+        nodes: &[NodeId],
         note_epoch: u64,
     ) -> Result<bool, Halt> {
         let end = match scope.second_end() {
@@ -3509,7 +3555,8 @@ where
             }
         };
         Ok(self.cells.observed_unlinks.borrow().iter().any(|unlinked| {
-            unlinked.node == folder && unlinked.parent_name == live_parent_name(unlinked.parent)
+            nodes.contains(&unlinked.node)
+                && unlinked.parent_name == live_parent_name(unlinked.parent)
         }))
     }
 
@@ -4271,6 +4318,13 @@ where
             node.0,
         )
         .with_seed_stamp(Some(plane.epoch))
+        .with_owed_move(
+            self.inputs
+                .owed_move_reads
+                .iter()
+                .find(|(root, _)| *root == plane.end.root)
+                .map(|(_, left)| left.to_scope()),
+        )
     }
 
     /// One end's scope root as the record plane now serves it, resolved through
@@ -9568,7 +9622,8 @@ where
     /// Abandon one op with its staged version preserved and its name left
     /// standing: the halt that took it gives no ground to believe no published
     /// record names the op's target, and cutting a name a live record carries
-    /// would leave a reference outliving its referent.
+    /// would leave a reference outliving its referent. Returns whether the op
+    /// left the queue.
     async fn abandon_keeping_its_name(
         &self,
         scope: &DrainScope<'_>,
@@ -9576,16 +9631,18 @@ where
         op: &Op,
         reason: DeadLetterReason,
         report: &mut DrainReport,
-    ) {
+    ) -> bool {
         let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
-            return;
+            return false;
         };
-        if self.dequeue_op(op_id).await.is_ok() {
-            self.release_unpreserved(scope, preserved, op).await;
-            report
-                .dead_letters
-                .push((op_id, op.target, preserved.observed(reason)));
+        if self.dequeue_op(op_id).await.is_err() {
+            return false;
         }
+        self.release_unpreserved(scope, preserved, op).await;
+        report
+            .dead_letters
+            .push((op_id, op.target, preserved.observed(reason)));
+        true
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
@@ -10235,7 +10292,7 @@ fn paint_folder(
     }
 }
 
-/// The node a kept op writes under: the parent of a create, the destination
+/// The node a kept op anchors at: the parent of a create, the destination
 /// of a restore, the folder its note names for a delete, a rename or a move,
 /// and else the node itself.
 fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
@@ -10251,6 +10308,13 @@ fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
         ) => parent,
         _ => op.target,
     }
+}
+
+/// The folder a kept op writes under ([`KeptNote::parent`]), and else its
+/// anchor. It differs from the anchor only for an edit and a version
+/// restore, which anchor at their file.
+fn kept_folder(op: &Op, parent: Option<NodeId>) -> NodeId {
+    parent.unwrap_or_else(|| kept_anchor(op, parent))
 }
 
 /// Whether a file's version list names the version `content` staged
@@ -12141,6 +12205,7 @@ mod tests {
         scope_roots: Vec<NodeId>,
         known_scope_roots: Vec<NodeId>,
         granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
+        deferred_raises: Vec<NodeId>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -12164,6 +12229,8 @@ mod tests {
                     bin_retention_days: self.bin_retention_days,
                     retention: RetentionPolicy::KeepAll,
                     owed_moves: Some(&[]),
+                    owed_move_reads: &[],
+                    deferred_raises: &self.deferred_raises,
                 },
             )
         }
@@ -12337,6 +12404,7 @@ mod tests {
             scope_roots: vec![HARNESS_ROOT],
             known_scope_roots: vec![HARNESS_ROOT],
             granted_namespaces: Vec::new(),
+            deferred_raises: Vec::new(),
             keyless_roots: Vec::new(),
             enc_secret,
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
@@ -12992,6 +13060,213 @@ mod tests {
 
         assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
         assert!(report.dropped.is_empty());
+    }
+
+    /// The folder the kept ops of the unlink tests below write under.
+    const KEPT_FOLDER: NodeId = NodeId([0x63; 16]);
+    /// The node those ops write: a new child of `KEPT_FOLDER`, or its file.
+    const KEPT_NODE: NodeId = NodeId([0x62; 16]);
+
+    /// A kept create under `HARNESS_ROOT` past a cut, whose folder this
+    /// session saw unlinked from its parent: at the parent's live name with
+    /// `live`, and at an old name without. A pass anchored at `pass_root`
+    /// reads the queue.
+    fn kept_create_under_an_unlinked_folder(
+        live: bool,
+        pass_root: NodeId,
+    ) -> (Op, OpId, Queue, DrainReport) {
+        let op = Op::create(
+            KEPT_NODE,
+            KEPT_FOLDER,
+            "late",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let note = KeptNote {
+            parent: None,
+            result: None,
+            ..cut_note()
+        };
+        kept_op_under_an_unlinked_node(&harness, op, note, KEPT_FOLDER, live, pass_root)
+    }
+
+    /// The note of a kept op published under `HARNESS_ROOT` at write epoch 2,
+    /// which [`kept_op_under_an_unlinked_node`] cuts.
+    fn cut_note() -> KeptNote {
+        KeptNote {
+            scope: Some(HARNESS_ROOT),
+            write_epoch: 2,
+            published_at: UnixMillis(0),
+            parent: Some(KEPT_FOLDER),
+            result: None,
+        }
+    }
+
+    /// [`kept_create_under_an_unlinked_folder`] for any `op` with `note`, past
+    /// a cut, where this session saw `unlinked` unlinked from its parent.
+    fn kept_op_under_an_unlinked_node(
+        harness: &DrainHarness,
+        op: Op,
+        note: KeptNote,
+        unlinked: NodeId,
+        live: bool,
+        pass_root: NodeId,
+    ) -> (Op, OpId, Queue, DrainReport) {
+        let old_parent = NodeId([0x68; 16]);
+        let mut capture = UnlinkedChild {
+            parent: old_parent,
+            ..capture_of(&[0; 32], unlinked)
+        };
+        capture.parent_name = if live {
+            harness.scope().source.write_name(&old_parent.0)
+        } else {
+            derive_write_name(&[0; 32], &old_parent.0)
+        }
+        .as_str()
+        .as_bytes()
+        .to_vec();
+        *harness.state.observed_unlinks.borrow_mut() = vec![capture];
+        let op_id = harness.queue_an_op(&op);
+        let mut notes = KeptNotes::default();
+        notes
+            .insert(
+                op_id,
+                KeptNote {
+                    published_at: harness.seams.scheduler.now(),
+                    ..note
+                },
+            )
+            .expect("the note is in bounds");
+        block_on(harness.drain().store_kept_notes(&harness.scope(), &notes))
+            .expect("the notes store");
+        block_on(floor::advance_write_epoch_on_sight(
+            &FloorNamespace::Own.view(&harness.seams.floors),
+            &HARNESS_ROOT.0,
+            3,
+        ))
+        .expect("the floor rises");
+        let mut report = DrainReport::default();
+        let queue = block_on(
+            harness
+                .drain()
+                .queued_ops(&harness.own_scope_at(pass_root), &mut report),
+        )
+        .expect("the queue reads");
+        (op, op_id, queue, report)
+    }
+
+    /// A kept content edit of `KEPT_NODE`, with its root block staged.
+    fn kept_edit(harness: &DrainHarness) -> Op {
+        let root_cid = compute_cid(DAG_ROOT_CODEC, b"edit");
+        block_on(harness.seams.staging.put_staged_bytes(&root_cid, b"edit"))
+            .expect("the block stages");
+        let content = StagedContent {
+            root_cid,
+            plaintext_size: 1,
+            sealed_content_key: vec![0x67; 4],
+            scope: HARNESS_ROOT,
+            epoch: 0,
+        };
+        Op::update_content(KEPT_NODE, content, None, 1, UnixMillis(0))
+    }
+
+    /// The op dead-lettered with a notice and left the queue.
+    fn dead_lettered_with_a_notice(op: &Op, op_id: OpId, queue: &Queue, report: &DrainReport) {
+        assert!(queue.kept.is_empty() && queue.mine.is_empty());
+        assert_eq!(
+            report.dead_letters,
+            vec![(op_id, op.target, DeadLetterReason::TargetGone)],
+            "with a notice"
+        );
+    }
+
+    /// A read of this session at the live parent name saw the folder a kept
+    /// create writes under unlinked, past a cut, under a root the walk proved
+    /// and this pass writes. No pass can check the op, so it dead-letters with
+    /// a notice before the bound (ADR 0069 D5).
+    #[test]
+    fn a_kept_create_under_a_folder_this_session_saw_unlinked_dead_letters() {
+        let (op, op_id, queue, report) = kept_create_under_an_unlinked_folder(true, HARNESS_ROOT);
+
+        dead_lettered_with_a_notice(&op, op_id, &queue, &report);
+    }
+
+    /// A kept content edit writes under the folder its note names, and a live
+    /// unlink of that folder or of its own file dead-letters it.
+    #[test]
+    fn a_kept_edit_whose_folder_or_file_this_session_saw_unlinked_dead_letters() {
+        for unlinked in [KEPT_FOLDER, KEPT_NODE] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let edit = kept_edit(&harness);
+            let (op, op_id, queue, report) = kept_op_under_an_unlinked_node(
+                &harness,
+                edit,
+                cut_note(),
+                unlinked,
+                true,
+                HARNESS_ROOT,
+            );
+
+            dead_lettered_with_a_notice(&op, op_id, &queue, &report);
+        }
+    }
+
+    /// A note with no folder (version 1) checks the edit's own file.
+    #[test]
+    fn a_kept_edit_with_no_folder_in_its_note_checks_its_file() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let edit = kept_edit(&harness);
+        let note = KeptNote {
+            parent: None,
+            ..cut_note()
+        };
+        let (op, op_id, queue, report) =
+            kept_op_under_an_unlinked_node(&harness, edit, note, KEPT_NODE, true, HARNESS_ROOT);
+
+        dead_lettered_with_a_notice(&op, op_id, &queue, &report);
+    }
+
+    /// A kept version restore writes under its file's folder as an edit does.
+    #[test]
+    fn a_kept_version_restore_whose_folder_or_file_this_session_saw_unlinked_dead_letters() {
+        let before = compute_cid(DAG_ROOT_CODEC, b"head");
+        let after = compute_cid(DAG_ROOT_CODEC, b"restored");
+        for unlinked in [KEPT_FOLDER, KEPT_NODE] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let restore = Op::restore_version(KEPT_NODE, after.clone(), 1, UnixMillis(0));
+            let note = KeptNote {
+                result: Some(KeptResult::RestoreVersion {
+                    before: before.clone(),
+                    after: after.clone(),
+                }),
+                ..cut_note()
+            };
+            let (op, op_id, queue, report) = kept_op_under_an_unlinked_node(
+                &harness,
+                restore,
+                note,
+                unlinked,
+                true,
+                HARNESS_ROOT,
+            );
+
+            dead_lettered_with_a_notice(&op, op_id, &queue, &report);
+        }
+    }
+
+    /// A folder that the base lacks with no such read shows nothing: a cold
+    /// base lacks deep folders. An unlink read at an old name, or a pass that
+    /// does not write the root, keeps the op too.
+    #[test]
+    fn a_kept_create_under_a_folder_with_no_live_unlink_waits() {
+        for (live, pass_root) in [(false, HARNESS_ROOT), (true, NodeId([0x70; 16]))] {
+            let (_, op_id, queue, report) = kept_create_under_an_unlinked_folder(live, pass_root);
+
+            assert_eq!(queue.kept, vec![op_id], "live={live}: the op waits");
+            assert!(report.dead_letters.is_empty());
+        }
     }
 
     /// A granted root that no one granting identity names has no floor this
