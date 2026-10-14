@@ -152,6 +152,8 @@ struct Assembly {
     proved_roots: Vec<NodeId>,
     granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
     descendants: Vec<DescendantScopeRoot>,
+    /// This tick's scope walk proved the whole boundary set.
+    walk_complete: bool,
     /// The scope id of each bookmark in [`ScopeRender::deferred_raises`].
     deferred_raises: Vec<NodeId>,
 }
@@ -433,13 +435,13 @@ where
         let recovered_root = resolved
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
-        let descendants = self.walk_scopes(state, &pass, recovered_root).await;
+        let (descendants, walk_complete) = self.walk_scopes(state, &pass, recovered_root).await;
         lap();
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
         lap();
         let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
-            .assemble_scopes(state, &pass, &scopes, descendants)
+            .assemble_scopes(state, &pass, &scopes, descendants, walk_complete)
             .await;
         lap();
         let boundaries = self
@@ -738,13 +740,14 @@ where
         (resolved, read_seed)
     }
 
-    /// The scope walk below the vault root, and the boundaries it proved.
+    /// The scope walk below the vault root, the boundaries it proved, and
+    /// whether it proved the whole set.
     async fn walk_scopes(
         &self,
         state: &SessionState,
         pass: &Pass,
         recovered_root: bool,
-    ) -> Vec<DescendantScopeRoot> {
+    ) -> (Vec<DescendantScopeRoot>, bool) {
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let mut held_root = state
@@ -763,6 +766,7 @@ where
         // walk's awaits.
         let walk_keys = self.secrets.sweep_keys.borrow().clone();
         let mut descendants = Vec::new();
+        let mut complete = false;
         let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
             owner_seed_cache: Some(owner_seed_cache),
             transport: &self.seams.transport,
@@ -790,6 +794,7 @@ where
             let failure = walked
                 .as_ref()
                 .map_or_else(|met| Some(*met), |walked| walked.failure);
+            complete = failure.is_none();
             *state.walk_refused_roots.borrow_mut() = walked
                 .as_ref()
                 .map(|walked| walked.refused.clone())
@@ -844,7 +849,7 @@ where
                 Some(WalkFailure::Unavailable) => {}
             }
         }
-        descendants
+        (descendants, complete)
     }
 
     /// The focus-window legs, one per scope, and the scope sets they grouped by.
@@ -1082,6 +1087,7 @@ where
         pass: &Pass,
         scopes: &ScopeSets,
         descendants: Vec<DescendantScopeRoot>,
+        walk_complete: bool,
     ) -> Assembly {
         // The drain rides the same tick: it publishes onto exactly the
         // gate-passing state this pass just reconciled. Both scope seeds
@@ -1190,6 +1196,7 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            walk_complete,
             deferred_raises: state
                 .deferred_raises
                 .borrow()
@@ -1269,6 +1276,7 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            walk_complete,
             deferred_raises,
         } = assembly;
         let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
@@ -1433,7 +1441,7 @@ where
             .collect();
         let every_scope_reached = vault.is_some()
             && scopes.unproved.is_empty()
-            && every_descendant_held(&descendants)
+            && every_proved_scope_held(walk_complete, &scopes.proved, &descendants)
             && state
                 .bookmarked_permissions
                 .borrow()
@@ -2008,11 +2016,23 @@ fn vault_source<'a>(
     }
 }
 
-/// Whether this tick holds a pass for every proved descendant. A keyless one
-/// may be a copy recovered after a refusal or a write cut that did not finish,
-/// and the names its write seed derives can still link a node.
-fn every_descendant_held(descendants: &[DescendantScopeRoot]) -> bool {
-    descendants.iter().all(|scope| scope.write.is_ok())
+/// Whether this tick holds a pass for every scope the session proved: the walk
+/// proved the whole set, and each proved root is a descendant with a write
+/// plane. A keyless one may be a copy recovered after a refusal or a write cut
+/// that did not finish, and the names its write seed derives can still link a
+/// node.
+fn every_proved_scope_held(
+    walk_complete: bool,
+    proved: &BTreeSet<NodeId>,
+    descendants: &[DescendantScopeRoot],
+) -> bool {
+    walk_complete
+        && descendants.iter().all(|scope| scope.write.is_ok())
+        && proved.iter().all(|root| {
+            descendants
+                .iter()
+                .any(|scope| NodeId(scope.scope_id) == *root)
+        })
 }
 
 /// A proved descendant scope root's end, under the read seed the walk
@@ -2692,7 +2712,8 @@ mod tests {
                     epoch: 1,
                 }))
             };
-            assert!(every_descendant_held(&[held()]));
+            let roots = BTreeSet::from([NodeId(SHARED)]);
+            assert!(every_proved_scope_held(true, &roots, &[held()]));
             let recovered = DescendantScopeRoot {
                 recovered_after_rejection: true,
                 ..proved(Err(WritePlaneDark::Keyless))
@@ -2702,8 +2723,28 @@ mod tests {
                 ..proved(Err(WritePlaneDark::Keyless))
             };
             for dark in [recovered, cut, proved(Err(WritePlaneDark::Unavailable))] {
-                assert!(!every_descendant_held(&[held(), dark]));
+                assert!(!every_proved_scope_held(true, &roots, &[held(), dark]));
             }
+        }
+
+        /// A proved scope that this tick's walk did not reach, through a walk
+        /// that failed or a level it skipped, leaves the scope set unreached
+        /// (ADR 0070 D2).
+        #[test]
+        fn a_proved_scope_the_walk_missed_leaves_a_scope_unreached() {
+            let roots = BTreeSet::from([NodeId(SHARED)]);
+            assert!(
+                !every_proved_scope_held(false, &roots, &[]),
+                "a walk that failed"
+            );
+            assert!(
+                !every_proved_scope_held(false, &BTreeSet::new(), &[]),
+                "a walk that failed with no proved scope"
+            );
+            assert!(
+                !every_proved_scope_held(true, &roots, &[]),
+                "a level the walk skipped"
+            );
         }
 
         /// A descendant scope's end is stamped at the epoch of the record the

@@ -297,7 +297,8 @@ scenario fails the meta-test):
   once, a refused folder that became a scope root restarts it, a folder that
   never answers restarts it, a descent proves only after its second sweep, and
   a complete descent proves again with one confirm sweep (`sync::drain`); a
-  keyless descendant leaves a scope unreached (`sync::pass`); a debt journaled
+  keyless descendant and a proved scope that the walk missed leave a scope
+  unreached (`sync::pass`); a debt journaled
   before a write grant moved its node settles under the old name and spares
   the kept version (`tests/write_plane.rs`); a hard-delete debt settles after
   a write cut once every scope is reached and waits with a scope unreached,

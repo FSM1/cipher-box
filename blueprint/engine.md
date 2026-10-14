@@ -374,8 +374,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   sweep. The debt waits while a folder does not answer or the gate refuses
   one, and while a read past its node bound stays carried. A refused folder
   that becomes a scope root starts the read again. A name that no held end
-  derives settles with no live record only when the tick holds a pass for
-  every scope and no rotation work is owed. A record at the
+  derives settles with no live record only when the tick walks the whole
+  scope set, holds a pass for every scope that the session proved, and owes
+  no rotation work. Accepted residual: while an own scope is keyless, for
+  example a section with no owner write blob or a write cut that another
+  device has not finished, the named retired debts that no held end derives
+  wait across the vault. This is a leak, not a loss. A record at the
   recorded name that the scope binding refuses
   is read again under the held end whose root its tag names (ADR 0072 D1), and
   the retire stays under that name. An entry with no name derives it from

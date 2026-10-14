@@ -59,7 +59,11 @@ record. A later tick proves a complete read again with one more sweep. The entry
 a folder does not answer, while the gate refuses a folder, and while a read that passed its node
 bound stays carried. A refused folder that becomes a scope root starts the read again. A name
 that no held end derives, as after a write cut, settles with no live record only when the tick
-holds a pass for every scope and no rotation work is owed; otherwise the entry waits.
+walks the whole scope set, holds a pass for every scope that the session proved, and owes no
+rotation work; otherwise the entry waits. Accepted residual: while an own scope is keyless, for
+example a section with no owner write blob or a write cut that another device has not finished,
+the named retired debts that no held end derives wait across the vault. This is a leak, not a
+loss.
 Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
 a write grant re-seals the record at the recorded name under the new scope root. When the scope
 binding refuses that record, the settle reads it again at the same name under the held end whose
