@@ -974,6 +974,14 @@ where
                 for published in &outcome.published_roots {
                     sequences.note_own(published);
                 }
+                // A cut taken while the move was owed read the unmoved nodes
+                // as foreign records, so its sweep settled short of the proof.
+                if outcome.read_scope.epoch > MINT_EPOCH {
+                    let scope = ChildScopeRef::new(node.0, grantee.ipns_name().as_str().into());
+                    let ascent = Zeroizing::new(*parent_node_seed.as_bytes());
+                    self.scheduler
+                        .spawn((self.cut.sweep.task)(scope, Some(ascent)));
+                }
                 Ok(())
             }
             // A parent-scope writer can publish a record at the folder's name,
