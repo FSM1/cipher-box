@@ -13,7 +13,9 @@ export type DevnetFault =
   | 'node-quorum'
   | 'node-5xx'
   | 'node-busy'
-  | 'key-assign';
+  | 'key-assign'
+  | 'key-broadcast'
+  | 'rss-envelope';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -23,6 +25,10 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
   ['node-busy', /all auth network nodes are currently busy/i],
   ['key-assign', /failed to fetch key assign result/i],
+  ['key-broadcast', /unable to assign key\b.*could not broadcast/i],
+  // The Torus SDK decrypt helper got no share envelope: from rss-client round 1 or
+  // recover, or @tkey/tss getTSSShare.
+  ['rss-envelope', /reading 'ciphertext'/i],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {

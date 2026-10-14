@@ -16,7 +16,7 @@ import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage, type RowStanding } from '../page-objects/shared.page';
 import { expect, nudgedUntil, published, signIn, signInWithWallet, test } from './fixtures';
-import { restoreVault } from './restoreVault';
+import { restoreVault, resumeSession } from './restoreVault';
 
 const FOLDER = 'link-first';
 const EXPIRED_FOLDER = 'link-first-expired';
@@ -140,7 +140,8 @@ test('the link-first flow runs across two owner devices', async ({
     await ownerShare.close();
     const invite = new InvitePage(reader);
     await invite.open(again);
-    await invite.expectState('joinable', 180_000);
+    await resumeSession(reader, invite.joinButton);
+    await invite.expectState('joinable');
     await invite.name.fill('reader');
     await invite.join();
     await invite.expectFolderOpened(180_000);

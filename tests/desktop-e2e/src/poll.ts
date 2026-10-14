@@ -148,6 +148,10 @@ export async function poll<T>(
       // Never sleep past the deadline: a wait longer than what is left would
       // report the timeout late, and a caller reads that delay as a slow signal.
       await clock.wait(Math.min(options.intervalMs, remaining));
+      // A wait that ends on the deadline starts no read the alarm would cut.
+      if (clock.now() >= deadline) {
+        throw new PollTimeout(options.what, last, attempts, options.timeoutMs, false);
+      }
     }
   })();
 

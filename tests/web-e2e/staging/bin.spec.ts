@@ -7,6 +7,7 @@ import { BinPage } from '../page-objects/bin.page';
 import { FilesPage } from '../page-objects/files.page';
 import { expect, published, signIn, test } from './fixtures';
 import { filler } from './media';
+import { reloadVault } from './restoreVault';
 
 const RESTORED = 'bin-restored.bin';
 const PURGED = 'bin-purged.bin';
@@ -51,8 +52,7 @@ test('a deleted file restores, and a purged one does not come back', async ({ pa
   await expect(files.row(PURGED)).toHaveCount(0);
   await expect(files.row(RESTORED)).toBeVisible();
 
-  await page.reload();
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
+  await reloadVault(page);
   await expect(files.row(RESTORED)).toBeVisible({ timeout: 180_000 });
   await expect(files.row(PURGED)).toHaveCount(0);
 });

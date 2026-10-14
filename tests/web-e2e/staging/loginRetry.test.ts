@@ -36,6 +36,11 @@ describe('devnetFault', () => {
       'undefined Unable to assign key, failed to fetch key assign result please try again',
       'key-assign',
     ],
+    [
+      'undefined Unable to assign key, jsonrpc: code: -32603, message: Internal error, data: Unable to broadcast: Could not broadcast, ErrorCode: 3',
+      'key-broadcast',
+    ],
+    ["Cannot read properties of undefined (reading 'ciphertext')", 'rss-envelope'],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });
@@ -45,6 +50,9 @@ describe('devnetFault', () => {
     'the request to api.example.com failed with status 500',
     'the request to node-1.dev-node.web3auth.io failed with status 401',
     'undefined Unable to assign key, the key is already assigned',
+    'undefined Unable to assign key, jsonrpc: code: -32603, message: Internal error, data: invalid token',
+    'jsonrpc: code: -32603, message: Internal error, data: Unable to broadcast: Could not broadcast',
+    "Cannot read properties of undefined (reading 'sessionKey')",
   ])('fails at once on %s', (refusal) => {
     expect(devnetFault(refusal)).toBeNull();
   });
