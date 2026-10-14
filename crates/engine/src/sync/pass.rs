@@ -152,6 +152,8 @@ struct Assembly {
     proved_roots: Vec<NodeId>,
     granted_namespaces: Vec<(NodeId, Option<FloorNamespace>)>,
     descendants: Vec<DescendantScopeRoot>,
+    /// The scope id of each bookmark in [`ScopeRender::deferred_raises`].
+    deferred_raises: Vec<NodeId>,
 }
 
 /// The scope roots this pass's focus legs grouped by: the proved set and the
@@ -187,6 +189,20 @@ impl LegScopes {
             .collect();
         Self { own, owed_moves }
     }
+}
+
+/// [`LegScopes::new`] over this pass's proved roots and this session's
+/// minted ones.
+fn leg_scopes(
+    state: &SessionState,
+    scopes: &ScopeSets,
+    owed_moves: Option<Vec<(NodeId, NodeId)>>,
+) -> LegScopes {
+    LegScopes::new(
+        &scopes.proved,
+        &state.minted_scope_roots.borrow(),
+        owed_moves,
+    )
 }
 
 /// One scope leg's material, with the second scope that an owed interior move
@@ -871,11 +887,7 @@ where
             unproved: state.unproved_scope_roots.borrow().clone(),
         };
         let owed_moves = self.owed_moves(state, pass).await;
-        let leg_scopes = LegScopes::new(
-            &scopes.proved,
-            &state.minted_scope_roots.borrow(),
-            owed_moves,
-        );
+        let leg_scopes = leg_scopes(state, &scopes, owed_moves);
         let own = &leg_scopes.own;
         let focus_scope_ids = focus_scope_roots(own, &scopes.unproved);
         let mut by_scope = focus_by_scope(
@@ -910,16 +922,7 @@ where
             .flat_map(|targets| targets.folders.iter().chain(&targets.files).copied())
             .collect();
         let mut read_pins: BTreeSet<Vec<u8>> = BTreeSet::new();
-        let legs = ScopeLegContext {
-            floors: &self.seams.floors,
-            sharers: grafted,
-            contact_label_seed: &pass.contact_label_seed,
-            own_root: self.root_id,
-            own,
-            unproved: &scopes.unproved,
-            base: &state.snapshot,
-            root_name: Some(&pass.root_name),
-        };
+        let legs = self.leg_context(state, pass, grafted, &leg_scopes, &scopes.unproved);
         for (scope_root, targets) in by_scope {
             let left = leg_scopes.owed_moves.get(&scope_root).copied();
             let leg = match legs
@@ -1187,6 +1190,33 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            deferred_raises: state
+                .deferred_raises
+                .borrow()
+                .iter()
+                .map(|key| NodeId(key.1))
+                .collect(),
+        }
+    }
+
+    /// What every scope leg of this pass reads alike.
+    fn leg_context<'a>(
+        &'a self,
+        state: &'a SessionState,
+        pass: &'a Pass,
+        sharers: &'a GraftedSharers,
+        leg_scopes: &'a LegScopes,
+        unproved: &'a BTreeSet<NodeId>,
+    ) -> ScopeLegContext<'a, F> {
+        ScopeLegContext {
+            floors: &self.seams.floors,
+            sharers,
+            contact_label_seed: &pass.contact_label_seed,
+            own_root: self.root_id,
+            own: &leg_scopes.own,
+            unproved,
+            base: &state.snapshot,
+            root_name: Some(&pass.root_name),
         }
     }
 
@@ -1225,6 +1255,7 @@ where
             proved_roots,
             granted_namespaces,
             descendants,
+            deferred_raises,
         } = assembly;
         let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
         let drivable: Vec<_> = descendants
@@ -1365,10 +1396,27 @@ where
                 }),
             })
             .collect();
-        let owed_moves: Option<Vec<NodeId>> = self
-            .owed_moves(state, pass)
-            .await
-            .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
+        let owed = self.owed_moves(state, pass).await;
+        let owed_moves: Option<Vec<NodeId>> = owed
+            .as_ref()
+            .map(|moves| moves.iter().map(|(scope, _)| *scope).collect());
+        let leg_scopes = leg_scopes(state, scopes, owed);
+        let sharers = state.grafted_sharers.borrow().clone();
+        let legs = self.leg_context(state, pass, &sharers, &leg_scopes, &scopes.unproved);
+        let mut owed_legs = Vec::new();
+        for (&root, &left) in &leg_scopes.owed_moves {
+            if let Ok(leg) = legs
+                .leg_material(root, Some(left), &state.scope_read_seeds)
+                .await
+                && leg.scope == root
+            {
+                owed_legs.push(leg);
+            }
+        }
+        let owed_move_reads: Vec<(NodeId, OwedMoveLeg<'_>)> = owed_legs
+            .iter()
+            .filter_map(|leg| Some((leg.scope, leg.owed_move_leg()?)))
+            .collect();
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1378,6 +1426,8 @@ where
                 bin_retention_days: owner_bin_retention_days(&state.settings_summary),
                 retention: owner_retention(&state.settings_summary),
                 owed_moves: owed_moves.as_deref(),
+                owed_move_reads: &owed_move_reads,
+                deferred_raises: &deferred_raises,
             },
         );
         drain
@@ -1625,6 +1675,7 @@ where
             permissions: &state.bookmarked_permissions,
             claims: &state.grafted_claims,
             pointer_pins: &state.pointer_pins,
+            deferred_raises: &state.deferred_raises,
             root_sequences: &state.root_sequences,
             events: &self.seams.events,
         }

@@ -163,7 +163,7 @@ where
         )
         .await
         {
-            Ok(vouched) => vouched?,
+            Ok(vouched) => vouched.map(|held| (held.root, held.write_floor))?,
             Err(PointerConsultError::Rejected) => {
                 emit_trust_violation(
                     &self.seams.events,

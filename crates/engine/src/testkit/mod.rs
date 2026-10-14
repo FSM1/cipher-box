@@ -61,6 +61,18 @@ pub fn without_scope_pointer_names(
     bare
 }
 
+/// The write-epoch lease of one scope, held for a test as a publish of this
+/// device holds it, so a sighting raise of that scope defers until the drop.
+pub struct HeldWriteEpochLease {
+    _lease: crate::gate::floor::WriteEpochLease,
+}
+
+/// Take `scope_id`'s write-epoch lease, or `None` when it is already held.
+pub fn hold_write_epoch_lease(scope_id: &[u8; 16]) -> Option<HeldWriteEpochLease> {
+    crate::gate::floor::acquire_write_epoch_lease(scope_id)
+        .map(|lease| HeldWriteEpochLease { _lease: lease })
+}
+
 /// Compiles only while the bearer a request carries wipes itself on drop.
 /// The proof is the type, so the test never reads the credential.
 #[track_caller]

@@ -12176,6 +12176,92 @@ fn an_owed_interior_move_still_reports_a_hostile_interior_node() {
     }
 }
 
+/// A link mint whose interior move stops at `inner`, which leaves the create
+/// of that unmoved folder queued as a kept op. Returns `inner`.
+fn stalled_mint_over_a_kept_create(fx: &mut GrantScenario) -> NodeId {
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    fx.world
+        .record_store
+        .fail_put_for(write_name(inner).as_str());
+    fx.mint_link();
+    settle_filed_sweeps(fx);
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the move is owed");
+    fx.world
+        .record_store
+        .heal_put_for(write_name(inner).as_str());
+    assert!(
+        queued_targets(&fx.owner_device).contains(&inner),
+        "the create of the unmoved folder is still queued"
+    );
+    events_so_far(&mut fx._events);
+    inner
+}
+
+/// The drain's read of an unmoved interior folder of an owed move opens it
+/// under the scope its tag names, so the tick after the mint sends no abuse
+/// event, and the move then lands (ADR 0072 D1).
+#[test]
+fn the_drain_reads_an_unmoved_interior_folder_of_an_owed_move_with_no_abuse() {
+    let mut fx = GrantScenario::new();
+    let inner = stalled_mint_over_a_kept_create(&mut fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        "{events:?}"
+    );
+    assert_eq!(owed_entry(&fx), None, "the move landed");
+    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    assert!(
+        opens_under(&fx, inner, &read_key_under(&override_seed, inner)),
+        "the folder moved into the new scope"
+    );
+}
+
+/// The control: a record that a bound scope does not open, and a record whose
+/// tag names a third scope, are each exactly one trust violation of the drain.
+#[test]
+fn the_drain_still_reports_a_hostile_interior_folder_of_an_owed_move() {
+    for (case, scope) in [("bound scope", SCOPE), ("third scope", [0x33; 16])] {
+        let mut fx = GrantScenario::new();
+        let inner = stalled_mint_over_a_kept_create(&mut fx);
+        reseal_interior_node(
+            &fx.world,
+            &fx.blocks,
+            inner,
+            scope,
+            &[0x5a; 32],
+            published_read_epoch(&fx.world, &fx.blocks, ROOT),
+        );
+
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+        let reported = abuse_descriptions(&mut fx._events);
+        assert_eq!(reported.len(), 1, "{case}: {reported:?}");
+        assert!(
+            reported[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {reported:?}"
+        );
+    }
+}
+
 /// A revoke runs several gated scope-root reads, so its refusal names the read
 /// that refused. The command read runs on the last copy, and a read-only cut
 /// keeps the stop at the read cascade (ADR 0068 D1 and D3).
