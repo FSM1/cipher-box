@@ -56,7 +56,11 @@ or while a mark exists that will not read. A confirmed publish above the mark re
 that will not read stands for any sequence, so the publish signs above the sequence floor plus the
 attempt budget. For a dropped create, the settle treats the name as holding nothing only when
 every endpoint answers that it holds no record, this device holds no sequence floor for the name,
-and no mark exists for the node; any other read waits.
+and no mark is held at that name; any other read waits. Amended by
+[ADR 0076](./0076-a-put-that-no-endpoint-acknowledged-holds-its-signed-sequence-as-a-second-mark.md)
+D2, D4 and D5 on 2026-10-15: a PUT that no endpoint acknowledged holds its signed sequence as a
+second mark, which the settle reads and the signature does not; only a confirmed publish above
+that mark clears it; and the vacancy rule for a dropped create holds whatever mark is held.
 
 ## Alternatives considered
 
