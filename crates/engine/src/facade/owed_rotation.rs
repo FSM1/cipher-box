@@ -165,6 +165,9 @@ pub(super) const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy
 /// The folder answers as no scope root, and nothing owner-signed proves the
 /// promotion never ran.
 const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
+/// The folder answers as no scope root, and this device never sent the root
+/// PUT of its promotion, so the share did not complete.
+const OWED_MOVE_NEVER_PROMOTED: &str = "owed-interior-move-share-not-completed";
 /// The root claims the owed write epoch, and no owner-signed pointer vouches
 /// for the root it moved to.
 const OWED_WAVE_UNVOUCHED: &str = "owed-write-cut-unvouched";
@@ -986,8 +989,12 @@ where
             }
             // A parent-scope writer can publish a record at the folder's name,
             // so a root with no grant section does not prove the promotion
-            // never ran.
-            Ok(None) => Err(OwedStop::pending(OWED_MOVE_NOT_PROMOTED)),
+            // never ran. The promotion seeds the write-epoch floor before its
+            // root PUT, so with no floor this device sent no PUT (ADR 0063 D5).
+            Ok(None) => match floor::write_epoch_floor(self.floors, &node.0).await {
+                Ok(None) => Err(OwedStop::abandoned(OWED_MOVE_NEVER_PROMOTED)),
+                _ => Err(OwedStop::pending(OWED_MOVE_NOT_PROMOTED)),
+            },
             Err(e) => Err(OwedStop::of_grant(&e)),
         }
     }
