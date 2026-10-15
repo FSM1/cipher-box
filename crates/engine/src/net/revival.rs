@@ -29,6 +29,7 @@ use super::register::register;
 use super::renewal_walk::{
     FloorRule, RenewalSeams, sign_admitted, transient_registration, transient_renewal,
 };
+use super::retire::HeldMarks;
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, load_bin_index};
@@ -155,6 +156,8 @@ pub(crate) struct ReviveRequest<'a, P> {
     /// as for a scope root after a write rotation.
     pub(crate) signer: Option<&'a Ed25519Signer>,
     pub(crate) plane: P,
+    /// The node's marks, which the signature clears (ADR 0076 D3).
+    pub(crate) held: HeldMarks,
 }
 
 /// One revival's result.
@@ -373,8 +376,9 @@ struct Lapsed<'a> {
 
 /// Revive each lapsed name in `requests` (ADR 0062 D1): admit each through
 /// the read of its plane, register the admitted names in one batch, then sign
-/// each at `S + 1` with the renewal EOL. Each recovery fetch waits for a slot
-/// of `pace`. One result for each request, in order.
+/// each at `S + 1`, or above the request's marks, with the renewal EOL. Each
+/// recovery fetch waits for a slot of `pace`. One result for each request, in
+/// order.
 pub(crate) async fn revive<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
@@ -416,7 +420,7 @@ where
         let result = match (result, &registered) {
             (Err((error, _)), _) => Err(error),
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
-            (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed).await,
+            (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed, request.held).await,
         };
         let restored = restored && (result.is_ok() || request.plane.admit_writes_floor());
         revived.push(Revival { result, restored });
@@ -579,10 +583,12 @@ where
 }
 
 /// Steps 5 and 6: the fan-out still corroborates the admitted record, then the
-/// renewal walk's signature path signs at `S + 1`.
+/// renewal walk's signature path signs at `S + 1`, or above the request's
+/// marks.
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
+    held: HeldMarks,
 ) -> Result<PublishOutcome, ReviveError>
 where
     T: RecordTransport + Clone + 'static,
@@ -604,6 +610,7 @@ where
         FloorRule::AtMost,
         &lapsed.signer,
         &lapsed.value,
+        held,
     )
     .await
     .ok_or(ReviveError::Moved)?
@@ -951,6 +958,7 @@ mod tests {
                 name,
                 signer,
                 plane,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0)
@@ -1007,6 +1015,7 @@ mod tests {
                 name: &name,
                 signer: Some(signer),
                 plane,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0)
@@ -1419,6 +1428,7 @@ mod tests {
                 name,
                 signer: Some(signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             })
             .collect();
         let results = revive_all(&world, &device, &requests);
@@ -1451,6 +1461,7 @@ mod tests {
                 name: &name,
                 signer: Some(&signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             }],
         );
         assert_eq!(results, [Err(ReviveError::WrongSigner)]);
@@ -1972,6 +1983,7 @@ mod tests {
                 name: &name,
                 signer: Some(&signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0);

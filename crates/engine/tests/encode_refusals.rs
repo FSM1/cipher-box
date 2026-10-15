@@ -30,7 +30,7 @@ use cipherbox_engine::net::renewal_walk::cursor::{
     CursorCodecError, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor,
     encode_cursor,
 };
-use cipherbox_engine::net::retire::StagingRetireLedger;
+use cipherbox_engine::net::retire::{Acknowledged, StagingRetireLedger};
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
@@ -105,6 +105,31 @@ fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
     assert_eq!(journaled.len(), 1);
     for entry in refused {
         assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
+    }
+    assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
+}
+
+/// The decoder reads an unacknowledged mark at sequence zero, or at a name
+/// that is not an IPNS name, as unreadable. So the hold refuses one and stores
+/// nothing (ADR 0076 D1).
+#[test]
+fn an_unacknowledged_mark_the_decoder_reads_as_unreadable_is_refused_at_hold() {
+    let store = InMemoryStagingStore::default();
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(4));
+    let ledger = StagingRetireLedger::new(&store, BookkeepingSeal::new(&enc, &entropy));
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x73; 32]).verifying_key());
+    block_on(ledger.hold_unacknowledged(b"owner", [7; 16], name.as_str(), 3))
+        .expect("a signed sequence at an IPNS name holds");
+    assert_eq!(
+        block_on(ledger.unacknowledged(b"owner", [7; 16], name.as_str())).expect("reads"),
+        Acknowledged::At(3)
+    );
+    block_on(ledger.forget_unacknowledged(b"owner", [7; 16])).expect("forgets");
+    for (refused, sequence) in [(name.as_str(), 0), ("", 3), ("k51qzowningrecord", 3)] {
+        assert!(
+            block_on(ledger.hold_unacknowledged(b"owner", [7; 16], refused, sequence)).is_err()
+        );
     }
     assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
 }
