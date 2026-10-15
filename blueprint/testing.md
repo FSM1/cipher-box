@@ -325,14 +325,20 @@ scenario fails the meta-test):
   name (`tests/encode_refusals.rs`);
 - the unacknowledged mark (ADR 0076) — a dropped version whose PUT landed
   with no ack retires nothing its record names, an outage retry signs at one
-  sequence, a publish that ties the mark leaves it and the debt waits, a
-  dropped create that was acknowledged settles on vacancy, a dead-lettered
-  create is linked by no folder, and a vacancy settle with a mark at another
-  name retires only under its own name (`tests/write_plane.rs`); a dead
-  letter above the served sequence still renews and revives, an outage dead
-  letter renews above its mark and its debt then settles, and a mark that
-  does not open renews and revives above the floor plus the attempt budget
-  plus one (`tests/renewal_walk.rs`); the mark is invisible to the
+  sequence, a publish that ties the mark leaves it and the debt waits, a prune
+  that ties the mark retires nothing the hidden record names, a mark that
+  does not open makes the publish sign above its bound and clears on the
+  confirm, an unreadable unacknowledged mark never hides a higher
+  acknowledged mark, a dropped create that was acknowledged settles on
+  vacancy, a dead-lettered create is linked by no folder, and a vacancy
+  settle with a mark at another name retires only under its own name
+  (`tests/write_plane.rs`); a dead letter above the served sequence renews
+  and revives one above its mark, an outage dead letter renews above its
+  mark and its debt then settles, and revives above it after a full lapse,
+  and a mark that does not open renews (and is reported) and revives above
+  the floor plus the attempt budget plus one (`tests/renewal_walk.rs`); both
+  marks clear and hold each on their own (`net::retire`); the mark is
+  invisible to the
   acknowledged read (`net::retire`) and orphan GC spares it (`sync::staging`)
   (ADR 0020); the hold refuses a sequence of zero or a name that is not an
   IPNS name (`tests/encode_refusals.rs`);

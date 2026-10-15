@@ -235,9 +235,10 @@ const ENTRY_HEAD_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>();
 const NODE_ID_LEN: usize = 16;
 
 /// A node's acknowledged sequence at one name, as the ledger holds it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Acknowledged {
     /// None is held for the name.
+    #[default]
     Nothing,
     /// The highest sequence acknowledged at the name.
     At(u64),
@@ -247,23 +248,9 @@ pub enum Acknowledged {
 }
 
 impl Acknowledged {
-    /// The higher of two marks. A mark that does not read stands for any
-    /// sequence, so it is the higher.
-    #[must_use]
-    pub fn higher(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Unreadable, _) | (_, Self::Unreadable) => Self::Unreadable,
-            (Self::At(held), Self::At(other)) => Self::At(held.max(other)),
-            (Self::At(held), Self::Nothing) | (Self::Nothing, Self::At(held)) => Self::At(held),
-            (Self::Nothing, Self::Nothing) => Self::Nothing,
-        }
-    }
-
     /// The sequence a signature over this mark signs above, at the name's
-    /// sequence `floor`. A mark that does not read stands for the highest
-    /// value either mark can hold: the attempt budget bounds the acknowledged
-    /// mark above the floor, and the unacknowledged one is at most one higher
-    /// (ADR 0076 D2, D3).
+    /// sequence `floor`. A mark that does not read is signed above the floor
+    /// plus the attempt budget plus one (ADR 0076 D2, D3).
     #[must_use]
     pub fn cleared_by(self, floor: Option<u64>) -> u64 {
         match self {
@@ -273,6 +260,47 @@ impl Acknowledged {
                 .unwrap_or(0)
                 .saturating_add(u64::from(ATTEMPT_BUDGET) + 1),
         }
+    }
+}
+
+/// A node's two marks at one name: the acknowledged sequence and the
+/// unacknowledged one (ADR 0076 D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeldMarks {
+    /// The acknowledged mark (ADR 0054 D2).
+    pub acked: Acknowledged,
+    /// The unacknowledged mark.
+    pub unacked: Acknowledged,
+}
+
+impl HeldMarks {
+    /// The sequence a signature over both marks signs above, at the name's
+    /// sequence `floor`. Each mark keeps its own value, so a mark that does
+    /// not read never hides a higher one that does.
+    #[must_use]
+    pub fn cleared_by(self, floor: Option<u64>) -> u64 {
+        self.acked
+            .cleared_by(floor)
+            .max(self.unacked.cleared_by(floor))
+    }
+
+    /// Whether either mark does not read.
+    #[must_use]
+    pub fn unreadable(self) -> bool {
+        self.acked == Acknowledged::Unreadable || self.unacked == Acknowledged::Unreadable
+    }
+
+    /// Whether a record at `sequence` may be one that a mark stands for, so a
+    /// settle that reads it waits.
+    #[must_use]
+    pub fn hold(self, sequence: u64) -> bool {
+        [self.acked, self.unacked]
+            .into_iter()
+            .any(|mark| match mark {
+                Acknowledged::Nothing => false,
+                Acknowledged::At(held) => sequence <= held,
+                Acknowledged::Unreadable => true,
+            })
     }
 }
 
@@ -2352,22 +2380,31 @@ mod tests {
         });
     }
 
-    /// One mark that does not read stands for any sequence, and a signature
-    /// over it clears the floor plus the attempt budget plus one.
+    /// A signature over both marks clears the higher of their values, and a
+    /// mark that does not read stands for the floor plus the attempt budget
+    /// plus one without hiding a readable mark above that. A settle waits at
+    /// or below either mark, and always under one that does not read.
     #[test]
-    fn the_higher_mark_is_the_unreadable_one_and_it_clears_the_bound() {
+    fn held_marks_clear_and_hold_each_mark_on_its_own() {
+        let marks = |acked, unacked| HeldMarks { acked, unacked };
+        let bound = 4 + u64::from(ATTEMPT_BUDGET) + 1;
         assert_eq!(
-            Acknowledged::At(3).higher(Acknowledged::At(5)),
-            Acknowledged::At(5)
+            marks(Acknowledged::At(3), Acknowledged::At(5)).cleared_by(Some(4)),
+            5
         );
         assert_eq!(
-            Acknowledged::Nothing.higher(Acknowledged::At(2)),
-            Acknowledged::At(2)
+            marks(Acknowledged::At(40), Acknowledged::Unreadable).cleared_by(Some(4)),
+            40,
+            "an unreadable mark never hides a readable one above its bound"
         );
         assert_eq!(
-            Acknowledged::At(9).higher(Acknowledged::Unreadable),
-            Acknowledged::Unreadable
+            marks(Acknowledged::At(5), Acknowledged::Unreadable).cleared_by(Some(4)),
+            bound
         );
+        assert!(marks(Acknowledged::Nothing, Acknowledged::At(5)).hold(5));
+        assert!(!marks(Acknowledged::Nothing, Acknowledged::At(5)).hold(6));
+        assert!(marks(Acknowledged::Unreadable, Acknowledged::Nothing).hold(1000));
+        assert!(!HeldMarks::default().hold(1));
         assert_eq!(Acknowledged::Nothing.cleared_by(Some(4)), 0);
         assert_eq!(Acknowledged::At(7).cleared_by(Some(4)), 7);
         assert_eq!(

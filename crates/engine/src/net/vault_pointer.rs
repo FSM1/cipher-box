@@ -17,7 +17,7 @@ use super::fanout::{FanoutRecord, TiedFetch, fanout_get_classified, fanout_get_t
 use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
 use super::resolve::unavailable_below_floor;
-use super::retire::Acknowledged;
+use super::retire::HeldMarks;
 use super::revival::{
     Admitted, PlaneRead, PlaneRefusal, RecoveryPace, Revival, ReviveError, ReviveRequest,
     revive_name,
@@ -402,8 +402,9 @@ where
                     name: &name,
                     signer: Some(&signer),
                     plane: read,
+                    held: HeldMarks::default(),
                 };
-                let revival = revive_name(api, seams, pace, request, Acknowledged::Nothing).await;
+                let revival = revive_name(api, seams, pace, request).await;
                 let stop = revival.result.is_err();
                 pass.unconfirmed = match &revival.result {
                     Ok(_) | Err(ReviveError::Recovery(ApiError::Status { status: 404, .. })) => {

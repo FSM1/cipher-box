@@ -79,7 +79,7 @@ use crate::net::record_publish::{
 };
 use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
-    Acknowledged, AcknowledgedSlot, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
+    Acknowledged, AcknowledgedSlot, HeldMarks, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
     StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::signed_data;
@@ -8540,13 +8540,19 @@ where
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
-        let acked = match owing {
-            OwingRecord::Unconfirmed => self
-                .retire_ledger(scope)
-                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
+        // Every read of a live record waits at or below a mark: a record of
+        // ours there may name what the retire would drop (ADR 0076 D2).
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let marks = HeldMarks {
+            acked: ledger
+                .acknowledged(&owner, node, write_name.as_str())
                 .await
                 .ok()?,
-            _ => Acknowledged::Nothing,
+            unacked: ledger
+                .unacknowledged(&owner, node, write_name.as_str())
+                .await
+                .ok()?,
         };
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
@@ -8567,22 +8573,8 @@ where
             }
             Err(_) => return None,
         };
-        let held = match owing {
-            OwingRecord::Unconfirmed => acked.higher(
-                self.retire_ledger(scope)
-                    .unacknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
-                    .await
-                    .ok()?,
-            ),
-            _ => Acknowledged::Nothing,
-        };
-        if owing == OwingRecord::Unconfirmed
-            && (loaded.tied
-                || match held {
-                    Acknowledged::Nothing => false,
-                    Acknowledged::At(acked) => loaded.observed.sequence() <= acked,
-                    Acknowledged::Unreadable => true,
-                })
+        if (owing == OwingRecord::Unconfirmed && loaded.tied)
+            || marks.hold(loaded.observed.sequence())
         {
             return None;
         }
@@ -9445,23 +9437,24 @@ where
         // signature clears it too. An unacknowledged mark moves the signature
         // only when it does not read, so a retry after an outage never climbs
         // (ADR 0076 D2).
-        let held = match unacked {
-            Acknowledged::Unreadable => Acknowledged::Unreadable,
-            Acknowledged::Nothing | Acknowledged::At(_) => acked,
+        let signing = HeldMarks {
+            acked,
+            unacked: match unacked {
+                Acknowledged::Unreadable => Acknowledged::Unreadable,
+                Acknowledged::Nothing | Acknowledged::At(_) => Acknowledged::Nothing,
+            },
         };
-        let observed = match held {
-            Acknowledged::Nothing => observed,
-            Acknowledged::At(sequence) => observed.clearing(sequence),
-            Acknowledged::Unreadable => {
-                let floor = floor::sequence_floor(
-                    &plane.end.floors(&self.seams.floors),
-                    name.as_str().as_bytes(),
-                )
-                .await
-                .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
-                observed.clearing(held.cleared_by(floor))
-            }
+        let floor = if signing.unreadable() {
+            floor::sequence_floor(
+                &plane.end.floors(&self.seams.floors),
+                name.as_str().as_bytes(),
+            )
+            .await
+            .map_err(|error| PublishHalt::before_the_put(seam(error)))?
+        } else {
+            None
         };
+        let observed = observed.clearing(signing.cleared_by(floor));
         let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await

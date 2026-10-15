@@ -80,7 +80,7 @@ pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_resolved, resolve_and_hold, resolve_gated,
 };
 pub use retire::{
-    ACKED_SEQUENCE_PREFIX, Acknowledged, LiveRecord, NODE_TOMBSTONE_PREFIX, OrphanHeads,
+    ACKED_SEQUENCE_PREFIX, Acknowledged, HeldMarks, LiveRecord, NODE_TOMBSTONE_PREFIX, OrphanHeads,
     RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason, StagingRetireLedger,
     drain_owed_retires, orphaned_head, retire, root_retire_ready,
 };

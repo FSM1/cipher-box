@@ -29,7 +29,7 @@ use super::register::register;
 use super::renewal_walk::{
     FloorRule, RenewalSeams, sign_admitted, transient_registration, transient_renewal,
 };
-use super::retire::Acknowledged;
+use super::retire::HeldMarks;
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, load_bin_index};
@@ -156,6 +156,8 @@ pub(crate) struct ReviveRequest<'a, P> {
     /// as for a scope root after a write rotation.
     pub(crate) signer: Option<&'a Ed25519Signer>,
     pub(crate) plane: P,
+    /// The node's marks, which the signature clears (ADR 0076 D3).
+    pub(crate) held: HeldMarks,
 }
 
 /// One revival's result.
@@ -376,14 +378,11 @@ struct Lapsed<'a> {
 /// the read of its plane, register the admitted names in one batch, then sign
 /// each at `S + 1` with the renewal EOL. Each recovery fetch waits for a slot
 /// of `pace`. One result for each request, in order.
-/// The signature of the request at index `i` clears `held[i]` (ADR 0076 D3);
-/// a request past the end of `held` clears none.
 pub(crate) async fn revive<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     requests: &[ReviveRequest<'_, P>],
-    held: &[Acknowledged],
 ) -> Vec<Revival>
 where
     T: RecordTransport + Clone + 'static,
@@ -412,7 +411,7 @@ where
         register(api, &registrations).await
     };
     let mut revived = Vec::with_capacity(results.len());
-    for (index, (result, request)) in results.into_iter().zip(requests).enumerate() {
+    for (result, request) in results.into_iter().zip(requests) {
         let restored = match &result {
             Ok(lapsed) => lapsed.restored,
             Err((_, restored)) => *restored,
@@ -420,10 +419,7 @@ where
         let result = match (result, &registered) {
             (Err((error, _)), _) => Err(error),
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
-            (Ok(lapsed), Ok(())) => {
-                let held = held.get(index).copied().unwrap_or(Acknowledged::Nothing);
-                sign_lapsed(seams, &lapsed, held).await
-            }
+            (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed, request.held).await,
         };
         let restored = restored && (result.is_ok() || request.plane.admit_writes_floor());
         revived.push(Revival { result, restored });
@@ -431,14 +427,12 @@ where
     revived
 }
 
-/// [`revive`] for the one lapsed name of `request`, whose signature clears
-/// the node's `held` mark.
+/// [`revive`] for the one lapsed name of `request`.
 pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     request: ReviveRequest<'_, P>,
-    held: Acknowledged,
 ) -> Revival
 where
     T: RecordTransport + Clone + 'static,
@@ -448,9 +442,7 @@ where
     Sch: Scheduler + Clone + 'static,
     P: PlaneRead,
 {
-    revive(api, seams, pace, &[request], &[held])
-        .await
-        .remove(0)
+    revive(api, seams, pace, &[request]).await.remove(0)
 }
 
 /// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
@@ -594,7 +586,7 @@ where
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
-    held: Acknowledged,
+    held: HeldMarks,
 ) -> Result<PublishOutcome, ReviveError>
 where
     T: RecordTransport + Clone + 'static,
@@ -945,7 +937,7 @@ mod tests {
             profile: &SyncTimingProfile::CI,
             publishing: &publishing,
         };
-        block_on(revive(&api(device), &seams, pace, requests, &[]))
+        block_on(revive(&api(device), &seams, pace, requests))
     }
 
     /// The one [`Revival`] of `name`, with the restore flag on either result.
@@ -964,6 +956,7 @@ mod tests {
                 name,
                 signer,
                 plane,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0)
@@ -1020,6 +1013,7 @@ mod tests {
                 name: &name,
                 signer: Some(signer),
                 plane,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0)
@@ -1432,6 +1426,7 @@ mod tests {
                 name,
                 signer: Some(signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             })
             .collect();
         let results = revive_all(&world, &device, &requests);
@@ -1464,6 +1459,7 @@ mod tests {
                 name: &name,
                 signer: Some(&signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             }],
         );
         assert_eq!(results, [Err(ReviveError::WrongSigner)]);
@@ -1985,6 +1981,7 @@ mod tests {
                 name: &name,
                 signer: Some(&signer),
                 plane: Admits,
+                held: HeldMarks::default(),
             }],
         )
         .remove(0);

@@ -301,9 +301,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   times. A scope root the walk meets as a child is walked as a root of its own;
   a grant section on any other child outside the bin is a `TrustViolation`.
   When the node holds a mark (its acknowledged or its unacknowledged
-  sequence), the walk and the revival sign above the higher one, not at
-  `S + 1`; a mark that does not open stands for the sequence floor plus the
-  attempt budget plus one (ADR 0076 D3). The walk renews no name in a scope
+  sequence), the walk and its revival sign above the higher one, not at
+  `S + 1`; a mark that does not open is signed above the sequence floor plus
+  the attempt budget plus one and emits `renewalFailed`, and the walk still
+  signs (ADR 0076 D3). The liveness loop and the session-start revivals read
+  neither mark. The walk renews no name in a scope
   that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
   root whose name its write seed does not derive, it emits
   `writeCutUnfinished`, so every owner device shows a write cut that did not
@@ -357,9 +359,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   was acknowledged at (ADR 0054). A PUT that no endpoint acknowledged can still
   land, so it holds its signed sequence as the node's unacknowledged mark,
   under a second key beside the acknowledged one. The signature does not read
-  it, so a retry after an outage signs at the same sequence; the settle waits
-  at or below either mark, and only a confirmed record above the unacknowledged
-  mark clears it (ADR 0076). A dropped create settles once its name holds no
+  it, so a retry after an outage signs at the same sequence. Every settle that
+  reads a live record, a prune's included, waits at or below either mark, and
+  only a confirmed record above the unacknowledged mark clears it (ADR 0076).
+  A dropped create settles once its name holds no
   record, whatever mark is held: the drain publishes a child before its
   parent, so no folder links it. A drop whose staged root is gone, fails its
   own CID, or does not decode journals the same debt from the root CID the op

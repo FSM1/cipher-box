@@ -1418,17 +1418,17 @@ fn a_failed_ledger_read_keeps_the_cursor_for_the_next_pass() {
 /// acknowledged mark can climb.
 const ATTEMPT_BUDGET: u64 = 5;
 
-/// A mark that does not open stands for the highest value either mark can
-/// hold, so the walk signs above the floor plus the attempt budget plus one,
-/// and does not refuse (ADR 0076 D3). This holds for each of the two marks.
+/// A mark that does not open makes the walk sign above the floor plus the
+/// attempt budget plus one. The walk reports the mark and does not refuse
+/// (ADR 0076 D3). This holds for each of the two marks.
 #[test]
-fn an_unreadable_mark_renews_above_the_highest_value_a_mark_can_hold() {
+fn an_unreadable_mark_renews_above_its_bound_and_is_reported() {
     for unacked in [false, true] {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
         let device = world.device(b"a later session");
-        let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+        let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
         let owner = owner_tag(&kdf::enc_subkey(&SECRET));
         let key = if unacked {
             StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
@@ -1447,6 +1447,10 @@ fn an_unreadable_mark_renews_above_the_highest_value_a_mark_can_hold() {
             record_at(&world, &name).sequence,
             before.sequence + ATTEMPT_BUDGET + 2,
             "the walk signs above the floor plus the budget plus one"
+        );
+        assert!(
+            renewal_failed(&mut events, name.as_str(), "does not open"),
+            "the walk reports the mark"
         );
     }
 }
@@ -3422,11 +3426,11 @@ fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
 /// and stores nothing, until the edit dead-letters on its attempt budget. The
 /// acknowledged mark is left above the served sequence. The session ends, and
 /// the same device starts again `days` later, after `prepare` ran. Returns the
-/// served record before and after the walk.
+/// served record before and after the walk, and the mark's sequence.
 fn dead_lettered_above_the_served_sequence(
     days: u32,
     prepare: impl FnOnce(&FakeWorld, &Blocks, &FakeDevice, NodeId),
-) -> (VerifiedRecord, Option<VerifiedRecord>) {
+) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"the device that wrote");
@@ -3467,8 +3471,11 @@ fn dead_lettered_above_the_served_sequence(
             .acknowledged(&owner_tag(&enc), file.0, name.as_str()),
     )
     .expect("the mark reads");
+    let Acknowledged::At(mark) = mark else {
+        panic!("the dead letter leaves a readable mark");
+    };
     assert!(
-        matches!(mark, Acknowledged::At(sequence) if sequence > before.sequence),
+        mark > before.sequence,
         "the dead letter leaves the mark above the served sequence"
     );
     prepare(&world, &blocks, &device, file);
@@ -3488,7 +3495,7 @@ fn dead_lettered_above_the_served_sequence(
                 .and_then(|record| record.verify(&name))
                 .expect("the served record verifies")
         });
-    (before, after)
+    (before, after, mark)
 }
 
 /// A dead letter that leaves the acknowledged mark above the served sequence
@@ -3496,12 +3503,15 @@ fn dead_lettered_above_the_served_sequence(
 /// so its EOL does not lapse.
 #[test]
 fn a_dead_letter_above_the_served_sequence_still_renews_in_the_walk_window() {
-    let (before, after) = dead_lettered_above_the_served_sequence(65, |_, _, _, _| {});
+    let (before, after, mark) = dead_lettered_above_the_served_sequence(65, |_, _, _, _| {});
     let after = after.expect("the record is still served");
-    assert!(
-        after.sequence > before.sequence,
-        "the walk renews the record: it stayed at sequence {} with validity {:?}",
+    assert_eq!(
         after.sequence,
+        mark + 1,
+        "the walk renews the record one above the mark: it stayed at sequence {} \
+         from {} with validity {:?}",
+        after.sequence,
+        before.sequence,
         String::from_utf8_lossy(&after.validity)
     );
 }
@@ -3510,12 +3520,14 @@ fn a_dead_letter_above_the_served_sequence_still_renews_in_the_walk_window() {
 /// into the recovery cache, the device that wrote revives the file.
 #[test]
 fn a_dead_letter_above_the_served_sequence_still_revives_after_a_full_lapse() {
-    let (before, after) = dead_lettered_above_the_served_sequence(100, |world, blocks, _, _| {
-        lapse_into_the_recovery_cache(world, blocks);
-    });
-    assert!(
-        after.is_some_and(|after| after.sequence > before.sequence),
-        "the walk revives the lapsed record above sequence {}",
+    let (before, after, mark) =
+        dead_lettered_above_the_served_sequence(100, |world, blocks, _, _| {
+            lapse_into_the_recovery_cache(world, blocks);
+        });
+    assert_eq!(
+        after.map(|after| after.sequence),
+        Some(mark + 1),
+        "the walk revives the lapsed record at {} one above the mark",
         before.sequence
     );
 }
@@ -3524,7 +3536,10 @@ fn a_dead_letter_above_the_served_sequence_still_revives_after_a_full_lapse() {
 /// lands, no ack), then is discarded. The same device starts again `days`
 /// later and runs the walk. Returns the served record before and after, and
 /// the pending reclaim figure after the walk.
-fn outage_discarded_then_walk(days: u32) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
+fn outage_discarded_then_walk(
+    days: u32,
+    lapse: bool,
+) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"the device that wrote");
@@ -3569,6 +3584,9 @@ fn outage_discarded_then_walk(days: u32) -> (VerifiedRecord, Option<VerifiedReco
     });
     let name = write_name(file);
     let before = record_at(&world, &name);
+    if lapse {
+        lapse_into_the_recovery_cache(&world, &blocks);
+    }
     world.scheduler.advance(DAY * days);
     let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
     until_the_first_walk(&world, &engine, &mut tasks);
@@ -3593,7 +3611,7 @@ fn outage_discarded_then_walk(days: u32) -> (VerifiedRecord, Option<VerifiedReco
 /// discarded version's debt settles.
 #[test]
 fn an_outage_dead_letter_renews_above_its_mark_and_its_debt_then_settles() {
-    let (before, after, pending) = outage_discarded_then_walk(65);
+    let (before, after, pending) = outage_discarded_then_walk(65, false);
     assert_eq!(
         after.expect("the record is still served").sequence,
         before.sequence + 2,
@@ -3602,11 +3620,23 @@ fn an_outage_dead_letter_renews_above_its_mark_and_its_debt_then_settles() {
     assert_eq!(pending, 0, "the discarded debt settles after the renewal");
 }
 
+/// After a full lapse, the walk revives the record above the unacknowledged
+/// mark that an outage dead letter leaves (ADR 0076 D3).
+#[test]
+fn an_outage_dead_letter_revives_above_its_mark_after_a_full_lapse() {
+    let (before, after, _) = outage_discarded_then_walk(100, true);
+    assert_eq!(
+        after.map(|after| after.sequence),
+        Some(before.sequence + 2),
+        "the revival signs above the mark at S + 1"
+    );
+}
+
 /// A revival under a mark that does not open signs above the floor plus the
 /// attempt budget plus one, and does not refuse (ADR 0076 D3).
 #[test]
 fn an_unreadable_mark_still_revives_after_a_full_lapse() {
-    let (before, after) =
+    let (before, after, _) =
         dead_lettered_above_the_served_sequence(100, |world, blocks, device, file| {
             let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
                 &owner_tag(&kdf::enc_subkey(&SECRET)),

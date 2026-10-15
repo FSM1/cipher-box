@@ -13216,46 +13216,58 @@ fn a_discarded_dead_letter_the_previous_release_parked_journals_with_no_name() {
     assert_eq!(owed_names(&alice), vec![None]);
 }
 
+/// The attempt budget, which bounds how far one op climbs the acknowledged
+/// mark above the sequence floor.
+const ATTEMPT_BUDGET: u64 = 5;
+
 /// A mark that will not read may hide any sequence, so the next publish at the
-/// name signs well above the floor rather than at the next sequence.
+/// name signs above the floor plus the attempt budget plus one, and its
+/// confirm drops the mark. This holds for each of the two marks (ADR 0076 D2,
+/// D4).
 #[test]
-fn an_unreadable_acknowledged_sequence_makes_the_publish_sign_above_it() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &[1u8; 200],
-    )
-    .expect("the create commits");
-    tick(&world, &engine, &mut tasks);
-    let node = child_id(&engine, ROOT, "clip.bin");
-    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
-        &owner_tag(&kdf::enc_subkey(&SECRET)),
-        node.0,
-    )
-    .expect("a mark key");
-    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+fn an_unreadable_mark_makes_the_publish_sign_above_its_bound_and_clears_it() {
+    for unacked in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "clip.bin".into(),
+            },
+            &[1u8; 200],
+        )
+        .expect("the create commits");
+        tick(&world, &engine, &mut tasks);
+        let node = child_id(&engine, ROOT, "clip.bin");
+        let floor = sequence_at(&world, &write_name(node));
+        let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+        let key = if unacked {
+            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
+        } else {
+            StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
+        }
+        .expect("a mark key");
+        block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
 
-    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
-    tick(&world, &engine, &mut tasks);
+        write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+        tick(&world, &engine, &mut tasks);
 
-    assert!(
-        sequence_at(&world, &write_name(node)) > 2,
-        "the edit signs above whatever the unreadable mark may hide"
-    );
-    assert!(
-        block_on(alice.staging_store.staged_bytes(&key))
-            .unwrap()
-            .is_none(),
-        "the confirmed publish drops the mark"
-    );
+        assert_eq!(
+            sequence_at(&world, &write_name(node)),
+            floor + ATTEMPT_BUDGET + 2,
+            "the edit signs above the floor plus the budget plus one"
+        );
+        assert!(
+            block_on(alice.staging_store.staged_bytes(&key))
+                .unwrap()
+                .is_none(),
+            "the confirmed publish drops the mark"
+        );
+    }
 }
 
 /// A confirm that reads a tie at our sequence loses the race, yet our PUT was
@@ -20673,5 +20685,162 @@ fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
     assert!(
         dropped.iter().all(|cid| retired.contains(cid)),
         "a record above the mark settles the debt"
+    );
+}
+
+/// `node`'s acknowledged mark at `name`.
+fn acked_mark(device: &FakeDevice, node: NodeId, name: &IpnsName) -> Acknowledged {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(14));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .acknowledged(&owner_tag(&enc), node.0, name.as_str()),
+    )
+    .expect("the mark reads")
+}
+
+/// An unacknowledged mark that does not open never hides a readable
+/// acknowledged mark above its bound. Two edits dead-letter while one endpoint
+/// acks and keeps each PUT but serves no GET, so the acknowledged mark climbs
+/// past the floor plus the attempt budget plus one. The next edit signs above
+/// that mark, so the bytes the endpoint keeps never become the head again.
+#[test]
+fn an_unreadable_unacknowledged_mark_never_hides_a_higher_acknowledged_mark() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let floor = sequence_at(&world, &name);
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 4000);
+    let mut ops = Vec::new();
+    for (round, body) in [[2u8; 200], [3u8; 200]].iter().enumerate() {
+        ops.push(write_file(&mut engine, version(node), body).expect("the edit commits"));
+        let mut passes = 0;
+        while block_on(engine.snapshot(ROOT)).unwrap().dead_letters.len() <= round {
+            tick(&world, &engine, &mut tasks);
+            passes += 1;
+            assert!(passes <= 50, "the attempt budget must be finite");
+        }
+    }
+    let Acknowledged::At(acked) = acked_mark(&alice, node, &name) else {
+        panic!("the dead letters leave a readable acknowledged mark");
+    };
+    assert!(
+        acked > floor + ATTEMPT_BUDGET + 1,
+        "the acknowledged mark climbs past the bound"
+    );
+    let key = StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        node.0,
+    )
+    .expect("a mark key");
+    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+
+    world.record_store.heal_put_endpoint(serving);
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the third edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        sequence_at(&world, &name) > acked,
+        "the edit signs above the readable acknowledged mark"
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id: ops[1] })).expect("the discard");
+    tick(&world, &engine, &mut tasks);
+
+    world.record_store.heal_get_for(name.as_str());
+    let (_reader, reader, _reader_events) = open_reader(&world, &blocks, 400);
+    assert_eq!(
+        block_on(reader.read_content(node)).expect("the head reads"),
+        vec![4u8; 200],
+        "the confirmed edit stays the head over the kept bytes"
+    );
+}
+
+/// A prune that confirms at exactly the unacknowledged mark ties the record an
+/// outage PUT left. That record still names the pruned version, so the prune's
+/// debt retires nothing until a record above the mark confirms (ADR 0076 D2,
+/// D4).
+#[test]
+fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..70u8).map(|byte| byte ^ (version + 3)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let pruned = published_versions(&world.record_store, &blocks, file)[1]
+        .content_cid
+        .clone();
+    let name = write_name(file);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(keeping);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(file), &[9u8; 70]).expect("the edit commits");
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    world.record_store.heal_put_endpoint(keeping);
+    world.record_store.fail_put_endpoint(keeping);
+    world.record_store.heal_put_endpoint(serving);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    block_on(engine.command(Command::DeleteVersion {
+        node: file,
+        content_cid: pruned.clone(),
+    }))
+    .expect("the delete queues");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the prune ties the mark"
+    );
+    let pruned_cid = encode_content_cid_str(&pruned);
+    assert!(
+        !retire_targets(&alice).contains(&pruned_cid),
+        "the record the outage PUT left still names the pruned version"
+    );
+
+    write_file(&mut engine, version(file), &[8u8; 70]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert!(
+        retire_targets(&alice).contains(&pruned_cid),
+        "a record above the mark settles the prune"
     );
 }

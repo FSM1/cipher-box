@@ -34,7 +34,7 @@ use super::publish::{
 };
 use super::register::register;
 use super::renewal_walk::{FloorRule, RenewalSeams, renew_admitted};
-use super::retire::Acknowledged;
+use super::retire::HeldMarks;
 use crate::api::{ApiClient, NameRegistration};
 use crate::grants::grafted::FloorNamespace;
 use crate::profile::SyncTimingProfile;
@@ -521,7 +521,7 @@ where
         rule,
         &held.signer,
         &admitted.value,
-        Acknowledged::Nothing,
+        HeldMarks::default(),
     )
     .await
     else {
