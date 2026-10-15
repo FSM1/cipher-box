@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe } from '../cli';
-import { startInstance } from '../instance';
+import { startInstance, type Instance } from '../instance';
 import { REAL_CLOCK } from '../poll';
 import { deadlines } from '../profile';
 import { Stack, requireFile } from '../stack';
@@ -57,6 +57,10 @@ async function main(): Promise<number> {
 
   const devKey = randomBytes(32).toString('hex');
   const results: MountResult[] = [];
+  const record = (result: MountResult): void => {
+    results.push(result);
+    process.stdout.write(`${line(result)}\n`);
+  };
   // The span runs from the first mount going live, not from its start: a slow
   // first login must not use up the window.
   let origin: number | null = null;
@@ -70,9 +74,9 @@ async function main(): Promise<number> {
       }
       const started = Date.now();
       const offsetMs = origin === null ? 0 : started - origin;
-      let result: MountResult;
+      let instance: Instance;
       try {
-        const instance = await startInstance({
+        instance = await startInstance({
           name: `cadence-${index}`,
           home,
           devKey,
@@ -80,40 +84,35 @@ async function main(): Promise<number> {
           logDir,
           deadlines: budget,
         });
-        const live = Date.now();
-        origin ??= live;
-        let detail: string;
-        try {
-          detail = await listing(instance.mountRoot).catch(
-            (error: unknown) => `the mount table was not read: ${describe(error)}`
-          );
-        } finally {
-          await instance.stop();
-        }
-        result = {
-          offsetMs,
-          outcome: 'live',
-          tookMs: live - started,
-          detail,
-        };
       } catch (error) {
-        result = {
+        record({
           offsetMs,
           outcome: 'failed',
           tookMs: Date.now() - started,
           detail: describe(error),
-        };
+        });
+        // Without a first live mount there is no window to cross.
+        if (origin === null) break;
+        continue;
       }
-      results.push(result);
-      process.stdout.write(`${line(result)}\n`);
-      // Without a first live mount there is no window to cross.
-      if (origin === null) break;
+      const live = Date.now();
+      origin ??= live;
+      const detail = await listing(instance.mountRoot).catch(
+        (error: unknown) => `the mount table was not read: ${describe(error)}`
+      );
+      record({ offsetMs, outcome: 'live', tookMs: live - started, detail });
+      try {
+        await instance.stop();
+      } catch (error) {
+        // The next mount would reuse a mount point that is not clean.
+        throw new Error(`cadence-${index} went live but did not stop: ${describe(error)}`);
+      }
     }
   } finally {
     await stack.stopApi();
   }
 
-  const failed = verdict(cadence, results);
+  const failed = verdict(results);
   process.stdout.write(
     `\n${results.length} mounts, ${failed.length} failed` +
       `${failed.length > 0 ? `: ${failed.map(line).join('; ')}` : ''}\n` +

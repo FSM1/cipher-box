@@ -11,7 +11,7 @@ const DEFAULT_SPAN_MS = 160_000;
 const DEFAULT_EVERY_MS = 5_000;
 
 export interface Cadence {
-  /** The latest offset from the first mount at which a mount still starts. */
+  /** The latest offset from the first live mount at which a mount still starts. */
   spanMs: number;
   /** The interval between two mount starts. */
   everyMs: number;
@@ -58,15 +58,9 @@ export function line(result: MountResult): string {
 }
 
 /**
- * The failures. A run with none that ended before the span is refused: it did
- * not cross the window.
+ * The failed mounts. The loop mounts until `nextStart` finds no slot left in
+ * the span, so a run with no failure has crossed it.
  */
-export function verdict(cadence: Cadence, results: readonly MountResult[]): MountResult[] {
-  const failed = results.filter((result) => result.outcome === 'failed');
-  if (failed.length > 0) return failed;
-  const last = results.at(-1)?.offsetMs ?? 0;
-  if (last + cadence.everyMs <= cadence.spanMs) {
-    throw new Error(`the last mount started at ${last}ms, short of the ${cadence.spanMs}ms span`);
-  }
-  return failed;
+export function verdict(results: readonly MountResult[]): MountResult[] {
+  return results.filter((result) => result.outcome === 'failed');
 }

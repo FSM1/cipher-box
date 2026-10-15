@@ -202,9 +202,10 @@ mod platform {
     /// never passes it to the SMB layer, so it reaches no mount table.
     const FUSE_T_SERVICE: &str = "._smb._tcp.local";
 
-    /// FUSE-T's default instance, which the release before per-mount locations
-    /// mounted under. A crash under it leaves a stale entry this release must
-    /// still clear; the dead-server proof still applies.
+    /// FUSE-T's default instance, which CipherBox mounted under before each
+    /// mount drew a location. A crash under it leaves a stale entry to clear,
+    /// under the same dead-server proof; keep it until no supported release
+    /// mounts under `fuse-t`.
     const LEGACY_INSTANCE: &str = "fuse-t";
 
     /// The mount table, or the refusal an unreadable one is. A `mount` that
@@ -266,7 +267,8 @@ mod platform {
         name.strip_prefix(LOCATION_PREFIX)
             .and_then(|drawn| drawn.split_at_checked(2 * LOCATION_BYTES))
             .is_some_and(|(hex, collision)| {
-                hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                hex.bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
                     && no_collision_or_numbered(collision)
             })
     }
@@ -490,6 +492,7 @@ mod tests {
             "//Guest@CipherBox-._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-a._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-00c0ffee0._smb._tcp.local/CipherBox",
+            "//Guest@CipherBox-DEADBEEF._smb._tcp.local/CipherBox",
             "//Guest@fuse-t-._smb._tcp.local/CipherBox",
             "//Guest@fuse-t-one._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-00c0ffee-._smb._tcp.local/CipherBox",

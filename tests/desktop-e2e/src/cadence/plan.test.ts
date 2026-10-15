@@ -30,22 +30,20 @@ describe('the mount-cadence plan', () => {
   it('reports each failed mount', () => {
     const results = [0, 5_000, 10_000, 15_000].map((at) => result(at));
     results.push(result(20_000, 'failed'));
-    expect(verdict(cadence, results)).toEqual([results[4]]);
-    expect(verdict(cadence, results.slice(0, 4).concat(result(20_000)))).toEqual([]);
+    expect(verdict(results)).toEqual([results[4]]);
+    expect(verdict(results.slice(0, 4).concat(result(20_000)))).toEqual([]);
   });
 
   it('reports a late failure that ended the run before the span', () => {
-    const results = [0, 5_000, 10_000].map((at) => result(at));
-    results.push(result(13_000, 'failed'));
-    expect(verdict(cadence, results)).toEqual([results[3]]);
-    const long = { spanMs: 160_000, everyMs: 5_000 };
-    expect(verdict(long, [result(0), result(130_000, 'failed')])).toEqual([
-      result(130_000, 'failed'),
-    ]);
+    const late = result(130_000, 'failed');
+    expect(verdict([result(0), late])).toEqual([late]);
   });
 
-  it('refuses a run that ended before the span', () => {
-    expect(() => verdict(cadence, [result(0), result(5_000)])).toThrow('short of');
+  it('passes a clean run whose last cycle ran past the span', () => {
+    const long = { spanMs: 160_000, everyMs: 5_000 };
+    // The mount at 152 s took 9 s, so no slot is left in the span.
+    expect(nextStart(long, 152_000 + 9_000)).toBeNull();
+    expect(verdict([result(0), result(147_000), result(152_000)])).toEqual([]);
   });
 
   it('logs the offset, outcome and time of each mount', () => {
