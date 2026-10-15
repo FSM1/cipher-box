@@ -1,6 +1,6 @@
 # ADR 0075: A preserved dead letter records the name of the record its version would have joined
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-15
 - **Date:** 2026-10-14
 - **Relates to:** [#2283](https://github.com/FSM1/cipher-box/issues/2283),
   [ADR 0070](./0070-a-retire-ledger-entry-records-the-name-of-the-record-that-owes-it.md) D1
