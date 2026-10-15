@@ -32,21 +32,22 @@ const NO_ATTR_CACHE: &str = "noattrcache";
 /// (blueprint/desktop.md "Names and attributes").
 const NFC_NAMES: &str = "nfc";
 
-/// FUSE-T names a mount's Bonjour service and host after its `location`, and
-/// the SMB client reaches the mount through that name. Under one shared name a
-/// mount inherits what macOS cached for an earlier server: once that host
-/// record's 120 s lifetime lapses, FUSE-T answers no direct query for it, and
-/// the mount's lookup fails after 30 s. A fresh name per mount is in no cache.
-/// FUSE-T appends `-1`, `-2`, … when concurrent servers collide.
+/// Each mount's FUSE-T `location`, which names its Bonjour service and host
+/// (blueprint/desktop.md "FUSE-T mount name").
 pub(crate) const LOCATION_PREFIX: &str = "CipherBox-";
 
 /// Random bytes in a location: 8 hex characters, far inside a DNS label's 63.
-const LOCATION_BYTES: usize = 4;
+pub(crate) const LOCATION_BYTES: usize = 4;
 
 /// Mount at `mountpoint`, which is prepared first.
 pub fn mount(mountpoint: &Path) -> io::Result<FuseMount> {
-    let location = location(&mut OsEntropy).map_err(io::Error::other)?;
-    FuseMount::at(mountpoint, profile(Some(&location)))
+    let profile = member_profile(&mut OsEntropy).map_err(io::Error::other)?;
+    FuseMount::at(mountpoint, profile)
+}
+
+/// The profile a member's mount is made under, with a location of its own.
+fn member_profile(entropy: &mut dyn Entropy) -> Result<MountProfile, EntropyError> {
+    Ok(profile(Some(&location(entropy)?)))
 }
 
 /// Mount under FUSE-T's default, shared name: the comparison leg of the
@@ -57,7 +58,7 @@ pub fn mount_under_the_shared_name(mountpoint: &Path) -> io::Result<FuseMount> {
 }
 
 /// A location this machine's earlier mounts did not use.
-fn location(entropy: &mut dyn Entropy) -> Result<String, EntropyError> {
+pub(crate) fn location(entropy: &mut dyn Entropy) -> Result<String, EntropyError> {
     let drawn: [u8; LOCATION_BYTES] = fresh_bytes(entropy, "the mount's location")?;
     let suffix: String = drawn.iter().map(|byte| format!("{byte:02x}")).collect();
     Ok(format!("{LOCATION_PREFIX}{suffix}"))
@@ -79,6 +80,19 @@ fn profile(location: Option<&str>) -> MountProfile {
             attribute_cache: false,
             case_insensitive_lookup: false,
         },
+    }
+}
+
+/// An entropy source that draws the same bytes every time, so a test knows the
+/// location it expects.
+#[cfg(test)]
+pub(crate) struct FixedEntropy(pub [u8; LOCATION_BYTES]);
+
+#[cfg(test)]
+impl Entropy for FixedEntropy {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        dest.copy_from_slice(&self.0);
+        Ok(())
     }
 }
 
@@ -107,10 +121,16 @@ mod tests {
             // One DNS label, with room left for FUSE-T's collision suffix.
             assert!(drawn.len() + "-99".len() <= 63);
         }
+    }
+
+    /// The profile a member's mount is made under carries the drawn location.
+    #[test]
+    fn a_member_mount_passes_its_location() {
+        let profile = member_profile(&mut FixedEntropy([0x00, 0xc0, 0xff, 0xee])).expect("entropy");
         assert!(
-            profile(Some(&first))
+            profile
                 .options
-                .contains(&MountOption::CUSTOM(format!("location={first}")))
+                .contains(&MountOption::CUSTOM(format!("location={PROBE}")))
         );
     }
 

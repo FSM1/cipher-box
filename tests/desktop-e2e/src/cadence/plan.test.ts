@@ -34,6 +34,16 @@ describe('the mount-cadence plan', () => {
     expect(verdict(cadence, results.slice(0, 4).concat(result(20_000)))).toEqual([]);
   });
 
+  it('reports a late failure that ended the run before the span', () => {
+    const results = [0, 5_000, 10_000].map((at) => result(at));
+    results.push(result(13_000, 'failed'));
+    expect(verdict(cadence, results)).toEqual([results[3]]);
+    const long = { spanMs: 160_000, everyMs: 5_000 };
+    expect(verdict(long, [result(0), result(130_000, 'failed')])).toEqual([
+      result(130_000, 'failed'),
+    ]);
+  });
+
   it('refuses a run that ended before the span', () => {
     expect(() => verdict(cadence, [result(0), result(5_000)])).toThrow('short of');
   });

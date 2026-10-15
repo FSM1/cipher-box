@@ -1,10 +1,8 @@
 /**
- * The mount-cadence probe: one account mounts, quits, and mounts again every
- * few seconds across the span after its first mount, on one machine. It fails
- * on any mount that does not go live. Dispatch only (blueprint/testing.md).
- *
- * `CIPHERBOX_E2E_SHARED_MOUNT_NAME=1` mounts under FUSE-T's shared default
- * name, the comparison leg.
+ * The mount-cadence probe (blueprint/testing.md "Desktop mounted e2e"): one
+ * account mounts, quits, and mounts again every few seconds for the span after
+ * its first mount went live. It fails on any mount that does not go live.
+ * `CIPHERBOX_E2E_SHARED_MOUNT_NAME=1` is the shared-name comparison leg.
  */
 
 import { execFile } from 'node:child_process';
@@ -62,15 +60,18 @@ async function main(): Promise<number> {
 
   const devKey = randomBytes(32).toString('hex');
   const results: MountResult[] = [];
-  let first: number | null = null;
+  // The span runs from the first mount going live, not from its start: a slow
+  // first login must not use up the window.
+  let origin: number | null = null;
   try {
     for (let index = 0; ; index += 1) {
-      const elapsed = first === null ? 0 : Date.now() - first;
-      const offset = nextStart(cadence, elapsed);
-      if (offset === null) break;
-      await wait(offset - elapsed);
+      if (origin !== null) {
+        const elapsed = Date.now() - origin;
+        const offset = nextStart(cadence, elapsed);
+        if (offset === null) break;
+        await wait(offset - elapsed);
+      }
       const started = Date.now();
-      first ??= started;
       let result: MountResult;
       try {
         const instance = await startInstance({
@@ -81,16 +82,34 @@ async function main(): Promise<number> {
           logDir,
           deadlines: budget,
         });
-        const tookMs = Date.now() - started;
-        const detail = await listing(instance.mountRoot);
-        await instance.stop();
-        result = { offsetMs: started - first, outcome: 'live', tookMs, detail };
+        const live = Date.now();
+        origin ??= live;
+        let detail: string;
+        try {
+          detail = await listing(instance.mountRoot).catch(
+            (error: unknown) => `the mount table was not read: ${describe(error)}`
+          );
+        } finally {
+          await instance.stop();
+        }
+        result = {
+          offsetMs: Math.max(0, started - origin),
+          outcome: 'live',
+          tookMs: live - started,
+          detail,
+        };
       } catch (error) {
-        const tookMs = Date.now() - started;
-        result = { offsetMs: started - first, outcome: 'failed', tookMs, detail: describe(error) };
+        result = {
+          offsetMs: origin === null ? 0 : started - origin,
+          outcome: 'failed',
+          tookMs: Date.now() - started,
+          detail: describe(error),
+        };
       }
       results.push(result);
       process.stdout.write(`${line(result)}\n`);
+      // Without a first live mount there is no window to cross.
+      if (origin === null) break;
     }
   } finally {
     await stack.stopApi();

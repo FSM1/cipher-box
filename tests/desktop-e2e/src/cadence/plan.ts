@@ -1,11 +1,7 @@
 /**
  * The pure parts of the mount-cadence probe: when each mount starts, and what
- * the run concludes.
- *
- * A mount that starts within about 150 s of a machine's first FUSE-T mount,
- * under a name an earlier mount used, can fail to resolve its own server. The
- * probe mounts at a fixed cadence across that span, so a run either crosses
- * the window or reports that it did not.
+ * the run concludes. The window the span crosses: blueprint/desktop.md
+ * "FUSE-T mount name".
  */
 
 export const SPAN_ENV = 'CIPHERBOX_CADENCE_SPAN_MS';
@@ -47,7 +43,7 @@ export function nextStart(cadence: Cadence, elapsedMs: number): number | null {
 }
 
 export interface MountResult {
-  /** The start offset from the first mount. */
+  /** The start offset from the moment the first mount went live. */
   offsetMs: number;
   outcome: 'live' | 'failed';
   /** How long the start took to reach its outcome. */
@@ -61,11 +57,16 @@ export function line(result: MountResult): string {
   return `+${at}s ${result.outcome} after ${result.tookMs}ms: ${result.detail}`;
 }
 
-/** The failures, or a refusal of a run too short to have crossed the window. */
+/**
+ * The failures. A run with none that ended before the span is refused: it did
+ * not cross the window.
+ */
 export function verdict(cadence: Cadence, results: readonly MountResult[]): MountResult[] {
+  const failed = results.filter((result) => result.outcome === 'failed');
+  if (failed.length > 0) return failed;
   const last = results.at(-1)?.offsetMs ?? 0;
   if (last + cadence.everyMs <= cadence.spanMs) {
     throw new Error(`the last mount started at ${last}ms, short of the ${cadence.spanMs}ms span`);
   }
-  return results.filter((result) => result.outcome === 'failed');
+  return failed;
 }

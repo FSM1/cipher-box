@@ -182,7 +182,7 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
-    use crate::adapters::macos::LOCATION_PREFIX;
+    use crate::adapters::macos::{LOCATION_BYTES, LOCATION_PREFIX};
 
     const UMOUNT: &[&str] = &["/sbin/umount", "/usr/sbin/umount"];
     const DISKUTIL: &[&str] = &["/usr/sbin/diskutil"];
@@ -201,6 +201,11 @@ mod platform {
     /// the way it does on Linux: FUSE-T's libfuse shim consumes `fsname` and
     /// never passes it to the SMB layer, so it reaches no mount table.
     const FUSE_T_SERVICE: &str = "._smb._tcp.local";
+
+    /// FUSE-T's default instance, which the release before per-mount locations
+    /// mounted under. A crash under it leaves a stale entry this release must
+    /// still clear; the dead-server proof still applies.
+    const LEGACY_INSTANCE: &str = "fuse-t";
 
     /// The mount table, or the refusal an unreadable one is. A `mount` that
     /// ran and failed reports empty output, which would read as an unmounted
@@ -226,7 +231,7 @@ mod platform {
             || ran(DISKUTIL, &["unmount", "force"], mountpoint);
     }
 
-    /// Whether `mountpoint` is listed, and whether the entry is a FUSE-T mount
+    /// Whether `mountpoint` is listed, and whether the entry is a CipherBox mount
     /// rather than a share the member mounted. Each line reads
     /// `<source> on <mountpoint> (<type>, …)`, and macOS prints the path
     /// literally.
@@ -236,14 +241,15 @@ mod platform {
             let (found, kinds) = rest.rsplit_once(" (")?;
             (Path::new(found) == mountpoint).then(|| {
                 kinds.split(',').next().unwrap_or_default().trim() == OURS
-                    && served_by_fuse_t(source)
+                    && served_for_cipherbox(source)
             })
         })
     }
 
-    /// Whether `source` names a FUSE-T server. An SMB source this does not
-    /// recognize is one to refuse rather than force-unmount, whoever made it.
-    fn served_by_fuse_t(source: &str) -> bool {
+    /// Whether `source` names a FUSE-T server CipherBox mounted: a drawn
+    /// location, or the legacy instance. An SMB source this does not recognize
+    /// is one to refuse rather than force-unmount, whoever made it.
+    fn served_for_cipherbox(source: &str) -> bool {
         let Some(host) = source
             .strip_prefix("//")
             .and_then(|rest| rest.split('/').next())
@@ -251,17 +257,28 @@ mod platform {
             return false;
         };
         let instance = host.rsplit('@').next().unwrap_or(host);
-        let Some(drawn) = instance
-            .strip_suffix(FUSE_T_SERVICE)
-            .and_then(|name| name.strip_prefix(LOCATION_PREFIX))
-        else {
+        let Some(name) = instance.strip_suffix(FUSE_T_SERVICE) else {
             return false;
         };
-        let (suffix, collision) = drawn.split_once('-').unwrap_or((drawn, "0"));
-        !suffix.is_empty()
-            && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && !collision.is_empty()
-            && collision.bytes().all(|byte| byte.is_ascii_digit())
+        if let Some(rest) = name.strip_prefix(LEGACY_INSTANCE) {
+            return no_collision_or_numbered(rest);
+        }
+        let Some(drawn) = name.strip_prefix(LOCATION_PREFIX) else {
+            return false;
+        };
+        let hex = 2 * LOCATION_BYTES;
+        drawn.len() >= hex
+            && drawn.is_char_boundary(hex)
+            && drawn[..hex].bytes().all(|byte| byte.is_ascii_hexdigit())
+            && no_collision_or_numbered(&drawn[hex..])
+    }
+
+    /// Nothing, or FUSE-T's collision suffix `-<digits>`.
+    fn no_collision_or_numbered(rest: &str) -> bool {
+        rest.is_empty()
+            || rest.strip_prefix('-').is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            })
     }
 }
 
@@ -384,7 +401,7 @@ mod tests {
         let table = "\
 /dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)
 //Guest:@CipherBox-00c0ffee._smb._tcp.local/CipherBox on /Users/me/CipherBox (smbfs, nodev, nosuid)
-//Guest:@CipherBox-1a2b3c4d-2._smb._tcp.local/My Vault on /Users/me/My Vault (smbfs, nodev, nosuid)
+//Guest@fuse-t-2._smb._tcp.local/My Vault on /Users/me/My Vault (smbfs, nodev, nosuid)
 //me@files.example.com/backups on /Users/me/Work (smbfs, nodev, nosuid)
 /dev/disk5s1 on /Users/me/Elsewhere (exfat, local, nodev)\n";
 
@@ -395,8 +412,8 @@ mod tests {
         assert_eq!(
             platform::entry(table, Path::new("/Users/me/My Vault")),
             Some(true),
-            "a mount point with a space is printed literally, and a second \
-             FUSE-T server carries a collision suffix"
+            "a mount point with a space is printed literally, and a stale \
+             mount from the release before per-mount locations is still ours"
         );
         assert_eq!(
             platform::entry(table, Path::new("/Users/me/Work")),
@@ -413,6 +430,23 @@ mod tests {
             platform::entry(table, Path::new("/Users/me/CipherBoxBackup")),
             None,
             "a longer path that starts the same is not this mount point"
+        );
+    }
+
+    /// A location `location` draws reads back as this app's from the listing
+    /// the kernel prints for it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_drawn_location_is_read_back_as_this_apps() {
+        use crate::adapters::macos::{FixedEntropy, location};
+
+        let drawn = location(&mut FixedEntropy([0x1a, 0x2b, 0x3c, 0x4d])).expect("entropy");
+        let table = format!(
+            "//Guest:@{drawn}._smb._tcp.local/CipherBox on /Users/me/CipherBox (smbfs, nodev)\n"
+        );
+        assert_eq!(
+            platform::entry(&table, Path::new("/Users/me/CipherBox")),
+            Some(true)
         );
     }
 
@@ -434,15 +468,18 @@ mod tests {
         );
     }
 
-    /// Only the instance names a CipherBox mount gets pass. A source that
-    /// merely reads like one is a share to refuse, and so is a FUSE-T mount
-    /// under the default name, which CipherBox does not mount with.
+    /// Only the instance names CipherBox mounts under pass: a drawn location,
+    /// or the legacy `fuse-t` instance a stale mount from the previous release
+    /// carries, each with FUSE-T's collision suffix or none. A source that
+    /// merely reads like one is a share to refuse.
     #[cfg(target_os = "macos")]
     #[test]
     fn only_a_cipherbox_instance_name_is_read_as_this_apps_server() {
         for source in [
             "//Guest:@CipherBox-00c0ffee._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-1a2b3c4d-11._smb._tcp.local/CipherBox",
+            "//Guest@fuse-t._smb._tcp.local/CipherBox",
+            "//Guest@fuse-t-11._smb._tcp.local/CipherBox",
         ] {
             let table = format!("{source} on /Users/me/CipherBox (smbfs, nodev)\n");
             assert_eq!(
@@ -452,8 +489,11 @@ mod tests {
             );
         }
         for source in [
-            "//Guest@fuse-t._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-._smb._tcp.local/CipherBox",
+            "//Guest@CipherBox-a._smb._tcp.local/CipherBox",
+            "//Guest@CipherBox-00c0ffee0._smb._tcp.local/CipherBox",
+            "//Guest@fuse-t-._smb._tcp.local/CipherBox",
+            "//Guest@fuse-t-one._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-00c0ffee-._smb._tcp.local/CipherBox",
             "//Guest@CipherBox-evil._smb._tcp.local/CipherBox",
             "//Guest@MyCipherBox-00c0ffee._smb._tcp.local/CipherBox",

@@ -29,14 +29,9 @@ on:
         description: 'Git ref to checkout (tag, branch, or SHA)'
         required: false
         type: string
-      # The mount-cadence probe replaces the suites when chosen: on a fresh
-      # macOS runner, one account mounts, quits, and mounts again every few
-      # seconds for the span after its first mount, and any mount that does
-      # not go live fails it. A mount under FUSE-T's shared default name can
-      # fail to resolve its server from about 120 s after the machine's first
-      # FUSE-T mount; `cadence-shared-name` is that comparison leg. Dispatch
-      # only (blueprint/testing.md law 1): its harness compiles and its plan is
-      # tested in the PR gate.
+      # A probe replaces the suites when chosen: the mount-cadence probe and
+      # its shared-name comparison leg (blueprint/testing.md "Desktop mounted
+      # e2e"). Dispatch only; its plan is tested in the PR gate.
       probe:
         description: 'Run a probe instead of the suites'
         required: false
@@ -47,7 +42,7 @@ on:
           - cadence
           - cadence-shared-name
       span_ms:
-        description: 'Probe: how long after the first mount mounts still start, in ms'
+        description: 'Probe: how long after the first live mount mounts still start, in ms'
         required: false
         type: string
         default: '160000'
@@ -57,6 +52,11 @@ on:
         description: 'Git ref to checkout (tag, branch, or SHA)'
         required: false
         type: string
+      probe:
+        description: 'A probe to run instead of the suites; callers keep none'
+        required: false
+        type: string
+        default: none
 
 permissions: {}
 

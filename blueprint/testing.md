@@ -606,10 +606,9 @@ is not the contract gate.
   the new facade: mount round-trip, conflict outcomes, cross-client sync,
   and the new offline-replay and rotation-under-mount flows (desktop.md).
   Its dispatch-only **mount-cadence probe** (`desktop-e2e.yml` input `probe`)
-  mounts one account every 5 s for 160 s on a fresh macOS runner, across the
-  window in which a mount under FUSE-T's shared name did not resolve
-  (desktop.md "FUSE-T mount name"). `cadence-shared-name` is the comparison
-  leg. Its plan is unit-tested and its harness typechecked in the PR gate.
+  mounts one account every 5 s for 160 s after its first mount went live, on
+  a fresh macOS runner (the window: desktop.md "FUSE-T mount name").
+  `cadence-shared-name` is the comparison leg. Its plan is unit-tested and its harness typechecked in the PR gate.
 - **Staging e2e** — the v1 usage profiles (`tests/web-e2e/staging`) against
   the deployed front, reached only when `E2E_BASE_URL` is set. It signs in
   through a shipped method, because a deployed bundle refuses the

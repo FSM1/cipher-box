@@ -137,10 +137,13 @@ File System Proxy, Copyright (C) Bill Zissimopoulos"** and a pointer to
 **FUSE-T mount name.** Each macOS mount gives FUSE-T a `location` of its own,
 `CipherBox-<8 hex>` from OS entropy. FUSE-T names the mount's Bonjour service
 and host after it, and the SMB client resolves the mount through that name.
-Under FUSE-T's shared default name, macOS keeps records from an earlier server,
-and a mount that starts once its 120 s host record has lapsed does not resolve
-and refuses after 30 s. Stale-mount recovery takes this name as the proof that a
-mount is CipherBox's. The mount-cadence probe (testing.md) covers it.
+Under FUSE-T's shared default name, macOS keeps the records of an earlier
+server. The host record lives 120 s, and FUSE-T answers no direct query for the
+host, so a mount that starts in a window just after that record lapses does not
+resolve and refuses after 30 s. CI saw this 122 to 127 s after a runner's first
+mount; a mount at 160 s resolved again. Stale-mount recovery takes this name, or
+the legacy `fuse-t` name of the release before it, as the proof that a mount is
+CipherBox's. The mount-cadence probe (testing.md) covers it.
 
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
