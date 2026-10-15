@@ -1,6 +1,6 @@
 # ADR 0076: A PUT that no endpoint acknowledged holds its signed sequence as a second mark
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-15
 - **Date:** 2026-10-15
 - **Relates to:** [#2430](https://github.com/FSM1/cipher-box/issues/2430),
   [ADR 0054](./0054-a-dropped-versions-debt-carries-its-target-set-and-settles-above-the-acknowledged-sequence.md)
@@ -32,12 +32,12 @@ name that is not an IPNS name, and the decode reads such a body as unreadable (A
 8). The previous release reads only the exact acknowledged key, so it does not see this one,
 and its orphan GC spares the whole `cbx/ra/` prefix.
 
-**D2 — Every settle that reads a live record reads both marks, and the signature reads only the
-acknowledged one.** The settle of a dropped version, of a prune, and of a retired node that it
-reads as published waits while the gated record is at or below either mark, or while a mark does
-not read. The drain's signature clears the acknowledged mark, so a retry after an outage signs at
-the same sequence and nothing climbs. An unacknowledged mark that does not read also moves the
-signature: the publish signs above the sequence floor plus the attempt budget plus one. Each
+**D2 — Every settle that reads a live record reads both marks, and the drain's signature does not
+read a readable unacknowledged mark.** The settle of a dropped version, of a prune, and of a retired
+node that it reads as published waits while the gated record is at or below either mark, or while a
+mark does not read. The drain's signature clears the acknowledged mark, so a retry after an outage
+signs at the same sequence and nothing climbs. An unacknowledged mark that does not read also moves
+the signature: the publish signs above the sequence floor plus the attempt budget plus one. Each
 mark is cleared on its own value, so a mark that does not read never hides a readable one.
 
 **D3 — The renewal walk and the walk's revival sign above each held mark, and do not refuse.**
@@ -50,8 +50,8 @@ another device signs at `S + 1` at the same time then loses to the renewal and r
 **D4 — Only a confirmed publish above the unacknowledged mark clears it.** A publish that
 confirms at exactly the mark's sequence ties the bytes that the mark stands for, so the mark
 stays and a debt keeps waiting. The next record above the mark, a later edit or the walk renewal
-of D3, clears it. A mark that does not read clears on any confirmed publish, which D2 signs
-above its bound.
+of D3, settles the debt. A mark that does not read clears on any confirmed drain publish, which
+D2 signs above its bound.
 
 **D5 — A dropped create settles once its name holds no record, whatever mark is held.** The
 drain publishes a child before its parent and stops at the first failure, so no folder links a

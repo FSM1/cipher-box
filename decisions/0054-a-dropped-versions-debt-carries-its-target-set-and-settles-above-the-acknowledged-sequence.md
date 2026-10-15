@@ -59,10 +59,10 @@ every endpoint answers that it holds no record, this device holds no sequence fl
 and no mark is held at that name; any other read waits. Amended by
 [ADR 0076](./0076-a-put-that-no-endpoint-acknowledged-holds-its-signed-sequence-as-a-second-mark.md)
 D2, D4 and D5 on 2026-10-15: a PUT that no endpoint acknowledged holds its signed sequence as a
-second mark, which every settle that reads a live record reads and the signature does not; a mark
-that will not read makes the publish sign above the sequence floor plus the attempt budget plus
-one; only a confirmed publish above the second mark clears it; and for a dropped create the
-vacancy rule applies whatever mark is held.
+second mark, which every settle that reads a live record reads; the drain's signature does not
+read a readable unacknowledged mark; a mark that will not read makes the publish sign above the
+sequence floor plus the attempt budget plus one; only a confirmed publish above the second mark
+clears it; and for a dropped create the vacancy rule applies whatever mark is held.
 
 ## Alternatives considered
 
@@ -89,8 +89,9 @@ vacancy rule applies whatever mark is held.
    the owner tag and the node, as the tombstone key does, and the value is sealed.
 5. A mark outlives a rotation. It is read against the current write name, so a mark held for an
    old name reads as nothing and stays as one key per node until a confirmed publish removes it.
-6. A rotation re-seal or a liveness re-sign does not read the mark and can tie the dropped
-   record. The settle sees the tie and waits, so the exposure is a delay, not a loss.
+6. A rotation re-seal or a liveness re-sign does not read the mark (either mark, ADR 0076) and can
+   tie the dropped record. The settle sees the tie and waits, so the exposure is a delay, not a
+   loss.
 
 ## Residuals
 
