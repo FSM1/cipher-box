@@ -24,7 +24,7 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{Acknowledged, NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, DebtOrigin, FloorStore, HttpMethod, HttpRequest, HttpResponse, OwedRetire,
+    BoxedTask, DebtOrigin, FloorStore, HttpMethod, HttpRequest, HttpResponse, OpId, OwedRetire,
     RecordTransport, RetireLedger, Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{VaultSettings, settings_name};
@@ -1414,8 +1414,8 @@ fn a_failed_ledger_read_keeps_the_cursor_for_the_next_pass() {
     assert_renewed_at_start(&world, &name, &before, started, "the file");
 }
 
-/// The attempt budget, which bounds how far above the sequence floor the
-/// acknowledged mark can climb.
+/// The attempt budget, which bounds how far one op climbs the acknowledged
+/// mark above the sequence floor.
 const ATTEMPT_BUDGET: u64 = 5;
 
 /// A mark that does not open makes the walk sign above the floor plus the
@@ -1429,19 +1429,7 @@ fn an_unreadable_mark_renews_above_its_bound_and_is_reported() {
         let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
         let device = world.device(b"a later session");
         let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
-        let owner = owner_tag(&kdf::enc_subkey(&SECRET));
-        let key = if unacked {
-            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
-        } else {
-            StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
-        }
-        .expect("a key");
-        block_on(
-            device
-                .staging_store
-                .put_staged_bytes(&key, b"not a sealed mark"),
-        )
-        .expect("stage it");
+        stage_unreadable_mark(&device, node, unacked);
         tick(&world, &engine, &mut tasks);
         assert_eq!(
             record_at(&world, &name).sequence,
@@ -3438,17 +3426,7 @@ fn dead_lettered_above_the_served_sequence(
     written_then_left_on(&world, &blocks, &device, |engine, tasks| {
         file = write_file(&world, engine, tasks, ROOT, "note.txt");
         world.record_store.drop_puts();
-        let body = b"an edit no endpoint keeps";
-        let handle = block_on(engine.begin_write(
-            WriteTarget::Version {
-                node: file,
-                expected_version: None,
-            },
-            body.len() as u64,
-        ))
-        .expect("a write opens");
-        block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
-        block_on(engine.commit_write(handle)).expect("the edit commits");
+        commit_edit(engine, file, b"an edit no endpoint keeps");
         let mut passes = 0;
         while block_on(engine.snapshot(ROOT))
             .expect("a snapshot")
@@ -3479,22 +3457,7 @@ fn dead_lettered_above_the_served_sequence(
         "the dead letter leaves the mark above the served sequence"
     );
     prepare(&world, &blocks, &device, file);
-    world.scheduler.advance(DAY * days);
-    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
-    until_the_first_walk(&world, &engine, &mut tasks);
-    for _ in 0..4 {
-        world.scheduler.advance(Duration::from_secs(60));
-        poll_tasks_until_parked(&mut tasks);
-        tick(&world, &engine, &mut tasks);
-    }
-    let after = world
-        .record_store
-        .record_at(&world.record_store.endpoints()[0], name.as_str())
-        .map(|bytes| {
-            IpnsRecord::unmarshal(&bytes)
-                .and_then(|record| record.verify(&name))
-                .expect("the served record verifies")
-        });
+    let (after, _) = walk_after(&world, &blocks, &device, &name, days, 4);
     (before, after, mark)
 }
 
@@ -3550,17 +3513,7 @@ fn outage_discarded_then_walk(
         for endpoint in &endpoints {
             world.record_store.fail_put_endpoint(endpoint);
         }
-        let body = b"an edit made during an outage";
-        let handle = block_on(engine.begin_write(
-            WriteTarget::Version {
-                node: file,
-                expected_version: None,
-            },
-            body.len() as u64,
-        ))
-        .expect("a write opens");
-        block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
-        let op_id = block_on(engine.commit_write(handle)).expect("the edit commits");
+        let op_id = commit_edit(engine, file, b"an edit made during an outage");
         let mut passes = 0;
         while block_on(engine.snapshot(ROOT))
             .expect("a snapshot")
@@ -3587,23 +3540,67 @@ fn outage_discarded_then_walk(
     if lapse {
         lapse_into_the_recovery_cache(&world, &blocks);
     }
+    let (after, pending) = walk_after(&world, &blocks, &device, &name, days, 6);
+    (before, after, pending)
+}
+
+/// Start `device` again `days` later, run its first walk and then `rounds`
+/// more minutes of ticks. Returns the served record at `name` and the pending
+/// reclaim figure.
+fn walk_after(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    name: &IpnsName,
+    days: u32,
+    rounds: usize,
+) -> (Option<VerifiedRecord>, u64) {
     world.scheduler.advance(DAY * days);
-    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
-    until_the_first_walk(&world, &engine, &mut tasks);
-    for _ in 0..6 {
+    let (engine, _events, mut tasks) = boot(world, blocks, device, 2);
+    until_the_first_walk(world, &engine, &mut tasks);
+    for _ in 0..rounds {
         world.scheduler.advance(Duration::from_secs(60));
         poll_tasks_until_parked(&mut tasks);
-        tick(&world, &engine, &mut tasks);
+        tick(world, &engine, &mut tasks);
     }
-    let after = world
-        .record_store
-        .record_at(&world.record_store.endpoints()[0], name.as_str())
-        .map(|bytes| {
-            IpnsRecord::unmarshal(&bytes)
-                .and_then(|record| record.verify(&name))
-                .expect("the served record verifies")
-        });
-    (before, after, engine.pending_reclaim_bytes())
+    let after = served_at(world, name).map(|bytes| {
+        IpnsRecord::unmarshal(&bytes)
+            .and_then(|record| record.verify(name))
+            .expect("the served record verifies")
+    });
+    (after, engine.pending_reclaim_bytes())
+}
+
+/// Commit `body` as a new version of `file`, with no tick.
+fn commit_edit(engine: &mut Engine<FakeSeamTypes>, file: NodeId, body: &[u8]) -> OpId {
+    let handle = block_on(engine.begin_write(
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        body.len() as u64,
+    ))
+    .expect("a write opens");
+    block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
+    block_on(engine.commit_write(handle)).expect("the edit commits")
+}
+
+/// Stage bytes that do not open under `node`'s unacknowledged mark key, or
+/// under its acknowledged one.
+fn stage_unreadable_mark(device: &FakeDevice, node: NodeId, unacked: bool) {
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let key = if unacked {
+        StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
+    } else {
+        StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
+    }
+    .expect("a key");
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(&key, b"not a sealed mark"),
+    )
+    .expect("stage it");
 }
 
 /// The walk signs above the unacknowledged mark that an outage dead letter
@@ -3638,17 +3635,7 @@ fn an_outage_dead_letter_revives_above_its_mark_after_a_full_lapse() {
 fn an_unreadable_mark_still_revives_after_a_full_lapse() {
     let (before, after, _) =
         dead_lettered_above_the_served_sequence(100, |world, blocks, device, file| {
-            let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
-                &owner_tag(&kdf::enc_subkey(&SECRET)),
-                file.0,
-            )
-            .expect("a key");
-            block_on(
-                device
-                    .staging_store
-                    .put_staged_bytes(&key, b"not a sealed mark"),
-            )
-            .expect("stage it");
+            stage_unreadable_mark(device, file, false);
             lapse_into_the_recovery_cache(world, blocks);
         });
     assert_eq!(

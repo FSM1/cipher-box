@@ -281,8 +281,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   one day after it, or when it is ahead of the clock, each pass of the cycle
   stores where it stopped, across sessions. A permanent failure (no record
   at any endpoint and none cached, a 403 or other 4xx, a decode error) moves
-  the cursor on at once and
-  emits `renewalFailed`. A pass whose doomed-name journal does not list, or
+  the cursor on at once and emits `renewalFailed`. A pass whose doomed-name journal does not list, or
   whose stored cursor does not read, renews nothing, stores nothing and emits
   `renewalFailed` for each owned scope root. A journal entry that does not read or open stops only the scope
   root it was written under: the pass renews no name of that scope, keeps the
@@ -305,8 +304,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   `S + 1`; a mark that does not open is signed above the sequence floor plus
   the attempt budget plus one and emits `renewalFailed`, and the walk still
   signs (ADR 0076 D3). The liveness loop and the session-start revivals read
-  neither mark. The walk renews no name in a scope
-  that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
+  neither mark. The walk renews no name in a scope that has an owed rotation
+  entry (ADR 0063 D4). When it meets an owned scope
   root whose name its write seed does not derive, it emits
   `writeCutUnfinished`, so every owner device shows a write cut that did not
   finish and can finish it.
@@ -362,9 +361,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   it, so a retry after an outage signs at the same sequence. Every settle that
   reads a live record, a prune's included, waits at or below either mark, and
   only a confirmed record above the unacknowledged mark clears it (ADR 0076).
-  A dropped create settles once its name holds no
-  record, whatever mark is held: the drain publishes a child before its
-  parent, so no folder links it. A drop whose staged root is gone, fails its
+  A dropped create settles once its name holds no record, whatever mark is
+  held: the drain publishes a child before its parent, so no folder links it. A drop whose staged root is gone, fails its
   own CID, or does not decode journals the same debt from the root CID the op
   record names (ADR 0059). An entry that records the `ipnsName` of the
   record that owes it is read and retired under that name, wherever the base

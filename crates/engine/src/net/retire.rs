@@ -395,8 +395,7 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
     /// The highest sequence at which this device signed a record at `name`,
     /// `node`'s write-plane name, and sent it with no endpoint acknowledging
     /// it (ADR 0076 D1). Its bytes may still surface, so a settle reads
-    /// nothing at or below it as the node's live record. The signature does
-    /// not read it.
+    /// nothing at or below it as the node's live record.
     pub async fn unacknowledged(
         &self,
         owner_tag: &[u8],
@@ -2343,9 +2342,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         let session = Session::new();
         let ledger = session.ledger(&store);
-        let name = IpnsName::from_public_key(
-            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([0x55; 32]).verifying_key(),
-        );
+        let name = record_name(0x55);
         let name = name.as_str();
         block_on(async {
             ledger
@@ -2407,10 +2404,7 @@ mod tests {
         assert!(!HeldMarks::default().hold(1));
         assert_eq!(Acknowledged::Nothing.cleared_by(Some(4)), 0);
         assert_eq!(Acknowledged::At(7).cleared_by(Some(4)), 7);
-        assert_eq!(
-            Acknowledged::Unreadable.cleared_by(Some(4)),
-            4 + u64::from(ATTEMPT_BUDGET) + 1
-        );
+        assert_eq!(Acknowledged::Unreadable.cleared_by(Some(4)), bound);
         assert_eq!(
             Acknowledged::Unreadable.cleared_by(None),
             u64::from(ATTEMPT_BUDGET) + 1

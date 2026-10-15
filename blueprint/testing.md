@@ -338,9 +338,8 @@ scenario fails the meta-test):
   and a mark that does not open renews (and is reported) and revives above
   the floor plus the attempt budget plus one (`tests/renewal_walk.rs`); both
   marks clear and hold each on their own (`net::retire`); the mark is
-  invisible to the
-  acknowledged read (`net::retire`) and orphan GC spares it (`sync::staging`)
-  (ADR 0020); the hold refuses a sequence of zero or a name that is not an
+  invisible to the acknowledged read (`net::retire`) and orphan GC spares it
+  (`sync::staging`) (ADR 0020); the hold refuses a sequence of zero or a name that is not an
   IPNS name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
@@ -351,8 +350,8 @@ scenario fails the meta-test):
   root or child, a 503 registration, a failed ledger read or a failed PUT
   keeps the cursor for the next pass, across sessions, for one day from the
   cycle's first keep-back at most; a scope root or child with no record and
-  a 4xx registration move the cursor at once and emit `renewalFailed`; a 401 after the refresh keeps
-  the cursor back; a doomed-name journal that does not list, or a cursor that
+  a 4xx registration move the cursor at once and emit `renewalFailed`; a 401
+  after the refresh keeps the cursor back; a doomed-name journal that does not list, or a cursor that
   does not read, renews and stores nothing and emits `renewalFailed`; a journal entry that does not read or
   open stops only its own scope root, and `tests/owner_actions.rs` shows that
   another owned scope still renews; unit tests in

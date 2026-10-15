@@ -9470,17 +9470,15 @@ where
                 }
                 // Only a record above the mark wins over the bytes it stands
                 // for; a tie at its sequence leaves it held (ADR 0076 D4).
-                if match unacked {
-                    Acknowledged::Nothing => false,
-                    Acknowledged::At(held) => held < sequence,
-                    Acknowledged::Unreadable => true,
-                } {
+                if matches!(unacked, Acknowledged::Unreadable)
+                    || matches!(unacked, Acknowledged::At(held) if held < sequence)
+                {
                     let _ = ledger.forget_unacknowledged(&owner, node.0).await;
                 }
                 (record_bytes, bar, sequence)
             }
-            // No ack does not prove that nothing stored. The signature does not
-            // read this mark, and the halt stays an outage.
+            // No ack does not prove that nothing landed, so the halt stays an
+            // outage.
             HeadPublish::Unacknowledged { sequence } => {
                 self.hold_unacknowledged(scope, node, name, sequence)
                     .await

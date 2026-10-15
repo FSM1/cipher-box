@@ -1614,17 +1614,6 @@ mod tests {
         });
     }
 
-    /// Collecting the drain's completion mark would let a restored queue replay
-    /// ops that already published, so it is never orphan residue.
-    ///
-    /// The same holds for a retire-ledger entry, whose collection would drop a
-    /// pending reclaim debt and leak the pinned bytes it names, and for a
-    /// received-shares list, whose collection would lose every accepted share
-    /// whose mailbox item is already acked.
-    ///
-    /// Every prefix is per-identity, so this holds for an entry **this**
-    /// session cannot read too: its owner is the identity that still needs it,
-    /// and collecting it would discard their record.
     /// The unacknowledged mark's key sits under the acknowledged-mark prefix,
     /// so orphan GC spares it, also in the previous release (ADR 0076 D1).
     #[test]
@@ -1636,6 +1625,17 @@ mod tests {
         assert!(is_bookkeeping(&key));
     }
 
+    /// Collecting the drain's completion mark would let a restored queue replay
+    /// ops that already published, so it is never orphan residue.
+    ///
+    /// The same holds for a retire-ledger entry, whose collection would drop a
+    /// pending reclaim debt and leak the pinned bytes it names, and for a
+    /// received-shares list, whose collection would lose every accepted share
+    /// whose mailbox item is already acked.
+    ///
+    /// Every prefix is per-identity, so this holds for an entry **this**
+    /// session cannot read too: its owner is the identity that still needs it,
+    /// and collecting it would discard their record.
     #[test]
     fn the_drains_own_bookkeeping_is_never_classed_an_orphan() {
         let store = InMemoryStagingStore::default();

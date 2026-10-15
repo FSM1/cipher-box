@@ -52,7 +52,7 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::net::eol::renewal_eol_from;
 use cipherbox_engine::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use cipherbox_engine::net::{
-    Acknowledged, ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall,
+    Acknowledged, ChildAdopter, HeldMarks, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall,
     ReclaimStallReason, ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::rotation::derive_write_name;
@@ -13244,14 +13244,7 @@ fn an_unreadable_mark_makes_the_publish_sign_above_its_bound_and_clears_it() {
         tick(&world, &engine, &mut tasks);
         let node = child_id(&engine, ROOT, "clip.bin");
         let floor = sequence_at(&world, &write_name(node));
-        let owner = owner_tag(&kdf::enc_subkey(&SECRET));
-        let key = if unacked {
-            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
-        } else {
-            StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
-        }
-        .expect("a mark key");
-        block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+        let key = stage_unreadable_mark(&alice, node, unacked);
 
         write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
         tick(&world, &engine, &mut tasks);
@@ -13398,6 +13391,22 @@ fn a_dropped_versions_debt_waits_while_its_record_is_tied() {
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
 }
 
+/// Tick until the head op dead-letters on the unattributed budget.
+fn tick_through_the_unattributed_budget(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> Vec<DeadLetter> {
+    let dead_letters = || block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
+    let mut passes = 0;
+    while dead_letters().is_empty() {
+        tick(world, engine, tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    dead_letters()
+}
+
 /// A PUT that lands at an endpoint and comes back with no ack is
 /// `AllEndpointsFailed`, yet its bytes may surface at the name. The dropped
 /// version that PUT carried retires nothing while that endpoint serves no GET,
@@ -13431,18 +13440,8 @@ fn a_dropped_version_whose_put_landed_unacked_retires_nothing_its_record_names()
     serve_http(&alice, &blocks, 2000);
     let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
     let (root_cid, leaves) = staged_version(&alice);
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
     assert_eq!(
-        block_on(engine.snapshot(ROOT)).unwrap().dead_letters,
+        tick_through_the_unattributed_budget(&world, &engine, &mut tasks),
         vec![DeadLetter {
             op_id,
             reason: DeadLetterReason::AttemptsExhausted
@@ -20496,16 +20495,7 @@ fn an_outage_retry_signs_at_one_sequence_so_nothing_climbs() {
     world.record_store.fail_put_endpoint(other);
     serve_http(&alice, &blocks, 2000);
     write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
     let landed = IpnsRecord::unmarshal(
         &world
             .record_store
@@ -20542,16 +20532,7 @@ fn a_create_that_dead_letters_is_linked_by_no_folder() {
         &[1u8; 200],
     )
     .expect("the create commits");
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
     for endpoint in &endpoints {
         world.record_store.heal_put_endpoint(endpoint);
     }
@@ -20583,15 +20564,33 @@ fn a_create_that_dead_letters_is_linked_by_no_folder() {
     );
 }
 
-/// `node`'s unacknowledged mark at `name`, as the settle reads it.
-fn unacked_mark(device: &FakeDevice, node: NodeId, name: &IpnsName) -> Acknowledged {
+/// `node`'s two marks at `name`, as the settle reads them.
+fn held_marks(device: &FakeDevice, node: NodeId, name: &IpnsName) -> HeldMarks {
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(13));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
-            .unacknowledged(&owner_tag(&enc), node.0, name.as_str()),
-    )
-    .expect("the mark reads")
+    let ledger =
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy));
+    let owner = owner_tag(&enc);
+    HeldMarks {
+        acked: block_on(ledger.acknowledged(&owner, node.0, name.as_str()))
+            .expect("the mark reads"),
+        unacked: block_on(ledger.unacknowledged(&owner, node.0, name.as_str()))
+            .expect("the mark reads"),
+    }
+}
+
+/// Stage bytes that do not open under `node`'s unacknowledged mark key, or
+/// under its acknowledged one, and return the key.
+fn stage_unreadable_mark(device: &FakeDevice, node: NodeId, unacked: bool) -> Vec<u8> {
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let key = if unacked {
+        StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
+    } else {
+        StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
+    }
+    .expect("a mark key");
+    block_on(device.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+    key
 }
 
 /// The unacknowledged mark clears only on a confirmed publish above it (ADR
@@ -20626,21 +20625,12 @@ fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
     serve_http(&alice, &blocks, 2000);
     let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
     let (root_cid, leaves) = staged_version(&alice);
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
     for endpoint in &endpoints {
         world.record_store.heal_put_endpoint(endpoint);
     }
     assert_eq!(
-        unacked_mark(&alice, node, &name),
+        held_marks(&alice, node, &name).unacked,
         Acknowledged::At(served + 1)
     );
     block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
@@ -20665,7 +20655,7 @@ fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
         "the edit ties the mark"
     );
     assert_eq!(
-        unacked_mark(&alice, node, &name),
+        held_marks(&alice, node, &name).unacked,
         Acknowledged::At(served + 1),
         "a tie leaves the mark"
     );
@@ -20677,7 +20667,7 @@ fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
     tick(&world, &engine, &mut tasks);
     assert_eq!(sequence_at(&world, &name), served + 2);
     assert_eq!(
-        unacked_mark(&alice, node, &name),
+        held_marks(&alice, node, &name).unacked,
         Acknowledged::Nothing,
         "a record above the mark clears it"
     );
@@ -20686,17 +20676,6 @@ fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
         dropped.iter().all(|cid| retired.contains(cid)),
         "a record above the mark settles the debt"
     );
-}
-
-/// `node`'s acknowledged mark at `name`.
-fn acked_mark(device: &FakeDevice, node: NodeId, name: &IpnsName) -> Acknowledged {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(14));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
-            .acknowledged(&owner_tag(&enc), node.0, name.as_str()),
-    )
-    .expect("the mark reads")
 }
 
 /// An unacknowledged mark that does not open never hides a readable
@@ -20739,19 +20718,14 @@ fn an_unreadable_unacknowledged_mark_never_hides_a_higher_acknowledged_mark() {
             assert!(passes <= 50, "the attempt budget must be finite");
         }
     }
-    let Acknowledged::At(acked) = acked_mark(&alice, node, &name) else {
+    let Acknowledged::At(acked) = held_marks(&alice, node, &name).acked else {
         panic!("the dead letters leave a readable acknowledged mark");
     };
     assert!(
         acked > floor + ATTEMPT_BUDGET + 1,
         "the acknowledged mark climbs past the bound"
     );
-    let key = StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(
-        &owner_tag(&kdf::enc_subkey(&SECRET)),
-        node.0,
-    )
-    .expect("a mark key");
-    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+    stage_unreadable_mark(&alice, node, true);
 
     world.record_store.heal_put_endpoint(serving);
     write_file(&mut engine, version(node), &[4u8; 200]).expect("the third edit commits");
@@ -20801,16 +20775,7 @@ fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_n
     world.record_store.fail_put_endpoint(serving);
     serve_http(&alice, &blocks, 2000);
     let op_id = write_file(&mut engine, version(file), &[9u8; 70]).expect("the edit commits");
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
     world.record_store.heal_put_endpoint(keeping);
     world.record_store.fail_put_endpoint(keeping);
     world.record_store.heal_put_endpoint(serving);
