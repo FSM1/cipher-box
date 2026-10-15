@@ -357,7 +357,7 @@ pub enum PublishError {
     /// registration, so no record was PUT — the fail-closed ordering law.
     Register(ApiError),
     /// No endpoint acknowledged the record PUT (the whole endpoint set is
-    /// unreachable). Nothing durable happened; the caller retries later.
+    /// unreachable). The bytes can still have landed; the caller retries later.
     AllEndpointsFailed,
     /// Every endpoint stated a refusal of the PUT
     /// ([`PutOutcome::Refused`](super::fanout::PutOutcome::Refused)), so the
@@ -478,6 +478,9 @@ pub(crate) enum PutMark<'a> {
     },
     /// A note for the caller's own call, which nothing keeps.
     Sent(&'a core::cell::Cell<bool>),
+    /// The sequence the record was signed at, for a caller that marks a PUT
+    /// no endpoint acknowledged: its bytes can still have landed.
+    Signed(&'a core::cell::Cell<Option<u64>>),
 }
 
 /// The durable floors one signature is checked against, read last before it.
@@ -551,6 +554,19 @@ impl<'a> SignatureGate<'a> {
         ttl_nanos: u64,
         eol: &str,
     ) -> Result<(Vec<u8>, u64), PublishError> {
+        self.sign_above(0, signer, value, ttl_nanos, eol)
+    }
+
+    /// [`Self::sign`], also strictly above `held`: a mark of this device's own
+    /// PUT that may still surface at the name.
+    pub(crate) fn sign_above(
+        &self,
+        held: u64,
+        signer: &Ed25519Signer,
+        value: &[u8],
+        ttl_nanos: u64,
+        eol: &str,
+    ) -> Result<(Vec<u8>, u64), PublishError> {
         if let Some((bar, at)) = &self.bar {
             bar.refuse(*at)?;
         }
@@ -558,6 +574,7 @@ impl<'a> SignatureGate<'a> {
             .sequence_floor
             .unwrap_or(0)
             .max(self.observed.sequence)
+            .max(held)
             .checked_add(1)
             .ok_or(PublishError::SequenceExhausted)?;
         let record_bytes = IpnsRecord::create_v2(signer, value, sequence, ttl_nanos, eol).marshal();
@@ -748,6 +765,7 @@ where
             }
         }
         Some(PutMark::Sent(sent)) => sent.set(true),
+        Some(PutMark::Signed(signed)) => signed.set(Some(sequence)),
         None => {}
     }
 

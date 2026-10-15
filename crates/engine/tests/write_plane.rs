@@ -52,8 +52,8 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::net::eol::renewal_eol_from;
 use cipherbox_engine::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use cipherbox_engine::net::{
-    ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
-    ResolveOutcome, StagingRetireLedger, resolve,
+    Acknowledged, ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall,
+    ReclaimStallReason, ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
@@ -12847,11 +12847,12 @@ fn a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence() {
     );
 }
 
-/// A create whose PUT was acknowledged and never served may still surface.
-/// Its dropped version retires nothing on the endpoints' word that the name
-/// holds no record.
+/// A create whose PUT was acknowledged and never served may still surface,
+/// but no folder links it: the drain publishes a child before its parent. So
+/// its dropped version settles on the endpoints' word that the name holds no
+/// record, whatever mark is held (ADR 0076 D5).
 #[test]
-fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
+fn a_discarded_create_acknowledged_at_its_name_settles_on_vacancy() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -12877,10 +12878,10 @@ fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
         leaves
             .iter()
             .chain([&root_cid])
-            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
-        "nothing the acknowledged create names is retired"
+            .all(|cid| retired.contains(&encode_content_cid_str(cid))),
+        "the dropped create's version is retired"
     );
-    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the debt settles");
 }
 
 /// Grant `folder` to the recipient with write permission, which cuts it into a
@@ -20454,10 +20455,11 @@ fn a_refused_tied_record_read_does_not_stall_a_head_op_that_landed() {
 /// each of the two endpoints.
 const TIED_READ_AFTER: usize = 4;
 
-/// PROBE, not for the PR: an outage pass never climbs. After the unattributed
-/// budget, the bytes that landed with no ack sit one above the served record.
+/// A pass whose PUT no endpoint acknowledged never climbs: the signature does
+/// not read the unacknowledged mark (ADR 0076 D2). After the unattributed
+/// budget, the bytes that landed sit one above the served record.
 #[test]
-fn probe_unacked_passes_sign_at_one_sequence() {
+fn an_outage_retry_signs_at_one_sequence_so_nothing_climbs() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -20501,64 +20503,14 @@ fn probe_unacked_passes_sign_at_one_sequence() {
     .and_then(|record| record.verify(&name))
     .expect("verifies")
     .sequence;
-    eprintln!(
-        "PROBE passes {passes}, served {}, landed {landed}",
-        sequence_at(&world, &name)
-    );
     assert_eq!(landed, sequence_at(&world, &name) + 1, "no climb");
 }
 
-/// PROBE, not for the PR: a create that dead-letters through a full outage
-/// settles on vacancy after its discard, so the unacked mark at its own name
-/// adds no wait.
+/// A create that dead-letters is linked by no folder, also after a later op
+/// publishes its parent while the dead letter is still preserved. The vacancy
+/// settle of ADR 0076 D5 rests on this.
 #[test]
-fn probe_an_outage_dropped_create_settles_on_vacancy() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    let endpoints = world.record_store.endpoints();
-    for endpoint in &endpoints {
-        world.record_store.fail_put_endpoint(endpoint);
-    }
-    serve_http(&alice, &blocks, 2000);
-    let op_id = write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &[1u8; 200],
-    )
-    .expect("the create commits");
-    let mut passes = 0;
-    while block_on(engine.snapshot(ROOT))
-        .unwrap()
-        .dead_letters
-        .is_empty()
-    {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes <= 130, "the unattributed budget must be finite");
-    }
-    for endpoint in &endpoints {
-        world.record_store.heal_put_endpoint(endpoint);
-    }
-    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
-    tick(&world, &engine, &mut tasks);
-    eprintln!(
-        "PROBE create passes {passes}, pending {}",
-        engine.pending_reclaim_bytes()
-    );
-    assert_eq!(engine.pending_reclaim_bytes(), 0, "the vacancy settle runs");
-}
-
-/// PROBE, not for the PR: a create that dead-letters is linked by no folder,
-/// also after a later op publishes its parent while the dead letter is still
-/// preserved.
-#[test]
-fn probe_a_preserved_dead_lettered_create_is_linked_by_no_folder() {
+fn a_create_that_dead_letters_is_linked_by_no_folder() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -20609,7 +20561,6 @@ fn probe_a_preserved_dead_lettered_create_is_linked_by_no_folder() {
         .into_iter()
         .map(|child| child.name)
         .collect();
-    eprintln!("PROBE root children seen by a second device: {names:?}");
     assert!(
         names.contains(&"later.bin".to_owned()),
         "the parent published"
@@ -20617,5 +20568,110 @@ fn probe_a_preserved_dead_lettered_create_is_linked_by_no_folder() {
     assert!(
         !names.contains(&"clip.bin".to_owned()),
         "no folder links the dropped create"
+    );
+}
+
+/// `node`'s unacknowledged mark at `name`, as the settle reads it.
+fn unacked_mark(device: &FakeDevice, node: NodeId, name: &IpnsName) -> Acknowledged {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(13));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .unacknowledged(&owner_tag(&enc), node.0, name.as_str()),
+    )
+    .expect("the mark reads")
+}
+
+/// The unacknowledged mark clears only on a confirmed publish above it (ADR
+/// 0076 D4). A second op that confirms at exactly its sequence ties the bytes
+/// it stands for, so the mark stays and the dropped version's debt waits. The
+/// next record above it clears the mark and settles the debt.
+#[test]
+fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    for endpoint in &endpoints {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    assert_eq!(
+        unacked_mark(&alice, node, &name),
+        Acknowledged::At(served + 1)
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+    let dropped: Vec<String> = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    let retired_any = |device: &FakeDevice| {
+        let retired = retire_targets(device);
+        dropped.iter().any(|cid| retired.contains(cid))
+    };
+    assert!(!retired_any(&alice), "the debt waits below the mark");
+
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the second edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the edit ties the mark"
+    );
+    assert_eq!(
+        unacked_mark(&alice, node, &name),
+        Acknowledged::At(served + 1),
+        "a tie leaves the mark"
+    );
+    assert!(!retired_any(&alice), "the debt waits at the mark");
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the third edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert_eq!(
+        unacked_mark(&alice, node, &name),
+        Acknowledged::Nothing,
+        "a record above the mark clears it"
+    );
+    let retired = retire_targets(&alice);
+    assert!(
+        dropped.iter().all(|cid| retired.contains(cid)),
+        "a record above the mark settles the debt"
     );
 }

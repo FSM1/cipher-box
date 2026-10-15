@@ -1625,6 +1625,17 @@ mod tests {
     /// Every prefix is per-identity, so this holds for an entry **this**
     /// session cannot read too: its owner is the identity that still needs it,
     /// and collecting it would discard their record.
+    /// The unacknowledged mark's key sits under the acknowledged-mark prefix,
+    /// so orphan GC spares it, also in the previous release (ADR 0076 D1).
+    #[test]
+    fn an_unacknowledged_mark_is_never_classed_an_orphan() {
+        let key =
+            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&[7u8; 32], [9u8; 16])
+                .unwrap();
+        assert!(key.starts_with(ACKED_SEQUENCE_PREFIX));
+        assert!(is_bookkeeping(&key));
+    }
+
     #[test]
     fn the_drains_own_bookkeeping_is_never_classed_an_orphan() {
         let store = InMemoryStagingStore::default();

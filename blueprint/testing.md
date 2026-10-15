@@ -323,6 +323,19 @@ scenario fails the meta-test):
   (`sync::dead_letter_name`); a create records the name under the end of
   its parent (`sync::drain`); the encode refuses a name that is not an IPNS
   name (`tests/encode_refusals.rs`);
+- the unacknowledged mark (ADR 0076) — a dropped version whose PUT landed
+  with no ack retires nothing its record names, an outage retry signs at one
+  sequence, a publish that ties the mark leaves it and the debt waits, a
+  dropped create that was acknowledged settles on vacancy, a dead-lettered
+  create is linked by no folder, and a vacancy settle with a mark at another
+  name retires only under its own name (`tests/write_plane.rs`); a dead
+  letter above the served sequence still renews and revives, an outage dead
+  letter renews above its mark and its debt then settles, and a mark that
+  does not open renews and revives above the floor plus the attempt budget
+  plus one (`tests/renewal_walk.rs`); the mark is invisible to the
+  acknowledged read (`net::retire`) and orphan GC spares it (`sync::staging`)
+  (ADR 0020); the hold refuses a sequence of zero or a name that is not an
+  IPNS name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
@@ -332,8 +345,7 @@ scenario fails the meta-test):
   root or child, a 503 registration, a failed ledger read or a failed PUT
   keeps the cursor for the next pass, across sessions, for one day from the
   cycle's first keep-back at most; a scope root or child with no record and
-  a 4xx registration or an acknowledged sequence that does not open move
-  the cursor at once and emit `renewalFailed`; a 401 after the refresh keeps
+  a 4xx registration move the cursor at once and emit `renewalFailed`; a 401 after the refresh keeps
   the cursor back; a doomed-name journal that does not list, or a cursor that
   does not read, renews and stores nothing and emits `renewalFailed`; a journal entry that does not read or
   open stops only its own scope root, and `tests/owner_actions.rs` shows that

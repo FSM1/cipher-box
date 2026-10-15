@@ -34,6 +34,7 @@ use super::publish::{
 };
 use super::register::register;
 use super::renewal_walk::{FloorRule, RenewalSeams, renew_admitted};
+use super::retire::Acknowledged;
 use crate::api::{ApiClient, NameRegistration};
 use crate::grants::grafted::FloorNamespace;
 use crate::profile::SyncTimingProfile;
@@ -513,8 +514,16 @@ where
         profile: seams.profile,
         publishing: seams.publishing,
     };
-    let Some(receipt) =
-        renew_admitted(&seams, &observed, bar, rule, &held.signer, &admitted.value).await
+    let Some(receipt) = renew_admitted(
+        &seams,
+        &observed,
+        bar,
+        rule,
+        &held.signer,
+        &admitted.value,
+        Acknowledged::Nothing,
+    )
+    .await
     else {
         return Ok(None);
     };

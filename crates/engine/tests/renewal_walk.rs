@@ -1414,35 +1414,41 @@ fn a_failed_ledger_read_keeps_the_cursor_for_the_next_pass() {
     assert_renewed_at_start(&world, &name, &before, started, "the file");
 }
 
-/// An acknowledged sequence that does not open is a permanent failure: the
-/// pass moves the cursor on and reports the file.
+/// The attempt budget, which bounds how far above the sequence floor the
+/// acknowledged mark can climb.
+const ATTEMPT_BUDGET: u64 = 5;
+
+/// A mark that does not open stands for the highest value either mark can
+/// hold, so the walk signs above the floor plus the attempt budget plus one,
+/// and does not refuse (ADR 0076 D3). This holds for each of the two marks.
 #[test]
-fn an_unreadable_acknowledged_sequence_moves_the_cursor_and_is_reported() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
-    let device = world.device(b"a later session");
-    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
-    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
-        &owner_tag(&kdf::enc_subkey(&SECRET)),
-        node.0,
-    )
-    .expect("a key");
-    block_on(
-        device
-            .staging_store
-            .put_staged_bytes(&key, b"not a sealed mark"),
-    )
-    .expect("stage it");
-    tick(&world, &engine, &mut tasks);
-    assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
-    let cursor = stored_cursor(&device).expect("the pass stored its cursor");
-    assert_eq!(cursor.root, None, "the cursor moved past the file");
-    assert_eq!(cursor.kept_back_since, None);
-    assert!(
-        renewal_failed(&mut events, name.as_str(), "acknowledged sequence"),
-        "the file is reported"
-    );
+fn an_unreadable_mark_renews_above_the_highest_value_a_mark_can_hold() {
+    for unacked in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
+        let device = world.device(b"a later session");
+        let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+        let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+        let key = if unacked {
+            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
+        } else {
+            StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
+        }
+        .expect("a key");
+        block_on(
+            device
+                .staging_store
+                .put_staged_bytes(&key, b"not a sealed mark"),
+        )
+        .expect("stage it");
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(
+            record_at(&world, &name).sequence,
+            before.sequence + ATTEMPT_BUDGET + 2,
+            "the walk signs above the floor plus the budget plus one"
+        );
+    }
 }
 
 /// A registry that answers 401 to the registration after the client refreshed
@@ -3514,44 +3520,11 @@ fn a_dead_letter_above_the_served_sequence_still_revives_after_a_full_lapse() {
     );
 }
 
-/// PROBE control, not for the PR: the same flow with the mark removed renews
-/// and revives, so the mark alone holds the walk back.
-fn forget_the_mark(device: &FakeDevice, file: NodeId) {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(10));
-    block_on(
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
-            .forget_acknowledged(&owner_tag(&enc), file.0),
-    )
-    .expect("the mark goes");
-}
-
-#[test]
-fn probe_control_without_the_mark_the_walk_renews_and_revives() {
-    let (before, after) = dead_lettered_above_the_served_sequence(65, |_, _, device, file| {
-        forget_the_mark(device, file)
-    });
-    assert!(after.expect("served").sequence > before.sequence, "renews");
-    let (before, after) =
-        dead_lettered_above_the_served_sequence(100, |world, blocks, device, file| {
-            forget_the_mark(device, file);
-            lapse_into_the_recovery_cache(world, blocks);
-        });
-    assert!(
-        after.is_some_and(|after| after.sequence > before.sequence),
-        "revives"
-    );
-}
-
-/// PROBE, not for the PR: an edit that dead-letters through a full record
-/// endpoint outage (no PUT lands, no ack), optionally discarded, then the walk
-/// `days` later. Returns the served record before and after, and the pending
-/// reclaim figure after the walk.
-fn probe_outage_then_walk(
-    days: u32,
-    lapse: bool,
-    discard: bool,
-) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
+/// An edit that dead-letters through a full record endpoint outage (no PUT
+/// lands, no ack), then is discarded. The same device starts again `days`
+/// later and runs the walk. Returns the served record before and after, and
+/// the pending reclaim figure after the walk.
+fn outage_discarded_then_walk(days: u32) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"the device that wrote");
@@ -3583,25 +3556,19 @@ fn probe_outage_then_walk(
             passes += 1;
             assert!(passes < 200, "the unattributed budget must be finite");
         }
-        eprintln!("PROBE outage passes {passes}");
         for endpoint in &endpoints {
             world.record_store.heal_put_endpoint(endpoint);
         }
-        if discard {
-            block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("discard");
-            tick(&world, engine, tasks);
-            eprintln!(
-                "PROBE pending after discard {}",
-                engine.pending_reclaim_bytes()
-            );
-        }
+        block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+        tick(&world, engine, tasks);
+        assert!(
+            engine.pending_reclaim_bytes() > 0,
+            "the debt waits below the unacknowledged mark"
+        );
         vec![file]
     });
     let name = write_name(file);
     let before = record_at(&world, &name);
-    if lapse {
-        lapse_into_the_recovery_cache(&world, &blocks);
-    }
     world.scheduler.advance(DAY * days);
     let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
     until_the_first_walk(&world, &engine, &mut tasks);
@@ -3618,27 +3585,45 @@ fn probe_outage_then_walk(
                 .and_then(|record| record.verify(&name))
                 .expect("the served record verifies")
         });
-    let pending = engine.pending_reclaim_bytes();
-    eprintln!(
-        "PROBE outage days {days} lapse {lapse} discard {discard}: seq {} -> {:?}, pending {pending}",
-        before.sequence,
-        after.as_ref().map(|after| after.sequence)
-    );
-    (before, after, pending)
+    (before, after, engine.pending_reclaim_bytes())
 }
 
+/// The walk signs above the unacknowledged mark that an outage dead letter
+/// leaves (ADR 0076 D3). The renewal is the record above the mark, so the
+/// discarded version's debt settles.
 #[test]
-fn probe_an_outage_dead_letter_still_renews_and_its_debt_settles() {
-    let (before, after, pending) = probe_outage_then_walk(65, false, true);
-    assert!(after.expect("served").sequence > before.sequence, "renews");
+fn an_outage_dead_letter_renews_above_its_mark_and_its_debt_then_settles() {
+    let (before, after, pending) = outage_discarded_then_walk(65);
+    assert_eq!(
+        after.expect("the record is still served").sequence,
+        before.sequence + 2,
+        "the walk signs above the mark at S + 1"
+    );
     assert_eq!(pending, 0, "the discarded debt settles after the renewal");
 }
 
+/// A revival under a mark that does not open signs above the floor plus the
+/// attempt budget plus one, and does not refuse (ADR 0076 D3).
 #[test]
-fn probe_an_outage_dead_letter_still_revives_after_a_full_lapse() {
-    let (before, after, _) = probe_outage_then_walk(100, true, false);
-    assert!(
-        after.is_some_and(|after| after.sequence > before.sequence),
-        "revives"
+fn an_unreadable_mark_still_revives_after_a_full_lapse() {
+    let (before, after) =
+        dead_lettered_above_the_served_sequence(100, |world, blocks, device, file| {
+            let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
+                &owner_tag(&kdf::enc_subkey(&SECRET)),
+                file.0,
+            )
+            .expect("a key");
+            block_on(
+                device
+                    .staging_store
+                    .put_staged_bytes(&key, b"not a sealed mark"),
+            )
+            .expect("stage it");
+            lapse_into_the_recovery_cache(world, blocks);
+        });
+    assert_eq!(
+        after.expect("the walk revives the record").sequence,
+        before.sequence + ATTEMPT_BUDGET + 2,
+        "the revival signs above the floor plus the budget plus one"
     );
 }

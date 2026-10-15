@@ -29,6 +29,7 @@ use super::register::register;
 use super::renewal_walk::{
     FloorRule, RenewalSeams, sign_admitted, transient_registration, transient_renewal,
 };
+use super::retire::Acknowledged;
 use super::rotation::{ScopeRootAdmission, admit_owned_scope_root};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, load_bin_index};
@@ -375,11 +376,14 @@ struct Lapsed<'a> {
 /// the read of its plane, register the admitted names in one batch, then sign
 /// each at `S + 1` with the renewal EOL. Each recovery fetch waits for a slot
 /// of `pace`. One result for each request, in order.
+/// The signature of the request at index `i` clears `held[i]` (ADR 0076 D3);
+/// a request past the end of `held` clears none.
 pub(crate) async fn revive<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     requests: &[ReviveRequest<'_, P>],
+    held: &[Acknowledged],
 ) -> Vec<Revival>
 where
     T: RecordTransport + Clone + 'static,
@@ -408,7 +412,7 @@ where
         register(api, &registrations).await
     };
     let mut revived = Vec::with_capacity(results.len());
-    for (result, request) in results.into_iter().zip(requests) {
+    for (index, (result, request)) in results.into_iter().zip(requests).enumerate() {
         let restored = match &result {
             Ok(lapsed) => lapsed.restored,
             Err((_, restored)) => *restored,
@@ -416,7 +420,10 @@ where
         let result = match (result, &registered) {
             (Err((error, _)), _) => Err(error),
             (Ok(_), Err(error)) => Err(ReviveError::Publish(PublishError::Register(error.clone()))),
-            (Ok(lapsed), Ok(())) => sign_lapsed(seams, &lapsed).await,
+            (Ok(lapsed), Ok(())) => {
+                let held = held.get(index).copied().unwrap_or(Acknowledged::Nothing);
+                sign_lapsed(seams, &lapsed, held).await
+            }
         };
         let restored = restored && (result.is_ok() || request.plane.admit_writes_floor());
         revived.push(Revival { result, restored });
@@ -424,12 +431,14 @@ where
     revived
 }
 
-/// [`revive`] for the one lapsed name of `request`.
+/// [`revive`] for the one lapsed name of `request`, whose signature clears
+/// the node's `held` mark.
 pub(crate) async fn revive_name<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
     pace: &RecoveryPace,
     request: ReviveRequest<'_, P>,
+    held: Acknowledged,
 ) -> Revival
 where
     T: RecordTransport + Clone + 'static,
@@ -439,7 +448,9 @@ where
     Sch: Scheduler + Clone + 'static,
     P: PlaneRead,
 {
-    revive(api, seams, pace, &[request]).await.remove(0)
+    revive(api, seams, pace, &[request], &[held])
+        .await
+        .remove(0)
 }
 
 /// Whether the fan-out reads `name` `Absent`, the mark of a lapsed name.
@@ -583,6 +594,7 @@ where
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
+    held: Acknowledged,
 ) -> Result<PublishOutcome, ReviveError>
 where
     T: RecordTransport + Clone + 'static,
@@ -604,6 +616,7 @@ where
         FloorRule::AtMost,
         &lapsed.signer,
         &lapsed.value,
+        held,
     )
     .await
     .ok_or(ReviveError::Moved)?
@@ -932,7 +945,7 @@ mod tests {
             profile: &SyncTimingProfile::CI,
             publishing: &publishing,
         };
-        block_on(revive(&api(device), &seams, pace, requests))
+        block_on(revive(&api(device), &seams, pace, requests, &[]))
     }
 
     /// The one [`Revival`] of `name`, with the restore flag on either result.

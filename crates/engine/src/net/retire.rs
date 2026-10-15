@@ -34,6 +34,7 @@ use crate::seams::{
     CredentialStore, DebtOrigin, Http, OwedPage, OwedRetire, OwingRecord, RetireLedger, SeamError,
     SeamResult, StagingStore,
 };
+use crate::sync::drain::ATTEMPT_BUDGET;
 use crate::sync::{BookkeepingSeal, MAX_BOOKKEEPING_OPENS, Snapshot};
 
 /// Registry rows a pass left charged and unreachable, pending retirement: the
@@ -220,6 +221,11 @@ pub const ACKED_SEQUENCE_PREFIX: &[u8] = b"cbx/ra/";
 /// The leading byte of a stored acknowledged sequence.
 const ACKED_V1: u8 = 1;
 
+/// The byte after a node's mark key that keys its unacknowledged mark (ADR
+/// 0076 D1). The key stays under [`ACKED_SEQUENCE_PREFIX`], which orphan GC
+/// spares, and a release that reads only the exact mark key passes over it.
+const UNACKED_SUFFIX: u8 = b'u';
+
 /// One stored entry's fixed head: the owing node's id, then the owed figure and
 /// the manifest total as big-endian `u64`. The target's binary CID follows, as
 /// the tail that binds the value to its key.
@@ -238,6 +244,36 @@ pub enum Acknowledged {
     /// A value is held under the node's key that this identity cannot open
     /// or read, so any sequence may hide behind it.
     Unreadable,
+}
+
+impl Acknowledged {
+    /// The higher of two marks. A mark that does not read stands for any
+    /// sequence, so it is the higher.
+    #[must_use]
+    pub fn higher(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Unreadable, _) | (_, Self::Unreadable) => Self::Unreadable,
+            (Self::At(held), Self::At(other)) => Self::At(held.max(other)),
+            (Self::At(held), Self::Nothing) | (Self::Nothing, Self::At(held)) => Self::At(held),
+            (Self::Nothing, Self::Nothing) => Self::Nothing,
+        }
+    }
+
+    /// The sequence a signature over this mark signs above, at the name's
+    /// sequence `floor`. A mark that does not read stands for the highest
+    /// value either mark can hold: the attempt budget bounds the acknowledged
+    /// mark above the floor, and the unacknowledged one is at most one higher
+    /// (ADR 0076 D2, D3).
+    #[must_use]
+    pub fn cleared_by(self, floor: Option<u64>) -> u64 {
+        match self {
+            Self::Nothing => 0,
+            Self::At(sequence) => sequence,
+            Self::Unreadable => floor
+                .unwrap_or(0)
+                .saturating_add(u64::from(ATTEMPT_BUDGET) + 1),
+        }
+    }
 }
 
 /// A node's acknowledged-sequence slot, whatever name its mark is held at.
@@ -319,15 +355,80 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
         {
             return Ok(());
         }
-        let mut body = Zeroizing::new(Vec::with_capacity(1 + NODE_ID_LEN + 8 + name.len()));
-        body.push(ACKED_V1);
-        body.extend_from_slice(&node);
-        body.extend_from_slice(&sequence.to_be_bytes());
-        body.extend_from_slice(name.as_bytes());
-        let blob = self.seal.seal(OwnerLocalKind::RetireLedger, &body)?;
+        let blob = self.seal.seal(
+            OwnerLocalKind::RetireLedger,
+            &encode_mark(node, name, sequence),
+        )?;
         self.staging
             .put_staged_bytes(&Self::acknowledged_key(owner_tag, node)?, &blob)
             .await
+    }
+
+    /// The highest sequence at which this device signed a record at `name`,
+    /// `node`'s write-plane name, and sent it with no endpoint acknowledging
+    /// it (ADR 0076 D1). Its bytes may still surface, so a settle reads
+    /// nothing at or below it as the node's live record. The signature does
+    /// not read it.
+    pub async fn unacknowledged(
+        &self,
+        owner_tag: &[u8],
+        node: [u8; 16],
+        name: &str,
+    ) -> SeamResult<Acknowledged> {
+        let key = Self::unacknowledged_key(owner_tag, node)?;
+        let Some(blob) = self.staging.staged_bytes(&key).await? else {
+            return Ok(Acknowledged::Nothing);
+        };
+        Ok(self
+            .seal
+            .open(OwnerLocalKind::RetireLedger, &blob)
+            .map_or(AcknowledgedSlot::Unreadable, |body| {
+                decode_unacked(&body, node)
+            })
+            .at(name))
+    }
+
+    /// Hold `sequence` as `node`'s unacknowledged mark at `name`, keeping a
+    /// higher one already held there. A sequence of zero or a `name` that is
+    /// not an IPNS name is refused, as the decode reads it as unreadable.
+    pub async fn hold_unacknowledged(
+        &self,
+        owner_tag: &[u8],
+        node: [u8; 16],
+        name: &str,
+        sequence: u64,
+    ) -> SeamResult<()> {
+        if sequence == 0 || IpnsName::parse(name).is_err() {
+            return Err(SeamError::new(
+                "an unacknowledged mark needs a signed sequence and an IPNS name",
+            ));
+        }
+        if let Acknowledged::At(held) = self.unacknowledged(owner_tag, node, name).await?
+            && held >= sequence
+        {
+            return Ok(());
+        }
+        let blob = self.seal.seal(
+            OwnerLocalKind::RetireLedger,
+            &encode_mark(node, name, sequence),
+        )?;
+        self.staging
+            .put_staged_bytes(&Self::unacknowledged_key(owner_tag, node)?, &blob)
+            .await
+    }
+
+    /// Drop `node`'s unacknowledged mark, once a record above it confirmed.
+    pub async fn forget_unacknowledged(&self, owner_tag: &[u8], node: [u8; 16]) -> SeamResult<()> {
+        self.staging
+            .remove_staged_bytes(&Self::unacknowledged_key(owner_tag, node)?)
+            .await
+    }
+
+    /// The staging key `node`'s unacknowledged mark is held under.
+    pub fn unacknowledged_key(owner_tag: &[u8], node: [u8; 16]) -> SeamResult<Vec<u8>> {
+        let mut key = Self::acknowledged_key(owner_tag, node)?;
+        key.push(UNACKED_SUFFIX);
+        Ok(key)
     }
 
     /// Drop `node`'s acknowledged sequence, once a record above it confirmed.
@@ -342,6 +443,30 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
         let mut key = Self::scope(ACKED_SEQUENCE_PREFIX, owner_tag)?;
         key.extend_from_slice(&node);
         Ok(key)
+    }
+}
+
+/// One stored mark: the version byte, the node, the sequence, then the name.
+fn encode_mark(node: [u8; 16], name: &str, sequence: u64) -> Zeroizing<Vec<u8>> {
+    let mut body = Zeroizing::new(Vec::with_capacity(1 + NODE_ID_LEN + 8 + name.len()));
+    body.push(ACKED_V1);
+    body.extend_from_slice(&node);
+    body.extend_from_slice(&sequence.to_be_bytes());
+    body.extend_from_slice(name.as_bytes());
+    body
+}
+
+/// A stored unacknowledged mark: an acknowledged mark's body whose sequence
+/// is a signed one and whose name is an IPNS name.
+fn decode_unacked(body: &[u8], node: [u8; 16]) -> AcknowledgedSlot {
+    match decode_acked(body, node) {
+        AcknowledgedSlot::Marked { name, sequence }
+            if sequence > 0
+                && core::str::from_utf8(&name).is_ok_and(|name| IpnsName::parse(name).is_ok()) =>
+        {
+            AcknowledgedSlot::Marked { name, sequence }
+        }
+        _ => AcknowledgedSlot::Unreadable,
     }
 }
 
@@ -2179,6 +2304,80 @@ mod tests {
                 Acknowledged::Nothing
             );
         });
+    }
+
+    /// The unacknowledged mark keeps its highest value at its name, and sits
+    /// beside the acknowledged mark: the read of the acknowledged mark, the
+    /// only one the previous release makes, sees nothing (ADR 0020, ADR 0076
+    /// D1).
+    #[test]
+    fn an_unacknowledged_mark_is_invisible_to_the_acknowledged_read() {
+        let store = InMemoryStagingStore::default();
+        let session = Session::new();
+        let ledger = session.ledger(&store);
+        let name = IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([0x55; 32]).verifying_key(),
+        );
+        let name = name.as_str();
+        block_on(async {
+            ledger
+                .hold_unacknowledged(OWNER, NODE, name, 4)
+                .await
+                .unwrap();
+            ledger
+                .hold_unacknowledged(OWNER, NODE, name, 2)
+                .await
+                .unwrap();
+            assert_eq!(
+                ledger.unacknowledged(OWNER, NODE, name).await.unwrap(),
+                Acknowledged::At(4)
+            );
+            assert_eq!(
+                ledger.acknowledged(OWNER, NODE, name).await.unwrap(),
+                Acknowledged::Nothing
+            );
+            assert!(matches!(
+                ledger.acknowledged_slot(OWNER, NODE).await.unwrap(),
+                AcknowledgedSlot::Empty
+            ));
+            ledger.acknowledge(OWNER, NODE, name, 3).await.unwrap();
+            ledger.forget_acknowledged(OWNER, NODE).await.unwrap();
+            assert_eq!(
+                ledger.unacknowledged(OWNER, NODE, name).await.unwrap(),
+                Acknowledged::At(4),
+                "the acknowledged forget leaves the other mark"
+            );
+            ledger.forget_unacknowledged(OWNER, NODE).await.unwrap();
+            assert!(store.staged_keys().await.unwrap().is_empty());
+        });
+    }
+
+    /// One mark that does not read stands for any sequence, and a signature
+    /// over it clears the floor plus the attempt budget plus one.
+    #[test]
+    fn the_higher_mark_is_the_unreadable_one_and_it_clears_the_bound() {
+        assert_eq!(
+            Acknowledged::At(3).higher(Acknowledged::At(5)),
+            Acknowledged::At(5)
+        );
+        assert_eq!(
+            Acknowledged::Nothing.higher(Acknowledged::At(2)),
+            Acknowledged::At(2)
+        );
+        assert_eq!(
+            Acknowledged::At(9).higher(Acknowledged::Unreadable),
+            Acknowledged::Unreadable
+        );
+        assert_eq!(Acknowledged::Nothing.cleared_by(Some(4)), 0);
+        assert_eq!(Acknowledged::At(7).cleared_by(Some(4)), 7);
+        assert_eq!(
+            Acknowledged::Unreadable.cleared_by(Some(4)),
+            4 + u64::from(ATTEMPT_BUDGET) + 1
+        );
+        assert_eq!(
+            Acknowledged::Unreadable.cleared_by(None),
+            u64::from(ATTEMPT_BUDGET) + 1
+        );
     }
 
     /// A value under a node's key that will not open, or that is another
