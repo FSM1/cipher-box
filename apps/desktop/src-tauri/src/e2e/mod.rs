@@ -16,6 +16,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::engine::EngineHost;
 
+#[cfg(target_os = "macos")]
+pub use cli::shared_mount_name;
 pub use cli::{Headless, data_dir_override};
 pub use credentials::MemoryCredentialStore;
 

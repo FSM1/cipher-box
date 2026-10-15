@@ -15,7 +15,7 @@ publish.workspace = true
 # The headless e2e entry: a dev-key start and a loopback control endpoint. Off
 # by default, so a shipping build holds neither.
 [features]
-e2e-hook = []
+e2e-hook = ["cipherbox-fuse/e2e-hook"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

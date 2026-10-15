@@ -24,6 +24,33 @@ name: Desktop E2E Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (tag, branch, or SHA)'
+        required: false
+        type: string
+      # The mount-cadence probe replaces the suites when chosen: on a fresh
+      # macOS runner, one account mounts, quits, and mounts again every few
+      # seconds for the span after its first mount, and any mount that does
+      # not go live fails it. A mount under FUSE-T's shared default name can
+      # fail to resolve its server from about 120 s after the machine's first
+      # FUSE-T mount; `cadence-shared-name` is that comparison leg. Dispatch
+      # only (blueprint/testing.md law 1): its harness compiles and its plan is
+      # tested in the PR gate.
+      probe:
+        description: 'Run a probe instead of the suites'
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - cadence
+          - cadence-shared-name
+      span_ms:
+        description: 'Probe: how long after the first mount mounts still start, in ms'
+        required: false
+        type: string
+        default: '160000'
   workflow_call:
     inputs:
       ref:
@@ -36,6 +63,7 @@ permissions: {}
 jobs:
   desktop-e2e:
     name: ${{ matrix.label }} (${{ matrix.platform }})
+    if: ${{ !startsWith(inputs.probe, 'cadence') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeoutMinutes }}
     permissions:
@@ -379,4 +407,133 @@ jobs:
         with:
           name: desktop-e2e-logs-${{ matrix.suite }}-${{ matrix.platform }}
           path: failure-logs/
+          retention-days: 7
+
+  mount-cadence:
+    name: Mount Cadence (macos, ${{ inputs.probe }})
+    if: ${{ startsWith(inputs.probe, 'cadence') }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    env:
+      # The compile-time inputs and the API under test, as for the suites.
+      VITE_API_URL: http://localhost:3000
+      VITE_ROUTING_ENDPOINTS: http://localhost:3001
+      VITE_READ_ACCELERATOR_URL: http://127.0.0.1:8080
+      VITE_ENVIRONMENT: ci
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: cipherbox_test
+      JWT_SECRET: desktop-e2e-jwt-secret
+      KUBO_API_URL: http://localhost:5001
+      # One account signs in once per mount, from one runner address.
+      THROTTLE_AUTH_LIMIT: '200'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: ./.github/actions/setup-fuse-t
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: desktop-e2e-macos-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: desktop-e2e-macos-cargo-
+
+      - name: Build the desktop frontend
+        run: pnpm --filter "@cipherbox/desktop..." run build
+
+      - name: Build the desktop binary with the e2e hook
+        run: cargo build -p cipherbox-desktop --features e2e-hook
+
+      - name: Setup PostgreSQL
+        uses: ikalnytskyi/action-setup-postgres@c4dda34aae1c821e3a771b68b73b13af3198a7ee # v8
+        with:
+          username: postgres
+          password: postgres
+          database: cipherbox_test
+          postgres-version: '16'
+
+      - name: Start Kubo
+        run: |
+          set -euo pipefail
+          KUBO_VERSION=v0.42.0
+          KUBO_SHA512=5f863972f7edee0ac3f003d8b097366927e8d9f651fd5c74e1fda980f766dbf7af4b8a813b13400eb2bcf3a871a494a139c85f022e239b237581ad152259cd22
+          KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_darwin-arm64.tar.gz"
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 \
+            --retry-max-time 300 -o "$KUBO_ARCHIVE" \
+            "https://github.com/ipfs/kubo/releases/download/${KUBO_VERSION}/kubo_${KUBO_VERSION}_darwin-arm64.tar.gz"
+          echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | shasum -a 512 -c -
+          tar -xzf "$KUBO_ARCHIVE"
+          echo "$PWD/kubo" >> "$GITHUB_PATH"
+          export PATH="$PWD/kubo:$PATH"
+          ipfs init --profile server
+          ipfs daemon > "$RUNNER_TEMP/kubo.log" 2>&1 &
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 \
+            -X POST http://localhost:5001/api/v0/id > /dev/null \
+            || { echo '--- kubo log ---'; cat "$RUNNER_TEMP/kubo.log"; exit 1; }
+
+      - uses: ./.github/actions/mock-ipns-routing
+
+      - name: Apply migrations to a fresh database
+        run: pnpm --filter @cipherbox/api migration:run
+        env:
+          NODE_ENV: test
+
+      - name: Build the API
+        run: pnpm --filter @cipherbox/api build
+
+      - name: Run the mount-cadence probe
+        run: pnpm --filter @cipherbox/desktop-e2e run test:cadence
+        env:
+          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop
+          CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js
+          CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/cadence
+          CIPHERBOX_API_URL: http://localhost:3000
+          CIPHERBOX_CADENCE_SPAN_MS: ${{ inputs.span_ms }}
+          CIPHERBOX_E2E_SHARED_MOUNT_NAME: ${{ inputs.probe == 'cadence-shared-name' && '1' || '' }}
+          NODE_ENV: test
+
+      # Only the log files: the home holds the account directory and the
+      # control token. -xdev: a failed mount can be left under the workdir.
+      - name: Collect the logs
+        if: always()
+        run: |
+          mkdir -p cadence-logs/runner
+          log_root="${RUNNER_TEMP}/cadence"
+          if [ -d "$log_root" ]; then
+            while IFS= read -r -d '' log_file; do
+              destination="cadence-logs/cadence/${log_file#"$log_root"/}"
+              mkdir -p "$(dirname "$destination")"
+              cp "$log_file" "$destination" 2>/dev/null || true
+            done < <(find "$log_root" -xdev -type f -name '*.log' -print0 2>/dev/null)
+          fi
+          cp "${RUNNER_TEMP}/kubo.log" cadence-logs/runner/ 2>/dev/null || true
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mount-cadence-logs
+          path: cadence-logs/
           retention-days: 7

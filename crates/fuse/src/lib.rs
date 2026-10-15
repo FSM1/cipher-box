@@ -39,6 +39,8 @@ pub use adapters::fuse::{FuseInvalidator as Invalidator, FuseMount as Mount, Ker
 pub use adapters::linux::mount;
 #[cfg(target_os = "macos")]
 pub use adapters::macos::mount;
+#[cfg(all(target_os = "macos", feature = "e2e-hook"))]
+pub use adapters::macos::mount_under_the_shared_name;
 #[cfg(windows)]
 pub use adapters::windows::mount;
 #[cfg(windows)]
