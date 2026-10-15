@@ -68,7 +68,7 @@ use super::record_publish::{
 };
 use super::register::register;
 use super::renewal_walk::{OWED_UNREAD_NO_REVIVAL, RenewalSeams};
-use super::retire::{retire, root_retire_ready};
+use super::retire::{HeldMarks, retire, root_retire_ready};
 use super::revival::{RecoveryPace, ReviveError, ReviveRequest, ScopePointerRead, revive_name};
 use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
@@ -6687,6 +6687,7 @@ where
         name: &name,
         signer: Some(&signer),
         plane: read,
+        held: HeldMarks::default(),
     };
     let revival = revive_name(pass.api, &seams, pass.pace, request).await;
     let retryable = revival.result.as_ref().err().map(ReviveError::is_retryable);

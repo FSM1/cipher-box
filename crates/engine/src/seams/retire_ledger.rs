@@ -10,6 +10,10 @@ use crate::content::RetireTarget;
 /// has and a hard-deleted one never will. The answer is a property of the node,
 /// so the ledger holds it once per node
 /// ([`tombstoned`](RetireLedger::tombstoned)) rather than once per entry.
+///
+/// Each class whose settle reads the live record waits while that record is
+/// at or below either of the node's marks, or while a mark does not read: a
+/// record of ours there may name what the retire drops (ADR 0076 D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OwingRecord {
     /// The node outlives the debt — a prune shortened its history. An
@@ -25,9 +29,9 @@ pub enum OwingRecord {
     /// ([`DebtOrigin::DroppedVersion`], [`DebtOrigin::DroppedRoot`]), or may
     /// never have published.
     ///
-    /// A record at or below the node's acknowledged sequence, or one the
-    /// endpoints serve tied with other bytes, stands the entry down: a PUT of
-    /// the dropped version may still surface there. A name the endpoints all
+    /// A record the endpoints serve tied with other bytes stands the entry
+    /// down: a PUT of the dropped version may still surface there. A name the
+    /// endpoints all
     /// answer as holding no record reads as an empty live set, unless this
     /// device ever adopted a record there. Any other read is
     /// [`Published`](Self::Published).

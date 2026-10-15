@@ -32,7 +32,7 @@ use super::publish::{
     RefusedRead, SignatureGate, head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
-use super::retire::{Acknowledged, AdmittedParent, OrphanHeads, StagingRetireLedger, retired_here};
+use super::retire::{AdmittedParent, HeldMarks, OrphanHeads, StagingRetireLedger, retired_here};
 use super::revival::{
     ChildRead, PlaneRead, RecoveryPace, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
     revive_name, write_signer,
@@ -84,10 +84,11 @@ const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
 /// Why the walk does not yet renew a name the endpoints serve forked.
 const FORK_HELD: &str =
     "the endpoints serve a same-sequence fork of the name, so the renewal waits for it to heal";
-/// Why the walk does not renew a name whose acknowledged sequence is unreadable.
-const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
 /// Why the walk does not revive a lapsed name.
 const REVIVAL_REFUSED: &str = "the revival refused the record the recovery endpoint served";
+/// Why the walk renews a name above the bound of a mark it cannot read.
+const MARK_UNREADABLE: &str =
+    "a retire-ledger mark of the name does not open, so the renewal signs above its bound";
 /// Why the walk renews every name as if no scope had owed work this pass.
 pub(crate) const OWED_UNREAD: &str =
     "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
@@ -275,6 +276,8 @@ impl Frame {
 
 /// A name the pass admitted and found due.
 struct Due {
+    /// The node's marks, which the renewal signs above.
+    held: HeldMarks,
     node_id: [u8; 16],
     name: IpnsName,
     signer: Ed25519Signer,
@@ -1009,12 +1012,9 @@ where
         let material = pass.materials.get(&plane.scope_id)?.as_ref()?;
         let signer = material.signer_for(&node_id, name)?;
         let (scope_root, bar) = (material.name.clone(), material.admitted.bar);
-        if !self
-            .may_sign(pass, plane.scope_id, node_id, parent, name, None)
-            .await
-        {
-            return None;
-        }
+        let held = self
+            .may_sign(pass, plane.scope_id, node_id, parent, name)
+            .await?;
         let adopter = ChildAdopter::new(
             self.gateway,
             self.http,
@@ -1030,26 +1030,16 @@ where
             scope_root: Some(&scope_root),
             bar,
         };
-        Some(self.revive_one(pass, name, Some(&signer), read).await)
+        Some(self.revive_one(pass, name, Some(&signer), read, held).await)
     }
 
     /// Revive the lapsed owned scope root of `scope` through the root adopt
     /// (ADR 0062 D3), with the signer of the write seed the admitted owner
     /// blob carries. `None` when the walk may not sign the name.
     async fn revive_root(&self, pass: &mut Pass<'_>, scope: &WalkScope) -> Option<bool> {
-        if !self
-            .may_sign(
-                pass,
-                scope.scope_id,
-                scope.scope_id,
-                None,
-                &scope.name,
-                None,
-            )
-            .await
-        {
-            return None;
-        }
+        let held = self
+            .may_sign(pass, scope.scope_id, scope.scope_id, None, &scope.name)
+            .await?;
         let signer = write_signer(scope.write_seed.as_deref(), &scope.scope_id, &scope.name);
         let read = ScopeRootRead {
             gateway: self.gateway,
@@ -1063,7 +1053,7 @@ where
             ascent: scope.ascent.as_ref(),
         };
         Some(
-            self.revive_one(pass, &scope.name, signer.as_ref(), read)
+            self.revive_one(pass, &scope.name, signer.as_ref(), read, held)
                 .await,
         )
     }
@@ -1077,6 +1067,7 @@ where
         name: &IpnsName,
         signer: Option<&Ed25519Signer>,
         plane: P,
+        held: HeldMarks,
     ) -> bool {
         if pass.owed_unread {
             if !core::mem::replace(&mut pass.no_revival_reported, true) {
@@ -1091,6 +1082,7 @@ where
             name,
             signer,
             plane,
+            held,
         };
         let revival = revive_name(self.api, &self.seams(), self.pace, request).await;
         let routing_key = name.as_str().to_owned();
@@ -1150,9 +1142,9 @@ where
     /// Whether the walk may sign `name` for `node_id` (ADR 0061 D3 step 2): no
     /// delete doomed it, no retire is pending, no tombstone retired it
     /// ([`retired_here`] under `parent`, the record the walk reached it
-    /// through), the drain is not publishing it, and no retire is acknowledged
-    /// above `sequence`. A revival passes `None`,
-    /// as it reads its sequence later, so any acknowledged retire refuses it.
+    /// through), and the drain is not publishing it. `Some` holds the node's
+    /// marks, which the signature clears (ADR 0076 D3). A mark that does not
+    /// read is reported, and the walk still signs.
     async fn may_sign(
         &self,
         pass: &mut Pass<'_>,
@@ -1160,11 +1152,10 @@ where
         node_id: [u8; 16],
         parent: Option<AdmittedParent>,
         name: &IpnsName,
-        sequence: Option<u64>,
-    ) -> bool {
+    ) -> Option<HeldMarks> {
         if pass.doomed.unreadable.contains(&material_scope) {
             pass.kept_back = true;
-            return false;
+            return None;
         }
         let key = name.as_str();
         if pass.doomed.names.contains(key)
@@ -1176,29 +1167,31 @@ where
                 .any(|held| held == key)
             || self.guards.publishing.borrow().contains(key)
         {
-            return false;
+            return None;
         }
         let ledger = StagingRetireLedger::new(self.staging, self.seal);
         match ledger.tombstoned(&pass.owner_tag, node_id).await {
-            Ok(true) if retired_here(&self.guards.base.borrow(), node_id, parent) => return false,
+            Ok(true) if retired_here(&self.guards.base.borrow(), node_id, parent) => return None,
             Ok(_) => {}
             Err(_) => {
                 pass.kept_back = true;
-                return false;
+                return None;
             }
         }
-        match ledger.acknowledged(&pass.owner_tag, node_id, key).await {
-            Ok(Acknowledged::Nothing) => true,
-            Ok(Acknowledged::At(acked)) => sequence.is_some_and(|sequence| acked <= sequence),
-            Ok(Acknowledged::Unreadable) => {
-                pass.report.failed.push((key.to_owned(), ACK_UNREADABLE));
-                false
-            }
-            Err(_) => {
+        let held = match (
+            ledger.acknowledged(&pass.owner_tag, node_id, key).await,
+            ledger.unacknowledged(&pass.owner_tag, node_id, key).await,
+        ) {
+            (Ok(acked), Ok(unacked)) => HeldMarks { acked, unacked },
+            _ => {
                 pass.kept_back = true;
-                false
+                return None;
             }
+        };
+        if held.unreadable() {
+            pass.report.failed.push((key.to_owned(), MARK_UNREADABLE));
         }
+        Some(held)
     }
 
     /// Queue a renewal of the record the gate admitted, when its EOL is inside
@@ -1248,12 +1241,12 @@ where
             return;
         };
         let bar = material.admitted.bar;
-        if !self
-            .may_sign(pass, material_scope, node_id, parent, name, Some(sequence))
+        let Some(held) = self
+            .may_sign(pass, material_scope, node_id, parent, name)
             .await
-        {
+        else {
             return;
-        }
+        };
         let key = name.as_str();
         let observed = match observed {
             Ok(observed) => observed,
@@ -1266,6 +1259,7 @@ where
             }
         };
         pass.due.push(Due {
+            held,
             node_id,
             name: name.clone(),
             signer,
@@ -1321,6 +1315,7 @@ where
             FloorRule::Exact,
             &due.signer,
             &due.value,
+            due.held,
         )
         .await?
         {
@@ -1385,9 +1380,9 @@ pub(crate) enum FloorRule {
 }
 
 /// Sign `value` at `S + 1` for the registered name `observed` admitted at
-/// `S`, when the network still serves that record, the durable floor still
-/// meets `rule`, and the drain has no publish of the name in flight (ADR 0061
-/// D3 steps 4 to 6). `None` when any of the three moved.
+/// `S`, or above `held`, when the network still serves that record, the
+/// durable floor still meets `rule`, and the drain has no publish of the name
+/// in flight (ADR 0061 D3 steps 4 to 6). `None` when any of the three moved.
 pub(crate) async fn renew_admitted<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     observed: &Observed,
@@ -1395,6 +1390,7 @@ pub(crate) async fn renew_admitted<T, F, Sch>(
     rule: FloorRule,
     signer: &Ed25519Signer,
     value: &[u8],
+    held: HeldMarks,
 ) -> Option<Result<PublishReceipt, PublishError>>
 where
     T: RecordTransport + Clone + 'static,
@@ -1406,12 +1402,14 @@ where
         FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
         FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
     }
-    sign_admitted(seams, observed, bar, rule, signer, value).await
+    sign_admitted(seams, observed, bar, rule, signer, value, held).await
 }
 
 /// [`renew_admitted`] after its caller's own check of what the network
 /// serves: sign `value` at `S + 1` with the renewal EOL when the durable floor
-/// still meets `rule` and the drain has no publish of the name in flight.
+/// still meets `rule` and the drain has no publish of the name in flight. A
+/// held mark of the node lifts the signature above it, and the floor check
+/// stays on `S` (ADR 0076 D3).
 pub(crate) async fn sign_admitted<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     observed: &Observed,
@@ -1419,6 +1417,7 @@ pub(crate) async fn sign_admitted<T, F, Sch>(
     rule: FloorRule,
     signer: &Ed25519Signer,
     value: &[u8],
+    held: HeldMarks,
 ) -> Option<Result<PublishReceipt, PublishError>>
 where
     T: RecordTransport + Clone + 'static,
@@ -1442,7 +1441,8 @@ where
     }
     let ttl_nanos = u64::try_from(seams.profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
     let eol = renewal_eol_from(seams.scheduler.now());
-    let (record_bytes, sequence) = match gate.sign(signer, value, ttl_nanos, &eol) {
+    let above = held.cleared_by(gate.sequence_floor());
+    let (record_bytes, sequence) = match gate.sign_above(above, signer, value, ttl_nanos, &eol) {
         Ok(signed) => signed,
         Err(error) => return Some(Err(error)),
     };
@@ -1799,6 +1799,7 @@ mod tests {
             FloorRule::Exact,
             &signer,
             b"/ipfs/bafyheld",
+            HeldMarks::default(),
         ));
         assert!(renewal.is_none(), "nothing is signed");
         let endpoint = device.record_store.endpoints()[0].clone();

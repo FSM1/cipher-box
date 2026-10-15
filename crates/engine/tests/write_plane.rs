@@ -52,13 +52,13 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::net::eol::renewal_eol_from;
 use cipherbox_engine::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use cipherbox_engine::net::{
-    ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
-    ResolveOutcome, StagingRetireLedger, resolve,
+    Acknowledged, ChildAdopter, HeldMarks, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall,
+    ReclaimStallReason, ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, RetireLedger,
-    Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, DebtOrigin, EndpointId, FloorStore, HttpResponse, OpId, OwedRetire, RecordTransport,
+    RetireLedger, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
@@ -12847,11 +12847,12 @@ fn a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence() {
     );
 }
 
-/// A create whose PUT was acknowledged and never served may still surface.
-/// Its dropped version retires nothing on the endpoints' word that the name
-/// holds no record.
+/// A create whose PUT was acknowledged and never served may still surface,
+/// but no folder links it: the drain publishes a child before its parent. So
+/// its dropped version settles on the endpoints' word that the name holds no
+/// record, whatever mark is held (ADR 0076 D5).
 #[test]
-fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
+fn a_discarded_create_acknowledged_at_its_name_settles_on_vacancy() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -12877,10 +12878,10 @@ fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
         leaves
             .iter()
             .chain([&root_cid])
-            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
-        "nothing the acknowledged create names is retired"
+            .all(|cid| retired.contains(&encode_content_cid_str(cid))),
+        "the dropped create's version is retired"
     );
-    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the debt settles");
 }
 
 /// Grant `folder` to the recipient with write permission, which cuts it into a
@@ -13125,6 +13126,72 @@ fn a_dead_letter_whose_mark_is_held_at_an_old_name_records_no_name() {
     assert_eq!(owed_names(&bob), vec![None]);
 }
 
+/// A dropped create whose name every endpoint answers as empty settles on
+/// vacancy while the node's mark is held at another name, where a live record
+/// stands. The retire is scoped to the create's own name (ADR 0046 D1), so
+/// the record at the other name keeps its rows: a leak at worst, never a loss.
+#[test]
+fn a_vacancy_settle_with_a_mark_at_another_name_retires_only_under_its_own_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "other.bin".into(),
+        },
+        &[9u8; 200],
+    )
+    .expect("the other create commits");
+    tick(&world, &engine, &mut tasks);
+    let other = write_name(child_id(&engine, ROOT, "other.bin"));
+    let other_sequence = sequence_at(&world, &other);
+
+    world.record_store.drop_puts();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let own = write_name(node);
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    world.record_store.keep_puts();
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    hold_mark(&alice, node, &other, other_sequence);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the vacancy settle ran");
+    let entries = retire_entries(&alice);
+    for cid in leaves.iter().chain([&root_cid]) {
+        let cid = encode_content_cid_str(cid);
+        let namings: Vec<Option<String>> = entries
+            .iter()
+            .filter(|(_, targets)| targets.contains(&cid))
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(
+            namings,
+            vec![Some(own.as_str().to_owned())],
+            "the dropped create retires under its own name only"
+        );
+    }
+    assert!(
+        entries
+            .iter()
+            .all(|(name, _)| name.as_deref() != Some(other.as_str()) && name.is_some()),
+        "no retire names the record at the other name, or the whole account"
+    );
+}
+
 /// A preserved set the previous release wrote has no name key, so it still
 /// reads and its discard journals a version 2 entry (ADR 0020 D5).
 #[test]
@@ -13149,46 +13216,51 @@ fn a_discarded_dead_letter_the_previous_release_parked_journals_with_no_name() {
     assert_eq!(owed_names(&alice), vec![None]);
 }
 
+/// The attempt budget, which bounds how far one op climbs the acknowledged
+/// mark above the sequence floor.
+const ATTEMPT_BUDGET: u64 = 5;
+
 /// A mark that will not read may hide any sequence, so the next publish at the
-/// name signs well above the floor rather than at the next sequence.
+/// name signs above the floor plus the attempt budget plus one, and its
+/// confirm drops the mark. This holds for each of the two marks (ADR 0076 D2,
+/// D4).
 #[test]
-fn an_unreadable_acknowledged_sequence_makes_the_publish_sign_above_it() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &[1u8; 200],
-    )
-    .expect("the create commits");
-    tick(&world, &engine, &mut tasks);
-    let node = child_id(&engine, ROOT, "clip.bin");
-    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
-        &owner_tag(&kdf::enc_subkey(&SECRET)),
-        node.0,
-    )
-    .expect("a mark key");
-    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+fn an_unreadable_mark_makes_the_publish_sign_above_its_bound_and_clears_it() {
+    for unacked in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "clip.bin".into(),
+            },
+            &[1u8; 200],
+        )
+        .expect("the create commits");
+        tick(&world, &engine, &mut tasks);
+        let node = child_id(&engine, ROOT, "clip.bin");
+        let floor = sequence_at(&world, &write_name(node));
+        let key = stage_unreadable_mark(&alice, node, unacked);
 
-    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
-    tick(&world, &engine, &mut tasks);
+        write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+        tick(&world, &engine, &mut tasks);
 
-    assert!(
-        sequence_at(&world, &write_name(node)) > 2,
-        "the edit signs above whatever the unreadable mark may hide"
-    );
-    assert!(
-        block_on(alice.staging_store.staged_bytes(&key))
-            .unwrap()
-            .is_none(),
-        "the confirmed publish drops the mark"
-    );
+        assert_eq!(
+            sequence_at(&world, &write_name(node)),
+            floor + ATTEMPT_BUDGET + 2,
+            "the edit signs above the floor plus the budget plus one"
+        );
+        assert!(
+            block_on(alice.staging_store.staged_bytes(&key))
+                .unwrap()
+                .is_none(),
+            "the confirmed publish drops the mark"
+        );
+    }
 }
 
 /// A confirm that reads a tie at our sequence loses the race, yet our PUT was
@@ -13317,6 +13389,100 @@ fn a_dropped_versions_debt_waits_while_its_record_is_tied() {
         "nothing the dropped version names is retired against a tied record"
     );
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// Tick until the head op dead-letters on the unattributed budget.
+fn tick_through_the_unattributed_budget(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> Vec<DeadLetter> {
+    let dead_letters = || block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
+    let mut passes = 0;
+    while dead_letters().is_empty() {
+        tick(world, engine, tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    dead_letters()
+}
+
+/// A PUT that lands at an endpoint and comes back with no ack is
+/// `AllEndpointsFailed`, yet its bytes may surface at the name. The dropped
+/// version that PUT carried retires nothing while that endpoint serves no GET,
+/// because the record it holds names the version once the endpoint serves again.
+#[test]
+fn a_dropped_version_whose_put_landed_unacked_retires_nothing_its_record_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let (landing, other) = (&endpoints[1], &endpoints[0]);
+
+    world.record_store.land_puts_unacked_at(landing);
+    world.record_store.fail_get_at_for(landing, name.as_str());
+    world.record_store.fail_put_endpoint(other);
+    // The unattributed budget spends a register per pass.
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    assert_eq!(
+        tick_through_the_unattributed_budget(&world, &engine, &mut tasks),
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }],
+        "the unattributed budget dead-letters the edit"
+    );
+    let landed = world
+        .record_store
+        .record_at(landing, name.as_str())
+        .expect("the unacked PUT landed");
+    assert!(
+        IpnsRecord::unmarshal(&landed)
+            .and_then(|record| record.verify(&name))
+            .expect("the landed record verifies")
+            .sequence
+            > sequence_at(&world, &name),
+        "the landed record sits above the one the other endpoint serves"
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+    let retired = retire_targets(&alice);
+
+    world.record_store.heal_get_for(name.as_str());
+    world.record_store.heal_put_endpoint(landing);
+    world.record_store.heal_put_endpoint(other);
+    let (_reader, reader, _reader_events) = open_reader(&world, &blocks, 400);
+    assert_eq!(
+        block_on(reader.read_content(node)).expect("the head version reads"),
+        vec![2u8; 200],
+        "the endpoints serve the record the unacked PUT left, so it names the dropped version"
+    );
+    let named: Vec<String> = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .filter(|cid| retired.contains(cid))
+        .collect();
+    assert!(
+        named.is_empty(),
+        "the settle retired content the served record names: {named:?}"
+    );
 }
 
 /// A conditional-edit loser keeps its rows, and a preserved set that refuses
@@ -20299,3 +20465,444 @@ fn a_refused_tied_record_read_does_not_stall_a_head_op_that_landed() {
 /// a tied record: the tick's own read and the drain's folder load, one GET for
 /// each of the two endpoints.
 const TIED_READ_AFTER: usize = 4;
+
+/// A pass whose PUT no endpoint acknowledged never climbs: the signature does
+/// not read the unacknowledged mark (ADR 0076 D2). After the unattributed
+/// budget, the bytes that landed sit one above the served record.
+#[test]
+fn an_outage_retry_signs_at_one_sequence_so_nothing_climbs() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let (landing, other) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(landing);
+    world.record_store.fail_get_at_for(landing, name.as_str());
+    world.record_store.fail_put_endpoint(other);
+    serve_http(&alice, &blocks, 2000);
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    let landed = IpnsRecord::unmarshal(
+        &world
+            .record_store
+            .record_at(landing, name.as_str())
+            .expect("the unacked PUT landed"),
+    )
+    .and_then(|record| record.verify(&name))
+    .expect("verifies")
+    .sequence;
+    assert_eq!(landed, sequence_at(&world, &name) + 1, "no climb");
+}
+
+/// A create that dead-letters is linked by no folder, also after a later op
+/// publishes its parent while the dead letter is still preserved. The vacancy
+/// settle of ADR 0076 D5 rests on this.
+#[test]
+fn a_create_that_dead_letters_is_linked_by_no_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    serve_http(&alice, &blocks, 2000);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    for endpoint in &endpoints {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "later.bin".into(),
+        },
+        &[2u8; 200],
+    )
+    .expect("the later create commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    let (_reader, reader, _events) = open_reader(&world, &blocks, 400);
+    let names: Vec<String> = block_on(reader.view())
+        .expect("a view")
+        .children(ROOT)
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    assert!(
+        names.contains(&"later.bin".to_owned()),
+        "the parent published"
+    );
+    assert!(
+        !names.contains(&"clip.bin".to_owned()),
+        "no folder links the dropped create"
+    );
+}
+
+/// `node`'s two marks at `name`, as the settle reads them.
+fn held_marks(device: &FakeDevice, node: NodeId, name: &IpnsName) -> HeldMarks {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(13));
+    let ledger =
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy));
+    let owner = owner_tag(&enc);
+    HeldMarks {
+        acked: block_on(ledger.acknowledged(&owner, node.0, name.as_str()))
+            .expect("the mark reads"),
+        unacked: block_on(ledger.unacknowledged(&owner, node.0, name.as_str()))
+            .expect("the mark reads"),
+    }
+}
+
+/// Stage bytes that do not open under `node`'s unacknowledged mark key, or
+/// under its acknowledged one, and return the key.
+fn stage_unreadable_mark(device: &FakeDevice, node: NodeId, unacked: bool) -> Vec<u8> {
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let key = if unacked {
+        StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&owner, node.0)
+    } else {
+        StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(&owner, node.0)
+    }
+    .expect("a mark key");
+    block_on(device.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+    key
+}
+
+/// The unacknowledged mark clears only on a confirmed publish above it (ADR
+/// 0076 D4). A second op that confirms at exactly its sequence ties the bytes
+/// it stands for, so the mark stays and the dropped version's debt waits. The
+/// next record above it clears the mark and settles the debt.
+#[test]
+fn a_publish_that_ties_the_unacknowledged_mark_leaves_it_and_the_debt_waits() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    for endpoint in &endpoints {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    assert_eq!(
+        held_marks(&alice, node, &name).unacked,
+        Acknowledged::At(served + 1)
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+    let dropped: Vec<String> = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    let retired_any = |device: &FakeDevice| {
+        let retired = retire_targets(device);
+        dropped.iter().any(|cid| retired.contains(cid))
+    };
+    assert!(!retired_any(&alice), "the debt waits below the mark");
+
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the second edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the edit ties the mark"
+    );
+    assert_eq!(
+        held_marks(&alice, node, &name).unacked,
+        Acknowledged::At(served + 1),
+        "a tie leaves the mark"
+    );
+    assert!(!retired_any(&alice), "the debt waits at the mark");
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the third edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert_eq!(
+        held_marks(&alice, node, &name).unacked,
+        Acknowledged::Nothing,
+        "a record above the mark clears it"
+    );
+    let retired = retire_targets(&alice);
+    assert!(
+        dropped.iter().all(|cid| retired.contains(cid)),
+        "a record above the mark settles the debt"
+    );
+}
+
+/// An unacknowledged mark that does not open never hides a readable
+/// acknowledged mark above its bound. Two edits dead-letter while one endpoint
+/// acks and keeps each PUT but serves no GET, so the acknowledged mark climbs
+/// past the floor plus the attempt budget plus one. The next edit signs above
+/// that mark, so the bytes the endpoint keeps never become the head again.
+#[test]
+fn an_unreadable_unacknowledged_mark_never_hides_a_higher_acknowledged_mark() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let floor = sequence_at(&world, &name);
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 4000);
+    let mut ops = Vec::new();
+    for (round, body) in [[2u8; 200], [3u8; 200]].iter().enumerate() {
+        ops.push(write_file(&mut engine, version(node), body).expect("the edit commits"));
+        let mut passes = 0;
+        while block_on(engine.snapshot(ROOT)).unwrap().dead_letters.len() <= round {
+            tick(&world, &engine, &mut tasks);
+            passes += 1;
+            assert!(passes <= 50, "the attempt budget must be finite");
+        }
+    }
+    let Acknowledged::At(acked) = held_marks(&alice, node, &name).acked else {
+        panic!("the dead letters leave a readable acknowledged mark");
+    };
+    assert!(
+        acked > floor + ATTEMPT_BUDGET + 1,
+        "the acknowledged mark climbs past the bound"
+    );
+    stage_unreadable_mark(&alice, node, true);
+
+    world.record_store.heal_put_endpoint(serving);
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the third edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        sequence_at(&world, &name) > acked,
+        "the edit signs above the readable acknowledged mark"
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id: ops[1] })).expect("the discard");
+    tick(&world, &engine, &mut tasks);
+
+    world.record_store.heal_get_for(name.as_str());
+    let (_reader, reader, _reader_events) = open_reader(&world, &blocks, 400);
+    assert_eq!(
+        block_on(reader.read_content(node)).expect("the head reads"),
+        vec![4u8; 200],
+        "the confirmed edit stays the head over the kept bytes"
+    );
+}
+
+/// A prune that confirms at exactly the unacknowledged mark ties the record an
+/// outage PUT left. That record still names the pruned version, so the prune's
+/// debt retires nothing until a record above the mark confirms (ADR 0076 D2,
+/// D4).
+#[test]
+fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..70u8).map(|byte| byte ^ (version + 3)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let pruned = published_versions(&world.record_store, &blocks, file)[1]
+        .content_cid
+        .clone();
+    let name = write_name(file);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(keeping);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(file), &[9u8; 70]).expect("the edit commits");
+    let (edit_root, edit_leaves) = staged_version(&alice);
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    world.record_store.heal_put_endpoint(keeping);
+    world.record_store.fail_put_endpoint(keeping);
+    world.record_store.heal_put_endpoint(serving);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    block_on(engine.command(Command::DeleteVersion {
+        node: file,
+        content_cid: pruned.clone(),
+    }))
+    .expect("the delete queues");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the prune ties the mark"
+    );
+    let pruned_cid = encode_content_cid_str(&pruned);
+    let hidden: Vec<String> = edit_leaves
+        .iter()
+        .chain([&edit_root])
+        .map(|cid| encode_content_cid_str(cid))
+        .chain([pruned_cid.clone()])
+        .collect();
+    let retired = retire_targets(&alice);
+    assert!(
+        hidden.iter().all(|cid| !retired.contains(cid)),
+        "every CID the record the outage PUT left names stays pinned"
+    );
+
+    write_file(&mut engine, version(file), &[8u8; 70]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert!(
+        retire_targets(&alice).contains(&pruned_cid),
+        "a record above the mark settles the prune"
+    );
+}
+
+/// A named debt of a node that the base links again is read as published.
+/// That read waits at or below either mark too: a record an outage PUT left
+/// at the mark's sequence names the debt's target, also after another publish
+/// ties it, until a record above the mark confirms (ADR 0076 D2).
+#[test]
+fn a_relinked_tombstoned_debt_retires_nothing_while_an_unacknowledged_mark_is_tied() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(keeping);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 3000);
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (hidden_root, _) = staged_version(&alice);
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    world.record_store.heal_put_endpoint(keeping);
+    world.record_store.fail_put_endpoint(keeping);
+    world.record_store.heal_put_endpoint(serving);
+    assert_eq!(
+        held_marks(&alice, node, &name).unacked,
+        Acknowledged::At(served + 1)
+    );
+
+    let target = encode_content_cid_str(&hidden_root);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(15));
+    let ledger =
+        StagingRetireLedger::new(&alice.staging_store, BookkeepingSeal::new(&enc, &entropy));
+    block_on(ledger.tombstone(&owner_tag(&enc), node.0)).expect("the tombstone holds");
+    block_on(ledger.owe(
+        &owner_tag(&enc),
+        &[OwedRetire {
+            node: node.0,
+            target: target.clone(),
+            owed_bytes: 1,
+            manifest_bytes: 1,
+            origin: DebtOrigin::DroppedRoot,
+            name: Some(name.as_str().to_owned()),
+        }],
+    ))
+    .expect("the debt journals");
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !retire_targets(&alice).contains(&target),
+        "the debt waits below the mark"
+    );
+
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the tying edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the edit ties the mark"
+    );
+    assert!(
+        !retire_targets(&alice).contains(&target),
+        "the debt waits at the mark"
+    );
+
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert!(
+        retire_targets(&alice).contains(&target),
+        "a record above the mark settles the debt"
+    );
+}

@@ -108,7 +108,7 @@ use crate::net::renewal_walk::{
     BinRoot, OWED_UNREAD_NO_REVIVAL, RenewalSeams, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards,
     WalkScope,
 };
-use crate::net::retire::{ReclaimStall, retire};
+use crate::net::retire::{HeldMarks, ReclaimStall, retire};
 use crate::net::revival::{
     BinIndexRead, RecoveryPace, Revival, ReviveError, ReviveRequest, ScopeRootRead, reads_absent,
     revive_name,
@@ -4918,6 +4918,7 @@ where
         name: keys.name(),
         signer: Some(keys.signer()),
         plane: BinIndexRead { ..*read },
+        held: HeldMarks::default(),
     };
     let revival = revive_name(api, seams, pace, request).await;
     let revived_at = match &revival.result {
@@ -6875,6 +6876,7 @@ impl<T: SeamTypes> Engine<T> {
             name,
             signer: None,
             plane: read,
+            held: HeldMarks::default(),
         };
         let revival = revive_name(api, &seams, &self.state.recovery_pace, request).await;
         let signed = revival.result.is_ok();
@@ -6932,6 +6934,7 @@ impl<T: SeamTypes> Engine<T> {
             name: &name,
             signer: Some(&signer),
             plane: read,
+            held: HeldMarks::default(),
         };
         let revival = revive_name(api, &seams, &self.state.recovery_pace, request).await;
         let signed = revival.result.is_ok();

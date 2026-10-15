@@ -71,7 +71,7 @@ use crate::net::author::{
 };
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{
-    Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict,
+    Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict, PutMark,
 };
 use crate::net::record_publish::{
     HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
@@ -79,7 +79,7 @@ use crate::net::record_publish::{
 };
 use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
-    Acknowledged, AcknowledgedSlot, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
+    Acknowledged, AcknowledgedSlot, HeldMarks, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
     StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::signed_data;
@@ -755,6 +755,8 @@ enum HeadPublish {
     },
     /// Acknowledged at `sequence`, but the confirm did not see it.
     Unconfirmed { sequence: u64 },
+    /// Signed at `sequence` and sent, and no endpoint acknowledged it.
+    Unacknowledged { sequence: u64 },
 }
 
 /// What a name serves at its freshest sequence: that sequence, every distinct
@@ -797,7 +799,7 @@ const CONTENT_LOST: Halt = Halt::Permanent(DeadLetterReason::ContentUnrecoverabl
 ///
 /// Bounds a pathology, not a network outage: it is spent only by a halt the
 /// valve could attribute to these bytes.
-const ATTEMPT_BUDGET: u32 = 5;
+pub(crate) const ATTEMPT_BUDGET: u32 = 5;
 
 /// How many passes may stop on one op under [`Halt::Unclassified`] before it
 /// dead-letters.
@@ -2587,6 +2589,24 @@ where
 
     fn retire_ledger<'s>(&'s self, scope: &'s DrainScope<'_>) -> StagingRetireLedger<'s, St> {
         StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
+    }
+
+    /// Hold `sequence` as `node`'s unacknowledged mark at `name`, retried
+    /// once: a lost mark lets a settle retire what the landed bytes name.
+    async fn hold_unacknowledged(
+        &self,
+        scope: &DrainScope<'_>,
+        node: NodeId,
+        name: &IpnsName,
+        sequence: u64,
+    ) -> Result<(), Halt> {
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let hold = || ledger.hold_unacknowledged(&owner, node.0, name.as_str(), sequence);
+        if hold().await.is_ok() {
+            return Ok(());
+        }
+        hold().await.map_err(seam)
     }
 
     /// Hold `sequence` as `node`'s acknowledged sequence at `name`, retried
@@ -8520,13 +8540,19 @@ where
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
-        let acked = match owing {
-            OwingRecord::Unconfirmed => self
-                .retire_ledger(scope)
-                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
+        // Every read of a live record waits at or below a mark: a record of
+        // ours there may name what the retire would drop (ADR 0076 D2).
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let marks = HeldMarks {
+            acked: ledger
+                .acknowledged(&owner, node, write_name.as_str())
                 .await
                 .ok()?,
-            _ => Acknowledged::Nothing,
+            unacked: ledger
+                .unacknowledged(&owner, node, write_name.as_str())
+                .await
+                .ok()?,
         };
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
@@ -8536,22 +8562,19 @@ where
             .await
         {
             Ok(loaded) => loaded,
+            // A dropped create: the drain publishes a child before its parent,
+            // so no folder links it, and a mark reads nothing here (ADR 0076
+            // D5).
             Err(_)
                 if owing == OwingRecord::Unconfirmed
-                    && acked == Acknowledged::Nothing
                     && self.holds_no_record(&end, &write_name).await? =>
             {
                 return reaching(BTreeSet::new());
             }
             Err(_) => return None,
         };
-        if owing == OwingRecord::Unconfirmed
-            && (loaded.tied
-                || match acked {
-                    Acknowledged::Nothing => false,
-                    Acknowledged::At(acked) => loaded.observed.sequence() <= acked,
-                    Acknowledged::Unreadable => true,
-                })
+        if (owing == OwingRecord::Unconfirmed && loaded.tied)
+            || marks.hold(loaded.observed.sequence())
         {
             return None;
         }
@@ -9406,23 +9429,32 @@ where
             .acknowledged(&owner, node.0, name.as_str())
             .await
             .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+        let unacked = ledger
+            .unacknowledged(&owner, node.0, name.as_str())
+            .await
+            .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
         // A PUT of ours the ledger acknowledged may still surface, so the
-        // signature clears it too.
-        let observed = match acked {
-            Acknowledged::Nothing => observed,
-            Acknowledged::At(sequence) => observed.clearing(sequence),
-            // Any sequence may hide behind it: clear the most one op's charged
-            // attempts can have signed above the floor.
-            Acknowledged::Unreadable => {
-                let floor = floor::sequence_floor(
-                    &plane.end.floors(&self.seams.floors),
-                    name.as_str().as_bytes(),
-                )
-                .await
-                .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
-                observed.clearing(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
-            }
+        // signature clears it too. An unacknowledged mark moves the signature
+        // only when it does not read, so a retry after an outage never climbs
+        // (ADR 0076 D2).
+        let signed_over = HeldMarks {
+            acked,
+            unacked: match unacked {
+                Acknowledged::Unreadable => Acknowledged::Unreadable,
+                Acknowledged::Nothing | Acknowledged::At(_) => Acknowledged::Nothing,
+            },
         };
+        let floor = if signed_over.unreadable() {
+            floor::sequence_floor(
+                &plane.end.floors(&self.seams.floors),
+                name.as_str().as_bytes(),
+            )
+            .await
+            .map_err(|error| PublishHalt::before_the_put(seam(error)))?
+        } else {
+            None
+        };
+        let observed = observed.clearing(signed_over.cleared_by(floor));
         let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await
@@ -9436,7 +9468,22 @@ where
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
+                // Only a record above the mark wins over the bytes it stands
+                // for; a tie at its sequence leaves it held (ADR 0076 D4).
+                if matches!(unacked, Acknowledged::Unreadable)
+                    || matches!(unacked, Acknowledged::At(held) if held < sequence)
+                {
+                    let _ = ledger.forget_unacknowledged(&owner, node.0).await;
+                }
                 (record_bytes, bar, sequence)
+            }
+            // No ack does not prove that nothing landed, so the halt stays an
+            // outage.
+            HeadPublish::Unacknowledged { sequence } => {
+                self.hold_unacknowledged(scope, node, name, sequence)
+                    .await
+                    .map_err(PublishHalt::before_the_put)?;
+                return Err(PublishHalt::before_the_put(Halt::Unclassified));
             }
             // Its bytes may still surface at `sequence`, so the next publish
             // here signs above it rather than tying it.
@@ -9580,6 +9627,7 @@ where
             .map_err(|_| Halt::UploadAttempt)?;
         let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
         let _publishing = PublishingName::hold(self.cells.publishing, observed.name());
+        let signed = Cell::new(None);
         let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
         let published = publish_record_placed(
             &self.seams.transport,
@@ -9595,7 +9643,7 @@ where
             },
             self.head_placement(),
             &mut mirror,
-            None,
+            Some(PutMark::Signed(&signed)),
         )
         .await;
         self.mirror.borrow_mut().leg = mirror;
@@ -9603,12 +9651,19 @@ where
             outcome,
             record_bytes,
             winner,
-        } = published.map_err(|error| {
-            if orphaned_head(&error) {
-                self.record_orphan_head(preflighted.cid());
+        } = match (published, signed.get()) {
+            (Ok(receipt), _) => receipt,
+            (
+                Err(RecordPublishError::Publish(PublishError::AllEndpointsFailed)),
+                Some(sequence),
+            ) => return Ok(HeadPublish::Unacknowledged { sequence }),
+            (Err(error), _) => {
+                if orphaned_head(&error) {
+                    self.record_orphan_head(preflighted.cid());
+                }
+                return Err(classify_publish(error, head.block.len() as u64));
             }
-            classify_publish(error, head.block.len() as u64)
-        })?;
+        };
         match outcome {
             PublishOutcome::Published { sequence } => Ok(HeadPublish::Confirmed {
                 record_bytes,

@@ -1614,6 +1614,17 @@ mod tests {
         });
     }
 
+    /// The unacknowledged mark's key sits under the acknowledged-mark prefix,
+    /// so orphan GC spares it, also in the previous release (ADR 0076 D1).
+    #[test]
+    fn an_unacknowledged_mark_is_never_classed_an_orphan() {
+        let key =
+            StagingRetireLedger::<InMemoryStagingStore>::unacknowledged_key(&[7u8; 32], [9u8; 16])
+                .unwrap();
+        assert!(key.starts_with(ACKED_SEQUENCE_PREFIX));
+        assert!(is_bookkeeping(&key));
+    }
+
     /// Collecting the drain's completion mark would let a restored queue replay
     /// ops that already published, so it is never orphan residue.
     ///
