@@ -12234,13 +12234,14 @@ fn a_share_that_stops_before_its_root_lands_is_no_trust_violation() {
                 fx._events = events;
                 fx._tasks = tasks;
             }
-            events_so_far(&mut fx._events);
+            let before_ticks = events_so_far(&mut fx._events);
             for _ in 0..2 {
                 tick(&fx.world, &fx.engine, &mut fx._tasks);
             }
             let events = events_so_far(&mut fx._events);
-            let abuse: Vec<&Event> = events
+            let abuse: Vec<&Event> = before_ticks
                 .iter()
+                .chain(&events)
                 .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
                 .collect();
             assert!(abuse.is_empty(), "{case}: {abuse:?}");
