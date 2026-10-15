@@ -54,7 +54,7 @@ use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{BookkeepingCursors, CaptureProofs, DrainCells, QueueHold};
+use crate::sync::drain::{BookkeepingCursors, CaptureProofs, DrainCells, QueueHold, RetireDescent};
 use crate::sync::model::Snapshot;
 use crate::sync::owed_rotation::OwedCell;
 use crate::sync::project::UnlinkedChild;
@@ -544,6 +544,8 @@ pub(crate) struct SessionState {
     /// The vault's capture walk, resumed across passes, and the captures a
     /// complete walk proved no folder names.
     pub(crate) capture_proofs: Rc<RefCell<CaptureProofs>>,
+    /// The retire path's live descents, resumed across ticks.
+    pub(crate) retire_descents: Rc<RefCell<BTreeMap<NodeId, RetireDescent>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -807,6 +809,7 @@ impl SessionState {
             settings_summary: Rc::new(RefCell::new(None)),
             observed_unlinks: Rc::new(RefCell::new(Vec::new())),
             capture_proofs: Rc::default(),
+            retire_descents: Rc::default(),
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
             kept_chains: Rc::default(),
@@ -831,6 +834,7 @@ impl SessionState {
             dead_letters: &self.dead_letters,
             observed_unlinks: &self.observed_unlinks,
             capture_proofs: &self.capture_proofs,
+            retire_descents: &self.retire_descents,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
             bin_index_unsettled: &self.bin_index_unsettled,

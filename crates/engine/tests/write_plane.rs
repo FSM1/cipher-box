@@ -57,13 +57,14 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, Scheduler, SeamError,
-    SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, RetireLedger,
+    Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
     publish_settings, settings_name,
 };
+use cipherbox_engine::sync::dead_letter_name::{DEAD_LETTER_NAME_PREFIX, dead_letter_name_key};
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -12882,6 +12883,272 @@ fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
 }
 
+/// Grant `folder` to the recipient with write permission, which cuts it into a
+/// scope root of its own, and tick the cut out.
+fn grant_write_to_recipient(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    folder: NodeId,
+) {
+    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
+    let contact_code =
+        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
+    block_on(engine.command(Command::ImportContact { contact_code }))
+        .expect("the recipient's code imports");
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: folder,
+            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the grant cuts the folder into a scope root of its own"
+    );
+    for _ in 0..4 {
+        tick(world, engine, tasks);
+    }
+}
+
+/// The names of the debts this device's retire ledger holds, as the settle
+/// reads them. A name rides only a version 3 entry.
+fn owed_names(device: &FakeDevice) -> Vec<Option<String>> {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .owed(&owner_tag(&enc), None),
+    )
+    .expect("the ledger reads")
+    .entries
+    .into_iter()
+    .map(|entry| entry.name)
+    .collect()
+}
+
+/// An edit that dead-letters with its version preserved, on a device whose
+/// endpoints serve none of its puts.
+fn parked_edit(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, OpId) {
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create lands");
+    tick(world, engine, tasks);
+    let node = child_id(engine, ROOT, "clip.bin");
+    world.record_store.drop_puts();
+    let op_id = write_file(engine, version(node), &[2u8; 200]).expect("the edit lands");
+    tick_until_dead_lettered(world, engine, tasks);
+    (node, op_id)
+}
+
+/// The discard journals the dropped version at version 3, under the name the
+/// drain recorded when it parked the version (ADR 0075 D1).
+#[test]
+fn a_discarded_dead_letter_journals_under_the_name_its_drain_recorded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert_eq!(
+        owed_names(&alice),
+        vec![Some(write_name(node).as_str().to_owned())]
+    );
+    let keys = block_on(alice.staging_store.staged_keys()).expect("keys list");
+    assert!(
+        !keys
+            .iter()
+            .any(|key| key.starts_with(DEAD_LETTER_NAME_PREFIX)),
+        "the discard removes the recorded name"
+    );
+}
+
+/// A discard whose name does not read fails, and leaves the preserved entry,
+/// its blocks and its name, with no debt. Once the read heals, the discard
+/// journals under the recorded name.
+#[test]
+fn a_discard_whose_name_does_not_read_keeps_the_dead_letter() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+    let staged_before = block_on(alice.staging_store.staged_keys()).expect("keys list");
+    alice
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(DEAD_LETTER_NAME_PREFIX);
+
+    assert!(block_on(engine.command(Command::DiscardDeadLetter { op_id })).is_err());
+    assert!(owed_names(&alice).is_empty());
+    assert_eq!(
+        block_on(alice.staging_store.staged_keys()).expect("keys list"),
+        staged_before,
+        "the entry, its blocks and its name stay"
+    );
+
+    alice.staging_store.inner().heal_staged_reads();
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    assert_eq!(
+        owed_names(&alice),
+        vec![Some(write_name(node).as_str().to_owned())]
+    );
+}
+
+/// A file whose folder the owner shares after the drain parked its edit moves
+/// to a new scope and a new name. The discard journals under the name of the
+/// record the version would have joined, not the new one (ADR 0075 D1).
+#[test]
+fn a_discard_after_a_share_moves_the_file_journals_under_the_old_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &tab, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder create lands");
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create lands");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, folder, "clip.bin");
+    let old_name = write_name(file);
+
+    world.record_store.drop_puts();
+    let op_id = write_file(&mut engine, version(file), &[2u8; 200]).expect("the edit lands");
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    world.record_store.keep_puts();
+
+    grant_write_to_recipient(&world, &mut engine, &mut tasks, folder);
+    // The file's current name is the one the next edit publishes at.
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let puts = || -> BTreeMap<String, usize> {
+        world
+            .record_store
+            .routing_keys(&endpoint)
+            .into_iter()
+            .map(|key| {
+                let count = world.record_store.put_count(&key);
+                (key, count)
+            })
+            .collect()
+    };
+    let before = puts();
+    write_file(&mut engine, version(file), &[3u8; 200]).expect("the next edit lands");
+    tick(&world, &engine, &mut tasks);
+    let after = puts();
+    let new_names: Vec<String> = after
+        .iter()
+        .filter(|(key, count)| before.get(*key) != Some(*count))
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert!(!new_names.is_empty(), "the next edit publishes");
+    assert!(
+        !new_names.contains(&old_name.as_str().to_owned()),
+        "the share moved the file off its old name"
+    );
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    let names = owed_names(&tab);
+    assert!(
+        names.contains(&Some(old_name.as_str().to_owned())),
+        "{names:?}"
+    );
+    assert!(
+        new_names
+            .iter()
+            .all(|new| !names.contains(&Some(new.clone()))),
+        "{names:?}"
+    );
+}
+
+/// Hold `node`'s acknowledged mark at `name`, as an earlier attempt at that
+/// name leaves it.
+fn hold_mark(device: &FakeDevice, node: NodeId, name: &IpnsName, sequence: u64) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(12));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .acknowledge(&owner_tag(&enc), node.0, name.as_str(), sequence),
+    )
+    .expect("the mark holds");
+}
+
+/// A node that moved after an attempt at its old name holds its mark there.
+/// The version may have charged under either name, so the drain records no
+/// name and the discard journals with none (ADR 0075 D1).
+#[test]
+fn a_dead_letter_whose_mark_is_held_at_an_old_name_records_no_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+    hold_mark(&bob, node, &write_name(NodeId([0xEE; 16])), 7);
+    let op_id =
+        write_file(&mut engine_b, version(node), &bobs).expect("the second device's edit commits");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's edit commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+
+    block_on(engine_b.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert_eq!(owed_names(&bob), vec![None]);
+}
+
+/// A preserved set the previous release wrote has no name key, so it still
+/// reads and its discard journals a version 2 entry (ADR 0020 D5).
+#[test]
+fn a_discarded_dead_letter_the_previous_release_parked_journals_with_no_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (_, op_id) = parked_edit(&world, &mut engine, &mut tasks);
+    let key = dead_letter_name_key(&owner_tag(&kdf::enc_subkey(&SECRET)), op_id).expect("a key");
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&key))
+            .expect("reads")
+            .is_some(),
+        "the drain recorded the name"
+    );
+    block_on(alice.staging_store.remove_staged_bytes(&key)).expect("removes");
+
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert_eq!(owed_names(&alice), vec![None]);
+}
+
 /// A mark that will not read may hide any sequence, so the next publish at the
 /// name signs well above the floor rather than at the next sequence.
 #[test]
@@ -18521,6 +18788,68 @@ fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
     assert!(
         retire_targets(&alice).contains(&doomed),
         "the debt settles on the pass that could read the record again"
+    );
+}
+
+/// A prune debt journaled under a file's vault-scope name, and then a write
+/// grant that moves the file to a name under the grant's own write seed: the
+/// debt settles, and no retire names a reference of the live copy.
+#[test]
+fn a_debt_journaled_before_a_write_grant_moved_its_node_settles() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &tab, 42);
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder create commits");
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "shared");
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "clip.bin".into(),
+        },
+        &bodies[0],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, folder, "clip.bin");
+    write_file(&mut engine, version(file), &bodies[1]).expect("the update commits");
+    tick(&world, &engine, &mut tasks);
+    let history = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(history.len(), 2, "two writes, two versions");
+    let kept = encode_content_cid_str(&history[0].content_cid);
+
+    blocks.refuse_retire(true);
+    stage_prune(&tab, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the debt is journaled under the vault-scope name"
+    );
+
+    grant_write_to_recipient(&world, &mut engine, &mut tasks, folder);
+
+    blocks.refuse_retire(false);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(engine.reclaim_stalls(), vec![], "no stall stands");
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the debt settles");
+    assert!(
+        !retire_targets(&tab).contains(&kept),
+        "no retire names the version the live copy keeps"
     );
 }
 
