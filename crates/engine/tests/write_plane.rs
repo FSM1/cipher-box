@@ -20553,3 +20553,69 @@ fn probe_an_outage_dropped_create_settles_on_vacancy() {
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0, "the vacancy settle runs");
 }
+
+/// PROBE, not for the PR: a create that dead-letters is linked by no folder,
+/// also after a later op publishes its parent while the dead letter is still
+/// preserved.
+#[test]
+fn probe_a_preserved_dead_lettered_create_is_linked_by_no_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    serve_http(&alice, &blocks, 2000);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    for endpoint in &endpoints {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "later.bin".into(),
+        },
+        &[2u8; 200],
+    )
+    .expect("the later create commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    let (_reader, reader, _events) = open_reader(&world, &blocks, 400);
+    let names: Vec<String> = block_on(reader.view())
+        .expect("a view")
+        .children(ROOT)
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    eprintln!("PROBE root children seen by a second device: {names:?}");
+    assert!(
+        names.contains(&"later.bin".to_owned()),
+        "the parent published"
+    );
+    assert!(
+        !names.contains(&"clip.bin".to_owned()),
+        "no folder links the dropped create"
+    );
+}
