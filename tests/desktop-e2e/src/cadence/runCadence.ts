@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe } from '../cli';
 import { startInstance } from '../instance';
+import { REAL_CLOCK } from '../poll';
 import { deadlines } from '../profile';
 import { Stack, requireFile } from '../stack';
 import { cadenceOf, line, nextStart, verdict, type MountResult } from './plan';
@@ -25,10 +26,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '
 async function listing(mountRoot: string): Promise<string> {
   const { stdout } = await run('mount', [], { timeout: 10_000 });
   return stdout.split('\n').find((entry) => entry.includes(` on ${mountRoot} (`)) ?? 'not listed';
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((done) => setTimeout(done, ms));
 }
 
 async function main(): Promise<number> {
@@ -69,9 +66,10 @@ async function main(): Promise<number> {
         const elapsed = Date.now() - origin;
         const offset = nextStart(cadence, elapsed);
         if (offset === null) break;
-        await wait(offset - elapsed);
+        await REAL_CLOCK.wait(offset - elapsed);
       }
       const started = Date.now();
+      const offsetMs = origin === null ? 0 : started - origin;
       let result: MountResult;
       try {
         const instance = await startInstance({
@@ -93,14 +91,14 @@ async function main(): Promise<number> {
           await instance.stop();
         }
         result = {
-          offsetMs: Math.max(0, started - origin),
+          offsetMs,
           outcome: 'live',
           tookMs: live - started,
           detail,
         };
       } catch (error) {
         result = {
-          offsetMs: origin === null ? 0 : started - origin,
+          offsetMs,
           outcome: 'failed',
           tookMs: Date.now() - started,
           detail: describe(error),

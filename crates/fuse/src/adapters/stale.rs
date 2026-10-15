@@ -263,14 +263,12 @@ mod platform {
         if let Some(rest) = name.strip_prefix(LEGACY_INSTANCE) {
             return no_collision_or_numbered(rest);
         }
-        let Some(drawn) = name.strip_prefix(LOCATION_PREFIX) else {
-            return false;
-        };
-        let hex = 2 * LOCATION_BYTES;
-        drawn.len() >= hex
-            && drawn.is_char_boundary(hex)
-            && drawn[..hex].bytes().all(|byte| byte.is_ascii_hexdigit())
-            && no_collision_or_numbered(&drawn[hex..])
+        name.strip_prefix(LOCATION_PREFIX)
+            .and_then(|drawn| drawn.split_at_checked(2 * LOCATION_BYTES))
+            .is_some_and(|(hex, collision)| {
+                hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && no_collision_or_numbered(collision)
+            })
     }
 
     /// Nothing, or FUSE-T's collision suffix `-<digits>`.
