@@ -529,6 +529,7 @@ jobs:
             done < <(find "$log_root" -xdev -type f -name '*.log' -print0 2>/dev/null)
           fi
           cp "${RUNNER_TEMP}/kubo.log" cadence-logs/runner/ 2>/dev/null || true
+          cp ~/Library/Logs/fuse-t/fuse-t.log cadence-logs/runner/ 2>/dev/null || true
 
       - name: Upload the logs
         if: always()
