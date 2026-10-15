@@ -281,11 +281,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   one day after it, or when it is ahead of the clock, each pass of the cycle
   stores where it stopped, across sessions. A permanent failure (no record
   at any endpoint and none cached, a 403 or other 4xx, a decode error) moves
-  the cursor on at once and emits `renewalFailed`. A pass whose doomed-name journal does not list, or
-  whose stored cursor does not read, renews nothing, stores nothing and emits
-  `renewalFailed` for each owned scope root. A journal entry that does not read or open stops only the scope
-  root it was written under: the pass renews no name of that scope, keeps the
-  cursor back and emits `renewalFailed` for that scope root.
+  the cursor on at once and emits `renewalFailed`. A pass whose doomed-name
+  journal does not list, or whose stored cursor does not read, renews
+  nothing, stores nothing and emits `renewalFailed` for each owned scope root.
+  A journal entry that does not read or open stops only the scope root it was
+  written under: the pass renews no name of that scope, keeps the cursor back
+  and emits `renewalFailed` for that scope root.
   A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
   longest time the owner takes to run `ceil(N / 500)` passes plus at most one
@@ -357,14 +358,15 @@ bytes (FSM1/cipher-box-next#28 D2).
   settle retires them once the name holds a record above the sequence its PUT
   was acknowledged at (ADR 0054). A PUT that no endpoint acknowledged can still
   land, so it holds its signed sequence as the node's unacknowledged mark,
-  under a second key beside the acknowledged one. The signature does not read
-  it, so a retry after an outage signs at the same sequence. Every settle that
-  reads a live record, a prune's included, waits at or below either mark, and
-  only a confirmed record above the unacknowledged mark clears it (ADR 0076).
-  A dropped create settles once its name holds no record, whatever mark is
-  held: the drain publishes a child before its parent, so no folder links it. A drop whose staged root is gone, fails its
-  own CID, or does not decode journals the same debt from the root CID the op
-  record names (ADR 0059). An entry that records the `ipnsName` of the
+  under a second key beside the acknowledged one. The drain's signature does
+  not read a readable unacknowledged mark, so a retry after an outage signs
+  at the same sequence. Every settle that reads a live record, a prune's
+  included, waits at or below either mark, and only a confirmed record above
+  the unacknowledged mark clears it (ADR 0076). A dropped create settles once
+  its name holds no record, whatever mark is held: the drain publishes a child
+  before its parent, so no folder links it. A drop whose staged root is gone,
+  fails its own CID, or does not decode journals the same debt from the root
+  CID the op record names (ADR 0059). An entry that records the `ipnsName` of the
   record that owes it is read and retired under that name, wherever the base
   places the node at settle time; a retired node that the base links again in
   a scope whose end derives that name is read as published, so the retire

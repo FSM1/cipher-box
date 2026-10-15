@@ -9437,14 +9437,14 @@ where
         // signature clears it too. An unacknowledged mark moves the signature
         // only when it does not read, so a retry after an outage never climbs
         // (ADR 0076 D2).
-        let signing = HeldMarks {
+        let signed_over = HeldMarks {
             acked,
             unacked: match unacked {
                 Acknowledged::Unreadable => Acknowledged::Unreadable,
                 Acknowledged::Nothing | Acknowledged::At(_) => Acknowledged::Nothing,
             },
         };
-        let floor = if signing.unreadable() {
+        let floor = if signed_over.unreadable() {
             floor::sequence_floor(
                 &plane.end.floors(&self.seams.floors),
                 name.as_str().as_bytes(),
@@ -9454,7 +9454,7 @@ where
         } else {
             None
         };
-        let observed = observed.clearing(signing.cleared_by(floor));
+        let observed = observed.clearing(signed_over.cleared_by(floor));
         let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await

@@ -57,8 +57,8 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, RetireLedger,
-    Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, DebtOrigin, EndpointId, FloorStore, HttpResponse, OpId, OwedRetire, RecordTransport,
+    RetireLedger, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
@@ -20775,6 +20775,7 @@ fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_n
     world.record_store.fail_put_endpoint(serving);
     serve_http(&alice, &blocks, 2000);
     let op_id = write_file(&mut engine, version(file), &[9u8; 70]).expect("the edit commits");
+    let (edit_root, edit_leaves) = staged_version(&alice);
     tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
     world.record_store.heal_put_endpoint(keeping);
     world.record_store.fail_put_endpoint(keeping);
@@ -20795,9 +20796,16 @@ fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_n
         "the prune ties the mark"
     );
     let pruned_cid = encode_content_cid_str(&pruned);
+    let hidden: Vec<String> = edit_leaves
+        .iter()
+        .chain([&edit_root])
+        .map(|cid| encode_content_cid_str(cid))
+        .chain([pruned_cid.clone()])
+        .collect();
+    let retired = retire_targets(&alice);
     assert!(
-        !retire_targets(&alice).contains(&pruned_cid),
-        "the record the outage PUT left still names the pruned version"
+        hidden.iter().all(|cid| !retired.contains(cid)),
+        "every CID the record the outage PUT left names stays pinned"
     );
 
     write_file(&mut engine, version(file), &[8u8; 70]).expect("the next edit commits");
@@ -20807,5 +20815,94 @@ fn a_prune_that_ties_the_unacknowledged_mark_retires_nothing_the_hidden_record_n
     assert!(
         retire_targets(&alice).contains(&pruned_cid),
         "a record above the mark settles the prune"
+    );
+}
+
+/// A named debt of a node that the base links again is read as published.
+/// That read waits at or below either mark too: a record an outage PUT left
+/// at the mark's sequence names the debt's target, also after another publish
+/// ties it, until a record above the mark confirms (ADR 0076 D2).
+#[test]
+fn a_relinked_tombstoned_debt_retires_nothing_while_an_unacknowledged_mark_is_tied() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let served = sequence_at(&world, &name);
+
+    let endpoints = world.record_store.endpoints();
+    let (keeping, serving) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(keeping);
+    world.record_store.fail_get_at_for(keeping, name.as_str());
+    world.record_store.fail_put_endpoint(serving);
+    serve_http(&alice, &blocks, 3000);
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (hidden_root, _) = staged_version(&alice);
+    tick_through_the_unattributed_budget(&world, &engine, &mut tasks);
+    world.record_store.heal_put_endpoint(keeping);
+    world.record_store.fail_put_endpoint(keeping);
+    world.record_store.heal_put_endpoint(serving);
+    assert_eq!(
+        held_marks(&alice, node, &name).unacked,
+        Acknowledged::At(served + 1)
+    );
+
+    let target = encode_content_cid_str(&hidden_root);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(15));
+    let ledger =
+        StagingRetireLedger::new(&alice.staging_store, BookkeepingSeal::new(&enc, &entropy));
+    block_on(ledger.tombstone(&owner_tag(&enc), node.0)).expect("the tombstone holds");
+    block_on(ledger.owe(
+        &owner_tag(&enc),
+        &[OwedRetire {
+            node: node.0,
+            target: target.clone(),
+            owed_bytes: 1,
+            manifest_bytes: 1,
+            origin: DebtOrigin::DroppedRoot,
+            name: Some(name.as_str().to_owned()),
+        }],
+    ))
+    .expect("the debt journals");
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !retire_targets(&alice).contains(&target),
+        "the debt waits below the mark"
+    );
+
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the tying edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        sequence_at(&world, &name),
+        served + 1,
+        "the edit ties the mark"
+    );
+    assert!(
+        !retire_targets(&alice).contains(&target),
+        "the debt waits at the mark"
+    );
+
+    write_file(&mut engine, version(node), &[4u8; 200]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(sequence_at(&world, &name), served + 2);
+    assert!(
+        retire_targets(&alice).contains(&target),
+        "a record above the mark settles the debt"
     );
 }

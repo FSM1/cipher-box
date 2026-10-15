@@ -234,13 +234,14 @@ const ENTRY_HEAD_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>();
 /// The engine's location-independent node id, as the entry stores it.
 const NODE_ID_LEN: usize = 16;
 
-/// A node's acknowledged sequence at one name, as the ledger holds it.
+/// One of a node's marks at one name, the acknowledged or the
+/// unacknowledged one, as the ledger holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Acknowledged {
     /// None is held for the name.
     #[default]
     Nothing,
-    /// The highest sequence acknowledged at the name.
+    /// The highest sequence the mark holds at the name.
     At(u64),
     /// A value is held under the node's key that this identity cannot open
     /// or read, so any sequence may hide behind it.
@@ -263,8 +264,9 @@ impl Acknowledged {
     }
 }
 
-/// A node's two marks at one name: the acknowledged sequence and the
-/// unacknowledged one (ADR 0076 D1).
+/// The marks a read or a signature of a node's name takes into account: the
+/// acknowledged one and the unacknowledged one (ADR 0076 D1). A caller that
+/// does not read a mark holds [`Acknowledged::Nothing`] for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HeldMarks {
     /// The acknowledged mark (ADR 0054 D2).

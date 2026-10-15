@@ -326,7 +326,8 @@ scenario fails the meta-test):
 - the unacknowledged mark (ADR 0076) — a dropped version whose PUT landed
   with no ack retires nothing its record names, an outage retry signs at one
   sequence, a publish that ties the mark leaves it and the debt waits, a prune
-  that ties the mark retires nothing the hidden record names, a mark that
+  that ties the mark retires nothing the hidden record names, a relinked
+  tombstoned debt waits while the mark is tied, a mark that
   does not open makes the publish sign above its bound and clears on the
   confirm, an unreadable unacknowledged mark never hides a higher
   acknowledged mark, a dropped create that was acknowledged settles on
@@ -339,8 +340,8 @@ scenario fails the meta-test):
   the floor plus the attempt budget plus one (`tests/renewal_walk.rs`); both
   marks clear and hold each on their own (`net::retire`); the mark is
   invisible to the acknowledged read (`net::retire`) and orphan GC spares it
-  (`sync::staging`) (ADR 0020); the hold refuses a sequence of zero or a name that is not an
-  IPNS name (`tests/encode_refusals.rs`);
+  (`sync::staging`) (ADR 0020); the hold refuses a sequence of zero or a name
+  that is not an IPNS name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
@@ -351,9 +352,10 @@ scenario fails the meta-test):
   keeps the cursor for the next pass, across sessions, for one day from the
   cycle's first keep-back at most; a scope root or child with no record and
   a 4xx registration move the cursor at once and emit `renewalFailed`; a 401
-  after the refresh keeps the cursor back; a doomed-name journal that does not list, or a cursor that
-  does not read, renews and stores nothing and emits `renewalFailed`; a journal entry that does not read or
-  open stops only its own scope root, and `tests/owner_actions.rs` shows that
+  after the refresh keeps the cursor back; a doomed-name journal that does not
+  list, or a cursor that does not read, renews and stores nothing and emits
+  `renewalFailed`; a journal entry that does not read or open stops only its
+  own scope root, and `tests/owner_actions.rs` shows that
   another owned scope still renews; unit tests in
   `net::renewal_walk` fix the window edge at exactly one day, a keep-back
   time ahead of the clock, and one window for each cycle; a publish during the

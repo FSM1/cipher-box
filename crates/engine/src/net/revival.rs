@@ -376,8 +376,9 @@ struct Lapsed<'a> {
 
 /// Revive each lapsed name in `requests` (ADR 0062 D1): admit each through
 /// the read of its plane, register the admitted names in one batch, then sign
-/// each at `S + 1` with the renewal EOL. Each recovery fetch waits for a slot
-/// of `pace`. One result for each request, in order.
+/// each at `S + 1`, or above the request's marks, with the renewal EOL. Each
+/// recovery fetch waits for a slot of `pace`. One result for each request, in
+/// order.
 pub(crate) async fn revive<T, H, C, F, Sch, P>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
@@ -582,7 +583,8 @@ where
 }
 
 /// Steps 5 and 6: the fan-out still corroborates the admitted record, then the
-/// renewal walk's signature path signs at `S + 1`.
+/// renewal walk's signature path signs at `S + 1`, or above the request's
+/// marks.
 async fn sign_lapsed<T, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     lapsed: &Lapsed<'_>,
