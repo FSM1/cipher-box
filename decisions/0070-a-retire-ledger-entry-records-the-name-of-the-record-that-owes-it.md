@@ -36,7 +36,9 @@ each new debt, with the name of the record whose history dropped the target. The
 a name that is not a well-formed IPNS name, and the decode reads such bytes as unwritten
 (AGENTS.md rule 8). Amended on 2026-10-03: the discard of a preserved dead letter and the
 preserved-set trim write a version 2 entry with no name, because no write seed of the op scope
-is in hand there; such a debt keeps the derived name and the wait rule.
+is in hand there; such a debt keeps the derived name and the wait rule. Amended by ADR 0075 D1
+on 2026-10-14: the drain records the name when it parks a version, and the two sites and
+the count-cap eviction journal version 3 with that name.
 
 **D2 — The settle retires under the recorded name.** For a version 3 entry, the settle uses the
 recorded name for the retire and for the live-record read, and it does not derive a name from the
@@ -45,12 +47,33 @@ wait rule of FSM1/cipher-box#2191 for a node that the base links. Amended on 202
 version 3 entry of a retired node that the base links again is read as published when the end
 of the scope that its links prove derives the recorded name, so the retire spares the CIDs that
 the live record names; with no record to read, or when its links prove no held scope, the entry
-waits.
+waits. Amended on 2026-10-14 (FSM1/cipher-box#2259, owner option 1): the base is local to the
+device, so before it settles a retired node that the base links nowhere, the settle reads the
+folder records of each held scope whose write seed derives the name (a read grant keeps its
+parent's seed) from the scope root, live and not from the cache. It settles only when no folder
+links the node. A folder that links the node counts as a base link. The read passes over the root
+of a scope that the tick holds a pass for, and over a read-only graft of another vault. Any other
+scope root makes the read blind, and the entry waits. A per-tick read cap bounds the read, and
+each held end of one debt takes an even share of it. The read resumes on a later tick that
+reaches the debt. A tick drops a read that it did not step only after a pass over the whole
+ledger. A read that spans ticks proves nothing until a second sweep reads each folder to the same
+record. A later tick proves a complete read again with one more sweep. The entry waits while
+a folder does not answer, while the gate refuses a folder, and while a read that passed its node
+bound stays carried. A refused folder that becomes a scope root starts the read again. A name
+that no held end derives, as after a write cut, settles with no live record only when the tick
+walks the whole scope set, holds a pass for every scope that the session proved, and owes no
+rotation work; otherwise the entry waits. Accepted residual: while an own scope is keyless, for
+example a section with no owner write blob or a write cut that another device has not finished,
+the named retired debts that no held end derives wait across the vault. This is a leak, not a
+loss.
+Amended on 2026-10-14 (FSM1/cipher-box#2280, owner option a):
+a write grant re-seals the record at the recorded name under the new scope root. When the scope
+binding refuses that record, the settle reads it again at the same name under the held end whose
+root the record's tag names, as ADR 0072 D1 does. The retire stays under the recorded name.
 
-**D3 — One release carries the change.** The new release reads all three shapes. A
-previous-release build reads a version 3 entry as unwritten, and its `owe` can overwrite the entry
-with a version 2 entry for the same content id; the debt then settles under the derived name with
-the wait rule.
+**D3 — One release carries the change.** The new release reads all three shapes. Corrected on
+2026-10-14: the previous release, v2.13.1, also reads a version 3 entry, so its `owe` keeps a held
+version 3 entry and does not overwrite it with a version 2 entry.
 
 ## Alternatives considered
 

@@ -79,8 +79,8 @@ use crate::net::record_publish::{
 };
 use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
-    Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
-    drain_owed_retires, linked_nowhere, orphaned_head, retire,
+    Acknowledged, AcknowledgedSlot, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
+    StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::signed_data;
 use crate::net::{
@@ -232,6 +232,47 @@ fn own_ends<'s, 'e>(
 ) -> impl Iterator<Item = &'s ScopeEnd<'e>> {
     std::iter::once(&scope.source)
         .chain(ends.iter().filter(move |end| end.root != scope.source.root))
+}
+
+/// Each held end whose write seed derives `name` for `node`, once per scope
+/// root. A read grant keeps its parent's write seed, so more than one end can.
+fn ends_writing<'s, 'e>(
+    scopes: &'s [DrainScope<'e>],
+    node: [u8; 16],
+    name: &str,
+) -> Vec<(&'s DrainScope<'e>, ScopeEnd<'e>)> {
+    let mut ends: Vec<(&DrainScope<'e>, ScopeEnd<'e>)> = Vec::new();
+    for held in scopes {
+        let second = held.second_end().ok().flatten().map(|plane| plane.end);
+        for end in std::iter::once(held.source).chain(second) {
+            if end.write_name(&node).as_str() == name
+                && !ends.iter().any(|(_, known)| known.root == end.root)
+            {
+                ends.push((held, end));
+            }
+        }
+    }
+    ends
+}
+
+/// The scope roots a retire descent passes over: the root of each end the tick
+/// holds, whose own descent covers it, and a read-only graft of another vault,
+/// whose names no seed of this vault derives.
+fn descent_skips(scopes: &[DrainScope<'_>]) -> BTreeSet<NodeId> {
+    let mut skips = BTreeSet::new();
+    for held in scopes {
+        skips.insert(held.source.root);
+        if let Ok(Some(plane)) = held.second_end() {
+            skips.insert(plane.end.root);
+        }
+        skips.extend(
+            held.granted_namespaces
+                .iter()
+                .map(|(root, _)| *root)
+                .filter(|root| held.scope_roots.contains(root)),
+        );
+    }
+    skips
 }
 
 /// Whether `child` is a node of this scope rather than a scope root. A granted
@@ -978,6 +1019,14 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
 /// spends a bounded share and resumes on the next tick.
 const MAX_CAPTURE_WALK_READS: usize = 128;
 
+/// The folder records one tick reads for the retire path's live descents
+/// ([`RetireDescent`]). A descent past it resumes on a later tick.
+const MAX_RETIRE_DESCENT_READS: usize = 64;
+
+/// The nodes one retire descent may hold. A descent past it proves nothing, so
+/// the debts it serves wait while the session carries it.
+const MAX_RETIRE_DESCENT_NODES: usize = 65_536;
+
 /// The nodes one capture walk may hold. A walk past this bound cannot prove
 /// any capture, so the session drops the captures of each scope the walk
 /// served and walks for those scopes no more (blueprint/engine.md "Owner
@@ -1174,6 +1223,140 @@ enum WalkStep {
     Restart,
     /// The walk passed its node bound.
     Overflowed,
+}
+
+/// A live descent through the folder records of one scope from its root,
+/// which the retire path needs before it settles the debt of a node that this
+/// device's base links nowhere (ADR 0070 D2). The base is local to the device,
+/// so a folder it never loaded can still link the node at the same name. The
+/// descent spans ticks, so it proves nothing until a second sweep reads each
+/// folder to the same record, as [`CaptureWalk`] does.
+pub(crate) struct RetireDescent {
+    /// Each folder still to read.
+    pending: Vec<NodeId>,
+    seen: BTreeSet<NodeId>,
+    /// Every node a folder read so far names.
+    linked: BTreeSet<NodeId>,
+    /// Each folder read, with the record it read.
+    read: Vec<(NodeId, RecordMark)>,
+    /// How many of `read` the second sweep has confirmed.
+    confirmed: usize,
+    /// The anchor the scope root's read gives the reads below it.
+    anchor: Option<WalkAnchor>,
+    /// A folder names a folder the descent cannot read. The descent then
+    /// proves no node unlinked, so it reads no more of its first sweep.
+    blind: bool,
+    /// The folders that made it blind. One that a later tick holds or passes
+    /// over starts the descent again.
+    blinded_by: BTreeSet<NodeId>,
+    /// The descent passed its node bound. It proves nothing and reads no more
+    /// while it is carried, so the debts it serves wait.
+    overflowed: bool,
+    /// The folder whose record the gate refused or found tied. The descent
+    /// reads only it, unreported, until it reads or becomes a scope root, and
+    /// then starts again.
+    refused: Option<NodeId>,
+    /// The unanswered attempts at the descent's next read, one for each tick.
+    unanswered: u8,
+    /// This tick reads no more of it.
+    stopped: bool,
+    /// A folder moved between the two sweeps, or a read went unanswered too
+    /// long: the next tick starts again.
+    restart: bool,
+}
+
+impl RetireDescent {
+    fn new(root: NodeId) -> Self {
+        Self {
+            pending: vec![root],
+            seen: BTreeSet::from([root]),
+            linked: BTreeSet::new(),
+            read: Vec::new(),
+            confirmed: 0,
+            anchor: None,
+            blind: false,
+            blinded_by: BTreeSet::new(),
+            overflowed: false,
+            refused: None,
+            unanswered: 0,
+            stopped: false,
+            restart: false,
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.pending.is_empty() && self.confirmed == self.read.len()
+    }
+
+    /// Whether the next tick resumes it.
+    fn carried(&self) -> bool {
+        !self.restart
+    }
+
+    /// Ready it for the next tick. A complete descent proves nothing on a later
+    /// tick until a confirm sweep reads each folder to the same record again.
+    fn end_tick(&mut self) {
+        self.stopped = false;
+        if self.complete() {
+            self.confirmed = 0;
+        }
+    }
+
+    /// Whether a folder that made it blind is now one that `skips` holds.
+    fn sees_further(&self, skips: &BTreeSet<NodeId>) -> bool {
+        self.blinded_by.iter().any(|id| skips.contains(id))
+    }
+
+    /// Whether a folder links `node`: `None` until both sweeps complete, or
+    /// when the descent cannot prove the node unlinked.
+    fn verdict(&self, node: NodeId) -> Option<bool> {
+        if self.overflowed || self.restart || self.refused.is_some() {
+            return None;
+        }
+        if self.linked.contains(&node) {
+            return Some(true);
+        }
+        (self.complete() && !self.blind).then_some(false)
+    }
+
+    /// Record what one folder of the scope at `end` names. A folder of this
+    /// scope is read in turn. A scope root in `skips` starts another scope,
+    /// which the descent of each end that derives the name covers. Any other
+    /// folder this end does not read makes the descent blind.
+    fn visit(
+        &mut self,
+        end: &ScopeEnd<'_>,
+        scope_roots: &[NodeId],
+        skips: &BTreeSet<NodeId>,
+        children: &[ChildRef],
+    ) {
+        for child in children {
+            let id = NodeId(child.id);
+            self.linked.insert(id);
+            if child.kind != NodeKind::Folder || skips.contains(&id) {
+                continue;
+            }
+            if scope_roots.contains(&id) || !names_this_scope(end, child) {
+                self.blind = true;
+                self.blinded_by.insert(id);
+            } else if self.seen.insert(id) {
+                self.pending.push(id);
+            }
+        }
+        if self.blind {
+            self.pending = Vec::new();
+        }
+        if self.seen.len() + self.linked.len() > MAX_RETIRE_DESCENT_NODES {
+            self.overflowed = true;
+            self.pending = Vec::new();
+            self.seen = BTreeSet::new();
+            self.linked = BTreeSet::new();
+            self.blinded_by = BTreeSet::new();
+            self.read = Vec::new();
+            self.confirmed = 0;
+            self.anchor = None;
+        }
+    }
 }
 
 impl CaptureWalk {
@@ -1511,6 +1694,17 @@ impl<'a> DrainScope<'a> {
         })
     }
 
+    /// The end whose records `op`'s version joins. A node joins the scope of
+    /// the parent that names it, and the base links a created node only once
+    /// that parent publishes, so a create resolves through its parent.
+    fn joined_end(&self, base: &Snapshot, op: &Op) -> Result<ScopeEnd<'a>, Halt> {
+        let anchor = match &op.kind {
+            OpKind::Create { parent, .. } => *parent,
+            _ => op.target,
+        };
+        self.end_of(base, anchor)
+    }
+
     /// The end rooted at `root`, if this scope holds one.
     fn end_rooted_at(&self, root: NodeId) -> Option<ScopeEnd<'a>> {
         if self.source.root == root {
@@ -1695,6 +1889,8 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
     pub(crate) capture_proofs: &'a RefCell<CaptureProofs>,
+    /// The retire descents a tick left unfinished, by scope root.
+    pub(crate) retire_descents: &'a RefCell<BTreeMap<NodeId, RetireDescent>>,
     pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
@@ -1772,6 +1968,10 @@ pub(crate) struct TickInputs<'a> {
     /// The scope id of each bookmark in
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     pub(crate) deferred_raises: &'a [NodeId],
+    /// This tick holds a pass for every scope the session knows, and no
+    /// rotation work is owed. A name no held end derives is then linked by no
+    /// folder this device reads (ADR 0070 D2).
+    pub(crate) every_scope_reached: bool,
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -1803,6 +2003,11 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Whether a capture walk read of this tick went unanswered. The later
     /// passes of the tick read no more, so the walk's attempts count ticks.
     walk_unanswered: Cell<bool>,
+    /// The retire descents this tick stepped, which every debt of the tick
+    /// shares.
+    retire_descents: RefCell<BTreeMap<NodeId, RetireDescent>>,
+    /// What this tick may still read for them ([`MAX_RETIRE_DESCENT_READS`]).
+    descent_reads: Cell<usize>,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
     /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
@@ -1839,6 +2044,8 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
             walk_unanswered: Cell::new(false),
+            retire_descents: RefCell::default(),
+            descent_reads: Cell::new(MAX_RETIRE_DESCENT_READS),
             capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
             sealer_reads: MAX_SEALER_READS,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
@@ -2564,6 +2771,7 @@ where
             );
         }
         let resume = self.cells.bookkeeping.borrow().ledger.clone();
+        let mut full_ledger_pass = false;
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(&self.seams.staging, seal, &staged),
             &owner,
@@ -2587,6 +2795,21 @@ where
             let mut bookkeeping = self.cells.bookkeeping.borrow_mut();
             bookkeeping.ledger = pass.cursor;
             bookkeeping.ledger_partial = pass.partial;
+            full_ledger_pass = !pass.partial;
+        }
+        let mut descents = self.retire_descents.take();
+        descents.retain(|_, descent| descent.carried());
+        for descent in descents.values_mut() {
+            descent.end_tick();
+        }
+        // A paged ledger reaches each debt on only some ticks, so a descent
+        // this tick did not step waits for a pass over the whole ledger.
+        {
+            let mut carried = self.cells.retire_descents.borrow_mut();
+            if full_ledger_pass {
+                carried.clear();
+            }
+            carried.append(&mut descents);
         }
         reconcile_staging_over(
             &self.seams.staging,
@@ -2793,7 +3016,9 @@ where
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
-            let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
+            let preserved = self
+                .preserve_dead_letter(scope, *op_id, op, *reason)
+                .await?;
             self.abandon(scope, *op_id, op).await?;
             // The abandonment retired what the op registered.
             if preserved == Preservation::Refused {
@@ -3013,7 +3238,8 @@ where
                     }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await
+                else {
                     return;
                 };
                 let handed_back = if owes_its_name {
@@ -3043,7 +3269,8 @@ where
             // which for a restored replay keeps the resurrection candidate alive
             // at the owner's own expense.
             Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
-                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await
+                else {
                     return;
                 };
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
@@ -4279,13 +4506,25 @@ where
         node: NodeId,
         mode: ResolveMode,
     ) -> Result<LoadedNode, ChildFault> {
-        let name = plane.end.write_name(&node.0);
         let floors = plane.end.floors(&self.seams.floors);
         let adopter = self.child_adopter(plane, &floors, node);
+        self.load_child_at(plane, anchor, &adopter, plane.end.write_name(&node.0), mode)
+            .await
+    }
+
+    /// [`Self::load_child_node_unreported`] at `name` through `adopter`.
+    async fn load_child_at(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: IpnsName,
+        mode: ResolveMode,
+    ) -> Result<LoadedNode, ChildFault> {
         let resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
-            &adopter,
+            adopter,
             &name,
             mode,
         )
@@ -4308,7 +4547,7 @@ where
             },
             _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
-        self.open_child_record(plane, anchor, &adopter, name, record_bytes, lagging, tied)
+        self.open_child_record(plane, anchor, adopter, name, record_bytes, lagging, tied)
             .await
     }
 
@@ -6322,7 +6561,7 @@ where
             let anchor = walk.anchors.get(&at).map(WalkAnchor::anchor);
             let read = match end {
                 Some(end) => self
-                    .walk_read(scope, &end, anchor, node)
+                    .walk_read(scope, &end, anchor, node, true)
                     .await
                     .map(|read| (end, read)),
                 None => Err(WalkReadFault::Unanswered),
@@ -6376,6 +6615,7 @@ where
         end: &ScopeEnd<'_>,
         anchor: Option<Anchor<'_>>,
         node: NodeId,
+        report: bool,
     ) -> Result<WalkRead, WalkReadFault> {
         let fault = |halt: Halt| match halt {
             Halt::RecordRefused => WalkReadFault::Untrusted,
@@ -6386,7 +6626,10 @@ where
                 .gated_scope_root(scope, end, ResolveMode::NoCache)
                 .await
                 .map_err(fault)?;
-            if !resolved.tied.is_empty() {
+            if !resolved.tied.is_empty()
+                || (!report
+                    && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
+            {
                 return Err(WalkReadFault::Untrusted);
             }
             let record =
@@ -6408,10 +6651,19 @@ where
             });
         }
         let anchor = anchor.ok_or(WalkReadFault::Unanswered)?;
-        let loaded = self
-            .load_child_node(&end.at(anchor.epoch), anchor, node, ResolveMode::NoCache)
+        let plane = end.at(anchor.epoch);
+        let loaded = match self
+            .load_child_node_unreported(&plane, anchor, node, ResolveMode::NoCache)
             .await
-            .map_err(fault)?;
+        {
+            Ok(loaded) => loaded,
+            Err(ChildFault::Refused(_)) if !report => return Err(WalkReadFault::Untrusted),
+            Err(error) => {
+                return Err(fault(
+                    self.report_fault(&plane.end.write_name(&node.0), error),
+                ));
+            }
+        };
         if loaded.tied {
             return Err(WalkReadFault::Untrusted);
         }
@@ -8207,11 +8459,24 @@ where
             None => scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?,
             Some(name) => {
                 if owing == OwingRecord::Retired {
-                    let base = self.cells.base.borrow();
-                    if !linked_nowhere(&base, node) {
+                    if linked_nowhere(&self.cells.base.borrow(), node) {
+                        // A folder this device never loaded may link the node
+                        // at the recorded name, which a live descent finds. A
+                        // name no held end derives is linked by no folder this
+                        // device reads, once the tick reached every scope.
+                        let ends = ends_writing(scopes, node, name);
+                        if ends.is_empty() {
+                            if !self.inputs.every_scope_reached {
+                                return None;
+                            }
+                        } else if self.ends_link(scopes, &ends, NodeId(node)).await? {
+                            owing = OwingRecord::Published;
+                        }
+                    } else {
                         // The base links the node again. Its links must prove
                         // the scope that holds it, and that scope's end decides:
                         // at the recorded name the record is live and is read.
+                        let base = self.cells.base.borrow();
                         let roots: BTreeSet<NodeId> = scope.scope_roots.iter().copied().collect();
                         let owner = scope_root_of(&base, NodeId(node), &roots);
                         let end = roots
@@ -8245,6 +8510,13 @@ where
             if !linked_nowhere(&self.cells.base.borrow(), node) {
                 return None;
             }
+            let mut ends = ends_writing(scopes, node, write_name.as_str());
+            if ends.is_empty() {
+                ends.push((scope, end));
+            }
+            if self.ends_link(scopes, &ends, NodeId(node)).await? {
+                return None;
+            }
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
@@ -8260,7 +8532,7 @@ where
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
         let loaded = match self
-            .load_child_node(&plane, root.anchor(), NodeId(node), ResolveMode::NoCache)
+            .load_owing_node(&plane, root.anchor(), NodeId(node), scopes)
             .await
         {
             Ok(loaded) => loaded,
@@ -8292,6 +8564,164 @@ where
             live.extend(self.expand_version(&version).await.ok()?.cids());
         }
         reaching(live)
+    }
+
+    /// Whether a folder of any of `ends` links `node`: `None` while a descent
+    /// of one of them cannot prove it unlinked. Each end steps its descent this
+    /// tick.
+    async fn ends_link(
+        &self,
+        scopes: &[DrainScope<'_>],
+        ends: &[(&DrainScope<'_>, ScopeEnd<'_>)],
+        node: NodeId,
+    ) -> Option<bool> {
+        let skips = descent_skips(scopes);
+        let mut unproved = false;
+        for (index, (held, end)) in ends.iter().enumerate() {
+            // An even share of what the tick has left, so one large scope
+            // does not starve the ends after it.
+            let share = self.descent_reads.get().div_ceil(ends.len() - index);
+            match self.scope_links(held, end, &skips, share, node).await {
+                Some(true) => return Some(true),
+                Some(false) => {}
+                None => unproved = true,
+            }
+        }
+        (!unproved).then_some(false)
+    }
+
+    /// Whether a folder of the scope at `end` links `node`, by this tick's step
+    /// of the scope's live descent ([`RetireDescent`]), which every debt of the
+    /// tick in that scope shares. `None` until the descent completes, or when
+    /// it cannot prove the node unlinked.
+    async fn scope_links(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        skips: &BTreeSet<NodeId>,
+        share: usize,
+        node: NodeId,
+    ) -> Option<bool> {
+        let root = end.root;
+        let taken = self.retire_descents.borrow_mut().remove(&root);
+        let mut descent = taken
+            .or_else(|| self.cells.retire_descents.borrow_mut().remove(&root))
+            .filter(|descent| !descent.sees_further(skips))
+            .unwrap_or_else(|| RetireDescent::new(root));
+        self.step_descent(scope, end, skips, share, &mut descent)
+            .await;
+        let verdict = descent.verdict(node);
+        self.retire_descents.borrow_mut().insert(root, descent);
+        verdict
+    }
+
+    /// Spend at most `share` of this tick's descent reads on `descent`: the
+    /// first sweep, then the second, which must read each folder to the same
+    /// record.
+    async fn step_descent(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        skips: &BTreeSet<NodeId>,
+        share: usize,
+        descent: &mut RetireDescent,
+    ) {
+        let mut left = share;
+        while !(descent.stopped || descent.restart || descent.overflowed || descent.complete())
+            && left > 0
+            && self.descent_reads.get() > 0
+        {
+            // A folder that is now a scope root reads under its own scope.
+            if descent
+                .refused
+                .is_some_and(|node| scope.scope_roots.contains(&node))
+            {
+                *descent = RetireDescent::new(end.root);
+            }
+            left -= 1;
+            self.descent_reads.set(self.descent_reads.get() - 1);
+            let refused = descent.refused;
+            let (next, confirming) = match (refused, descent.pending.last()) {
+                (Some(node), _) => (node, false),
+                (None, Some(&node)) => (node, false),
+                (None, None) => (descent.read[descent.confirmed].0, true),
+            };
+            let anchor = descent.anchor.as_ref().map(WalkAnchor::anchor);
+            let read = self
+                .walk_read(scope, end, anchor, next, refused.is_none())
+                .await;
+            match read {
+                Ok(_) if refused.is_some() => *descent = RetireDescent::new(end.root),
+                Ok(read) => {
+                    descent.unanswered = 0;
+                    if confirming {
+                        if read.mark == descent.read[descent.confirmed].1 {
+                            descent.confirmed += 1;
+                        } else {
+                            descent.restart = true;
+                        }
+                        continue;
+                    }
+                    descent.pending.pop();
+                    descent.read.push((next, read.mark));
+                    if let Some(anchor) = read.anchor {
+                        descent.anchor = Some(anchor);
+                    }
+                    descent.visit(end, scope.scope_roots, skips, &read.children);
+                }
+                Err(WalkReadFault::Untrusted) => {
+                    descent.refused = Some(next);
+                    descent.stopped = true;
+                }
+                Err(WalkReadFault::Unanswered) => {
+                    descent.unanswered += 1;
+                    descent.stopped = true;
+                    descent.restart = descent.unanswered >= MAX_CAPTURE_READ_ATTEMPTS;
+                }
+            }
+        }
+    }
+
+    /// `node`'s record at its name under `plane`, never from the cache. A record
+    /// the scope binding refuses is read again at the same name under the held
+    /// end that its tag names, as ADR 0072 D1 opens an interior node: a write
+    /// grant re-seals the record under the new scope root (ADR 0070 D2).
+    async fn load_owing_node(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        node: NodeId,
+        scopes: &[DrainScope<'_>],
+    ) -> Result<LoadedNode, Halt> {
+        let name = plane.end.write_name(&node.0);
+        let floors = plane.end.floors(&self.seams.floors);
+        let adopter = self.child_adopter(plane, &floors, node);
+        let rejection = match self
+            .load_child_at(plane, anchor, &adopter, name.clone(), ResolveMode::NoCache)
+            .await
+        {
+            Err(ChildFault::Refused(rejection)) if seal_open_failed(&rejection) => rejection,
+            loaded => return loaded.map_err(|fault| self.report_fault(&name, fault)),
+        };
+        let Some(tagged) = adopter.unbound_scope().and_then(|scope| {
+            scopes
+                .iter()
+                .find_map(|held| held.end_rooted_at(NodeId(scope)))
+        }) else {
+            return Err(refuse_record(&self.seams.events, &name, &rejection));
+        };
+        let (plane, root) = self.ledger_plane(tagged).await.ok_or(Halt::Unclassified)?;
+        let floors = tagged.floors(&self.seams.floors);
+        let adopter = self.child_adopter(&plane, &floors, node);
+        self.load_child_at(
+            &plane,
+            root.anchor(),
+            &adopter,
+            name.clone(),
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(|fault| self.report_fault(&name, fault))
     }
 
     /// Whether `name` holds no record by the [`OwingRecord::Unconfirmed`] rule:
@@ -9325,12 +9755,15 @@ where
         &self,
         scope: &DrainScope<'_>,
         op_id: OpId,
+        op: &Op,
         reason: DeadLetterReason,
     ) -> Result<Preservation, Halt> {
         let queued = self.seams.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
+        let name = self.joined_name(scope, op).await;
+        let reader = RecordReader::new(scope.enc_secret);
         preserve_dead_letter(
             &self.seams.staging,
             &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, scope.enc_secret),
@@ -9338,9 +9771,33 @@ where
             reason,
             record,
             self.seams.scheduler.now(),
+            Some((&self.dropped_version_debts(scope, &reader), name.as_ref())),
         )
         .await
         .map_err(seam)
+    }
+
+    /// The `ipnsName` of the record `op`'s version would join at this tick:
+    /// the marked name (ADR 0075 D1). `None` when the drain derives no end for
+    /// its target, or when the node's acknowledged mark is held at another
+    /// name or does not read, since the version may have charged there.
+    async fn joined_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<IpnsName> {
+        let name = scope
+            .joined_end(&self.cells.base.borrow(), op)
+            .ok()?
+            .write_name(&op.target.0);
+        match self
+            .retire_ledger(scope)
+            .acknowledged_slot(&owner_tag(scope.enc_secret), op.target.0)
+            .await
+            .ok()?
+        {
+            AcknowledgedSlot::Empty => Some(name),
+            AcknowledgedSlot::Marked { name: marked, .. } if marked == name.as_str().as_bytes() => {
+                Some(name)
+            }
+            AcknowledgedSlot::Marked { .. } | AcknowledgedSlot::Unreadable => None,
+        }
     }
 
     /// Drop the version no preserved entry holds — [`Preservation::Refused`]
@@ -9353,10 +9810,7 @@ where
     async fn release_unpreserved(&self, scope: &DrainScope<'_>, preserved: Preservation, op: &Op) {
         if preserved != Preservation::Kept {
             let reader = RecordReader::new(scope.enc_secret);
-            let name = scope
-                .end_of(&self.cells.base.borrow(), op.target)
-                .ok()
-                .map(|end| end.write_name(&op.target.0));
+            let name = self.joined_name(scope, op).await;
             self.dropped_version_debts(scope, &reader)
                 .drop_version(op, name.as_ref().map(IpnsName::as_str))
                 .await;
@@ -9376,7 +9830,7 @@ where
         reason: DeadLetterReason,
         report: &mut DrainReport,
     ) -> bool {
-        let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+        let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
             return false;
         };
         if self.dequeue_op(op_id).await.is_err() {
@@ -10855,6 +11309,41 @@ mod tests {
         );
     }
 
+    /// A create below the destination root joins the destination end, though
+    /// the base does not link the new node yet.
+    #[test]
+    fn a_create_joins_the_end_of_its_parent() {
+        let seams = OwnerSeams::new();
+        let (source, destination) = ends();
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT];
+        let scope = two_ended(&seams, &source, &destination, &roots);
+        let base = Snapshot::new(SOURCE_ROOT);
+        let create = Op::create(
+            NodeId([0x64; 16]),
+            DESTINATION_ROOT,
+            "new",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        assert_eq!(
+            scope.joined_end(&base, &create).map(|end| end.root),
+            Ok(DESTINATION_ROOT)
+        );
+        let beside = Op::create(
+            NodeId([0x65; 16]),
+            SOURCE_ROOT,
+            "beside",
+            NewNode::Folder,
+            1,
+            UnixMillis(0),
+        );
+        assert_eq!(
+            scope.joined_end(&base, &beside).map(|end| end.root),
+            Ok(SOURCE_ROOT)
+        );
+    }
+
     /// A base that places `target` under the source root, one node below it,
     /// and one beside it — the three positions the crossing walk has to tell
     /// apart.
@@ -11975,6 +12464,7 @@ mod tests {
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
                     deferred_raises: &self.deferred_raises,
+                    every_scope_reached: true,
                 },
             )
         }
@@ -13446,7 +13936,7 @@ mod tests {
 
     #[test]
     fn a_retired_debt_of_a_node_the_base_links_waits() {
-        let harness = drain_harness(Some(harness_root_envelope()));
+        let (harness, _) = walk_harness_of(&[]);
         let node = NodeId([0x48; 16]);
         let recorded = derive_write_name(&[0x21; 32], &node.0);
         let settle = |name: Option<&str>| {
@@ -13592,6 +14082,158 @@ mod tests {
         );
     }
 
+    /// The previous tick's end, then one tick's step of a retire descent over
+    /// the harness scope.
+    fn step_retire_descent(harness: &DrainHarness, descent: &mut RetireDescent) {
+        step_retire_descent_in(harness, &harness.scope(), descent);
+    }
+
+    /// The same, over `scope`.
+    fn step_retire_descent_in(
+        harness: &DrainHarness,
+        scope: &DrainScope<'_>,
+        descent: &mut RetireDescent,
+    ) {
+        let skips = descent_skips(std::slice::from_ref(scope));
+        descent.end_tick();
+        block_on(harness.drain().step_descent(
+            scope,
+            &scope.source,
+            &skips,
+            MAX_RETIRE_DESCENT_READS,
+            descent,
+        ));
+    }
+
+    /// A folder the gate refuses holds the retire descent: the debt waits, and
+    /// the refusal reports once, not on each tick.
+    #[test]
+    fn a_refused_folder_holds_the_retire_descent_and_reports_once() {
+        let (mut harness, mut blocks) = walk_harness();
+        publish_harness_file(
+            &mut harness,
+            &mut blocks,
+            WALK_FOLDER,
+            &[0xEE; 32],
+            &[4u8; 100],
+        );
+        let node = NodeId([0x4E; 16]);
+        let mut descent = RetireDescent::new(HARNESS_ROOT);
+        for _ in 0..3 {
+            step_retire_descent(&harness, &mut descent);
+            assert_eq!(descent.verdict(node), None, "the debt waits");
+            assert!(descent.carried(), "the next tick keeps the held descent");
+        }
+        assert_eq!(
+            drain_events(&mut harness.events)
+                .iter()
+                .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+                .count(),
+            1
+        );
+    }
+
+    /// A folder that never answers stops the descent for each tick, and after
+    /// its attempts the descent starts again.
+    #[test]
+    fn a_folder_that_never_answers_restarts_the_retire_descent() {
+        let (harness, _) = walk_harness();
+        harness
+            .seams
+            .transport
+            .fail_get_for(derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &WALK_FOLDER.0).as_str());
+        let mut descent = RetireDescent::new(HARNESS_ROOT);
+        for attempt in 1..=MAX_CAPTURE_READ_ATTEMPTS {
+            step_retire_descent(&harness, &mut descent);
+            assert_eq!(descent.verdict(NodeId([0x4E; 16])), None);
+            assert_eq!(descent.carried(), attempt < MAX_CAPTURE_READ_ATTEMPTS);
+        }
+    }
+
+    /// Both sweeps read each folder to the same record, and then the descent
+    /// proves an unlinked node unlinked and a linked one linked.
+    #[test]
+    fn a_retire_descent_proves_after_its_second_sweep() {
+        let (harness, _) = walk_harness();
+        let mut descent = RetireDescent::new(HARNESS_ROOT);
+        step_retire_descent(&harness, &mut descent);
+        assert!(descent.complete(), "two folders, four reads");
+        assert_eq!(descent.read.len(), 2);
+        assert_eq!(descent.verdict(NodeId([0x4E; 16])), Some(false));
+        assert_eq!(descent.verdict(WALK_FOLDER), Some(true));
+    }
+
+    /// A complete descent is carried, and the next tick proves it again with
+    /// one confirm sweep rather than a new descent.
+    #[test]
+    fn a_complete_retire_descent_proves_again_with_one_confirm_sweep() {
+        let (harness, _) = walk_harness();
+        let mut descent = RetireDescent::new(HARNESS_ROOT);
+        step_retire_descent(&harness, &mut descent);
+        assert!(descent.carried(), "a complete descent is carried");
+        descent.end_tick();
+        assert_eq!(
+            descent.verdict(NodeId([0x4E; 16])),
+            None,
+            "a carried descent proves nothing before its confirm sweep"
+        );
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let skips = descent_skips(std::slice::from_ref(&scope));
+        block_on(drain.step_descent(
+            &scope,
+            &scope.source,
+            &skips,
+            MAX_RETIRE_DESCENT_READS,
+            &mut descent,
+        ));
+        assert_eq!(
+            MAX_RETIRE_DESCENT_READS - drain.descent_reads.get(),
+            2,
+            "one read for each of the two folders"
+        );
+        assert_eq!(descent.verdict(NodeId([0x4E; 16])), Some(false));
+    }
+
+    /// A folder held refused that became a scope root no pass of the tick
+    /// holds starts the descent again, which is then blind, and the refusal is
+    /// not reported again.
+    #[test]
+    fn a_refused_folder_that_became_a_scope_root_restarts_the_retire_descent() {
+        let (mut harness, mut blocks) = walk_harness();
+        publish_harness_file(
+            &mut harness,
+            &mut blocks,
+            WALK_FOLDER,
+            &[0xEE; 32],
+            &[4u8; 100],
+        );
+        let node = NodeId([0x4E; 16]);
+        let mut descent = RetireDescent::new(HARNESS_ROOT);
+        step_retire_descent(&harness, &mut descent);
+        assert_eq!(descent.refused, Some(WALK_FOLDER));
+        let roots = [HARNESS_ROOT, WALK_FOLDER];
+        let scope = DrainScope {
+            scope_roots: &roots,
+            ..harness.scope()
+        };
+        step_retire_descent_in(&harness, &scope, &mut descent);
+        assert_eq!(descent.refused, None, "the descent started again");
+        assert_eq!(descent.verdict(WALK_FOLDER), Some(true));
+        assert_eq!(
+            descent.verdict(node),
+            None,
+            "a scope root no pass holds leaves the descent blind"
+        );
+        assert_eq!(
+            drain_events(&mut harness.events)
+                .iter()
+                .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+                .count(),
+            1
+        );
+    }
+
     /// The same, below an interior scope with its own write seed: the scope the
     /// base links the node in decides, not the vault end.
     #[test]
@@ -13613,8 +14255,8 @@ mod tests {
         let name = derive_write_name(&interior_seed, &node.0);
         let scopes = [vault, interior];
         assert!(
-            settle_named(&harness, &scopes, node, &name).is_some(),
-            "an unlinked node settles"
+            settle_named(&harness, &scopes, node, &name).is_none(),
+            "an unlinked node waits while no live read of its scope completes"
         );
         link_in_base(
             &harness,

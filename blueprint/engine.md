@@ -360,12 +360,38 @@ bytes (FSM1/cipher-box-next#28 D2).
   places the node at settle time; a retired node that the base links again in
   a scope whose end derives that name is read as published, so the retire
   spares what its live record names, and it waits when its links prove no held
-  scope. An entry with no name derives it from where the base places the node
-  (ADR 0070). Two residuals stand: the discard of a preserved dead letter and
-  the preserved-set trim journal with no name, because no write seed of the op
-  scope is in hand there; and two debts for one content id under two record
-  names share one ledger slot, so the second record's references stay charged
-  (a leak, not a loss). A publish that fails **before the
+  scope. A retired node that the base links nowhere settles only after a live
+  read of the folder records of each held scope whose write seed derives its
+  name, from the scope root, finds no folder that links it; a folder that
+  links it counts as a base link. The read passes over the root of a scope
+  that the tick holds a pass for and over a read-only graft of another vault;
+  any other scope root makes it blind, and the debt waits. A per-tick read cap
+  bounds that read, and each held end of one debt takes an even share. The
+  read resumes on a later tick that reaches the debt, and a tick drops a read
+  that it did not step only after a pass over the whole ledger. A read that
+  spans ticks proves nothing until a second sweep reads each folder to the
+  same record. A later tick proves a complete read again with one more
+  sweep. The debt waits while a folder does not answer or the gate refuses
+  one, and while a read past its node bound stays carried. A refused folder
+  that becomes a scope root starts the read again. A name that no held end
+  derives settles with no live record only when the tick walks the whole
+  scope set, holds a pass for every scope that the session proved, and owes
+  no rotation work. Accepted residual: while an own scope is keyless, for
+  example a section with no owner write blob or a write cut that another
+  device has not finished, the named retired debts that no held end derives
+  wait across the vault. This is a leak, not a loss. A record at the
+  recorded name that the scope binding refuses
+  is read again under the held end whose root its tag names (ADR 0072 D1), and
+  the retire stays under that name. An entry with no name derives it from
+  where the base places the node (ADR 0070). A discard of a preserved dead
+  letter, the preserved-set trim and an eviction past the count cap use the
+  name that the drain recorded when it parked the version, and with no
+  recorded name they journal with no name. The drain records no name when the
+  node's acknowledged mark is held at another name or does not read
+  (ADR 0075). One residual stands: two
+  debts for one content id under two record names share one ledger slot, so the
+  second record's references stay charged (a leak, not a loss). A publish that
+  fails **before the
   record reaches the transport** — register-first, the floor read, the
   head-CID echo, or an upload whose ack never came back — is the mirror case:
   its head block may already be pinned under its own charged row, no record

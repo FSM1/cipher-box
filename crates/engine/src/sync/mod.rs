@@ -19,6 +19,7 @@ pub mod bookkeeping;
 pub mod boot;
 pub(crate) mod cancel;
 pub(crate) mod crossing;
+pub mod dead_letter_name;
 pub(crate) mod doomed;
 pub(crate) mod drain;
 pub mod kept_op;

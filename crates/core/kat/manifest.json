@@ -710,6 +710,11 @@
         "name": "owner-seed-cache",
         "discriminator": 12,
         "hpkeInfo": "cipherbox/v2/owner-local/owner-seed-cache"
+      },
+      {
+        "name": "dead-letter-names",
+        "discriminator": 13,
+        "hpkeInfo": "cipherbox/v2/owner-local/dead-letter-names"
       }
     ],
     "reserved": [
@@ -720,11 +725,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 13
+      "count": 14
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 120,
+      "count": 142,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

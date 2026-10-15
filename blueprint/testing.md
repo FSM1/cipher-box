@@ -288,7 +288,41 @@ scenario fails the meta-test):
   own name (`tests/owner_actions.rs`); a named debt of a deleted node that the
   base links again at that name, in the vault scope or below an interior
   scope, reads its live record and spares what it names, and waits when the
-  record does not pass the gate (`sync::drain`);
+  record does not pass the gate (`sync::drain`); a named debt of a deleted
+  node that a folder the device never opened links does not settle, a
+  descent past its per-tick read cap settles on a later tick, a descent
+  resumes across ledger pages and settles under a one-page ledger, and a move
+  into a folder the descent already read keeps the debt
+  (`tests/renewal_walk.rs`); a refused folder holds the descent and reports
+  once, a refused folder that became a scope root restarts it, a folder that
+  never answers restarts it, a descent proves only after its second sweep, and
+  a complete descent proves again with one confirm sweep (`sync::drain`); a
+  keyless descendant and a proved scope that the walk missed leave a scope
+  unreached (`sync::pass`); a debt journaled
+  before a write grant moved its node settles under the old name and spares
+  the kept version (`tests/write_plane.rs`); a hard-delete debt settles after
+  a write cut once every scope is reached and waits with a scope unreached,
+  and a debt below a read-granted scope spares the live record, also when the
+  scope's write plane is dark (`tests/owner_actions.rs`);
+- the recorded dead-letter name (ADR 0075) — a discard journals a version 3
+  entry under the name that the drain recorded, also after a share moves the
+  file to a new scope and name; a discard whose name does not read fails and
+  keeps the entry, its blocks and its name; a mark held at an old name
+  records no name; a preserved set with no name key
+  (ADR 0020 D5) journals with no name (`tests/write_plane.rs`); a trimmed
+  version, a version whose root is gone, and an entry that the count cap
+  evicts journal under the recorded name, and a set with no name key with no
+  name; a name that does not read keeps its one entry while the trim drops
+  the others, and an entry past the count cap whose name does not read stays
+  with no debt until the read heals; a later tick that derives no end
+  removes the earlier name; a
+  failed name write preserves nothing, and after a failed set write orphan GC
+  keeps the name while the queue holds its op id (`sync::staging`); the body
+  round-trips, reads a body of another op or version, a bad name, trailing
+  bytes or an unknown version as no name, and decodes the core KAT body
+  (`sync::dead_letter_name`); a create records the name under the end of
+  its parent (`sync::drain`); the encode refuses a name that is not an IPNS
+  name (`tests/encode_refusals.rs`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2

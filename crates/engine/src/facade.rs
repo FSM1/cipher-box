@@ -13515,13 +13515,21 @@ where {
         }
         let (_, op) = self.parked_write(op_id).await?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let reader = RecordReader::new(session.enc_subkey());
+        let debts = self.dropped_version_debts(session, &reader);
+        let names = debts.names();
+        let name = match op.content_root_cid() {
+            Some(root) => names
+                .read(op_id, root)
+                .await
+                .map_err(EngineError::from_seam)?,
+            None => None,
+        };
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
             .map_err(EngineError::from_seam)?;
-        let reader = RecordReader::new(session.enc_subkey());
-        self.dropped_version_debts(session, &reader)
-            .drop_version(&op, None)
-            .await;
+        debts.drop_version(&op, name.as_deref()).await;
+        names.forget(op_id).await;
         self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())

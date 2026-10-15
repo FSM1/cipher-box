@@ -71,6 +71,9 @@ pub struct ChildAdopter<'a, H, F> {
     owed_move: Option<OwedMoveScope>,
     /// The scope whose seed opened the last record ([`Self::opened_scope`]).
     opened_scope: Cell<Option<[u8; 16]>>,
+    /// The scope the last record's tag named when this read binds no such
+    /// scope ([`Self::unbound_scope`]).
+    unbound_scope: Cell<Option<[u8; 16]>>,
 }
 
 /// The other scope that an owed interior move binds to a read of an interior
@@ -115,6 +118,7 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
             local_head: RefCell::new(None),
             owed_move: None,
             opened_scope: Cell::new(None),
+            unbound_scope: Cell::new(None),
         }
     }
 
@@ -154,6 +158,12 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
     /// The scope whose seed opened the last record this adopter admitted.
     pub(crate) fn opened_scope(&self) -> Option<[u8; 16]> {
         self.opened_scope.get()
+    }
+
+    /// The scope the tag of the expected node's last record named, when the
+    /// read refused it because it binds no such scope.
+    pub(crate) fn unbound_scope(&self) -> Option<[u8; 16]> {
+        self.unbound_scope.get()
     }
 
     /// The epoch tag of the head an adopt assembled, `None` before the head
@@ -210,6 +220,9 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         // a scope this read binds (the read-key KDF does not bind the scope UUID, so the
         // scope check joins the same equivalence class as the root gate's).
         if envelope.id != self.expected_node || !self.binds(&envelope.scope) {
+            if envelope.id == self.expected_node {
+                self.unbound_scope.set(Some(envelope.scope));
+            }
             return Err(reject(
                 GateStage::Unseal,
                 TrustViolation::SealOpenFailed.into(),

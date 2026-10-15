@@ -75,11 +75,14 @@ pub enum OwnerLocalKind {
     KeptOps,
     /// The owner's confirmed root copies for recovery (ADR 0073 D1).
     OwnerSeedCache,
+    /// The record name each preserved dead letter's version would have joined
+    /// (ADR 0075 D2).
+    DeadLetterNames,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
@@ -91,6 +94,7 @@ impl OwnerLocalKind {
         Self::OwedRotation,
         Self::KeptOps,
         Self::OwnerSeedCache,
+        Self::DeadLetterNames,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -107,6 +111,7 @@ impl OwnerLocalKind {
             Self::OwedRotation => "owed-rotation",
             Self::KeptOps => "kept-ops",
             Self::OwnerSeedCache => "owner-seed-cache",
+            Self::DeadLetterNames => "dead-letter-names",
         }
     }
 
@@ -124,6 +129,7 @@ impl OwnerLocalKind {
             Self::OwedRotation => 0x0a,
             Self::KeptOps => 0x0b,
             Self::OwnerSeedCache => 0x0c,
+            Self::DeadLetterNames => 0x0d,
         }
     }
 
@@ -336,6 +342,7 @@ mod tests {
                 OwnerLocalKind::OwedRotation => 8,
                 OwnerLocalKind::KeptOps => 9,
                 OwnerLocalKind::OwnerSeedCache => 10,
+                OwnerLocalKind::DeadLetterNames => 11,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],
