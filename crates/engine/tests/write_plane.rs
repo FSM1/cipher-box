@@ -13125,6 +13125,72 @@ fn a_dead_letter_whose_mark_is_held_at_an_old_name_records_no_name() {
     assert_eq!(owed_names(&bob), vec![None]);
 }
 
+/// A dropped create whose name every endpoint answers as empty settles on
+/// vacancy while the node's mark is held at another name, where a live record
+/// stands. The retire is scoped to the create's own name (ADR 0046 D1), so
+/// the record at the other name keeps its rows: a leak at worst, never a loss.
+#[test]
+fn a_vacancy_settle_with_a_mark_at_another_name_retires_only_under_its_own_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "other.bin".into(),
+        },
+        &[9u8; 200],
+    )
+    .expect("the other create commits");
+    tick(&world, &engine, &mut tasks);
+    let other = write_name(child_id(&engine, ROOT, "other.bin"));
+    let other_sequence = sequence_at(&world, &other);
+
+    world.record_store.drop_puts();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let own = write_name(node);
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    world.record_store.keep_puts();
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    hold_mark(&alice, node, &other, other_sequence);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the vacancy settle ran");
+    let entries = retire_entries(&alice);
+    for cid in leaves.iter().chain([&root_cid]) {
+        let cid = encode_content_cid_str(cid);
+        let namings: Vec<Option<String>> = entries
+            .iter()
+            .filter(|(_, targets)| targets.contains(&cid))
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(
+            namings,
+            vec![Some(own.as_str().to_owned())],
+            "the dropped create retires under its own name only"
+        );
+    }
+    assert!(
+        entries
+            .iter()
+            .all(|(name, _)| name.as_deref() != Some(other.as_str()) && name.is_some()),
+        "no retire names the record at the other name, or the whole account"
+    );
+}
+
 /// A preserved set the previous release wrote has no name key, so it still
 /// reads and its discard journals a version 2 entry (ADR 0020 D5).
 #[test]
@@ -13317,6 +13383,94 @@ fn a_dropped_versions_debt_waits_while_its_record_is_tied() {
         "nothing the dropped version names is retired against a tied record"
     );
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// A PUT that lands at an endpoint and comes back with no ack is
+/// `AllEndpointsFailed`, yet its bytes may surface at the name. The dropped
+/// version that PUT carried retires nothing while that endpoint serves no GET,
+/// because the record it holds names the version once the endpoint serves again.
+#[test]
+fn a_dropped_version_whose_put_landed_unacked_retires_nothing_its_record_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let (landing, other) = (&endpoints[1], &endpoints[0]);
+
+    world.record_store.land_puts_unacked_at(landing);
+    world.record_store.fail_get_at_for(landing, name.as_str());
+    world.record_store.fail_put_endpoint(other);
+    // The unattributed budget spends a register per pass.
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    assert_eq!(
+        block_on(engine.snapshot(ROOT)).unwrap().dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }],
+        "the unattributed budget dead-letters the edit"
+    );
+    let landed = world
+        .record_store
+        .record_at(landing, name.as_str())
+        .expect("the unacked PUT landed");
+    assert!(
+        IpnsRecord::unmarshal(&landed)
+            .and_then(|record| record.verify(&name))
+            .expect("the landed record verifies")
+            .sequence
+            > sequence_at(&world, &name),
+        "the landed record sits above the one the other endpoint serves"
+    );
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+    let retired = retire_targets(&alice);
+
+    world.record_store.heal_get_for(name.as_str());
+    world.record_store.heal_put_endpoint(landing);
+    world.record_store.heal_put_endpoint(other);
+    let (_reader, reader, _reader_events) = open_reader(&world, &blocks, 400);
+    assert_eq!(
+        block_on(reader.read_content(node)).expect("the head version reads"),
+        vec![2u8; 200],
+        "the endpoints serve the record the unacked PUT left, so it names the dropped version"
+    );
+    let named: Vec<String> = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .filter(|cid| retired.contains(cid))
+        .collect();
+    assert!(
+        named.is_empty(),
+        "the settle retired content the served record names: {named:?}"
+    );
 }
 
 /// A conditional-edit loser keeps its rows, and a preserved set that refuses

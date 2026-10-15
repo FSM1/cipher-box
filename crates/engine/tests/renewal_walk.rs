@@ -22,7 +22,7 @@ use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{
     CursorStore, MAX_CURSOR_PATH, RENEWAL_CURSOR_PREFIX, RenewalCursor,
 };
-use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
+use cipherbox_engine::net::retire::{Acknowledged, NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
     BoxedTask, DebtOrigin, FloorStore, HttpMethod, HttpRequest, HttpResponse, OwedRetire,
     RecordTransport, RetireLedger, Scheduler, SnapshotCache, StagingStore, UnixMillis,
@@ -3409,5 +3409,136 @@ fn a_restart_after_a_bin_index_revival_signs_nothing_over_the_revived_record() {
         served_at(&world, &bin),
         Some(revived),
         "while the start rule holds, the drain signs nothing at S + 1 again"
+    );
+}
+
+/// One device writes a file, then edits it while every endpoint acks its PUTs
+/// and stores nothing, until the edit dead-letters on its attempt budget. The
+/// acknowledged mark is left above the served sequence. The session ends, and
+/// the same device starts again `days` later, after `prepare` ran. Returns the
+/// served record before and after the walk.
+fn dead_lettered_above_the_served_sequence(
+    days: u32,
+    prepare: impl FnOnce(&FakeWorld, &Blocks, &FakeDevice, NodeId),
+) -> (VerifiedRecord, Option<VerifiedRecord>) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"the device that wrote");
+    let mut file = ROOT;
+    written_then_left_on(&world, &blocks, &device, |engine, tasks| {
+        file = write_file(&world, engine, tasks, ROOT, "note.txt");
+        world.record_store.drop_puts();
+        let body = b"an edit no endpoint keeps";
+        let handle = block_on(engine.begin_write(
+            WriteTarget::Version {
+                node: file,
+                expected_version: None,
+            },
+            body.len() as u64,
+        ))
+        .expect("a write opens");
+        block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
+        block_on(engine.commit_write(handle)).expect("the edit commits");
+        let mut passes = 0;
+        while block_on(engine.snapshot(ROOT))
+            .expect("a snapshot")
+            .dead_letters
+            .is_empty()
+        {
+            tick(&world, engine, tasks);
+            passes += 1;
+            assert!(passes < 50, "the attempt budget must be finite");
+        }
+        world.record_store.keep_puts();
+        vec![file]
+    });
+    let name = write_name(file);
+    let before = record_at(&world, &name);
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    let mark = block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .acknowledged(&owner_tag(&enc), file.0, name.as_str()),
+    )
+    .expect("the mark reads");
+    assert!(
+        matches!(mark, Acknowledged::At(sequence) if sequence > before.sequence),
+        "the dead letter leaves the mark above the served sequence"
+    );
+    prepare(&world, &blocks, &device, file);
+    world.scheduler.advance(DAY * days);
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    for _ in 0..4 {
+        world.scheduler.advance(Duration::from_secs(60));
+        poll_tasks_until_parked(&mut tasks);
+        tick(&world, &engine, &mut tasks);
+    }
+    let after = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .map(|bytes| {
+            IpnsRecord::unmarshal(&bytes)
+                .and_then(|record| record.verify(&name))
+                .expect("the served record verifies")
+        });
+    (before, after)
+}
+
+/// A dead letter that leaves the acknowledged mark above the served sequence
+/// does not stop the renewal walk: inside the walk window the record renews,
+/// so its EOL does not lapse.
+#[test]
+fn a_dead_letter_above_the_served_sequence_still_renews_in_the_walk_window() {
+    let (before, after) = dead_lettered_above_the_served_sequence(65, |_, _, _, _| {});
+    let after = after.expect("the record is still served");
+    assert!(
+        after.sequence > before.sequence,
+        "the walk renews the record: it stayed at sequence {} with validity {:?}",
+        after.sequence,
+        String::from_utf8_lossy(&after.validity)
+    );
+}
+
+/// The same dead letter does not stop a revival: after every record lapsed
+/// into the recovery cache, the device that wrote revives the file.
+#[test]
+fn a_dead_letter_above_the_served_sequence_still_revives_after_a_full_lapse() {
+    let (before, after) = dead_lettered_above_the_served_sequence(100, |world, blocks, _, _| {
+        lapse_into_the_recovery_cache(world, blocks);
+    });
+    assert!(
+        after.is_some_and(|after| after.sequence > before.sequence),
+        "the walk revives the lapsed record above sequence {}",
+        before.sequence
+    );
+}
+
+/// PROBE control, not for the PR: the same flow with the mark removed renews
+/// and revives, so the mark alone holds the walk back.
+fn forget_the_mark(device: &FakeDevice, file: NodeId) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(10));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .forget_acknowledged(&owner_tag(&enc), file.0),
+    )
+    .expect("the mark goes");
+}
+
+#[test]
+fn probe_control_without_the_mark_the_walk_renews_and_revives() {
+    let (before, after) = dead_lettered_above_the_served_sequence(65, |_, _, device, file| {
+        forget_the_mark(device, file)
+    });
+    assert!(after.expect("served").sequence > before.sequence, "renews");
+    let (before, after) =
+        dead_lettered_above_the_served_sequence(100, |world, blocks, device, file| {
+            forget_the_mark(device, file);
+            lapse_into_the_recovery_cache(world, blocks);
+        });
+    assert!(
+        after.is_some_and(|after| after.sequence > before.sequence),
+        "revives"
     );
 }
