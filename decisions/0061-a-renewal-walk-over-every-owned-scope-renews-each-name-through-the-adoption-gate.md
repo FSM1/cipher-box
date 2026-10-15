@@ -68,8 +68,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 6. The walk signs at S + 1 with the EOL `eol_from(now)` minus one day, so a write that another
    device signs at S + 1 at the same time has the later EOL, while that device's clock is less
    than one day behind. Amended by ADR 0076 D3 on 2026-10-15: when the node holds a mark above
-   S, the walk and the revival sign one above the higher mark, and a mark that does not read
-   stands for the sequence floor plus the attempt budget plus one.
+   S, the walk and the walk's revival sign one above the higher mark, and a mark that does not
+   read is signed above the sequence floor plus the attempt budget plus one.
 7. Every reader sides with the endpoints: at one sequence, the fan-out resolve (`fanout::scan`) and
    the last-known-good keeper (`keep_newest_last_known_good`) take the record with the later EOL.
    Amended by ADR 0066 D2 on 2026-10-02: at one sequence and one EOL, the higher signed `data`
