@@ -2192,6 +2192,36 @@ mod tests {
         assert_eq!(refused.stage, GateStage::GrantSection);
     }
 
+    /// A record sealed under the scope an owed interior move binds is barred
+    /// by that scope's floors, not the leg's (ADR 0072 D1).
+    #[test]
+    fn a_record_under_the_owed_move_scope_is_barred_by_that_scope() {
+        const MOVED_TO: [u8; 16] = [0x66; 16];
+        let published = publish(Spec {
+            scope_id: MOVED_TO,
+            epoch: CURRENT_EPOCH,
+            ..Spec::default()
+        });
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH)
+            .with_owed_move(Some(OwedMoveScope {
+                scope_id: MOVED_TO,
+                read_seed: Some(StampedSeed {
+                    seed: Zeroizing::new(scope_seed(CURRENT_EPOCH)),
+                    stamp: CURRENT_EPOCH,
+                }),
+                root_name: None,
+            }));
+
+        let outcome = block_on(adopter.adopt(&published.name, &published.record_bytes))
+            .unwrap_or_else(|_| panic!("the record opens under the owed move's seed"));
+
+        assert_eq!(outcome.bar.scope_id, MOVED_TO);
+        assert_eq!(adopter.opened_scope(), Some(MOVED_TO));
+    }
+
     /// The durable per-name sequence floor, zero where none was raised.
     fn sequence_floor(floors: &InMemoryFloorStore, name: &IpnsName) -> u64 {
         block_on(floor::sequence_floor(floors, name.as_str().as_bytes()))

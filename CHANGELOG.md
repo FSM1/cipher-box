@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.13.2](https://github.com/FSM1/cipher-box/compare/v2.13.1...v2.13.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **api:** map a full lock table to 503, lock the migration run, sweep spent identity tokens ([#2408](https://github.com/FSM1/cipher-box/issues/2408)) ([836672d](https://github.com/FSM1/cipher-box/commit/836672d77d531a2f9724a36f8a1615ba917692bf))
+* **desktop:** report an external unmount of the macOS FUSE-T mount ([#2409](https://github.com/FSM1/cipher-box/issues/2409)) ([65306b0](https://github.com/FSM1/cipher-box/commit/65306b0d168daf971288e5d61c3c4b11ccd93dfd))
+* **engine:** end kept ops that no pass can check and hold absent known pointers ([#2423](https://github.com/FSM1/cipher-box/issues/2423)) ([62ed387](https://github.com/FSM1/cipher-box/commit/62ed3871853a0879a09526702c0278a279b3d59a))
+* **engine:** file the sweep when an owed interior move lands after a cut ([#2411](https://github.com/FSM1/cipher-box/issues/2411)) ([44541fe](https://github.com/FSM1/cipher-box/commit/44541febc12435db69a28aece1537406345bcd33))
+* **engine:** list the interior of a root with an owed interior move after a restart ([#2431](https://github.com/FSM1/cipher-box/issues/2431)) ([61c9f27](https://github.com/FSM1/cipher-box/commit/61c9f274a4031d58d4b4b9feb2b2b6a3f82f9712))
+* **engine:** record the publish name of a preserved dead letter and journal its dropped version at version 3 ([#2425](https://github.com/FSM1/cipher-box/issues/2425)) ([06007da](https://github.com/FSM1/cipher-box/commit/06007da6183f968886c42f049a8bf4c705aa1010))
+* name the subtree case in the scope-root delete refusal ([#2420](https://github.com/FSM1/cipher-box/issues/2420)) ([8ed3c2c](https://github.com/FSM1/cipher-box/commit/8ed3c2c9f7d7aa154094e0eead15ee633b07f7e6))
+
 ## [2.13.1](https://github.com/FSM1/cipher-box/compare/v2.13.0...v2.13.1) (2026-10-12)
 
 

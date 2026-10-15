@@ -788,8 +788,9 @@ where
                 .and_then(|record| record.verify(&name))
                 .ok()
                 .map(HeldRoot::from);
+            let owed = self.owed_scope_roots(state, pass).await;
             let walked = walk
-                .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
+                .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root, &owed)
                 .await;
             let failure = walked
                 .as_ref()
@@ -1239,6 +1240,24 @@ where
         .interior_moves()
         .await
         .ok()
+    }
+
+    /// The scope each owed interior move left, with its root, for the walk to
+    /// descend into. A root this session minted holds its listing and seeds
+    /// already. A root no listing holds is left out, as a soft delete re-keys
+    /// its record out of every scope.
+    async fn owed_scope_roots(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+    ) -> Vec<([u8; 16], [u8; 16])> {
+        let owed = self.owed_moves(state, pass).await.unwrap_or_default();
+        let minted = state.minted_scope_roots.borrow();
+        let base = state.snapshot.borrow();
+        owed.into_iter()
+            .filter(|(root, _)| !minted.contains(root) && base.contains(*root))
+            .map(|(root, left)| (left.0, root.0))
+            .collect()
     }
 
     /// Whether no owed rotation entry stands; `false` when the record does not
