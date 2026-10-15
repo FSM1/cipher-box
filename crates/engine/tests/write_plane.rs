@@ -20453,3 +20453,103 @@ fn a_refused_tied_record_read_does_not_stall_a_head_op_that_landed() {
 /// a tied record: the tick's own read and the drain's folder load, one GET for
 /// each of the two endpoints.
 const TIED_READ_AFTER: usize = 4;
+
+/// PROBE, not for the PR: an outage pass never climbs. After the unattributed
+/// budget, the bytes that landed with no ack sit one above the served record.
+#[test]
+fn probe_unacked_passes_sign_at_one_sequence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let (landing, other) = (&endpoints[1], &endpoints[0]);
+    world.record_store.land_puts_unacked_at(landing);
+    world.record_store.fail_get_at_for(landing, name.as_str());
+    world.record_store.fail_put_endpoint(other);
+    serve_http(&alice, &blocks, 2000);
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    let landed = IpnsRecord::unmarshal(
+        &world
+            .record_store
+            .record_at(landing, name.as_str())
+            .expect("the unacked PUT landed"),
+    )
+    .and_then(|record| record.verify(&name))
+    .expect("verifies")
+    .sequence;
+    eprintln!(
+        "PROBE passes {passes}, served {}, landed {landed}",
+        sequence_at(&world, &name)
+    );
+    assert_eq!(landed, sequence_at(&world, &name) + 1, "no climb");
+}
+
+/// PROBE, not for the PR: a create that dead-letters through a full outage
+/// settles on vacancy after its discard, so the unacked mark at its own name
+/// adds no wait.
+#[test]
+fn probe_an_outage_dropped_create_settles_on_vacancy() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let endpoints = world.record_store.endpoints();
+    for endpoint in &endpoints {
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    serve_http(&alice, &blocks, 2000);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let mut passes = 0;
+    while block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+    {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes <= 130, "the unattributed budget must be finite");
+    }
+    for endpoint in &endpoints {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+    eprintln!(
+        "PROBE create passes {passes}, pending {}",
+        engine.pending_reclaim_bytes()
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the vacancy settle runs");
+}

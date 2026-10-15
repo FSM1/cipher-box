@@ -3542,3 +3542,103 @@ fn probe_control_without_the_mark_the_walk_renews_and_revives() {
         "revives"
     );
 }
+
+/// PROBE, not for the PR: an edit that dead-letters through a full record
+/// endpoint outage (no PUT lands, no ack), optionally discarded, then the walk
+/// `days` later. Returns the served record before and after, and the pending
+/// reclaim figure after the walk.
+fn probe_outage_then_walk(
+    days: u32,
+    lapse: bool,
+    discard: bool,
+) -> (VerifiedRecord, Option<VerifiedRecord>, u64) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"the device that wrote");
+    let mut file = ROOT;
+    written_then_left_on(&world, &blocks, &device, |engine, tasks| {
+        file = write_file(&world, engine, tasks, ROOT, "note.txt");
+        let endpoints = world.record_store.endpoints();
+        for endpoint in &endpoints {
+            world.record_store.fail_put_endpoint(endpoint);
+        }
+        let body = b"an edit made during an outage";
+        let handle = block_on(engine.begin_write(
+            WriteTarget::Version {
+                node: file,
+                expected_version: None,
+            },
+            body.len() as u64,
+        ))
+        .expect("a write opens");
+        block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
+        let op_id = block_on(engine.commit_write(handle)).expect("the edit commits");
+        let mut passes = 0;
+        while block_on(engine.snapshot(ROOT))
+            .expect("a snapshot")
+            .dead_letters
+            .is_empty()
+        {
+            tick(&world, engine, tasks);
+            passes += 1;
+            assert!(passes < 200, "the unattributed budget must be finite");
+        }
+        eprintln!("PROBE outage passes {passes}");
+        for endpoint in &endpoints {
+            world.record_store.heal_put_endpoint(endpoint);
+        }
+        if discard {
+            block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("discard");
+            tick(&world, engine, tasks);
+            eprintln!(
+                "PROBE pending after discard {}",
+                engine.pending_reclaim_bytes()
+            );
+        }
+        vec![file]
+    });
+    let name = write_name(file);
+    let before = record_at(&world, &name);
+    if lapse {
+        lapse_into_the_recovery_cache(&world, &blocks);
+    }
+    world.scheduler.advance(DAY * days);
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    for _ in 0..6 {
+        world.scheduler.advance(Duration::from_secs(60));
+        poll_tasks_until_parked(&mut tasks);
+        tick(&world, &engine, &mut tasks);
+    }
+    let after = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .map(|bytes| {
+            IpnsRecord::unmarshal(&bytes)
+                .and_then(|record| record.verify(&name))
+                .expect("the served record verifies")
+        });
+    let pending = engine.pending_reclaim_bytes();
+    eprintln!(
+        "PROBE outage days {days} lapse {lapse} discard {discard}: seq {} -> {:?}, pending {pending}",
+        before.sequence,
+        after.as_ref().map(|after| after.sequence)
+    );
+    (before, after, pending)
+}
+
+#[test]
+fn probe_an_outage_dead_letter_still_renews_and_its_debt_settles() {
+    let (before, after, pending) = probe_outage_then_walk(65, false, true);
+    assert!(after.expect("served").sequence > before.sequence, "renews");
+    assert_eq!(pending, 0, "the discarded debt settles after the renewal");
+}
+
+#[test]
+fn probe_an_outage_dead_letter_still_revives_after_a_full_lapse() {
+    let (before, after, _) = probe_outage_then_walk(100, true, false);
+    assert!(
+        after.is_some_and(|after| after.sequence > before.sequence),
+        "revives"
+    );
+}
