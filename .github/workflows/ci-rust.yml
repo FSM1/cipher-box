@@ -310,6 +310,13 @@ jobs:
         if: runner.os == 'macOS'
         run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-mount-table
 
+      # The FUSE-T half of the vendored fuser's server patch (the
+      # `fuser_fuse_t` cfg) compiles on macOS alone. The Linux gate above runs
+      # the rest; the upstream real-mount test stays skipped here too.
+      - name: Vendored fuser patches (FUSE-T)
+        if: runner.os == 'macOS'
+        run: cargo test -p fuser --features libfuse -- --skip mnt::test::mount_unmount
+
       - name: Cargo test (the Windows host adapters)
         if: runner.os == 'Windows'
         run: cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-win-security

@@ -77,8 +77,11 @@ pub struct Control {
 }
 
 impl Control {
-    /// The endpoint over a running shell, published at `control_file`. A
-    /// sign-in starts the session again on `dev_key`.
+    /// The endpoint over a running shell, published at `control_file`.
+    ///
+    /// It holds the only copy of `dev_key` outside a live engine, for the life
+    /// of the process: every sign-in, the first included, starts on a clone of
+    /// it, which `start` takes by value and zeroizes where it dies.
     pub fn over(
         app: &AppHandle,
         token: Zeroizing<String>,
@@ -124,6 +127,12 @@ impl Control {
                 })
             }),
         }
+    }
+
+    /// Starts a session on the dev key: the headless start, and the `sign-in`
+    /// verb.
+    pub(super) async fn sign_in(&self) -> Result<(), String> {
+        (self.sign_in)().await.map(|_| ())
     }
 }
 

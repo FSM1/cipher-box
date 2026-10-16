@@ -12,9 +12,7 @@ pub mod diagnostics;
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager};
-
-use crate::engine::EngineHost;
+use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
 pub use cli::shared_mount_name;
@@ -55,25 +53,13 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
         .port();
     control::publish(&control_file, port, &token)?;
 
-    let endpoint = Arc::new(control::Control::over(
-        app,
-        token,
-        control_file,
-        dev_key.clone(),
-    ));
-    tauri::async_runtime::spawn(control::serve(listener, endpoint));
+    let endpoint = Arc::new(control::Control::over(app, token, control_file, dev_key));
+    tauri::async_runtime::spawn(control::serve(listener, endpoint.clone()));
 
     announce_paths(app);
 
-    let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        // The secret is the engine's from here: `start` takes it by value and
-        // it is zeroized where it dies, exactly as the IPC path leaves it.
-        let started = match crate::session::session_env(&app) {
-            Ok(env) => app.state::<EngineHost>().start(dev_key, None, env).await,
-            Err(refusal) => Err(refusal),
-        };
-        if let Err(refusal) = started {
+        if let Err(refusal) = endpoint.sign_in().await {
             eprintln!("the headless start failed: {refusal}");
         }
     });

@@ -21,11 +21,20 @@ fn ensure_last_os_error() -> io::Error {
 #[derive(Debug)]
 pub struct Mount {
     mountpoint: CString,
+    /// The mount point as the mount table spells it.
+    #[cfg(fuser_fuse_t)]
+    listed_as: CString,
     #[cfg(fuser_fuse_t)]
     server: super::fuse_t::Server,
 }
 impl Mount {
     pub fn new(mountpoint: &Path, options: &[MountOption]) -> io::Result<(Arc<File>, Mount)> {
+        // Resolved before the mount: a resolve after it reads through the mount.
+        #[cfg(fuser_fuse_t)]
+        let listed_as =
+            CString::new(std::fs::canonicalize(mountpoint)?.as_os_str().as_bytes()).unwrap();
+        #[cfg(fuser_fuse_t)]
+        super::fuse_t::await_exits(&listed_as, super::fuse_t::EXIT_WITHIN)?;
         let mountpoint = CString::new(mountpoint.as_os_str().as_bytes()).unwrap();
         with_fuse_args(options, |args| {
             #[cfg(fuser_fuse_t)]
@@ -50,6 +59,8 @@ impl Mount {
                     Mount {
                         mountpoint,
                         #[cfg(fuser_fuse_t)]
+                        listed_as,
+                        #[cfg(fuser_fuse_t)]
                         server,
                     },
                 ))
@@ -67,7 +78,8 @@ impl Drop for Mount {
         // no indication of the error available to the caller. So we call unmount
         // directly, which is what osxfuse does anyway, since we already converted
         // to the real path when we first mounted.
-        if let Err(err) = super::libc_umount(&self.mountpoint) {
+        let unmounted = super::libc_umount(&self.mountpoint);
+        if let Err(err) = &unmounted {
             // Linux always returns EPERM for non-root users.  We have to let the
             // library go through the setuid-root "fusermount -u" to unmount.
             if err.kind() == PermissionDenied {
@@ -87,6 +99,9 @@ impl Drop for Mount {
         }
         // CipherBox patch: neither unmount above ends the FUSE-T server.
         #[cfg(fuser_fuse_t)]
-        self.server.end();
+        self.server
+            .release(&self.listed_as, unmounted.is_ok(), || {
+                super::fuse_t::mounted_at(&self.listed_as)
+            });
     }
 }

@@ -19,9 +19,8 @@ import {
   withInstances,
   type Scenario,
   type ScenarioContext,
+  unmountAndAwaitRefusal,
 } from '../scenario';
-
-const UNMOUNTED_OUTSIDE = /unmounted outside CipherBox/;
 
 const FILE = 'after-the-remount.txt';
 const TEXT = 'served after the remount';
@@ -64,19 +63,7 @@ export const remountInProcess: Scenario = {
       const ejected = await servers(a);
       if (macOS) assert.equal(ejected.length, 1, 'a live mount runs one FUSE-T server');
 
-      await a.unmountExternally();
-      const ended = await poll(
-        () => a.status(),
-        (status) => status.mount.state === 'refused',
-        {
-          what: 'the session to report the external unmount',
-          timeoutMs: context.deadlines.mountMs,
-          intervalMs: context.deadlines.intervalMs,
-          release: () => a.abandon(),
-        }
-      );
-      if (ended.mount.state !== 'refused') assert.fail('the poll accepts a refusal only');
-      assert.match(ended.mount.reason, UNMOUNTED_OUTSIDE);
+      await unmountAndAwaitRefusal(context, a);
       await serversEnd(context, a, ejected, 'the detach to end the server of the ejected mount');
 
       await a.signOut();

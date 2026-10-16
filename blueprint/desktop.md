@@ -55,7 +55,12 @@ learned reallocation causes stale-handle disconnects), platform-junk name
 filtering, the vendored `fuser` MSG_PEEK patch (FUSE-T fragments >256 KB
 messages; upstream accepts no PRs — the patch is load-bearing and travels with
 the vendored crate, this time with a regression test), and dev-key mode as the
-headless e2e seam.
+headless e2e seam. New in v2, the vendored `fuser` also carries the FUSE-T
+server patch: an unmount does not end a mount's `go-nfsv4` server, which
+force-unmounts its mount point by path once its monitor socket closes. So
+`Mount::drop` closes that socket only when the path can carry no other mount,
+and a new mount waits until the last server at its path has exited
+(`src/mnt/fuse_t.rs` and its tests).
 
 ## Component map
 

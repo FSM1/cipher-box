@@ -123,6 +123,14 @@ export class Instance {
     return this.wasAbandoned;
   }
 
+  /**
+   * Takes the mount away without an orderly quit.
+   *
+   * A kernel call on a mount carries no timeout, so a mount that stopped
+   * answering holds its caller — and with it one of the few filesystem threads
+   * Node has. Removing the mount is what returns those calls, so a scenario
+   * that ran out of time does this before it does anything else.
+   */
   async abandon(): Promise<void> {
     this.wasAbandoned = true;
     this.shell.child.kill('SIGKILL');
