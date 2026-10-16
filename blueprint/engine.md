@@ -1360,8 +1360,9 @@ re-sealed. Only a name the walk resolved current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
 never persist the superseded name that caused it (ADR 0041). A repair whose
 re-seal is over the scope root's grant section budget does not land: the
-outcome records it, and the pass still converges the interior nodes. Every
-other repair refusal still stops the pass. Sweeps re-seal
+outcome records it, and the pass still converges the interior nodes. A lost
+race is also recorded, and the next pass re-derives the repair. Every other
+repair refusal still stops the pass. Sweeps re-seal
 metadata only; content bytes are never re-encrypted by any rotation path
 (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment
 (FSM1/cipher-box-next#26 handed it to FSM1/cipher-box-next#33, which did not fix

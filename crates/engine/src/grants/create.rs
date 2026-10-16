@@ -21,8 +21,9 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, GrantSetEntryKind,
-    GranteeName, Permission, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, GrantSetEntry,
+    GrantSetEntryKind, GranteeName, Permission, PreservedFields, ReadBody, SignedSealed,
+    sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -391,8 +392,9 @@ pub enum CreateGrantError {
         /// The publish failure.
         error: RotationPublishError,
     },
-    /// Re-sealing the reparented parent scope root failed. Post-publish: the
-    /// grantee root is already on the network with no parent reference.
+    /// Re-sealing the reparented parent scope root failed. A fresh mint
+    /// re-seals the parent before any publish. A resume re-seals it after the
+    /// grantee root is on the network with no parent reference.
     ParentMint(ResealError),
     /// Publishing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference.
@@ -679,6 +681,9 @@ struct GrantedRoot {
     /// The children of the root's own body — the walk's first level.
     frontier: Vec<NodeRef>,
     bounds: InteriorBounds,
+    /// The parent's index and re-sealed root, when the mint built them before
+    /// its first publish.
+    minted_parent: Option<(Vec<ChildScopeRef>, GrantSection)>,
 }
 
 /// What the interior walk may move, and at what epoch.
@@ -1095,6 +1100,13 @@ where
             met_not_planned: boundaries.difference(&planned).copied().collect(),
         });
     }
+    // The parent root the pass could not re-seal is the one the mint re-seals.
+    if swept.index_repair_not_resealable {
+        return Err(CreateGrantError::Converge(SweepError::IndexRepair {
+            scope_id: parent_ref.scope_id,
+            error: RotationPublishError::NotResealable,
+        }));
+    }
     Ok(GrantSubtree::Converged(ConvergedSubtree {
         grantee,
         parent,
@@ -1319,6 +1331,9 @@ where
         write_epoch: MINT_EPOCH,
         section: grantee_section,
     };
+    // The parent re-seal is the last publish, so a parent too large to re-seal
+    // refuses here, before any publish moves the folder.
+    let minted_parent = mint_parent(entropy, grantee, parent, owner)?;
 
     // 4) Vouch for the scope on the pointer plane before the root exists.
     //
@@ -1374,6 +1389,7 @@ where
                 stop_at: boundaries,
                 admits: InteriorAdmission::Measured(interior),
             },
+            minted_parent: Some(minted_parent),
         },
         row.tag,
     )
@@ -1459,6 +1475,7 @@ where
                     .collect(),
                 admits: InteriorAdmission::Unmeasured,
             },
+            minted_parent: None,
         },
         entry.tag,
     )
@@ -1490,13 +1507,12 @@ where
     E: Entropy,
     N: MintNet,
 {
-    let ipns_name = grantee.ipns_name();
-    let name_bytes = ipns_name.as_str().as_bytes();
     let GrantedRoot {
         record: grantee_record,
         override_seed,
         frontier,
         bounds,
+        minted_parent,
     } = root;
 
     // Re-seal the folder's interior nodes into the scope that now owns them.
@@ -1566,39 +1582,9 @@ where
         published_roots.push(published);
     }
 
-    // Parent index update — a metadata-only re-seal at the same epoch.
-    let mut parent_index = parent.current_child_index.to_vec();
-    for descendant in grantee.subtree_child_index {
-        parent_index = remove_child(&parent_index, &descendant.scope_id);
-    }
-    parent_index = insert_child(
-        &parent_index,
-        ChildScopeRef::new(grantee.scope_id, name_bytes.to_vec()),
-    );
-
-    let parent_section = {
-        let committed = CommittedSet {
-            commitment: parent.commitment,
-            commitment_sig: parent.commitment_sig,
-            grant_ledger: parent.grant_ledger,
-            direct_child_scope_index: &parent_index,
-            revoked_recipients: &[],
-        };
-        // The owner runs this leg, so the tag binding is not the caller's to
-        // disable: the same subkey that re-wraps the parent's grant blobs decides
-        // which rows are still filed under a tag they derive.
-        let identity = ScopeRootIdentity {
-            owner_enc_secret: Some(owner.enc_secret),
-            ..parent.identity
-        };
-        reseal_scope_root(
-            entropy,
-            &identity,
-            &parent.seeds,
-            &committed,
-            parent.carried_history_links,
-        )
-        .map_err(CreateGrantError::ParentMint)?
+    let (parent_index, parent_section) = match minted_parent {
+        Some(minted) => minted,
+        None => mint_parent(entropy, grantee, parent, owner)?,
     };
     let parent_record = ResealedScopeRoot {
         scope_id: parent.identity.scope_id,
@@ -1623,6 +1609,50 @@ where
             epoch: grantee_record.read_epoch,
         },
     })
+}
+
+/// The parent's index with the granted folder as a scope root, and the parent
+/// root re-sealed over it: a metadata-only re-seal at the same epoch.
+fn mint_parent<E: Entropy>(
+    entropy: &mut E,
+    grantee: &GranteeScopePlan<'_>,
+    parent: &ParentScopePlan<'_>,
+    owner: &OwnerGrantKeys<'_>,
+) -> Result<(Vec<ChildScopeRef>, GrantSection), CreateGrantError> {
+    let mut parent_index = parent.current_child_index.to_vec();
+    for descendant in grantee.subtree_child_index {
+        parent_index = remove_child(&parent_index, &descendant.scope_id);
+    }
+    parent_index = insert_child(
+        &parent_index,
+        ChildScopeRef::new(
+            grantee.scope_id,
+            grantee.ipns_name().as_str().as_bytes().to_vec(),
+        ),
+    );
+    let committed = CommittedSet {
+        commitment: parent.commitment,
+        commitment_sig: parent.commitment_sig,
+        grant_ledger: parent.grant_ledger,
+        direct_child_scope_index: &parent_index,
+        revoked_recipients: &[],
+    };
+    // The owner runs this leg, so the tag binding is not the caller's to
+    // disable: the same subkey that re-wraps the parent's grant blobs decides
+    // which rows are still filed under a tag they derive.
+    let identity = ScopeRootIdentity {
+        owner_enc_secret: Some(owner.enc_secret),
+        ..parent.identity
+    };
+    let section = reseal_scope_root(
+        entropy,
+        &identity,
+        &parent.seeds,
+        &committed,
+        parent.carried_history_links,
+    )
+    .map_err(CreateGrantError::ParentMint)?;
+    Ok((parent_index, section))
 }
 
 /// A node the grant leaves outside, with the winning link the owner's snapshot
@@ -2045,6 +2075,13 @@ mod tests {
         /// and every scope-keyed seam answers only under it — as the production
         /// net's parked scope source does (`crate::net::rotation`).
         repointed_parent: Option<Vec<u8>>,
+        /// The parent root commits its index with one entry twice, so the
+        /// pass repairs it to canonical order.
+        duplicated_index: bool,
+        /// What the pass's index repair of the parent root returns.
+        index_repair_result: Result<(), RotationPublishError>,
+        /// The history links the parent plan carries.
+        parent_links: Vec<SignedSealed>,
     }
 
     impl FakeNet {
@@ -2078,7 +2115,18 @@ mod tests {
                 reseal_stall: Rc::new(RefCell::new(None)),
                 floored: Rc::new(RefCell::new(BTreeSet::new())),
                 repointed_parent: None,
+                duplicated_index: false,
+                index_repair_result: Ok(()),
+                parent_links: Vec::new(),
             }
+        }
+
+        /// Have the parent's index carry a duplicate entry, and have its repair
+        /// answer `result`.
+        fn repairing_index(mut self, result: Result<(), RotationPublishError>) -> Self {
+            self.duplicated_index = true;
+            self.index_repair_result = result;
+            self
         }
 
         /// Move the parent scope to `name`, so its old name answers superseded
@@ -2273,10 +2321,14 @@ mod tests {
                 node_id: *node_id,
                 ipns_name: interior_name(*node_id),
             }));
+            let mut direct_child_scope_index = self.descendants.clone();
+            if self.duplicated_index {
+                direct_child_scope_index.extend(self.descendants.first().cloned());
+            }
             Ok(SweptScope {
                 current_read_epoch: PARENT_EPOCH,
                 children,
-                direct_child_scope_index: self.descendants.clone(),
+                direct_child_scope_index,
             })
         }
 
@@ -2400,7 +2452,7 @@ mod tests {
             _scope: &ChildScopeRef,
             _index: &[ChildScopeRef],
         ) -> Result<(), RotationPublishError> {
-            Ok(())
+            self.index_repair_result.clone()
         }
     }
 
@@ -2859,7 +2911,7 @@ mod tests {
                 commitment_sig: &parent_commitment_sig,
                 grant_ledger: &parent_ledger,
                 current_child_index: &[],
-                carried_history_links: &[],
+                carried_history_links: &net.parent_links,
             };
             block_on(async {
                 let outcome = create_grant(
@@ -3587,6 +3639,62 @@ mod tests {
             }
             other => panic!("expected SubtreeBoundaryDiverged, got {other:?}"),
         }
+        assert!(published.is_empty(), "refused before the promotion publish");
+        assert_nothing_delivered(&hub);
+    }
+
+    #[test]
+    fn a_parent_too_large_to_re_seal_refuses_the_grant_before_any_publish() {
+        let net = FakeNet::new(Ok(()))
+            .with_descendant_scope(descendant_ref())
+            .repairing_index(Err(RotationPublishError::NotResealable));
+        let (outcome, published, hub) = run(7, &[descendant_ref()], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::Converge(SweepError::IndexRepair { scope_id, error })) => {
+                assert_eq!(scope_id, PARENT_SCOPE);
+                assert_eq!(error, RotationPublishError::NotResealable);
+            }
+            other => panic!("expected the size refusal, got {other:?}"),
+        }
+        assert!(published.is_empty(), "refused before the promotion publish");
+        assert_nothing_delivered(&hub);
+    }
+
+    #[test]
+    fn a_met_root_the_index_omits_still_diverges_when_the_parent_cannot_re_seal() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_boundary(INTERIOR_NODE)
+            .repairing_index(Err(RotationPublishError::NotResealable));
+        let (outcome, published, _hub) = run(7, &[], net, &[]);
+
+        assert_eq!(
+            outcome.expect_err("refused").check(),
+            "subtree-boundary-diverged"
+        );
+        assert!(published.is_empty());
+    }
+
+    #[test]
+    fn a_parent_re_seal_that_refuses_stops_the_grant_before_any_publish() {
+        // The parent root carries more links than any re-seal keeps, with a
+        // clean index, so the pass repairs nothing and only the mint sees it.
+        let links = vec![
+            SignedSealed {
+                sealed: vec![0x01; 8],
+                signature: [0x01; 64],
+                unknown: PreservedFields::new(),
+            };
+            cipherbox_core::seal::MAX_HISTORY_LINKS + 1
+        ];
+        let net = FakeNet {
+            parent_links: links,
+            ..FakeNet::new(Ok(()))
+        };
+        let (outcome, published, hub) = run(7, &[], net, &[]);
+
+        assert_eq!(outcome.expect_err("refused").check(), "parent-mint-failed");
         assert!(published.is_empty(), "refused before the promotion publish");
         assert_nothing_delivered(&hub);
     }

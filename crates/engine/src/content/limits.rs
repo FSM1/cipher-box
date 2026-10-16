@@ -114,8 +114,9 @@ const GRANT_RESERVATION_STEP: usize = 64;
 /// too full. The remaining runs keep their frozen ceilings, because a committed
 /// writer authors both the child index and the carried links.
 ///
-/// A section over the budget is a **retryable** refusal on the record the next
-/// pass re-resolves, never a trust verdict. The clamp keeps
+/// A section over the budget is never a trust verdict. On a cut it is a
+/// **retryable** refusal on the record the next pass re-resolves; a sweep
+/// records it and moves on (`RotationPublishError::NotResealable`). The clamp keeps
 /// [`resealable_root_rest_bytes`]'s complement a total: every caller feeds a
 /// decode-bounded count, and an unclamped one would underflow it.
 pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {

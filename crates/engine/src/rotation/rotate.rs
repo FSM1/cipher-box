@@ -116,8 +116,9 @@ pub enum RotationPublishError {
     /// follows it. Retryable: a re-run reads the landed record and raises again.
     FloorUnrecorded,
     /// The scope root's re-sealed grant section is over the re-seal budget.
-    /// Nothing was published, and a re-run over the same carried links meets
-    /// it again, so it is not retryable.
+    /// Nothing was published. A sweep re-run keeps the same carried links and
+    /// meets it again, so it is not retryable; the next cut, which keeps
+    /// fewer links, clears it.
     NotResealable,
 }
 
