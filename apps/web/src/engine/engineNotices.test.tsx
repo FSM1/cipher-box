@@ -276,4 +276,54 @@ describe('engine warnings', () => {
     );
     expect(screen.queryByTestId('notification-toast')).toBeNull();
   });
+
+  it('tells the owner to share again when a cut removed every share of a folder', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkAbandoned',
+        scopeRoot: new Uint8Array(16).fill(8),
+        detail: 'owed-grants-dropped-from-last-copy',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('removed every share of that folder');
+    expect(notice.textContent).toContain('share the folder again');
+    expect(notice.textContent).not.toContain('owed-grants-dropped');
+  });
+
+  it('renders a dropped node as one plain warning for each cause', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const causes = [
+      'record-refused',
+      'epoch-unreachable',
+      'no-record',
+      'endpoint-unavailable',
+      'no-head-block',
+      'below-sequence-floor',
+      'epoch-above-root',
+    ] as const;
+    const scopeRoot = new Uint8Array(16).fill(0xab);
+
+    for (const [i, cause] of causes.entries()) {
+      notificationStore.clear();
+      const nodeId = new Uint8Array(16).fill(0xc0 + i);
+      await act(async () => {
+        engine.emit({ kind: 'nodeDropped', scopeRoot, nodeId, cause });
+        engine.emit({ kind: 'nodeDropped', scopeRoot, nodeId, cause });
+      });
+
+      const notices = await screen.findAllByTestId('notification-notice');
+      expect(notices).toHaveLength(1);
+      const text = notices[0].textContent ?? '';
+      expect(text).toContain('an item left a shared folder');
+      expect(text).toContain('no longer in the folder');
+      expect(text).not.toContain(cause);
+      expect(text).not.toContain('abab');
+    }
+  });
 });
