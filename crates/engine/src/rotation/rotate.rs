@@ -140,7 +140,7 @@ impl RotationPublishError {
             | Self::NotConverged { .. }
             | Self::FloorUnrecorded => "availability",
             Self::Rejected => "trust",
-            Self::NotResealable => "capability",
+            Self::NotResealable => "over-cap",
         }
     }
 }

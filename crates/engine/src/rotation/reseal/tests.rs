@@ -1006,8 +1006,8 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
     // budget, so a section that fits it always fits beside them. Measured on
     // real bytes at the true maximum of an honest root: every count axis at
     // its ceiling, write rows at full width, and a sweep that keeps
-    // [`MAX_HISTORY_LINKS`] honest links. The room there is about 21 KiB, not
-    // the 64 KiB of slack, because the commitment entries take a share of it.
+    // [`MAX_HISTORY_LINKS`] honest links. The room is less than the slack
+    // (`SECTION_FRAMING_SLACK_BYTES`).
     let fx = Fixture::new();
     let owner_pub = fx.owner_enc.public();
     let set = MaximalSet::new(&fx);
@@ -1137,9 +1137,8 @@ fn a_maximal_gate_passed_root_re_seals_inside_every_bound() {
 
 /// The sweep re-seal of the same maximal root, as
 /// `OwnerRotationNet::repair_child_scope_index` gives it: `prev` is `None`, so
-/// every carried link stays (ADR 0033 D12), with the carried write link. The
-/// budget charges no byte for the commitment entries, and only the link share a
-/// cut leaves unused covers them, so this re-seal goes over the budget.
+/// every carried link stays (ADR 0033 D12), with the carried write link. At
+/// the widest links it goes over the budget (`SECTION_FRAMING_SLACK_BYTES`).
 #[test]
 fn a_sweep_re_seal_of_a_maximal_root_goes_over_its_budget() {
     let fx = Fixture::new();

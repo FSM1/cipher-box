@@ -3768,10 +3768,10 @@ fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
 }
 
 /// Carry a re-seal refusal into the sweep's publish arm on rule 6's axis: every
-/// variant but entropy is this build's own fail-closed verdict on material the
-/// pass already gated, so re-sealing the same inputs reaches it again. A section
-/// over its budget is a size refusal, not a trust verdict, so it keeps its own
-/// variant.
+/// variant but two is this build's own fail-closed verdict on material the pass
+/// already gated, so re-sealing the same inputs reaches it again. Entropy is the
+/// seam failing, and a section over its budget is a size refusal, not a trust
+/// verdict.
 fn reseal_publish_verdict(error: ResealError) -> RotationPublishError {
     match error {
         ResealError::Entropy(_) => RotationPublishError::NotPublished,

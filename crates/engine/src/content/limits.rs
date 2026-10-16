@@ -81,7 +81,7 @@ const _: () = assert!(
 
 /// The owner blobs, the ascent link, the write history link, the map framing
 /// around every run, and the grant-set commitment's entries. The entries are
-/// count-driven (about 157 bytes each), and no per-grant charge holds them, so
+/// count-driven, and no per-grant charge holds them, so
 /// at [`MAX_GRANT_BLOBS`](cipherbox_core::seal::MAX_GRANT_BLOBS) they need more
 /// than this slack and use the room the per-item charges leave. A sweep that
 /// keeps [`MAX_HISTORY_LINKS`](cipherbox_core::seal::MAX_HISTORY_LINKS) links
