@@ -18,6 +18,32 @@ describe('the notification store', () => {
     expect(keys).toEqual(['abuse:7', 'abuse:8', 'abuse:9', 'abuse:10', 'abuse:11']);
   });
 
+  it('evicts minor notices first, and never a warning for a minor one', () => {
+    notificationStore.warn('owed-trust:aa', 'stopped');
+    notificationStore.warnMinor('dropped:1', 'left');
+    notificationStore.warn('abuse:bb', 'refused');
+    for (let i = 2; i < 9; i += 1) notificationStore.warnMinor(`dropped:${i}`, 'left');
+
+    expect(notificationStore.getState().map((notice) => notice.key)).toEqual([
+      'owed-trust:aa',
+      'abuse:bb',
+      'dropped:6',
+      'dropped:7',
+      'dropped:8',
+    ]);
+
+    for (let i = 0; i < 3; i += 1) notificationStore.warn(`shares-dropped:${i}`, 'removed');
+    notificationStore.warnMinor('dropped:9', 'left');
+
+    expect(notificationStore.getState().map((notice) => notice.key)).toEqual([
+      'owed-trust:aa',
+      'abuse:bb',
+      'shares-dropped:0',
+      'shares-dropped:1',
+      'shares-dropped:2',
+    ]);
+  });
+
   it('carries the action a notice offers', async () => {
     let ran = 0;
     notificationStore.warn('unfinished:aa', 'a write cut is unfinished', {

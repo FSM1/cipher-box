@@ -191,6 +191,12 @@ export type BinDescriptor = BinView;
 export const KEEP_STORED_BEARER = 'keep' satisfies ByoIpfsConfig['accessToken'];
 
 /**
+ * The `rotationWorkAbandoned` detail of a cut that read the last copy of its
+ * root, so it removed every grant of the folder (ADR 0068 D5).
+ */
+export const OWED_GRANTS_DROPPED = 'owed-grants-dropped-from-last-copy';
+
+/**
  * A member's own IPFS provider. The bearer is a transferable buffer rather than
  * a string, which cannot be overwritten: every hop moves it
  * ([`commandTransfer`]), so the receiving realm is the only holder left and is
