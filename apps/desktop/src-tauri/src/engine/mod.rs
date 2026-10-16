@@ -56,7 +56,8 @@ const UNENDED: &str = "the session did not answer; restart CipherBox and sign ou
 const MAX_WARNINGS: usize = 8;
 
 /// The kind of the stranded-scope notice. It is minor: past the bound it
-/// evicts only another minor warning, so it never pushes out a trust warning.
+/// evicts only another stranded warning, and never evicts a warning of another
+/// kind.
 const SCOPE_ROOT_STRANDED: &str = "scopeRootStranded";
 
 /// Shown when a peer wrote the binned folder with no name.
@@ -1299,8 +1300,6 @@ mod tests {
         );
     }
 
-    /// A condition that keeps firing must not push the others out of a bounded
-    /// list — the oldest *distinct* warning is the one that goes.
     fn stranded(folder: &str) -> Event {
         Event::ScopeRootStranded {
             scope_root: NodeId([1; 16]),
@@ -1309,10 +1308,11 @@ mod tests {
         }
     }
 
-    /// Stranded warnings past the bound evict each other, never a trust
-    /// warning, and a list full of trust warnings drops a new stranded one.
+    /// Stranded warnings past the bound evict each other. A stranded warning
+    /// never evicts a warning of another kind, so a list full of other warnings
+    /// drops a new stranded one.
     #[test]
-    fn a_stranded_warning_never_evicts_a_trust_warning() {
+    fn a_stranded_warning_never_evicts_a_warning_of_another_kind() {
         let abuse = Event::AttributableAbuse {
             description: "gate rejection".to_owned(),
         };
@@ -1359,6 +1359,8 @@ mod tests {
         );
     }
 
+    /// A condition that keeps firing must not push the others out of a bounded
+    /// list — the oldest *distinct* warning is the one that goes.
     #[test]
     fn a_repeating_condition_neither_accumulates_nor_evicts() {
         let renewal = |detail: &str| Event::RenewalFailed {
