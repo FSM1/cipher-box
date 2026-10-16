@@ -11291,6 +11291,7 @@ where {
     /// record below it, or a floor store with no answer, also counts as moved.
     /// An unavailable plane counts as moved; an absent record names no scope.
     /// The probe adopts nothing and raises no floor.
+    /// The verdict on a replay, ADR 0071 D1 or D4, is the next walk's.
     async fn scope_root_moved(
         &self,
         probes: &RootProbes,
@@ -21884,7 +21885,7 @@ mod focus_access_tests {
     use crate::sync::model::NodeMeta;
     use crate::sync::tick::expire_focus_stamps;
     use crate::testkit::fakes::VirtualScheduler;
-    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+    use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     const FOLDER: NodeId = NodeId([3; 16]);
     const OTHER: NodeId = NodeId([4; 16]);
@@ -21940,7 +21941,20 @@ mod focus_access_tests {
     /// start reaches no API to mint against, so the seed is deposited rather
     /// than recovered.
     fn started_engine() -> Engine<FakeSeamTypes> {
-        let (mut engine, _clock) = engine();
+        started_engine_on(&FakeWorld::new().device(b"alice-pk"))
+    }
+
+    /// [`started_engine`] over `device`, whose record store a test seeds.
+    fn started_engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
@@ -22422,6 +22436,16 @@ mod focus_access_tests {
         let moved = |floors: &InMemoryFloorStore| {
             block_on(engine.scope_root_moved(&RootProbes::default(), FOLDER, Some(&name), floors))
         };
+        let vacant = IpnsName::from_public_key(&kdf::ipns_keypair(&[8u8; 32]).verifying_key());
+        assert!(
+            !block_on(engine.scope_root_moved(
+                &RootProbes::default(),
+                FOLDER,
+                Some(&vacant),
+                &InMemoryFloorStore::default(),
+            )),
+            "an absent record names no scope"
+        );
 
         let floored = InMemoryFloorStore::default();
         block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
@@ -22625,6 +22649,81 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![own_file],
             "the vault's row waits for the vault's seed"
+        );
+    }
+
+    /// A descendant scope root that serves the walked record below its sequence
+    /// floor counts as moved: its row stays queued, and a route through it
+    /// records no miss.
+    #[test]
+    fn a_descendant_root_below_the_floor_leaves_its_rows_queued() {
+        use cipherbox_core::ipns::IpnsRecord;
+
+        let device = FakeWorld::new().device(b"alice-pk");
+        let engine = started_engine_on(&device);
+        let (shared_file, own_file) = shared_scope_beside_own_row(&engine);
+        let inner = NodeId([0x4E; 16]);
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(inner, "inner", NodeKind::Folder));
+            base.link(FOLDER, inner, 1);
+        }
+        deposit_seed(
+            &engine.state.scope_read_seeds,
+            FOLDER.0,
+            Zeroizing::new([6u8; 32]),
+            Some(0),
+            FloorNamespace::Own,
+        );
+        let signer = kdf::ipns_keypair(&[6u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/bafkqaaa",
+            2,
+            2_000_000_000,
+            "2099-01-01T00:00:00Z",
+        );
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record.marshal());
+        }
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            crate::session::HeldRoot::from(record.verify(&name).expect("the record verifies")),
+        )]);
+        block_on(
+            engine
+                .seams
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 3),
+        )
+        .unwrap();
+
+        block_on(engine.set_focus(Some(UNLISTED))).expect("the route resolves");
+
+        assert!(
+            !engine
+                .state
+                .focus_refreshed
+                .borrow()
+                .contains_key(&shared_file),
+            "no leg read the scope"
+        );
+        assert!(
+            engine
+                .state
+                .focus_refreshed
+                .borrow()
+                .contains_key(&own_file)
+        );
+        assert_eq!(engine.queued_focus_files(), vec![shared_file]);
+        assert_eq!(
+            engine.state.locate_miss.get(),
+            None,
+            "the unread level below the root is no miss"
         );
     }
 
