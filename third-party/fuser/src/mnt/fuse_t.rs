@@ -286,13 +286,30 @@ mod tests {
 
     /// A server, delivered to a fresh [`Server`], whose monitor this test
     /// closes itself.
-    fn held_server() -> (Server, libc::pid_t, RawFd) {
+    /// Also returns a copy of the monitor, to see whether the drop shut it.
+    fn held_server() -> (Server, libc::pid_t, RawFd, OwnedFd) {
         let (monitor, child) = spawn_server("/bin/cat", &[]);
         let pid = pid_of(&child);
         let raw = monitor.as_raw_fd();
+        let copy = monitor.try_clone().expect("a second descriptor");
         let server = Server::new();
         server.deliver(monitor, pid);
-        (server, pid, raw)
+        (server, pid, raw, copy)
+    }
+
+    /// Whether the monitor socket is still open: a shut socket reads
+    /// end-of-file at once, an open one has nothing to read yet.
+    fn still_open(copy: &OwnedFd) -> bool {
+        let mut byte = 0u8;
+        let read = unsafe {
+            libc::recv(
+                copy.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock
     }
 
     /// Closes the monitor a kept server still holds, and waits for it to stop.
@@ -310,20 +327,22 @@ mod tests {
     #[test]
     fn a_mount_left_at_the_path_keeps_the_server() {
         let at = path("foreign");
-        let (server, pid, raw) = held_server();
+        let (server, pid, raw, copy) = held_server();
 
         server.release(&at, |_| Ok(true));
-        assert!(running(pid), "the server ended over another mount");
+        assert!(still_open(&copy), "the drop shut the monitor over another mount");
+        drop(copy);
         stop_kept(pid, raw);
     }
 
     #[test]
     fn an_unread_mount_table_keeps_the_server() {
         let at = path("unread");
-        let (server, pid, raw) = held_server();
+        let (server, pid, raw, copy) = held_server();
 
         server.release(&at, |_| Err(io::Error::other("unread")));
-        assert!(running(pid), "an unread table ended the server");
+        assert!(still_open(&copy), "an unread table shut the monitor");
+        drop(copy);
         stop_kept(pid, raw);
     }
 
