@@ -5480,9 +5480,9 @@ fn a_purge_stops_at_a_write_granted_folder_it_holds() {
     assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Write);
 }
 
-/// The owner device holds a granted folder under `plain`, and another writer
-/// unlinks `plain` from `outer`. Returns `(outer, plain)`.
-fn granted_folder_under_an_unlinked_folder(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+/// The owner device moves a granted folder under `plain`, inside `outer`.
+/// Returns `(outer, plain)`.
+fn granted_folder_under_plain(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     assert_eq!(
         fx.grant_folder_at(Permission::Read),
         Ok(CommandOutcome::Done)
@@ -5504,14 +5504,7 @@ fn granted_folder_under_an_unlinked_folder(fx: &mut GrantScenario) -> (NodeId, N
 fn unlink_plain(fx: &mut GrantScenario, outer: NodeId, plain: NodeId) {
     block_on(fx.engine.command(Command::SetFocus { node: Some(outer) })).unwrap();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        outer,
-        &read_key_of(outer),
-        SCOPE,
-        |children| children.retain(|child| child.id != plain.0),
-    );
+    unlink_from_keep(fx, outer, plain);
 }
 
 /// A scope root the boundary walk did not prove is no boundary to the capture
@@ -5520,7 +5513,7 @@ fn unlink_plain(fx: &mut GrantScenario, outer: NodeId, plain: NodeId) {
 #[test]
 fn a_capture_does_not_stop_at_a_scope_root_no_walk_proved() {
     let mut fx = GrantScenario::new();
-    let (outer, plain) = granted_folder_under_an_unlinked_folder(&mut fx);
+    let (outer, plain) = granted_folder_under_plain(&mut fx);
     fx.world
         .record_store
         .fail_get_for(write_name(fx.folder).as_str());
@@ -5560,7 +5553,7 @@ fn a_capture_does_not_stop_at_a_scope_root_no_walk_proved() {
 #[test]
 fn a_stranded_notice_waits_for_the_bin_entry() {
     let mut fx = GrantScenario::new();
-    let (outer, plain) = granted_folder_under_an_unlinked_folder(&mut fx);
+    let (outer, plain) = granted_folder_under_plain(&mut fx);
     let bin = BinIndexKeys::derive(&SECRET);
     fx.world.record_store.fail_put_for(bin.name().as_str());
     unlink_plain(&mut fx, outer, plain);

@@ -6097,9 +6097,8 @@ where
         hold_captures_first(self.cells.observed_unlinks, stopped);
     }
 
-    /// Tell the owner of each scope root a capture left with no live path to
-    /// it. Sent only once the bin entry stands, since a restore of the binned
-    /// folder is the way back.
+    /// Report each root in `stranded` as reachable through `unlinked`'s bin
+    /// entry. Sent only once that entry stands.
     fn report_stranded(&self, unlinked: &UnlinkedChild, stranded: &BTreeSet<NodeId>) {
         for scope_root in stranded {
             let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {
@@ -6853,17 +6852,16 @@ where
     /// The whole subtree is re-keyed in this pass, not left to the lazy wave: a
     /// binned node takes no ordinary write, so nothing would ever carry it.
     ///
-    /// A descendant that is a scope root is a boundary, not a member. Its
-    /// subtree is sealed under its own scope's seed, which no grantee of the
-    /// source scope holds, and cutting that scope's grantees is a rotation.
+    /// A descendant that is a scope root is a boundary, not a member, and is
+    /// returned. Its subtree is sealed under its own scope's seed, which no
+    /// grantee of the source scope holds, and cutting that scope's grantees is
+    /// a rotation.
     ///
     /// Every failure returns before the caller publishes the link it is about
     /// to move, so a subtree this pass could not re-key stays as it was.
     ///
     /// `opened` is `root`'s record as the caller already read it under `from`
     /// or `to`, which the re-key seals in place of a second read.
-    ///
-    /// Returns the scope roots the walk stopped at.
     async fn rekey_subtree(
         &self,
         scope: &DrainScope<'_>,
@@ -6900,10 +6898,10 @@ where
                 ReadBody::Folder { children, .. } => {
                     for child in children {
                         let child_id = NodeId(child.id);
-                        if in_this_scope(&from.end, scope.scope_roots, child) {
-                            pending.push(child_id);
-                        } else if scope.scope_roots.contains(&child_id) {
+                        if scope.scope_roots.contains(&child_id) {
                             stopped_at.insert(child_id);
+                        } else if names_this_scope(&from.end, child) {
+                            pending.push(child_id);
                         }
                     }
                     Vec::new()
