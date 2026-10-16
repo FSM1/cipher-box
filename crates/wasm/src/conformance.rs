@@ -148,7 +148,7 @@ pub async fn run_record_transport_conformance(
 
 /// Test-only: one event of each field kind, encoded as `nextEvent` encodes
 /// them — a `u64`, bytes, an absent `Option`, a nested struct, an enum and a
-/// present `Option` of a time.
+/// present `Option` of a time, and the abandon detail a host matches on.
 #[wasm_bindgen(js_name = sampleEvents, unchecked_return_type = "Event[]")]
 pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
     [
@@ -188,6 +188,10 @@ pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
             cut_at: Some(UnixMillis(op_id)),
             last_reseal_at: None,
             at: UnixMillis(op_id),
+        },
+        facade::Event::RotationWorkAbandoned {
+            scope_root: facade::NodeId([5; 16]),
+            detail: facade::OWED_GRANTS_DROPPED.to_owned(),
         },
     ]
     .iter()

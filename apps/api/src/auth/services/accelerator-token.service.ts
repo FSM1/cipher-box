@@ -7,7 +7,11 @@ import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
-import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
+import {
+  DEFAULT_SWEEP_BATCH_SIZE,
+  MAX_SWEEP_BATCH_SIZE,
+  sweepExpiredRows,
+} from '../../common/sweep';
 import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { LIVE_REFRESH_ROW_SQL, REFRESH_ALIAS } from '../refresh-liveness';
@@ -145,31 +149,16 @@ export class AcceleratorTokenService {
   /**
    * Hard-delete every expired row, whoever owns it. A mint only reclaims the
    * minting account's rows, so an account that logs in once and never returns
-   * would otherwise keep its row forever.
+   * would otherwise keep its row forever. The sweep skips the rows that a
+   * concurrent mint deletes.
    */
   async sweepExpired(): Promise<number> {
-    const cutoff = this.clock.now();
-    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
-  }
-
-  /**
-   * Postgres has no `DELETE ... LIMIT`, so the batch is bounded by selecting
-   * `ctid`s under the cutoff and deleting exactly those; `expires_at` ordering
-   * lets `idx_accelerator_tokens_expires_at` drive the scan. `SKIP LOCKED` yields
-   * any row a concurrent mint is already deleting, so the two paths take their
-   * row locks in whatever order they like without ever forming a cycle.
-   */
-  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
-    const result = await this.acceleratorTokenRepository
-      .createQueryBuilder()
-      .delete()
-      .from(AcceleratorToken)
-      .where(
-        'ctid IN (SELECT ctid FROM accelerator_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
-        { cutoff, limit: this.sweepBatchSize }
-      )
-      .execute();
-    return result.affected ?? 0;
+    return sweepExpiredRows(
+      this.acceleratorTokenRepository.manager,
+      AcceleratorToken,
+      this.clock.now(),
+      this.sweepBatchSize
+    );
   }
 }
 

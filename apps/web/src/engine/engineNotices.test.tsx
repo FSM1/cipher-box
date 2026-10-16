@@ -165,6 +165,24 @@ describe('engine warnings', () => {
     expect(notices.some((notice) => notice.textContent?.includes('failed verification'))).toBe(
       true
     );
+
+    // Stranded folders past the bound evict each other, never the trust stop.
+    await act(async () => {
+      for (let folder = 20; folder < 26; folder += 1) {
+        engine.emit({
+          kind: 'scopeRootStranded',
+          scopeRoot: new Uint8Array(16).fill(folder),
+          binnedFolder: new Uint8Array(16).fill(folder),
+          folderName: `binned ${folder}`,
+        });
+      }
+    });
+
+    const bounded = await screen.findAllByTestId('notification-notice');
+    expect(bounded).toHaveLength(5);
+    expect(bounded.some((notice) => notice.textContent?.includes('failed verification'))).toBe(
+      true
+    );
   });
 
   it('renders a vault restored from the server copy as one notice for the vault', async () => {
@@ -321,5 +339,86 @@ describe('engine warnings', () => {
       expect(screen.getByTestId('status-indicator').dataset.staleness).toBe('stale')
     );
     expect(screen.queryByTestId('notification-toast')).toBeNull();
+  });
+
+  it('tells the owner to share again when a cut removed every share of a folder', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkAbandoned',
+        scopeRoot: new Uint8Array(16).fill(8),
+        detail: 'owed-grants-dropped-from-last-copy',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('removed every share of that folder');
+    expect(notice.textContent).toContain('share the folder again');
+    expect(notice.textContent).not.toContain('owed-grants-dropped');
+  });
+
+  it('renders a dropped node as one plain warning for each cause', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const causes = [
+      ['record-refused', 'its record failed verification'],
+      ['epoch-unreachable', 'this device holds no key that opens its record'],
+      ['no-record', 'the network holds no record for it'],
+      ['endpoint-unavailable', 'no server answered for it'],
+      ['no-head-block', 'no server gave its data'],
+      ['below-sequence-floor', 'its record is older than one this device saw before'],
+      ['epoch-above-root', 'its record is newer than the shared folder that holds it'],
+    ] as const;
+    const scopeRoot = new Uint8Array(16).fill(0xab);
+
+    for (const [i, [cause, reason]] of causes.entries()) {
+      notificationStore.clear();
+      const nodeId = new Uint8Array(16).fill(0xc0 + i);
+      await act(async () => {
+        engine.emit({ kind: 'nodeDropped', scopeRoot, nodeId, cause });
+        engine.emit({ kind: 'nodeDropped', scopeRoot, nodeId, cause });
+      });
+
+      const notices = await screen.findAllByTestId('notification-notice');
+      expect(notices).toHaveLength(1);
+      const text = notices[0].textContent ?? '';
+      expect(text).toContain('an item left a shared folder');
+      expect(text).toContain(`because ${reason} -`);
+      expect(text).toContain('no longer in the folder');
+      expect(text).not.toContain(cause);
+      expect(text).not.toContain('abab');
+    }
+  });
+
+  it('keeps a trust stop standing through a burst of dropped nodes', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot: new Uint8Array(16).fill(4),
+        detail: 'rot-write-resolve-failed',
+        retryable: false,
+        class: 'trust',
+      });
+      for (let i = 0; i < 8; i += 1) {
+        engine.emit({
+          kind: 'nodeDropped',
+          scopeRoot: new Uint8Array(16).fill(4),
+          nodeId: new Uint8Array(16).fill(0x10 + i),
+          cause: 'no-record',
+        });
+      }
+    });
+
+    const notices = await screen.findAllByTestId('notification-notice');
+    expect(notices).toHaveLength(5);
+    expect(notices[0].textContent).toContain('failed verification');
+    expect(notices.slice(1).every((notice) => notice.textContent?.includes('an item left'))).toBe(
+      true
+    );
   });
 });
