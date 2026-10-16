@@ -6102,7 +6102,8 @@ where
     ///
     /// A child ref is wire data that a writer can plant, so a root the live tree
     /// still reaches is no strand: the vault root, the pass's own root, and a
-    /// root the base still links.
+    /// root whose parent chain in the base reaches the vault root. A link alone
+    /// is not enough, since the base can keep a detached cycle.
     fn report_stranded(
         &self,
         scope: &DrainScope<'_>,
@@ -6111,7 +6112,7 @@ where
     ) {
         let base = self.cells.base.borrow();
         let reachable = |root: NodeId| {
-            root == base.root || root == scope.source.root || !base.links_to(root).is_empty()
+            root == base.root || root == scope.source.root || base.is_descendant_of(root, base.root)
         };
         for scope_root in stranded.iter().filter(|root| !reachable(**root)) {
             let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {

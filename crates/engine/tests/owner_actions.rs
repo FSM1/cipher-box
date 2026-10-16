@@ -5649,6 +5649,63 @@ fn a_planted_ref_to_the_vault_root_gives_no_notice() {
     assert!(notices.is_empty(), "the vault root is no strand");
 }
 
+/// A planted ref from `d` back to `c` leaves a link to the granted folder after
+/// the unlink, but in a cycle the vault root does not reach. That is still a
+/// strand.
+#[test]
+fn a_detached_cycle_above_a_granted_folder_still_gives_the_notice() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    let c = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "c");
+    let d = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, c, "d");
+    block_on(fx.engine.command(Command::Relink {
+        node: fx.folder,
+        new_parent: d,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        d,
+        &read_key_of(d),
+        SCOPE,
+        |children| {
+            let mut back = named_child(c, "c", &write_name(c));
+            back.link_counter = 0;
+            children.push(back);
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(d) })).unwrap();
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    events_so_far(&mut fx._events);
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let seen = events_so_far(&mut fx._events);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the unlinked folder bins"
+    );
+    assert_eq!(
+        stranded_notices(&seen),
+        [(fx.folder, plain, "plain".to_owned())],
+        "a link inside a detached cycle does not reach the granted folder"
+    );
+}
+
 /// A bin entry that landed with no endpoint ack stands on the next pass, and
 /// that pass tells the owner once.
 #[test]
