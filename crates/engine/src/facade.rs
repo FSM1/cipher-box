@@ -3339,6 +3339,11 @@ impl EngineError {
             e @ (CreateGrantError::ResumeNotThisGrant | CreateGrantError::TargetIndexLostARoot) => {
                 EngineError::UnsupportedTarget { check: e.check() }
             }
+            // A parent root too large to re-seal is a size refusal on the share
+            // site, not a verdict on the record.
+            CreateGrantError::ParentMint(e @ ResealError::SectionNotResealable { .. }) => {
+                EngineError::UnsupportedTarget { check: e.check() }
+            }
             terminal => EngineError::TrustViolation {
                 message: terminal.to_string(),
             },
@@ -11323,6 +11328,7 @@ where {
     /// record below it, or a floor store with no answer, also counts as moved.
     /// An unavailable plane counts as moved; an absent record names no scope.
     /// The probe adopts nothing and raises no floor.
+    /// The verdict on a replay, ADR 0071 D1 or D4, is the next walk's.
     async fn scope_root_moved(
         &self,
         probes: &RootProbes,
@@ -14357,6 +14363,25 @@ mod tests {
                 node_id: [6u8; 16],
                 error: RotationPublishError::Rejected,
             }),
+            EngineError::TrustViolation { .. },
+        ));
+    }
+
+    #[test]
+    fn a_parent_too_large_to_re_seal_is_an_unsupported_target_not_a_trust_violation() {
+        assert_eq!(
+            EngineError::from_create_grant(CreateGrantError::ParentMint(
+                ResealError::SectionNotResealable { size: 2, limit: 1 }
+            )),
+            EngineError::UnsupportedTarget {
+                check: "rot-reseal-section-not-resealable",
+            },
+        );
+        assert!(matches!(
+            EngineError::from_create_grant(CreateGrantError::Converge(SweepError::IndexRepair {
+                scope_id: [7u8; 16],
+                error: RotationPublishError::Rejected,
+            })),
             EngineError::TrustViolation { .. },
         ));
     }
@@ -21916,7 +21941,7 @@ mod focus_access_tests {
     use crate::sync::model::NodeMeta;
     use crate::sync::tick::expire_focus_stamps;
     use crate::testkit::fakes::VirtualScheduler;
-    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+    use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     const FOLDER: NodeId = NodeId([3; 16]);
     const OTHER: NodeId = NodeId([4; 16]);
@@ -21952,9 +21977,11 @@ mod focus_access_tests {
     }
 
     fn engine() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
-        let world = FakeWorld::new();
-        let device = world.device(b"alice-pk");
-        let scheduler = world.scheduler.clone();
+        engine_on(&FakeWorld::new().device(b"alice-pk"))
+    }
+
+    /// [`engine`] over `device`, whose record store a test seeds.
+    fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, VirtualScheduler) {
         let (engine, _events) = Engine::new(
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
@@ -21964,7 +21991,7 @@ mod focus_access_tests {
             ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
-        (engine, scheduler)
+        (engine, device.scheduler.clone())
     }
 
     /// The same engine holding what a navigation leg runs under: a live session,
@@ -21972,7 +21999,12 @@ mod focus_access_tests {
     /// start reaches no API to mint against, so the seed is deposited rather
     /// than recovered.
     fn started_engine() -> Engine<FakeSeamTypes> {
-        let (mut engine, _clock) = engine();
+        started_engine_on(&FakeWorld::new().device(b"alice-pk"))
+    }
+
+    /// [`started_engine`] over `device`.
+    fn started_engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
+        let (mut engine, _clock) = engine_on(device);
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
@@ -22424,17 +22456,8 @@ mod focus_access_tests {
         use crate::testkit::fakes::InMemoryFloorStore;
         use cipherbox_core::ipns::IpnsRecord;
 
-        let world = FakeWorld::new();
-        let device = world.device(b"alice-pk");
-        let (mut engine, _events) = Engine::new(
-            device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
-            SyncTimingProfile::CI,
-            ContentProfile::CI,
-            StoragePolicy::CI,
-            ApiBaseUrl::offline(),
-            GatewayConfig::disabled(),
-        );
+        let device = FakeWorld::new().device(b"alice-pk");
+        let (mut engine, _) = engine_on(&device);
         block_on(engine.start(LoginSecret::new(vec![7; 32]), None)).unwrap();
         let signer = kdf::ipns_keypair(&[6u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
@@ -22454,6 +22477,16 @@ mod focus_access_tests {
         let moved = |floors: &InMemoryFloorStore| {
             block_on(engine.scope_root_moved(&RootProbes::default(), FOLDER, Some(&name), floors))
         };
+        let vacant = IpnsName::from_public_key(&kdf::ipns_keypair(&[8u8; 32]).verifying_key());
+        assert!(
+            !block_on(engine.scope_root_moved(
+                &RootProbes::default(),
+                FOLDER,
+                Some(&vacant),
+                &InMemoryFloorStore::default(),
+            )),
+            "an absent record names no scope"
+        );
 
         let floored = InMemoryFloorStore::default();
         block_on(floored.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
@@ -22657,6 +22690,70 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![own_file],
             "the vault's row waits for the vault's seed"
+        );
+    }
+
+    /// A descendant scope root that serves the walked record below its sequence
+    /// floor counts as moved: its row stays queued, and a route through it
+    /// records no miss.
+    #[test]
+    fn a_descendant_root_below_the_floor_leaves_its_rows_queued() {
+        use crate::testkit::account::{EOL, TTL_NANOS};
+        use cipherbox_core::ipns::IpnsRecord;
+
+        let device = FakeWorld::new().device(b"alice-pk");
+        let engine = started_engine_on(&device);
+        let (shared_file, own_file) = shared_scope_beside_own_row(&engine);
+        let inner = NodeId([0x4E; 16]);
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(inner, "inner", NodeKind::Folder));
+            base.link(FOLDER, inner, 1);
+        }
+        deposit_seed(
+            &engine.state.scope_read_seeds,
+            FOLDER.0,
+            Zeroizing::new([6u8; 32]),
+            Some(0),
+            FloorNamespace::Own,
+        );
+        let signer = kdf::ipns_keypair(&[6u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = IpnsRecord::create_v2(&signer, b"/ipfs/bafkqaaa", 2, TTL_NANOS, EOL);
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record.marshal());
+        }
+        engine.state.root_sequences.borrow_mut().note_walk([(
+            FOLDER,
+            name.clone(),
+            crate::session::HeldRoot::from(record.verify(&name).expect("the record verifies")),
+        )]);
+        block_on(
+            engine
+                .seams
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 3),
+        )
+        .unwrap();
+
+        block_on(engine.set_focus(Some(UNLISTED))).expect("the route resolves");
+
+        let stamped = engine.state.focus_refreshed.borrow();
+        assert!(
+            stamped.contains_key(&own_file),
+            "the vault's own row was attempted under the vault's seed"
+        );
+        assert!(
+            !stamped.contains_key(&shared_file),
+            "no leg read the scope: the probe read its root as moved"
+        );
+        assert_eq!(engine.queued_focus_files(), vec![shared_file]);
+        assert_eq!(
+            engine.state.locate_miss.get(),
+            None,
+            "the unread level below the root is no miss"
         );
     }
 

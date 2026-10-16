@@ -77,6 +77,7 @@ jobs:
               - 'apps/api/**'
               - 'packages/**'
               - 'crates/**'
+              - 'third-party/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
