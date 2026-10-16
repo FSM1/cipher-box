@@ -15,7 +15,8 @@ export type DevnetFault =
   | 'node-busy'
   | 'key-assign'
   | 'key-broadcast'
-  | 'rss-envelope';
+  | 'rss-envelope'
+  | 'key-timeout';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -29,6 +30,8 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   // The Torus SDK decrypt helper got no share envelope: from rss-client round 1 or
   // recover, or @tkey/tss getTSSShare.
   ['rss-envelope', /reading 'ciphertext'/i],
+  // The app's own bound on a key assignment that the nodes never answer.
+  ['key-timeout', /did not assign your key in time/i],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {

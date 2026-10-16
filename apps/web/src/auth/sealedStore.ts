@@ -15,6 +15,7 @@
  */
 
 import type { LockManagerLike } from '@cipherbox/client';
+import type { IAsyncStorage } from '@web3auth/mpc-core-kit';
 import { indexedDbRecord, type KeyRecordLocation, type KeyRecordStore } from './keyStore';
 
 /** The Core Kit wrapping key's own database, distinct from every other custody store. */
@@ -36,6 +37,16 @@ const ENVELOPE_VERSION = 1;
 
 /** Where the wrapping key lives. Its handle is storable; its bytes are not. */
 export type WrappingKeyStore = KeyRecordStore<CryptoKey>;
+
+/** The storage surface the Core Kit SDK drives. */
+export type CoreKitStorage = IAsyncStorage;
+
+/** A view of the sealed store that its owner can cut off. */
+export interface RevocableStoreView {
+  store: CoreKitStorage;
+  readonly revoked: boolean;
+  revoke(): void;
+}
 
 /**
  * `IAsyncStorage` for the Core Kit SDK, which awaits every store read and write.
@@ -74,7 +85,38 @@ export class SealedStore {
     return opened;
   }
 
-  async setItem(key: string, value: string): Promise<void> {
+  setItem(key: string, value: string): Promise<void> {
+    return this.seal(key, value, () => true);
+  }
+
+  async removeItem(key: string): Promise<void> {
+    this.storage.removeItem(key);
+  }
+
+  /**
+   * This store for one SDK instance. After `revoke`, the view reads nothing and
+   * changes nothing: no write lands, a write that was sealing when `revoke` ran
+   * included, and no read removes a value or mints a wrapping key.
+   */
+  revocableView(): RevocableStoreView {
+    let live = true;
+    return {
+      store: {
+        getItem: (key) => (live ? this.getItem(key) : Promise.resolve(null)),
+        setItem: (key, value) => this.seal(key, value, () => live),
+      },
+      get revoked() {
+        return !live;
+      },
+      revoke: () => {
+        live = false;
+      },
+    };
+  }
+
+  /** `live` is read before the key is resolved, and again at the step that commits. */
+  private async seal(key: string, value: string, live: () => boolean): Promise<void> {
+    if (!live()) return;
     const wrapping = await this.wrappingKey();
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = await crypto.subtle.encrypt(
@@ -82,11 +124,7 @@ export class SealedStore {
       wrapping,
       new TextEncoder().encode(value)
     );
-    this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
-  }
-
-  async removeItem(key: string): Promise<void> {
-    this.storage.removeItem(key);
+    if (live()) this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
   }
 
   /** `null` for anything the key does not authenticate under this envelope. */
