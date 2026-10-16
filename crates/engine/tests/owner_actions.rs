@@ -5629,14 +5629,61 @@ fn capture_with_a_planted_ref(
     (stranded_notices(&seen), abuse_events_in(&seen), binned)
 }
 
-/// A planted ref to a granted folder the vault still links elsewhere is no
-/// strand: the live tree still reaches the folder.
+/// A planted ref to a granted folder the vault still links elsewhere still
+/// gives the notice: a writer can shape the base, so no link in it counts.
 #[test]
-fn a_planted_ref_to_a_linked_granted_folder_gives_no_notice() {
+fn a_planted_ref_to_a_linked_granted_folder_still_gives_the_notice() {
     let (notices, abuse, binned) = capture_with_a_planted_ref(|fx| fx.folder);
     assert!(binned, "the unlinked folder bins");
     assert_eq!(abuse, 0, "no record is faulty");
-    assert!(notices.is_empty(), "the granted folder is still linked");
+    assert_eq!(notices.len(), 1, "the notice goes out");
+}
+
+/// A second ref to the granted folder under a live folder, which calls it a
+/// file and outranks its folder link, still gives the notice.
+#[test]
+fn a_second_ref_that_calls_a_granted_folder_a_file_still_gives_the_notice() {
+    let mut fx = GrantScenario::new();
+    let (outer, plain) = granted_folder_under_plain(&mut fx);
+    let live = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "live");
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let granted = fx.folder;
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(granted, "granted", &write_name(granted));
+            second.kind = CoreNodeKind::File;
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    events_so_far(&mut fx._events);
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let seen = events_so_far(&mut fx._events);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the unlinked folder bins"
+    );
+    assert_eq!(
+        stranded_notices(&seen),
+        [(granted, plain, "plain".to_owned())],
+        "a ref that calls the folder a file does not reach it"
+    );
 }
 
 /// A planted ref to the vault root, which is also the pass's own scope root,

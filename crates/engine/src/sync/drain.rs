@@ -6098,23 +6098,19 @@ where
     }
 
     /// Report each root in `stranded` as reachable through `unlinked`'s bin
-    /// entry. Sent only once that entry stands.
-    ///
-    /// A child ref is wire data that a writer can plant, so a root the live tree
-    /// still reaches is no strand: the vault root, the pass's own root, and a
-    /// root whose parent chain in the base reaches the vault root. A link alone
-    /// is not enough, since the base can keep a detached cycle.
+    /// entry. Sent only once that entry stands. A planted ref can name the
+    /// vault root or the pass's own root, which are never stranded.
     fn report_stranded(
         &self,
         scope: &DrainScope<'_>,
         unlinked: &UnlinkedChild,
         stranded: &BTreeSet<NodeId>,
     ) {
-        let base = self.cells.base.borrow();
-        let reachable = |root: NodeId| {
-            root == base.root || root == scope.source.root || base.is_descendant_of(root, base.root)
-        };
-        for scope_root in stranded.iter().filter(|root| !reachable(**root)) {
+        let vault_root = self.cells.base.borrow().root;
+        for scope_root in stranded
+            .iter()
+            .filter(|root| **root != vault_root && **root != scope.source.root)
+        {
             let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {
                 scope_root: *scope_root,
                 binned_folder: unlinked.node,
