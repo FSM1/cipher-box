@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
 import {
   EngineClient,
+  SECRET_EXPORT_TIMEOUT_MS,
   YIELD_TIMEOUT_MS,
   type EngineClientConfig,
   type LoginSecret,
@@ -883,6 +884,26 @@ describe('EngineClient leadership + transport swap', () => {
       await follower.dispose();
 
       expect(await started).toMatchObject({ message: 'engine client closed' });
+    });
+
+    it('refuses a start that parked during a promotion whose export hangs', async () => {
+      const { follower, workers, started, settle } = await parkDuringPromotion();
+      const spawned = workers.length;
+      await vi.advanceTimersByTimeAsync(SECRET_EXPORT_TIMEOUT_MS);
+
+      expect(await started).toMatchObject({
+        message: 'the login secret export did not finish in time',
+      });
+      expect(follower.currentRole()).not.toBe('leader');
+
+      // A secret that arrives after the limit is scrubbed and starts no worker.
+      const late = fakeLoginSecret([5]);
+      settle.resolve(late);
+      await turn();
+      expect([...new Uint8Array(late.secret)]).toEqual([0]);
+      expect(workers.slice(spawned).some((worker) => !worker.terminated)).toBe(false);
+
+      await follower.dispose();
     });
   });
 

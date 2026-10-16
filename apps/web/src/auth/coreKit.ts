@@ -126,6 +126,13 @@ const ACCOUNT_LABELS_KEY = 'cipherbox_account_email';
  */
 const UNENROLLED_FACTORS = 2;
 
+/** A session held short of reconstruction is still a live credential. */
+function holdsSession(coreKit: Web3AuthMPCCoreKit): boolean {
+  return (
+    coreKit.status === COREKIT_STATUS.LOGGED_IN || coreKit.status === COREKIT_STATUS.REQUIRED_SHARE
+  );
+}
+
 /**
  * Whether one of the SDK's flattened factor descriptions is the recovery
  * factor. The share index carries it as well as the label, because the SDK
@@ -185,6 +192,8 @@ class Web3AuthSession implements WebCoreKitSession {
    * reports no session, whatever a late answer of the nodes sets its status to.
    */
   private storeView: RevocableStoreView;
+  /** Abandoned instances whose key assignment can still give them a session. */
+  private readonly abandoned = new Set<Web3AuthMPCCoreKit>();
 
   constructor(
     private readonly build: (storage: CoreKitStorage) => Web3AuthMPCCoreKit,
@@ -251,6 +260,12 @@ class Web3AuthSession implements WebCoreKitSession {
         // The call can still complete and write its session, after a sign-out
         // or over the session of the next login.
         this.storeView.revoke();
+        const instance = this.coreKit;
+        this.abandoned.add(instance);
+        assigned.then(
+          () => this.endAbandoned(instance),
+          () => this.abandoned.delete(instance)
+        );
         reject(new KeyAssignmentTimedOutError());
       }, KEY_ASSIGNMENT_TIMEOUT_MS);
     });
@@ -258,6 +273,17 @@ class Web3AuthSession implements WebCoreKitSession {
       await Promise.race([assigned, timedOut]);
     } finally {
       clearTimeout(deadline);
+    }
+  }
+
+  /** Ends the node-side session a late answer gave an abandoned instance. */
+  private async endAbandoned(instance: Web3AuthMPCCoreKit): Promise<void> {
+    try {
+      if (holdsSession(instance)) await instance.logout();
+    } catch {
+      // Best effort: the session expires at `SESSION_SECONDS` regardless.
+    } finally {
+      this.abandoned.delete(instance);
     }
   }
 
@@ -414,12 +440,10 @@ class Web3AuthSession implements WebCoreKitSession {
 
   async logout(): Promise<void> {
     try {
-      // A session held short of reconstruction is still a live credential, and
-      // so is one a late answer gave an abandoned instance: read the SDK itself.
-      const { status } = this.coreKit;
-      if (status === COREKIT_STATUS.LOGGED_IN || status === COREKIT_STATUS.REQUIRED_SHARE) {
-        await this.coreKit.logout();
-      }
+      await Promise.all([...this.abandoned].map((instance) => this.endAbandoned(instance)));
+      // Read the SDK itself: a late answer can give an abandoned instance that
+      // is still current a session that `isLoggedIn` does not report.
+      if (holdsSession(this.coreKit)) await this.coreKit.logout();
     } finally {
       this.signedInDisplay = null;
       this.signedInSubject = null;

@@ -869,10 +869,24 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     await expect(store.getItem(STORE_KEY)).resolves.toBe(SESSION);
   });
 
+  it('logs out an abandoned instance that a late answer signed in, after a retry', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    const before = sdk.logoutCalls;
+
+    await sdk.lateLogin!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sdk.logoutCalls).toBe(before + 1);
+    expect(created.isLoggedIn()).toBe(true);
+  });
+
   it('reports no session from an abandoned instance that a late answer signed in', async () => {
     const created = session();
     await timedOutLogin(created);
     await created.logout();
+    const before = sdk.logoutCalls;
     await sdk.lateLogin!();
     const engine = { start: vi.fn(() => Promise.resolve()), logout: () => Promise.resolve() };
     const flow = createLoginFlow({
@@ -890,8 +904,7 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     await flow.resume();
 
     expect(engine.start).not.toHaveBeenCalled();
-    // The logout still ends the session the late answer made.
-    const before = sdk.logoutCalls;
+    // The session the late answer made still ends.
     await created.logout();
     expect(sdk.logoutCalls).toBe(before + 1);
   });

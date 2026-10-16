@@ -111,6 +111,13 @@ interface ParkedStart {
 export const YIELD_TIMEOUT_MS = 5000;
 
 /**
+ * How long a promotion waits for the login secret export, which is a Web3Auth
+ * node round trip. Devnet nodes answer a working round in about 40 s, so this
+ * sits well above that and still ends a start parked on a hung export.
+ */
+export const SECRET_EXPORT_TIMEOUT_MS = 100_000;
+
+/**
  * The shortest interval between two stand-downs by the same tab. The greeting
  * that asks for one is unauthenticated, and a stand-down costs a worker
  * teardown plus a cold start on re-election, so a flood must buy one hand-off
@@ -854,7 +861,23 @@ export class EngineClient implements EngineTransport {
   private async provideFailoverSecret(): Promise<LoginSecret> {
     const source = this.secretSource;
     if (!source) throw new Error('failover leader has no SecretSource; engine cannot start');
-    return source.provideSecret();
+    const exported = source.provideSecret();
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => {
+        // This frame is the terminal owner of a secret that arrives too late.
+        exported.then(
+          ({ secret }) => new Uint8Array(secret).fill(0),
+          () => undefined
+        );
+        reject(new Error('the login secret export did not finish in time'));
+      }, SECRET_EXPORT_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([exported, timedOut]);
+    } finally {
+      clearTimeout(deadline);
+    }
   }
 
   private abortPromotion(local: EngineTransport | null, error: unknown): void {
