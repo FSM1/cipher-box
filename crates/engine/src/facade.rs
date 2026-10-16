@@ -3306,6 +3306,17 @@ impl EngineError {
             e @ (CreateGrantError::ResumeNotThisGrant | CreateGrantError::TargetIndexLostARoot) => {
                 EngineError::UnsupportedTarget { check: e.check() }
             }
+            // A parent root too large to re-seal is a size refusal on the share
+            // site, not a verdict on the record.
+            CreateGrantError::Converge(SweepError::IndexRepair {
+                error: RotationPublishError::NotResealable,
+                ..
+            })
+            | CreateGrantError::ParentMint(ResealError::SectionNotResealable { .. }) => {
+                EngineError::UnsupportedTarget {
+                    check: "rot-reseal-section-not-resealable",
+                }
+            }
             terminal => EngineError::TrustViolation {
                 message: terminal.to_string(),
             },
@@ -14324,6 +14335,32 @@ mod tests {
                 node_id: [6u8; 16],
                 error: RotationPublishError::Rejected,
             }),
+            EngineError::TrustViolation { .. },
+        ));
+    }
+
+    #[test]
+    fn a_parent_too_large_to_re_seal_is_an_unsupported_target_not_a_trust_violation() {
+        let size_refusals = [
+            CreateGrantError::Converge(SweepError::IndexRepair {
+                scope_id: [7u8; 16],
+                error: RotationPublishError::NotResealable,
+            }),
+            CreateGrantError::ParentMint(ResealError::SectionNotResealable { size: 2, limit: 1 }),
+        ];
+        for refusal in size_refusals {
+            assert_eq!(
+                EngineError::from_create_grant(refusal),
+                EngineError::UnsupportedTarget {
+                    check: "rot-reseal-section-not-resealable",
+                },
+            );
+        }
+        assert!(matches!(
+            EngineError::from_create_grant(CreateGrantError::Converge(SweepError::IndexRepair {
+                scope_id: [7u8; 16],
+                error: RotationPublishError::Rejected,
+            })),
             EngineError::TrustViolation { .. },
         ));
     }

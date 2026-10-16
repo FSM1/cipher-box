@@ -1761,7 +1761,9 @@ surviving committed grants uniformly in the republish it already does.
   in — a fresh mint needs no history) → for write grants, the write-scope cut
   (fresh write scope seed + name wave over the subtree) → update the parent
   scope's direct-child-scope index → publish → post the sealed share pointer
-  to the recipient's mailbox. A committed writer of the parent scope can splice
+  to the recipient's mailbox. A fresh mint re-seals the parent root before
+  any publish, so a parent root that cannot re-seal refuses the grant with
+  nothing published. A committed writer of the parent scope can splice
   a source-scope node into a stalled resume; the resume admits it, and the
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,

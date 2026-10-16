@@ -1006,9 +1006,8 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
     // budget, so a section that fits it always fits beside them. Measured on
     // real bytes at the true maximum of an honest root: every count axis at
     // its ceiling, write rows at full width, and a sweep that keeps
-    // [`MAX_HISTORY_LINKS`] honest links. The measured room there is 21,963
-    // bytes (`SECTION_FRAMING_SLACK_BYTES`). The 16 KiB below is a floor
-    // under that room, not the bound itself.
+    // [`MAX_HISTORY_LINKS`] honest links. Measured room 21,963 bytes; the
+    // 16 KiB assertion is a floor with a 5,579-byte margin.
     let section = sweep_reseal_of_a_maximal_root(real_chain)
         .unwrap_or_else(|e| panic!("a maximal honest root re-seals: {}", e.check()));
     assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);

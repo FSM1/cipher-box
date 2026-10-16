@@ -2075,8 +2075,9 @@ mod tests {
         /// and every scope-keyed seam answers only under it — as the production
         /// net's parked scope source does (`crate::net::rotation`).
         repointed_parent: Option<Vec<u8>>,
-        /// When set, the parent root commits its index with one entry twice, so
-        /// the pass repairs it, and the repair answers this refusal.
+        /// When set, every index repair of the parent root answers this
+        /// refusal, and a parent index with an entry commits it twice, so the
+        /// pass repairs that index too.
         index_repair_fault: Option<RotationPublishError>,
         /// The history links the parent plan carries.
         parent_links: Vec<SignedSealed>,
@@ -2118,8 +2119,8 @@ mod tests {
             }
         }
 
-        /// Have the parent's index carry a duplicate entry, and have its repair
-        /// refuse with `error`.
+        /// Have every repair of the parent's index refuse with `error`
+        /// ([`Self::index_repair_fault`]).
         fn failing_index_repair(mut self, error: RotationPublishError) -> Self {
             self.index_repair_fault = Some(error);
             self
