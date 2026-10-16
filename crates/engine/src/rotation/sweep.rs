@@ -373,6 +373,10 @@ pub struct SweepOutcome {
     pub flagged_indexes: Vec<[u8; 16]>,
     /// The index repair lost the CAS; the next pass re-derives it.
     pub index_repair_lost_race: bool,
+    /// The index repair re-seals the scope root over its grant section budget
+    /// ([`RotationPublishError::NotResealable`]). The root keeps its index, and
+    /// the pass still converges the interior nodes. No re-run clears it.
+    pub index_repair_not_resealable: bool,
 }
 
 impl SweepOutcome {
@@ -759,6 +763,7 @@ where
                 .extend(omitted.iter().map(|root| root.scope_id)),
             // Never landed, so never flagged; the next pass re-derives it.
             Err(RotationPublishError::LostRace) => outcome.index_repair_lost_race = true,
+            Err(RotationPublishError::NotResealable) => outcome.index_repair_not_resealable = true,
             Err(error) => {
                 return Err(SweepError::IndexRepair {
                     scope_id: scope_ref.scope_id,
@@ -879,6 +884,7 @@ impl Cumulative {
             skipped_scope_roots: last.skipped_scope_roots,
             unreachable: last.unreachable,
             index_repair_lost_race: last.index_repair_lost_race,
+            index_repair_not_resealable: last.index_repair_not_resealable,
         }
     }
 }

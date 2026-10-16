@@ -3769,10 +3769,13 @@ fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
 
 /// Carry a re-seal refusal into the sweep's publish arm on rule 6's axis: every
 /// variant but entropy is this build's own fail-closed verdict on material the
-/// pass already gated, so re-sealing the same inputs reaches it again.
+/// pass already gated, so re-sealing the same inputs reaches it again. A section
+/// over its budget is a size refusal, not a trust verdict, so it keeps its own
+/// variant.
 fn reseal_publish_verdict(error: ResealError) -> RotationPublishError {
     match error {
         ResealError::Entropy(_) => RotationPublishError::NotPublished,
+        ResealError::SectionNotResealable { .. } => RotationPublishError::NotResealable,
         _ => RotationPublishError::Rejected,
     }
 }
@@ -14601,6 +14604,19 @@ mod tests {
             let check = sample.check();
             assert_eq!(reseal_verdict(sample), expected, "{check}: {why}");
         }
+    }
+
+    #[test]
+    fn a_sweep_index_repair_over_its_budget_is_a_size_refusal_not_a_rejection() {
+        assert_eq!(
+            reseal_publish_verdict(ResealError::SectionNotResealable { size: 2, limit: 1 }),
+            RotationPublishError::NotResealable
+        );
+        assert_eq!(
+            reseal_publish_verdict(ResealError::SignerNotCommitted),
+            RotationPublishError::Rejected,
+            "every other re-seal refusal still stops the pass"
+        );
     }
 
     // --- the subtree enumeration: the wave's read edge ---------------------

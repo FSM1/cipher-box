@@ -1004,81 +1004,45 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
     // The other half of the coordination `net/author.rs` enforces: the
     // author holds a scope root's other bytes under the complement of this
     // budget, so a section that fits it always fits beside them. Measured on
-    // real bytes at the frozen ceiling of committed rows, since the budget
-    // is sized from per-row wire estimates.
-    //
-    // Every row is full width, a via-link and a maximal grantee name, and
-    // every row and child ref carries a padded unknown map. The counts are
-    // frozen and the per-item sizes are not, so the budget is a bound only
-    // because it charges the widest row and the re-seal drops the carry.
+    // real bytes at the true maximum of an honest root: every count axis at
+    // its ceiling, write rows at full width, and a sweep that keeps
+    // [`MAX_HISTORY_LINKS`] honest links. The room there is about 21 KiB, not
+    // the 64 KiB of slack, because the commitment entries take a share of it.
     let fx = Fixture::new();
     let owner_pub = fx.owner_enc.public();
-    let (mut commitment, _, _) = fx.committed(b"n");
-    let rows: Vec<(_, _)> = (0..MAX_GRANT_BLOBS)
-        .map(|i| {
-            let mut tag = [0u8; SECRET_LEN];
-            tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
-            let recipient = Fixture::nth_recipient(i).public().to_bytes();
-            (
-                GrantSetEntry::new(
-                    &fx.pointer_read_key,
-                    tag,
-                    recipient,
-                    Permission::Read,
-                    [0x02; 32],
-                ),
-                fx.widest_row(recipient, tag, Permission::Read, b"n"),
-            )
-        })
-        .collect();
-    commitment.entries = rows.iter().map(|(entry, _)| entry.clone()).collect();
-    let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
-        .expect("the owner signs the maximal set")
-        .to_compact();
-    let ledger: Vec<GrantLedgerEntry> = rows
-        .into_iter()
-        .map(|(_, row)| GrantLedgerEntry {
-            unknown: padding(1024),
-            ..row
-        })
-        .collect();
-
-    // Every count axis at its ceiling at once, since only the joint maximum
-    // can exhaust the budget.
-    let children: Vec<ChildScopeRef> = (0..MAX_DIRECT_CHILD_SCOPES)
-        .map(|i| {
-            let mut scope_id = [0u8; 16];
-            scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
-            ChildScopeRef {
-                scope_id,
-                ipns_name: crate::rotation::derive_write_name(&[0x5b; SECRET_LEN], &scope_id)
-                    .as_str()
-                    .as_bytes()
-                    .to_vec(),
-                unknown: padding(1024),
-            }
-        })
-        .collect();
-    let id = identity(&fx, &owner_pub, b"n", None);
-    let seed = chain_seed(MAX_HISTORY_LINKS as u64 + 1);
-    let s = seeds(
-        &seed,
-        MAX_HISTORY_LINKS as u64 + 1,
-        None,
-        &fx.write_scope_seed,
-        &fx.pointer_read_key,
-    );
-    let mut cs = committed_set(&commitment, &sig, &ledger);
-    cs.direct_child_scope_index = &children;
-    let carried = real_chain(MAX_HISTORY_LINKS as u64);
-    let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
-        .expect("a maximal committed set re-seals");
+    let set = MaximalSet::new(&fx);
+    let id = ScopeRootIdentity {
+        owner_enc_secret: Some(&fx.owner_enc),
+        ..identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed))
+    };
+    let newest = MAX_HISTORY_LINKS as u64 + 1;
+    let carried = real_chain(newest);
+    let head = chain_seed(newest);
+    let carried_write_link = vec![0x5d; MAX_WRITE_HISTORY_LINK_BYTES];
+    let s = ResealSeeds {
+        override_seed: &head,
+        read_epoch: newest,
+        prev: None,
+        write_scope_seed: &FRESH_WRITE_SCOPE_SEED,
+        write_epoch: 5,
+        write_history: WriteHistory::Carried(&carried_write_link),
+        pointer_read_key: &fx.pointer_read_key,
+    };
+    let section = reseal_scope_root(
+        &mut SeededEntropy::new(3),
+        &id,
+        &s,
+        &set.committed(),
+        &carried,
+    )
+    .expect("a maximal honest root re-seals");
     assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
+    assert_eq!(section.history_links.len(), MAX_HISTORY_LINKS);
     let size = encode_grant_section(&section).expect("encodes").len();
     let budget = resealable_section_bytes(MAX_GRANT_BLOBS);
     // Headroom, so a wire-shape edit fails here rather than at the cliff.
     assert!(
-        size + 64 * 1024 <= budget,
+        size + 16 * 1024 <= budget,
         "a maximal re-seal is {size} bytes against a {budget}-byte budget"
     );
 }

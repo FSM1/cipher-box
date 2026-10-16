@@ -79,8 +79,14 @@ const _: () = assert!(
     "a retained history link must fit the per-link share of the re-seal budget"
 );
 
-/// The owner blobs, the ascent link, the write history link, and the map
-/// framing around every run — none of them count-driven, all of them small.
+/// The owner blobs, the ascent link, the write history link, the map framing
+/// around every run, and the grant-set commitment's entries. The entries are
+/// count-driven (about 157 bytes each), and no per-grant charge holds them, so
+/// at [`MAX_GRANT_BLOBS`](cipherbox_core::seal::MAX_GRANT_BLOBS) they need more
+/// than this slack and use the room the per-item charges leave. A sweep that
+/// keeps [`MAX_HISTORY_LINKS`](cipherbox_core::seal::MAX_HISTORY_LINKS) links
+/// at [`MAX_RETAINED_HISTORY_LINK_BYTES`] leaves too little of that room, so
+/// its re-seal can go over the budget.
 const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 
 /// The granularity [`resealable_section_bytes`] charges the committed grant

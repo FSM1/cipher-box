@@ -230,6 +230,49 @@ fn an_index_repair_that_did_not_land_fails_closed() {
 }
 
 #[test]
+fn a_scope_root_too_large_to_re_seal_still_lets_its_interior_converge() {
+    // A(01) lags and S(0a) is missing from the index, but the root's re-seal
+    // is over its budget: the index stays, and A still moves to the epoch.
+    let net = FakeNet::new(5, &[0x01, 0x0a])
+        .node(0x01, 1, &[])
+        .scope_root(0x0a, false);
+    net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::NotResealable);
+
+    let outcome = drive(&net, 3, 0).expect("the pass continues past the refused root");
+    assert!(outcome.index_repair_not_resealable);
+    assert!(
+        outcome.flagged_indexes.is_empty(),
+        "the repair never landed"
+    );
+    assert_eq!(outcome.converged, vec![id(0x01)]);
+    assert_eq!(outcome.old_epoch_nodes(), 0);
+    assert_eq!(net.epoch(0x01), 5);
+    assert_eq!(
+        net.index_repairs.get(),
+        1,
+        "no pass re-runs the refused root"
+    );
+    assert!(net.state.borrow().repaired_index.is_none());
+}
+
+#[test]
+fn an_index_repair_the_gate_refused_still_stops_the_pass() {
+    let net = FakeNet::new(5, &[0x01, 0x0a])
+        .node(0x01, 1, &[])
+        .scope_root(0x0a, false);
+    net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::Rejected);
+
+    let err = run(&net, 0x00).expect_err("a gate refusal is fail-closed");
+    assert_eq!(err.check(), "rot-sweep-index-repair-failed");
+    assert!(!err.is_retryable());
+    assert_eq!(
+        net.epoch(0x01),
+        1,
+        "no interior node moves past the refusal"
+    );
+}
+
+#[test]
 fn the_index_repair_lands_before_a_node_publish_can_abort_the_pass() {
     // A(01) lags and can never publish; the repair still landed, because the
     // self-heal runs on the walk result rather than behind a re-seal.

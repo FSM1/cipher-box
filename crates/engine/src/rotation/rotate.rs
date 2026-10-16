@@ -115,6 +115,10 @@ pub enum RotationPublishError {
     /// The publish landed, and the floor store did not record the floor that
     /// follows it. Retryable: a re-run reads the landed record and raises again.
     FloorUnrecorded,
+    /// The scope root's re-sealed grant section is over the re-seal budget.
+    /// Nothing was published, and a re-run over the same carried links meets
+    /// it again, so it is not retryable.
+    NotResealable,
 }
 
 impl RotationPublishError {
@@ -136,6 +140,7 @@ impl RotationPublishError {
             | Self::NotConverged { .. }
             | Self::FloorUnrecorded => "availability",
             Self::Rejected => "trust",
+            Self::NotResealable => "capability",
         }
     }
 }
@@ -156,6 +161,9 @@ impl core::fmt::Display for RotationPublishError {
             }
             RotationPublishError::FloorUnrecorded => {
                 f.write_str("the vouched record stands, and its floor did not rise")
+            }
+            RotationPublishError::NotResealable => {
+                f.write_str("the re-sealed scope root is over its grant section budget")
             }
         }
     }
