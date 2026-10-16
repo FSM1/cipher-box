@@ -1087,8 +1087,7 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
 /// frozen maximum the re-seal mints bytes inside every bound its own decoder
 /// holds, on a write cut and on a read cut with a carried write plane. A
 /// re-seal field that pushes the maximum past a bound fails here, before an
-/// owner rotation can stop on it. The sweep path, which keeps every carried
-/// link, is not covered.
+/// owner rotation can stop on it.
 #[test]
 fn a_maximal_gate_passed_root_re_seals_inside_every_bound() {
     let fx = Fixture::new();
@@ -1169,6 +1168,51 @@ fn a_maximal_gate_passed_root_re_seals_inside_every_bound() {
         if carries_write_link {
             assert_eq!(body.write_history_link, carried_write_link, "{run}");
         }
+    }
+}
+
+/// The sweep re-seal of the same maximal root, as
+/// `OwnerRotationNet::repair_child_scope_index` gives it: `prev` is `None`, so
+/// every carried link stays (ADR 0033 D12), with the carried write link. The
+/// budget charges no byte for the commitment entries, and only the link share a
+/// cut leaves unused covers them, so this re-seal goes over the budget.
+#[test]
+fn a_sweep_re_seal_of_a_maximal_root_goes_over_its_budget() {
+    let fx = Fixture::new();
+    let owner_pub = fx.owner_enc.public();
+    let set = MaximalSet::new(&fx);
+    let id = ScopeRootIdentity {
+        owner_enc_secret: Some(&fx.owner_enc),
+        ..identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed))
+    };
+    let newest = MAX_HISTORY_LINKS as u64 + 1;
+    let carried = widest_chain(newest);
+    let head = chain_seed(newest);
+    let carried_write_link = vec![0x5d; MAX_WRITE_HISTORY_LINK_BYTES];
+    let s = ResealSeeds {
+        override_seed: &head,
+        read_epoch: newest,
+        prev: None,
+        write_scope_seed: &FRESH_WRITE_SCOPE_SEED,
+        write_epoch: 5,
+        write_history: WriteHistory::Carried(&carried_write_link),
+        pointer_read_key: &fx.pointer_read_key,
+    };
+    let err = reseal_scope_root(
+        &mut SeededEntropy::new(5),
+        &id,
+        &s,
+        &set.committed(),
+        &carried,
+    )
+    .expect_err("a sweep keeps every widest link");
+    let budget = resealable_section_bytes(MAX_GRANT_BLOBS);
+    match err {
+        ResealError::SectionNotResealable { size, limit } => {
+            assert_eq!(limit, budget);
+            assert!(size > budget, "section {size} inside {budget}");
+        }
+        other => panic!("not a size refusal: {}", other.check()),
     }
 }
 
