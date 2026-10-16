@@ -139,6 +139,9 @@ use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_m
 use crate::sync::tick::{ResolveMode, scope_root_of};
 
 mod keyless_kept;
+mod walker;
+
+use walker::{ReadFault, SweepPolicy, Swept, TwoSweep};
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue.
@@ -1154,24 +1157,28 @@ struct SealerSearch {
 /// starts again.
 struct CaptureWalk {
     cohort: Cohort,
-    /// Each node still to read, with the scope root whose end reads it.
-    pending: Vec<(NodeId, NodeId)>,
-    seen: BTreeSet<NodeId>,
-    /// Cohort nodes some folder names.
-    linked: BTreeSet<NodeId>,
-    /// Each node read, as `pending` holds it, with the record read.
-    read: Vec<((NodeId, NodeId), RecordMark)>,
+    /// Each node with the scope root whose end reads it. `linked` holds the
+    /// cohort nodes some folder names. The walk is blind when a folder names a
+    /// child at a name its scope's write seed does not derive, or a proved
+    /// scope root this tick holds no end for: a settled walk then proves no
+    /// capture.
+    sweep: TwoSweep<(NodeId, NodeId)>,
     /// The anchor of each scope the walk entered, from its root's read.
     anchors: BTreeMap<NodeId, WalkAnchor>,
-    /// How many of `read` the second read has confirmed.
-    confirmed: usize,
-    /// The unanswered attempts at the walk's next read: the last of `pending`,
-    /// or `read[confirmed]` once every node is read one time.
-    unanswered: u8,
-    /// A folder names a child the walk cannot read: one at a name its scope's
-    /// write seed does not derive, or a proved scope root this tick holds no
-    /// end for. A settled walk then proves no capture.
-    blind: bool,
+}
+
+impl core::ops::Deref for CaptureWalk {
+    type Target = TwoSweep<(NodeId, NodeId)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sweep
+    }
+}
+
+impl core::ops::DerefMut for CaptureWalk {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sweep
+    }
 }
 
 /// What a scope root's read gives the reads below it.
@@ -1204,16 +1211,6 @@ struct WalkRead {
     anchor: Option<WalkAnchor>,
 }
 
-/// Why a walk read gave no [`WalkRead`].
-enum WalkReadFault {
-    /// Any halt but a refusal, such as no answer or an `UploadAttempt`,
-    /// `Unclassified` or `EpochLagged` halt: the read may land on a later pass.
-    Unanswered,
-    /// A refused record, or one served tied with other bytes at its sequence:
-    /// what the walk read so far proves nothing.
-    Untrusted,
-}
-
 /// Where one pass left a capture walk.
 enum WalkStep {
     /// Reads remain for a later pass.
@@ -1234,20 +1231,12 @@ enum WalkStep {
 /// descent spans ticks, so it proves nothing until a second sweep reads each
 /// folder to the same record, as [`CaptureWalk`] does.
 pub(crate) struct RetireDescent {
-    /// Each folder still to read.
-    pending: Vec<NodeId>,
-    seen: BTreeSet<NodeId>,
-    /// Every node a folder read so far names.
-    linked: BTreeSet<NodeId>,
-    /// Each folder read, with the record it read.
-    read: Vec<(NodeId, RecordMark)>,
-    /// How many of `read` the second sweep has confirmed.
-    confirmed: usize,
+    /// Each folder, with every node a folder read so far names in `linked`. A
+    /// folder that names a folder the descent cannot read makes it blind: it
+    /// then proves no node unlinked, so it reads no more of its first sweep.
+    sweep: TwoSweep<NodeId>,
     /// The anchor the scope root's read gives the reads below it.
     anchor: Option<WalkAnchor>,
-    /// A folder names a folder the descent cannot read. The descent then
-    /// proves no node unlinked, so it reads no more of its first sweep.
-    blind: bool,
     /// The folders that made it blind. One that a later tick holds or passes
     /// over starts the descent again.
     blinded_by: BTreeSet<NodeId>,
@@ -1258,8 +1247,6 @@ pub(crate) struct RetireDescent {
     /// reads only it, unreported, until it reads or becomes a scope root, and
     /// then starts again.
     refused: Option<NodeId>,
-    /// The unanswered attempts at the descent's next read, one for each tick.
-    unanswered: u8,
     /// This tick reads no more of it.
     stopped: bool,
     /// A folder moved between the two sweeps, or a read went unanswered too
@@ -1267,27 +1254,31 @@ pub(crate) struct RetireDescent {
     restart: bool,
 }
 
+impl core::ops::Deref for RetireDescent {
+    type Target = TwoSweep<NodeId>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sweep
+    }
+}
+
+impl core::ops::DerefMut for RetireDescent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sweep
+    }
+}
+
 impl RetireDescent {
     fn new(root: NodeId) -> Self {
         Self {
-            pending: vec![root],
-            seen: BTreeSet::from([root]),
-            linked: BTreeSet::new(),
-            read: Vec::new(),
-            confirmed: 0,
+            sweep: TwoSweep::new(root, root),
             anchor: None,
-            blind: false,
             blinded_by: BTreeSet::new(),
             overflowed: false,
             refused: None,
-            unanswered: 0,
             stopped: false,
             restart: false,
         }
-    }
-
-    fn complete(&self) -> bool {
-        self.pending.is_empty() && self.confirmed == self.read.len()
     }
 
     /// Whether the next tick resumes it.
@@ -1320,44 +1311,80 @@ impl RetireDescent {
         }
         (self.complete() && !self.blind).then_some(false)
     }
+}
 
-    /// Record what one folder of the scope at `end` names. A folder of this
-    /// scope is read in turn. A scope root in `skips` starts another scope,
-    /// which the descent of each end that derives the name covers. Any other
-    /// folder this end does not read makes the descent blind.
+/// A retire descent's policy for one step: the scope it reads and what this
+/// tick lets it read.
+struct DescentPolicy<'p, 'e> {
+    end: &'p ScopeEnd<'e>,
+    scope_roots: &'p [NodeId],
+    skips: &'p BTreeSet<NodeId>,
+    anchor: &'p mut Option<WalkAnchor>,
+    blinded_by: &'p mut BTreeSet<NodeId>,
+    overflowed: &'p mut bool,
+    /// The reads left to this descent's share.
+    left: usize,
+    /// The reads left to every descent of the tick.
+    tick_left: &'p Cell<usize>,
+}
+
+/// The node bound a walk passed.
+struct Overflow;
+
+impl SweepPolicy<NodeId> for DescentPolicy<'_, '_> {
+    type Answer = WalkRead;
+    type Stop = Overflow;
+
+    fn take_read(&mut self) -> bool {
+        if self.left == 0 || self.tick_left.get() == 0 {
+            return false;
+        }
+        self.left -= 1;
+        self.tick_left.set(self.tick_left.get() - 1);
+        true
+    }
+
+    /// Record what one folder of the scope names. A folder of this scope is
+    /// read in turn. A scope root in `skips` starts another scope, which the
+    /// descent of each end that derives the name covers. Any other folder this
+    /// end does not read makes the descent blind.
     fn visit(
         &mut self,
-        end: &ScopeEnd<'_>,
-        scope_roots: &[NodeId],
-        skips: &BTreeSet<NodeId>,
-        children: &[ChildRef],
-    ) {
-        for child in children {
+        sweep: &mut TwoSweep<NodeId>,
+        _: &NodeId,
+        read: WalkRead,
+    ) -> Result<(), Overflow> {
+        if let Some(anchor) = read.anchor {
+            *self.anchor = Some(anchor);
+        }
+        for child in &read.children {
             let id = NodeId(child.id);
-            self.linked.insert(id);
-            if child.kind != NodeKind::Folder || skips.contains(&id) {
+            sweep.linked.insert(id);
+            if child.kind != NodeKind::Folder || self.skips.contains(&id) {
                 continue;
             }
-            if scope_roots.contains(&id) || !names_this_scope(end, child) {
-                self.blind = true;
+            if self.scope_roots.contains(&id) || !names_this_scope(self.end, child) {
+                sweep.blind = true;
                 self.blinded_by.insert(id);
-            } else if self.seen.insert(id) {
-                self.pending.push(id);
+            } else if sweep.seen.insert(id) {
+                sweep.pending.push(id);
             }
         }
-        if self.blind {
-            self.pending = Vec::new();
+        if sweep.blind {
+            sweep.pending = Vec::new();
         }
-        if self.seen.len() + self.linked.len() > MAX_RETIRE_DESCENT_NODES {
-            self.overflowed = true;
-            self.pending = Vec::new();
-            self.seen = BTreeSet::new();
-            self.linked = BTreeSet::new();
-            self.blinded_by = BTreeSet::new();
-            self.read = Vec::new();
-            self.confirmed = 0;
-            self.anchor = None;
+        if sweep.seen.len() + sweep.linked.len() > MAX_RETIRE_DESCENT_NODES {
+            *self.overflowed = true;
+            sweep.pending = Vec::new();
+            sweep.seen = BTreeSet::new();
+            sweep.linked = BTreeSet::new();
+            *self.blinded_by = BTreeSet::new();
+            sweep.read = Vec::new();
+            sweep.confirmed = 0;
+            *self.anchor = None;
+            return Err(Overflow);
         }
+        Ok(())
     }
 }
 
@@ -1385,46 +1412,78 @@ impl CaptureWalk {
     fn new(root: NodeId, cohort: Cohort) -> Self {
         Self {
             cohort,
-            pending: vec![(root, root)],
-            seen: BTreeSet::from([root]),
-            linked: BTreeSet::new(),
-            read: Vec::new(),
+            sweep: TwoSweep::new((root, root), root),
             anchors: BTreeMap::new(),
-            confirmed: 0,
-            unanswered: 0,
-            blind: false,
         }
+    }
+}
+
+/// A capture walk's policy for one pass.
+struct CapturePolicy<'p, 'e> {
+    cohort: &'p Cohort,
+    anchors: &'p mut BTreeMap<NodeId, WalkAnchor>,
+    ends: &'p [ScopeEnd<'e>],
+    scope_roots: &'p [NodeId],
+    /// The pass's share of the tick's walk reads, and what it spent.
+    share: usize,
+    spent: usize,
+    /// A walk read of this tick went unanswered.
+    tick_unanswered: &'p Cell<bool>,
+    /// The nodes the walk may hold.
+    bound: usize,
+}
+
+impl<'e> SweepPolicy<(NodeId, NodeId)> for CapturePolicy<'_, 'e> {
+    type Answer = (ScopeEnd<'e>, WalkRead);
+    type Stop = Overflow;
+
+    fn take_read(&mut self) -> bool {
+        if self.spent == self.share || self.tick_unanswered.get() {
+            return false;
+        }
+        self.spent += 1;
+        true
+    }
+
+    /// A blind walk proves nothing, so its first sweep, which finds every
+    /// link, is all it needs.
+    fn settles_unconfirmed(&self, sweep: &TwoSweep<(NodeId, NodeId)>) -> bool {
+        sweep.blind
     }
 
     /// Record what one folder of the scope at `end` names: a cohort node it
     /// links, and each child still to read. A child's kind is wire data, so a
     /// child marked as a file is read too: its body, not its ref, says if it
     /// names children. A scope root with an end in `ends` is read under that
-    /// end. Answers `false` when the walk holds more than `bound` nodes.
+    /// end.
     fn visit(
         &mut self,
-        end: &ScopeEnd<'_>,
-        ends: &[ScopeEnd<'_>],
-        scope_roots: &[NodeId],
-        children: &[ChildRef],
-        bound: usize,
-    ) -> bool {
-        for child in children {
+        sweep: &mut TwoSweep<(NodeId, NodeId)>,
+        &(_, at): &(NodeId, NodeId),
+        (end, read): (ScopeEnd<'e>, WalkRead),
+    ) -> Result<(), Overflow> {
+        if let Some(anchor) = read.anchor {
+            self.anchors.insert(at, anchor);
+        }
+        for child in &read.children {
             let id = NodeId(child.id);
             if self.cohort.values().any(|keys| names_node(keys, id)) {
-                self.linked.insert(id);
+                sweep.linked.insert(id);
             }
-            if ends.iter().any(|below| below.root == id) {
-                if self.seen.insert(id) {
-                    self.pending.push((id, id));
+            if self.ends.iter().any(|below| below.root == id) {
+                if sweep.seen.insert(id) {
+                    sweep.pending.push((id, id));
                 }
-            } else if !in_this_scope(end, scope_roots, child) {
-                self.blind = true;
-            } else if self.seen.insert(id) {
-                self.pending.push((id, end.root));
+            } else if !in_this_scope(&end, self.scope_roots, child) {
+                sweep.blind = true;
+            } else if sweep.seen.insert(id) {
+                sweep.pending.push((id, end.root));
             }
         }
-        self.seen.len() <= bound
+        if sweep.seen.len() > self.bound {
+            return Err(Overflow);
+        }
+        Ok(())
     }
 }
 
@@ -6510,14 +6569,15 @@ where
                 }
             }
             WalkStep::Settled => {
-                for (root, keys) in walk.cohort {
+                let CaptureWalk { cohort, sweep, .. } = walk;
+                for (root, keys) in cohort {
                     let (linked, proved): (BTreeSet<CaptureKey>, BTreeSet<CaptureKey>) = keys
                         .into_iter()
-                        .partition(|(node, _)| walk.linked.contains(node));
+                        .partition(|(node, _)| sweep.linked.contains(node));
                     if !linked.is_empty() {
                         self.take_captures(root, &linked);
                     }
-                    if !walk.blind && !proved.is_empty() {
+                    if !sweep.blind && !proved.is_empty() {
                         proofs.scope_mut(root).proved.extend(proved);
                     }
                 }
@@ -6560,70 +6620,50 @@ where
         ends: &[ScopeEnd<'e>],
         walk: &mut CaptureWalk,
     ) -> WalkStep {
-        let share = self.capture_reads.borrow().share();
-        let mut spent = 0;
-        let step = loop {
-            // A blind walk proves nothing, so its first pass, which finds every
-            // link, is all it needs.
-            if walk.pending.is_empty() && (walk.blind || walk.confirmed == walk.read.len()) {
-                break WalkStep::Settled;
-            }
-            if spent == share || self.walk_unanswered.get() {
-                break WalkStep::Unfinished;
-            }
-            spent += 1;
-            let second = walk.pending.is_empty();
-            let (node, at) = match walk.pending.last() {
-                Some(next) => *next,
-                None => walk.read[walk.confirmed].0,
-            };
-            let end = own_ends(scope, ends).find(|end| end.root == at).copied();
-            let anchor = walk.anchors.get(&at).map(WalkAnchor::anchor);
-            let read = match end {
-                Some(end) => self
-                    .walk_read(scope, &end, anchor, node, true)
-                    .await
-                    .map(|read| (end, read)),
-                None => Err(WalkReadFault::Unanswered),
-            };
-            let (end, read) = match read {
-                Ok(read) => read,
-                Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
-                Err(WalkReadFault::Unanswered) => {
-                    self.walk_unanswered.set(true);
-                    walk.unanswered += 1;
-                    break if walk.unanswered >= MAX_CAPTURE_READ_ATTEMPTS {
-                        WalkStep::Restart
-                    } else {
-                        WalkStep::Unfinished
-                    };
-                }
-            };
-            walk.unanswered = 0;
-            if second {
-                if read.mark != walk.read[walk.confirmed].1 {
-                    break WalkStep::Restart;
-                }
-                walk.confirmed += 1;
-                continue;
-            }
-            walk.pending.pop();
-            walk.read.push(((node, at), read.mark));
-            if let Some(anchor) = read.anchor {
-                walk.anchors.insert(at, anchor);
-            }
-            if !walk.visit(
-                &end,
-                ends,
-                scope.scope_roots,
-                &read.children,
-                self.capture_walk_nodes,
-            ) {
-                break WalkStep::Overflowed;
-            }
+        let CaptureWalk {
+            cohort,
+            sweep,
+            anchors,
+        } = walk;
+        let mut policy = CapturePolicy {
+            cohort,
+            anchors,
+            ends,
+            scope_roots: scope.scope_roots,
+            share: self.capture_reads.borrow().share(),
+            spent: 0,
+            tick_unanswered: &self.walk_unanswered,
+            bound: self.capture_walk_nodes,
         };
-        self.capture_reads.borrow_mut().spend(spent);
-        step
+        let swept = sweep
+            .step(
+                &mut policy,
+                async |policy: &CapturePolicy<'_, 'e>, &(node, at): &(NodeId, NodeId), _| {
+                    let end = own_ends(scope, ends)
+                        .find(|end| end.root == at)
+                        .copied()
+                        .ok_or(ReadFault::Unanswered)?;
+                    let anchor = policy.anchors.get(&at).map(WalkAnchor::anchor);
+                    let read = self.walk_read(scope, &end, anchor, node, true).await?;
+                    Ok((read.mark, (end, read)))
+                },
+            )
+            .await;
+        self.capture_reads.borrow_mut().spend(policy.spent);
+        match swept {
+            Swept::Complete => WalkStep::Settled,
+            Swept::Paused => WalkStep::Unfinished,
+            Swept::Moved | Swept::Fault(ReadFault::Untrusted) => WalkStep::Restart,
+            Swept::Fault(ReadFault::Unanswered) => {
+                self.walk_unanswered.set(true);
+                if sweep.unanswered_at(MAX_CAPTURE_READ_ATTEMPTS) {
+                    WalkStep::Restart
+                } else {
+                    WalkStep::Unfinished
+                }
+            }
+            Swept::Stopped(Overflow) => WalkStep::Overflowed,
+        }
     }
 
     /// One node of the walk, read under `end` through the gate from the record
@@ -6636,10 +6676,10 @@ where
         anchor: Option<Anchor<'_>>,
         node: NodeId,
         report: bool,
-    ) -> Result<WalkRead, WalkReadFault> {
+    ) -> Result<WalkRead, ReadFault> {
         let fault = |halt: Halt| match halt {
-            Halt::RecordRefused => WalkReadFault::Untrusted,
-            _ => WalkReadFault::Unanswered,
+            Halt::RecordRefused => ReadFault::Untrusted,
+            _ => ReadFault::Unanswered,
         };
         if node == end.root {
             let resolved = self
@@ -6650,7 +6690,7 @@ where
                 || (!report
                     && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
             {
-                return Err(WalkReadFault::Untrusted);
+                return Err(ReadFault::Untrusted);
             }
             let record =
                 resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(fault)?;
@@ -6670,14 +6710,14 @@ where
                 }),
             });
         }
-        let anchor = anchor.ok_or(WalkReadFault::Unanswered)?;
+        let anchor = anchor.ok_or(ReadFault::Unanswered)?;
         let plane = end.at(anchor.epoch);
         let loaded = match self
             .load_child_node_unreported(&plane, anchor, node, ResolveMode::NoCache)
             .await
         {
             Ok(loaded) => loaded,
-            Err(ChildFault::Refused(_)) if !report => return Err(WalkReadFault::Untrusted),
+            Err(ChildFault::Refused(_)) if !report => return Err(ReadFault::Untrusted),
             Err(error) => {
                 return Err(fault(
                     self.report_fault(&plane.end.write_name(&node.0), error),
@@ -6685,7 +6725,7 @@ where
             }
         };
         if loaded.tied {
-            return Err(WalkReadFault::Untrusted);
+            return Err(ReadFault::Untrusted);
         }
         Ok(WalkRead {
             mark: RecordMark {
@@ -8650,57 +8690,76 @@ where
         descent: &mut RetireDescent,
     ) {
         let mut left = share;
-        while !(descent.stopped || descent.restart || descent.overflowed || descent.complete())
-            && left > 0
-            && self.descent_reads.get() > 0
+        if descent.stopped
+            || descent.restart
+            || descent.overflowed
+            || descent.complete()
+            || left == 0
+            || self.descent_reads.get() == 0
         {
-            // A folder that is now a scope root reads under its own scope.
-            if descent
-                .refused
-                .is_some_and(|node| scope.scope_roots.contains(&node))
-            {
-                *descent = RetireDescent::new(end.root);
-            }
+            return;
+        }
+        // A folder that is now a scope root reads under its own scope.
+        if descent
+            .refused
+            .is_some_and(|node| scope.scope_roots.contains(&node))
+        {
+            *descent = RetireDescent::new(end.root);
+        }
+        if let Some(refused) = descent.refused {
             left -= 1;
             self.descent_reads.set(self.descent_reads.get() - 1);
-            let refused = descent.refused;
-            let (next, confirming) = match (refused, descent.pending.last()) {
-                (Some(node), _) => (node, false),
-                (None, Some(&node)) => (node, false),
-                (None, None) => (descent.read[descent.confirmed].0, true),
-            };
             let anchor = descent.anchor.as_ref().map(WalkAnchor::anchor);
-            let read = self
-                .walk_read(scope, end, anchor, next, refused.is_none())
-                .await;
-            match read {
-                Ok(_) if refused.is_some() => *descent = RetireDescent::new(end.root),
-                Ok(read) => {
-                    descent.unanswered = 0;
-                    if confirming {
-                        if read.mark == descent.read[descent.confirmed].1 {
-                            descent.confirmed += 1;
-                        } else {
-                            descent.restart = true;
-                        }
-                        continue;
-                    }
-                    descent.pending.pop();
-                    descent.read.push((next, read.mark));
-                    if let Some(anchor) = read.anchor {
-                        descent.anchor = Some(anchor);
-                    }
-                    descent.visit(end, scope.scope_roots, skips, &read.children);
-                }
-                Err(WalkReadFault::Untrusted) => {
-                    descent.refused = Some(next);
+            match self.walk_read(scope, end, anchor, refused, false).await {
+                Ok(_) => *descent = RetireDescent::new(end.root),
+                Err(ReadFault::Untrusted) => {
                     descent.stopped = true;
+                    return;
                 }
-                Err(WalkReadFault::Unanswered) => {
-                    descent.unanswered += 1;
+                Err(ReadFault::Unanswered) => {
                     descent.stopped = true;
-                    descent.restart = descent.unanswered >= MAX_CAPTURE_READ_ATTEMPTS;
+                    descent.restart = descent.unanswered_at(MAX_CAPTURE_READ_ATTEMPTS);
+                    return;
                 }
+            }
+        }
+        let RetireDescent {
+            sweep,
+            anchor,
+            blinded_by,
+            overflowed,
+            ..
+        } = descent;
+        let mut policy = DescentPolicy {
+            end,
+            scope_roots: scope.scope_roots,
+            skips,
+            anchor,
+            blinded_by,
+            overflowed,
+            left,
+            tick_left: &self.descent_reads,
+        };
+        let swept = sweep
+            .step(
+                &mut policy,
+                async |policy: &DescentPolicy<'_, '_>, &node: &NodeId, _| {
+                    let anchor = policy.anchor.as_ref().map(WalkAnchor::anchor);
+                    let read = self.walk_read(scope, end, anchor, node, true).await?;
+                    Ok((read.mark, read))
+                },
+            )
+            .await;
+        match swept {
+            Swept::Complete | Swept::Paused | Swept::Stopped(Overflow) => {}
+            Swept::Moved => descent.restart = true,
+            Swept::Fault(ReadFault::Untrusted) => {
+                descent.refused = Some(*descent.next_read());
+                descent.stopped = true;
+            }
+            Swept::Fault(ReadFault::Unanswered) => {
+                descent.stopped = true;
+                descent.restart = descent.unanswered_at(MAX_CAPTURE_READ_ATTEMPTS);
             }
         }
     }
