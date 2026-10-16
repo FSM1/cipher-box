@@ -1100,13 +1100,6 @@ where
             met_not_planned: boundaries.difference(&planned).copied().collect(),
         });
     }
-    // The parent root the pass could not re-seal is the one the mint re-seals.
-    if swept.index_repair_not_resealable {
-        return Err(CreateGrantError::Converge(SweepError::IndexRepair {
-            scope_id: parent_ref.scope_id,
-            error: RotationPublishError::NotResealable,
-        }));
-    }
     Ok(GrantSubtree::Converged(ConvergedSubtree {
         grantee,
         parent,
@@ -3647,21 +3640,45 @@ mod tests {
     }
 
     #[test]
-    fn a_parent_too_large_to_re_seal_refuses_the_grant_before_any_publish() {
+    fn a_parent_the_sweep_cannot_re_seal_refuses_the_grant_only_through_the_mint() {
+        // The sweep's repair keeps the moved descendants; the mint's final
+        // index drops them, so only the mint's own re-seal decides.
+        let net = FakeNet::new(Ok(()))
+            .with_descendant_scope(descendant_ref())
+            .failing_index_repair(RotationPublishError::NotResealable)
+            .carrying_parent_links(too_many_parent_links());
+        let (outcome, published, hub) = run(7, &[descendant_ref()], net, &[]);
+
+        assert_eq!(outcome.expect_err("refused").check(), "parent-mint-failed");
+        assert!(published.is_empty(), "refused before the promotion publish");
+        assert_nothing_delivered(&hub);
+    }
+
+    #[test]
+    fn a_parent_the_sweep_cannot_re_seal_still_takes_a_grant_whose_mint_fits() {
         let net = FakeNet::new(Ok(()))
             .with_descendant_scope(descendant_ref())
             .failing_index_repair(RotationPublishError::NotResealable);
-        let (outcome, published, hub) = run(7, &[descendant_ref()], net, &[]);
+        let (outcome, published, _hub) = run(7, &[descendant_ref()], net, &[]);
 
-        match outcome {
-            Err(CreateGrantError::Converge(SweepError::IndexRepair { scope_id, error })) => {
-                assert_eq!(scope_id, PARENT_SCOPE);
-                assert_eq!(error, RotationPublishError::NotResealable);
-            }
-            other => panic!("expected the size refusal, got {other:?}"),
-        }
-        assert!(published.is_empty(), "refused before the promotion publish");
-        assert_nothing_delivered(&hub);
+        outcome.expect("the final parent section fits");
+        assert!(
+            published.iter().any(|root| root.scope_id == PARENT_SCOPE),
+            "the parent root publishes its final index"
+        );
+    }
+
+    /// More carried links than any re-seal keeps, so the parent's re-seal
+    /// refuses whatever its index.
+    fn too_many_parent_links() -> Vec<SignedSealed> {
+        vec![
+            SignedSealed {
+                sealed: vec![0x01; 8],
+                signature: [0x01; 64],
+                unknown: PreservedFields::new(),
+            };
+            cipherbox_core::seal::MAX_HISTORY_LINKS + 1
+        ]
     }
 
     #[test]
@@ -3681,17 +3698,8 @@ mod tests {
 
     #[test]
     fn a_parent_re_seal_that_refuses_stops_the_grant_before_any_publish() {
-        // The parent root carries more links than any re-seal keeps, with a
-        // clean index, so the pass repairs nothing and only the mint sees it.
-        let links = vec![
-            SignedSealed {
-                sealed: vec![0x01; 8],
-                signature: [0x01; 64],
-                unknown: PreservedFields::new(),
-            };
-            cipherbox_core::seal::MAX_HISTORY_LINKS + 1
-        ];
-        let net = FakeNet::new(Ok(())).carrying_parent_links(links);
+        // A clean index, so the pass repairs nothing and only the mint sees it.
+        let net = FakeNet::new(Ok(())).carrying_parent_links(too_many_parent_links());
         let (outcome, published, hub) = run(7, &[], net, &[]);
 
         assert_eq!(outcome.expect_err("refused").check(), "parent-mint-failed");
