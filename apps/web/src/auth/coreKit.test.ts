@@ -34,10 +34,10 @@ const sdk = vi.hoisted(() => ({
   /** Set to keep `loginWithJWT` pending, as the SDK does when the nodes refuse. */
   loginHangs: false,
   /**
-   * Completes each pending login in turn. The SDK writes its session to its
-   * storage when the nodes answer, so a late completion does too.
+   * Completes the pending login. The SDK writes its session to its storage
+   * when the nodes answer, so a late completion does too.
    */
-  lateLogins: [] as (() => Promise<void>)[],
+  lateLogin: undefined as (() => Promise<void>) | undefined,
   /** Set to make `loginWithJWT` reject with this refusal. */
   loginError: undefined as Error | undefined,
   /** How many SDK instances were built, and how many `init` calls they saw. */
@@ -98,19 +98,18 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.inits += 1;
         return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
-      loginWithJWT(params: Record<string, unknown>): Promise<void> {
+      async loginWithJWT(params: Record<string, unknown>): Promise<void> {
         sdk.jwtLogin = params;
         if (sdk.loginHangs) {
           return new Promise<void>((resolve) => {
-            sdk.lateLogins.push(async () => {
+            sdk.lateLogin = async () => {
               await this.storage.setItem(STORE_KEY, LATE_SESSION);
               resolve();
-            });
+            };
           });
         }
-        if (sdk.loginError) return Promise.reject(sdk.loginError);
+        if (sdk.loginError) throw sdk.loginError;
         sdk.status = sdk.statusAfterLogin;
-        return Promise.resolve();
       }
       getUserInfo(): Record<string, unknown> {
         if (!sdk.userInfo) throw new Error('no user info');
@@ -218,7 +217,7 @@ beforeEach(() => {
   sdk.options = undefined;
   sdk.jwtLogin = undefined;
   sdk.loginHangs = false;
-  sdk.lateLogins = [];
+  sdk.lateLogin = undefined;
   sdk.loginError = undefined;
   sdk.constructions = 0;
   sdk.inits = 0;
@@ -828,7 +827,7 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     await created.login(credential());
     await created.logout();
 
-    await sdk.lateLogins[0]();
+    await sdk.lateLogin!();
 
     // A reload would restore whatever the store holds.
     await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
@@ -839,7 +838,7 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     await timedOutLogin(created);
     await created.logout();
 
-    await sdk.lateLogins[0]();
+    await sdk.lateLogin!();
 
     await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
   });

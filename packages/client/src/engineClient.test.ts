@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
 import {
@@ -816,39 +816,45 @@ describe('EngineClient leadership + transport swap', () => {
     }
   });
 
-  /**
-   * The leader goes while a sign-in is in flight, so the start parks only after
-   * the promotion has begun its export. The export waits for the test.
-   */
-  async function parkDuringPromotion() {
-    const { tab, workers } = origin();
-    let settle!: { resolve(secret: LoginSecret): void; reject(failure: Error): void };
-    const secretSource = {
-      provideSecret: (): Promise<LoginSecret> =>
-        new Promise<LoginSecret>((resolve, reject) => (settle = { resolve, reject })),
-    };
-    const leader = tab();
-    const follower = tab({ secretSource });
-    await tick();
-    await startTab(leader);
+  describe('a start that parks while a promotion exports', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    const started = follower.facade
-      .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
-      .then(
-        () => null,
-        (failure: unknown) => failure
-      );
-    await leader.dispose();
-    for (let i = 0; i < 20 && settle === undefined; i += 1) await tick();
-    expect(settle).toBeDefined();
-    // Past the deadline a parked start has outside a promotion.
-    await vi.advanceTimersByTimeAsync(YIELD_TIMEOUT_MS + 1_000);
-    return { follower, workers, started, settle };
-  }
+    /**
+     * The leader goes while a sign-in is in flight, so the start parks only after
+     * the promotion has begun its export. The export waits for the test.
+     */
+    async function parkDuringPromotion() {
+      const { tab, workers } = origin();
+      let settle!: { resolve(secret: LoginSecret): void; reject(failure: Error): void };
+      const secretSource = {
+        provideSecret: (): Promise<LoginSecret> =>
+          new Promise<LoginSecret>((resolve, reject) => (settle = { resolve, reject })),
+      };
+      const leader = tab();
+      const follower = tab({ secretSource });
+      await turn();
+      await startTab(leader);
 
-  it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
+      const started = follower.facade
+        .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
+        .then(
+          () => null,
+          (failure: unknown) => failure
+        );
+      await leader.dispose();
+      for (let i = 0; i < 20 && settle === undefined; i += 1) await turn();
+      expect(settle).toBeDefined();
+      // Past the deadline a parked start has outside a promotion.
+      await vi.advanceTimersByTimeAsync(YIELD_TIMEOUT_MS + 1_000);
+      return { follower, workers, started, settle };
+    }
+
+    it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
       const { follower, workers, started, settle } = await parkDuringPromotion();
       settle.resolve(fakeLoginSecret([5]));
 
@@ -860,14 +866,9 @@ describe('EngineClient leadership + transport swap', () => {
       expect(coldStart?.identityToken).toBe('identity.jwt');
 
       await follower.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    });
 
-  it('refuses a start that parked during a promotion whose export failed', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
+    it('refuses a start that parked during a promotion whose export failed', async () => {
       const { follower, started, settle } = await parkDuringPromotion();
       settle.reject(new Error('no session to export'));
 
@@ -875,21 +876,14 @@ describe('EngineClient leadership + transport swap', () => {
       expect(follower.currentRole()).not.toBe('leader');
 
       await follower.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    });
 
-  it('refuses a start that parked during a promotion when the client closes', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
+    it('refuses a start that parked during a promotion when the client closes', async () => {
       const { follower, started } = await parkDuringPromotion();
       await follower.dispose();
 
       expect(await started).toMatchObject({ message: 'engine client closed' });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it('hosts again after standing down, once the tab it stepped aside for goes', async () => {

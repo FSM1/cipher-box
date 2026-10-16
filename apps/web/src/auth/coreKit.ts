@@ -178,15 +178,12 @@ class Web3AuthSession implements WebCoreKitSession {
   private readonly owedRemovals = new Set<string>();
 
   private coreKit: Web3AuthMPCCoreKit;
-  /** The store as `coreKit` sees it; revoked with an abandoned instance. */
-  private storeView: RevocableStoreView;
-
   /**
-   * Set when a key assignment ran out of time. The SDK cannot cancel it, and a
-   * second login on that instance shares its state, so the next login builds a
-   * fresh one.
+   * The store as `coreKit` sees it. Revoked when a key assignment ran out of
+   * time: the SDK cannot cancel it, and a second login on that instance shares
+   * its state, so the next login builds a fresh one.
    */
-  private abandoned = false;
+  private storeView: RevocableStoreView;
 
   constructor(
     private readonly build: (storage: CoreKitStorage) => Web3AuthMPCCoreKit,
@@ -216,13 +213,12 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   async login(credential: IdentityCredential): Promise<void> {
-    if (this.abandoned) {
+    if (this.storeView.revoked) {
       const view = this.store.revocableView();
       const fresh = this.build(view.store);
       await fresh.init();
       this.storeView = view;
       this.coreKit = fresh;
-      this.abandoned = false;
     }
     await this.assignKey(credential);
     this.signedInDisplay = credential.display;
@@ -254,7 +250,6 @@ class Web3AuthSession implements WebCoreKitSession {
         // The call can still complete and write its session, after a sign-out
         // or over the session of the next login.
         this.storeView.revoke();
-        this.abandoned = true;
         reject(new KeyAssignmentTimedOutError());
       }, KEY_ASSIGNMENT_TIMEOUT_MS);
     });
@@ -661,11 +656,12 @@ export function createCoreKitSession(
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
+  const web3AuthNetwork =
+    environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET;
   const build = (storage: CoreKitStorage) =>
     new Web3AuthMPCCoreKit({
       web3AuthClientId,
-      web3AuthNetwork:
-        environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
+      web3AuthNetwork,
       storage,
       sessionTime: SESSION_SECONDS,
       manualSync: true,

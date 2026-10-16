@@ -15,6 +15,7 @@
  */
 
 import type { LockManagerLike } from '@cipherbox/client';
+import type { IAsyncStorage } from '@web3auth/mpc-core-kit';
 import { indexedDbRecord, type KeyRecordLocation, type KeyRecordStore } from './keyStore';
 
 /** The Core Kit wrapping key's own database, distinct from every other custody store. */
@@ -38,15 +39,12 @@ const ENVELOPE_VERSION = 1;
 export type WrappingKeyStore = KeyRecordStore<CryptoKey>;
 
 /** The storage surface the Core Kit SDK drives. */
-export interface CoreKitStorage {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-  removeItem(key: string): Promise<void>;
-}
+export type CoreKitStorage = IAsyncStorage & Pick<SealedStore, 'removeItem'>;
 
 /** A view of the sealed store that its owner can cut off. */
 export interface RevocableStoreView {
   store: CoreKitStorage;
+  readonly revoked: boolean;
   revoke(): void;
 }
 
@@ -109,13 +107,16 @@ export class SealedStore {
           if (live) this.storage.removeItem(key);
         },
       },
+      get revoked() {
+        return !live;
+      },
       revoke: () => {
         live = false;
       },
     };
   }
 
-  /** `live` is read again after the encrypt, at the one step that commits. */
+  /** `live` is read after the encrypt, at the one step that commits. */
   private async seal(key: string, value: string, live: () => boolean): Promise<void> {
     const wrapping = await this.wrappingKey();
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
