@@ -2075,11 +2075,9 @@ mod tests {
         /// and every scope-keyed seam answers only under it — as the production
         /// net's parked scope source does (`crate::net::rotation`).
         repointed_parent: Option<Vec<u8>>,
-        /// The parent root commits its index with one entry twice, so the
-        /// pass repairs it to canonical order.
-        duplicated_index: bool,
-        /// What the pass's index repair of the parent root returns.
-        index_repair_result: Result<(), RotationPublishError>,
+        /// When set, the parent root commits its index with one entry twice, so
+        /// the pass repairs it, and the repair answers this refusal.
+        index_repair_fault: Option<RotationPublishError>,
         /// The history links the parent plan carries.
         parent_links: Vec<SignedSealed>,
     }
@@ -2115,17 +2113,21 @@ mod tests {
                 reseal_stall: Rc::new(RefCell::new(None)),
                 floored: Rc::new(RefCell::new(BTreeSet::new())),
                 repointed_parent: None,
-                duplicated_index: false,
-                index_repair_result: Ok(()),
+                index_repair_fault: None,
                 parent_links: Vec::new(),
             }
         }
 
         /// Have the parent's index carry a duplicate entry, and have its repair
-        /// answer `result`.
-        fn repairing_index(mut self, result: Result<(), RotationPublishError>) -> Self {
-            self.duplicated_index = true;
-            self.index_repair_result = result;
+        /// refuse with `error`.
+        fn failing_index_repair(mut self, error: RotationPublishError) -> Self {
+            self.index_repair_fault = Some(error);
+            self
+        }
+
+        /// Have the parent plan carry `links`.
+        fn carrying_parent_links(mut self, links: Vec<SignedSealed>) -> Self {
+            self.parent_links = links;
             self
         }
 
@@ -2322,7 +2324,7 @@ mod tests {
                 ipns_name: interior_name(*node_id),
             }));
             let mut direct_child_scope_index = self.descendants.clone();
-            if self.duplicated_index {
+            if self.index_repair_fault.is_some() {
                 direct_child_scope_index.extend(self.descendants.first().cloned());
             }
             Ok(SweptScope {
@@ -2452,7 +2454,7 @@ mod tests {
             _scope: &ChildScopeRef,
             _index: &[ChildScopeRef],
         ) -> Result<(), RotationPublishError> {
-            self.index_repair_result.clone()
+            self.index_repair_fault.clone().map_or(Ok(()), Err)
         }
     }
 
@@ -3647,7 +3649,7 @@ mod tests {
     fn a_parent_too_large_to_re_seal_refuses_the_grant_before_any_publish() {
         let net = FakeNet::new(Ok(()))
             .with_descendant_scope(descendant_ref())
-            .repairing_index(Err(RotationPublishError::NotResealable));
+            .failing_index_repair(RotationPublishError::NotResealable);
         let (outcome, published, hub) = run(7, &[descendant_ref()], net, &[]);
 
         match outcome {
@@ -3666,7 +3668,7 @@ mod tests {
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, PARENT_EPOCH)
             .with_boundary(INTERIOR_NODE)
-            .repairing_index(Err(RotationPublishError::NotResealable));
+            .failing_index_repair(RotationPublishError::NotResealable);
         let (outcome, published, _hub) = run(7, &[], net, &[]);
 
         assert_eq!(
@@ -3688,10 +3690,7 @@ mod tests {
             };
             cipherbox_core::seal::MAX_HISTORY_LINKS + 1
         ];
-        let net = FakeNet {
-            parent_links: links,
-            ..FakeNet::new(Ok(()))
-        };
+        let net = FakeNet::new(Ok(())).carrying_parent_links(links);
         let (outcome, published, hub) = run(7, &[], net, &[]);
 
         assert_eq!(outcome.expect_err("refused").check(), "parent-mint-failed");

@@ -374,8 +374,7 @@ pub struct SweepOutcome {
     /// The index repair lost the CAS; the next pass re-derives it.
     pub index_repair_lost_race: bool,
     /// The index repair re-seals the scope root over its grant section budget
-    /// ([`RotationPublishError::NotResealable`]). The root keeps its index, and
-    /// the pass still converges the interior nodes.
+    /// ([`RotationPublishError::NotResealable`]), so the root keeps its index.
     pub index_repair_not_resealable: bool,
 }
 
