@@ -21,6 +21,7 @@ unsafe extern "C" {
     // *_compat25 functions were introduced in FUSE 2.6 when function signatures changed.
     // Therefore, the minimum version requirement for *_compat25 functions is libfuse-2.6.0.
 
+    #[cfg(not(fuser_fuse_t))]
     pub fn fuse_mount_compat25(mountpoint: *const c_char, args: *const fuse_args) -> c_int;
     #[cfg(not(any(
         target_os = "macos",
@@ -30,4 +31,20 @@ unsafe extern "C" {
         target_os = "netbsd"
     )))]
     pub fn fuse_unmount_compat22(mountpoint: *const c_char);
+}
+
+/// The mount-status callback of FUSE-T's `fuse_kern_mount`: the context, the
+/// status, and the monitor socket.
+#[cfg(fuser_fuse_t)]
+pub type FuseMountCallback = unsafe extern "C" fn(*mut libc::c_void, c_int, c_int);
+
+#[cfg(fuser_fuse_t)]
+unsafe extern "C" {
+    /// FUSE-T's mount: `fuse_mount_compat25` is this with no callback.
+    pub fn fuse_kern_mount(
+        mountpoint: *const c_char,
+        args: *const fuse_args,
+        callback: Option<FuseMountCallback>,
+        context: *mut libc::c_void,
+    ) -> c_int;
 }

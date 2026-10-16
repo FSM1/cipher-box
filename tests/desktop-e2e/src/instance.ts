@@ -15,6 +15,8 @@ import {
   quit,
   readEndpoint,
   refresh as sendRefresh,
+  signIn as sendSignIn,
+  signOut as sendSignOut,
   status as readStatus,
   statusOrPending,
   type ControlEndpoint,
@@ -86,14 +88,36 @@ export class Instance {
     return sendRefresh(this.endpoint, this.budget.refreshMs);
   }
 
-  /**
-   * Takes the mount away without an orderly quit.
-   *
-   * A kernel call on a mount carries no timeout, so a mount that stopped
-   * answering holds its caller — and with it one of the few filesystem threads
-   * Node has. Removing the mount is what returns those calls, so a scenario
-   * that ran out of time does this before it does anything else.
-   */
+  /** Signs out and leaves the shell running. */
+  signOut(): Promise<void> {
+    return sendSignOut(this.endpoint, this.budget.shutdownMs);
+  }
+
+  /** Signs in again in the same process, and returns once the mount is live. */
+  async signIn(): Promise<void> {
+    await sendSignIn(this.endpoint, this.budget.mountMs);
+    const mount = await poll(
+      async () => (await this.status()).mount,
+      (opened) => opened.state !== 'opening',
+      {
+        what: `${this.name}: the mount to open after the sign-in`,
+        timeoutMs: this.budget.mountMs,
+        intervalMs: this.budget.intervalMs,
+      }
+    );
+    if (mount.state === 'refused') {
+      throw new Error(`${this.name} refused to mount after the sign-in: ${mount.reason}`);
+    }
+  }
+
+  /** The processes this shell started that the process table still lists. */
+  async children(): Promise<ChildProcessRow[]> {
+    const pid = this.shell.child.pid;
+    if (process.platform === 'win32' || pid === undefined) return [];
+    const { stdout } = await run('ps', ['-A', '-o', 'pid=,ppid=,stat=,comm=']);
+    return childrenOf(stdout, pid);
+  }
+
   /** Whether a bound or a stalled read took this instance away. */
   get abandoned(): boolean {
     return this.wasAbandoned;
@@ -257,6 +281,25 @@ async function tailOf(path: string): Promise<string> {
   } catch {
     return '(no log)';
   }
+}
+
+/** One row of the process table. */
+export interface ChildProcessRow {
+  pid: number;
+  /** Ended, and not yet reaped by its parent. */
+  zombie: boolean;
+  command: string;
+}
+
+/** The rows of `ps -o pid=,ppid=,stat=,comm=` output whose parent is `parent`. */
+export function childrenOf(psOutput: string, parent: number): ChildProcessRow[] {
+  const rows: ChildProcessRow[] = [];
+  for (const line of psOutput.split('\n')) {
+    const [pid, ppid, stat, ...command] = line.trim().split(/\s+/);
+    if (stat === undefined || Number(ppid) !== parent) continue;
+    rows.push({ pid: Number(pid), zombie: stat.startsWith('Z'), command: command.join(' ') });
+  }
+  return rows;
 }
 
 /** The tool a member unmounts with from outside the app, where one exists. */

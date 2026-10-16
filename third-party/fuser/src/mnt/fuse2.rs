@@ -21,17 +21,38 @@ fn ensure_last_os_error() -> io::Error {
 #[derive(Debug)]
 pub struct Mount {
     mountpoint: CString,
+    #[cfg(fuser_fuse_t)]
+    server: super::fuse_t::Server,
 }
 impl Mount {
     pub fn new(mountpoint: &Path, options: &[MountOption]) -> io::Result<(Arc<File>, Mount)> {
         let mountpoint = CString::new(mountpoint.as_os_str().as_bytes()).unwrap();
         with_fuse_args(options, |args| {
+            #[cfg(fuser_fuse_t)]
+            let server = super::fuse_t::Server::new();
+            #[cfg(fuser_fuse_t)]
+            let fd = unsafe {
+                fuse_kern_mount(
+                    mountpoint.as_ptr(),
+                    args,
+                    Some(super::fuse_t::delivered),
+                    server.context(),
+                )
+            };
+            #[cfg(not(fuser_fuse_t))]
             let fd = unsafe { fuse_mount_compat25(mountpoint.as_ptr(), args) };
             if fd < 0 {
                 Err(ensure_last_os_error())
             } else {
                 let file = unsafe { File::from_raw_fd(fd) };
-                Ok((Arc::new(file), Mount { mountpoint }))
+                Ok((
+                    Arc::new(file),
+                    Mount {
+                        mountpoint,
+                        #[cfg(fuser_fuse_t)]
+                        server,
+                    },
+                ))
             }
         })
     }
@@ -64,5 +85,8 @@ impl Drop for Mount {
             }
             warn!("umount failed with {err:?}");
         }
+        // CipherBox patch: neither unmount above ends the FUSE-T server.
+        #[cfg(fuser_fuse_t)]
+        self.server.end();
     }
 }

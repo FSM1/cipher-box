@@ -3,7 +3,7 @@
 //!
 //! A `--dev-key-stdin` on the command line starts the session with no webview
 //! login and no OS keyring, and publishes a loopback control endpoint the suite
-//! asks for status, refresh, and quit over.
+//! asks for status, refresh, sign-out, sign-in, and quit over.
 
 mod cli;
 mod control;
@@ -55,7 +55,12 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
         .port();
     control::publish(&control_file, port, &token)?;
 
-    let endpoint = Arc::new(control::Control::over(app, token, control_file));
+    let endpoint = Arc::new(control::Control::over(
+        app,
+        token,
+        control_file,
+        dev_key.clone(),
+    ));
     tauri::async_runtime::spawn(control::serve(listener, endpoint));
 
     announce_paths(app);

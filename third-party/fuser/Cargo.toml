@@ -36,6 +36,14 @@
 # its mount floor on the string the mount program receives, and `Session::new`
 # runs no option check of its own.
 #
+# It also carries the FUSE-T server patch: an unmount does not end the
+# `go-nfsv4` server FUSE-T forks for each mount, so every sign-out and every
+# external unmount left one running. Against FUSE-T (`fuser_fuse_t`, set by the
+# build script) `Mount::new` calls `fuse_kern_mount` with a status callback
+# that hands over the server's monitor socket, and `Mount::drop` shuts that
+# socket down and reaps the server (`src/mnt/fuse_t.rs`, and the tests beside
+# it).
+#
 # A workspace member, so it resolves through the one root `Cargo.lock` the
 # product links — a second lockfile would drift and the socket-read patch's
 # regression test would then run against a graph nothing ships. The general
