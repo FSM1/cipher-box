@@ -73,6 +73,17 @@ fn data_dir(value: Option<OsString>) -> Option<PathBuf> {
     value.filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
+/// The environment variable that mounts under FUSE-T's shared default name,
+/// for the comparison leg of the mount-cadence probe.
+#[cfg(target_os = "macos")]
+const SHARED_MOUNT_NAME: &str = "CIPHERBOX_E2E_SHARED_MOUNT_NAME";
+
+/// Whether the environment asks for FUSE-T's shared mount name.
+#[cfg(target_os = "macos")]
+pub fn shared_mount_name() -> bool {
+    std::env::var_os(SHARED_MOUNT_NAME).is_some_and(|value| value == "1")
+}
+
 /// The login secret standard input carries.
 pub fn dev_key_from_stdin() -> Result<Zeroizing<Vec<u8>>, String> {
     read_dev_key(unbuffered_stdin()?)

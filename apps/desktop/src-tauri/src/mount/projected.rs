@@ -299,8 +299,15 @@ async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalid
 /// Mount at `at`, naming the mount point in whatever refused it — the member's
 /// next move is to go and look at it.
 fn mount(at: &Path) -> Landing {
-    cipherbox_fuse::mount(at)
-        .map_err(|error| format!("{} could not be mounted: {error}", at.display()))
+    #[cfg(all(feature = "e2e-hook", target_os = "macos"))]
+    let mounted = if crate::e2e::shared_mount_name() {
+        cipherbox_fuse::mount_under_the_shared_name(at)
+    } else {
+        cipherbox_fuse::mount(at)
+    };
+    #[cfg(not(all(feature = "e2e-hook", target_os = "macos")))]
+    let mounted = cipherbox_fuse::mount(at);
+    mounted.map_err(|error| format!("{} could not be mounted: {error}", at.display()))
 }
 
 #[cfg(test)]

@@ -134,6 +134,18 @@ File System Proxy, Copyright (C) Bill Zissimopoulos"** and a pointer to
 `docs/ATTRIBUTION.md`, and no proprietary software is bundled alongside WinFsp
 (ADR 0051).
 
+**FUSE-T mount name.** Each macOS mount gives FUSE-T a `location` of its own,
+`CipherBox-<8 hex>` from OS entropy. FUSE-T names the mount's Bonjour service
+and host after it, and the SMB client resolves the mount through that name.
+Observed: under FUSE-T's shared default name, CI refusals started 122 to 127 s
+after a runner's first mount, and each one failed after 30 s. The shared-name
+probe fails at about +120 s, and the probe with a name per mount does not fail.
+The `fuse-t.local` address record has a 120 s TTL, and FUSE-T answers no direct
+query for that address. Inferred: the refusal occurs when the shared name's
+cached address record expires. Stale-mount recovery takes this name, or
+the legacy `fuse-t` name of the release before it, as the proof that a mount is
+CipherBox's. The mount-cadence probe (testing.md) covers it.
+
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
 regression). The hardware verification gates from FSM1/cipher-box-next#32 — SMB invalidation
