@@ -55,6 +55,13 @@ const UNENDED: &str = "the session did not answer; restart CipherBox and sign ou
 /// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
 const MAX_WARNINGS: usize = 8;
 
+/// The kind of the stranded-scope notice. It is minor: past the bound it
+/// evicts only another minor warning, so it never pushes out a trust warning.
+const SCOPE_ROOT_STRANDED: &str = "scopeRootStranded";
+
+/// Shown when a peer wrote the binned folder with no name.
+const UNNAMED_FOLDER: &str = "a folder";
+
 /// What the shell renders of a live vault. Key-free by construction: counts, a
 /// rung, and the engine's own key-material-free classifications — never a name
 /// the engine holds keys for.
@@ -183,8 +190,12 @@ impl Warnings {
             },
             // The binned folder's name is what the member restores.
             Event::ScopeRootStranded { folder_name, .. } => VaultWarning {
-                kind: "scopeRootStranded",
-                detail: Some(folder_name.clone()),
+                kind: SCOPE_ROOT_STRANDED,
+                detail: Some(if folder_name.is_empty() {
+                    UNNAMED_FOLDER.to_owned()
+                } else {
+                    folder_name.clone()
+                }),
             },
             _ => return,
         };
@@ -217,7 +228,16 @@ impl Warnings {
             return;
         }
         if self.0.len() == MAX_WARNINGS {
-            self.0.pop_front();
+            let minor = |w: &VaultWarning| w.kind == SCOPE_ROOT_STRANDED;
+            match self.0.iter().position(minor) {
+                Some(oldest) => {
+                    self.0.remove(oldest);
+                }
+                None if minor(&warning) => return,
+                None => {
+                    self.0.pop_front();
+                }
+            }
         }
         self.0.push_back(warning);
     }
@@ -1281,6 +1301,64 @@ mod tests {
 
     /// A condition that keeps firing must not push the others out of a bounded
     /// list — the oldest *distinct* warning is the one that goes.
+    fn stranded(folder: &str) -> Event {
+        Event::ScopeRootStranded {
+            scope_root: NodeId([1; 16]),
+            binned_folder: NodeId([2; 16]),
+            folder_name: folder.to_owned(),
+        }
+    }
+
+    /// Stranded warnings past the bound evict each other, never a trust
+    /// warning, and a list full of trust warnings drops a new stranded one.
+    #[test]
+    fn a_stranded_warning_never_evicts_a_trust_warning() {
+        let abuse = Event::AttributableAbuse {
+            description: "gate rejection".to_owned(),
+        };
+
+        let mut warnings = Warnings::default();
+        warnings.record(&abuse);
+        for index in 0..MAX_WARNINGS * 2 {
+            warnings.record(&stranded(&format!("folder {index}")));
+        }
+        let retained = warnings.list();
+        assert_eq!(retained.len(), MAX_WARNINGS);
+        assert_eq!(retained[0].kind, "attributableAbuse");
+        assert_eq!(
+            retained.last().and_then(|w| w.detail.clone()),
+            Some(format!("folder {}", MAX_WARNINGS * 2 - 1)),
+        );
+
+        // An abuse warning carries no detail, so distinct ones dedupe; renewals
+        // fill the rest of the list.
+        let mut full = Warnings::default();
+        full.record(&abuse);
+        for index in 1..MAX_WARNINGS {
+            full.record(&Event::RenewalFailed {
+                routing_key: "a-routing-key".to_owned(),
+                detail: format!("refusal {index}"),
+            });
+        }
+        full.record(&stranded("plain"));
+        let kept = full.list();
+        assert_eq!(kept.len(), MAX_WARNINGS);
+        assert_eq!(kept[0].kind, "attributableAbuse");
+        assert!(
+            kept.iter().all(|w| w.kind != "scopeRootStranded"),
+            "the new stranded warning is the one dropped"
+        );
+    }
+
+    /// A peer may write the folder with no name; the warning still names one.
+    #[test]
+    fn an_unnamed_binned_folder_reads_as_a_folder() {
+        assert_eq!(
+            warned(&[stranded("")])[0].detail.as_deref(),
+            Some("a folder")
+        );
+    }
+
     #[test]
     fn a_repeating_condition_neither_accumulates_nor_evicts() {
         let renewal = |detail: &str| Event::RenewalFailed {

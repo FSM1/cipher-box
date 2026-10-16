@@ -6056,7 +6056,7 @@ where
                 continue;
             };
             if standing.is_some() {
-                self.report_stranded(&unlinked, &stranded);
+                self.report_stranded(scope, &unlinked, &stranded);
                 continue;
             }
             index.entries.push(BinEntry::new(
@@ -6082,7 +6082,7 @@ where
             unfinished.extend(added.into_iter().map(|(unlinked, _)| unlinked));
         } else {
             for (unlinked, stranded) in &added {
-                self.report_stranded(unlinked, stranded);
+                self.report_stranded(scope, unlinked, stranded);
             }
         }
         self.return_captures(unfinished);
@@ -6099,8 +6099,21 @@ where
 
     /// Report each root in `stranded` as reachable through `unlinked`'s bin
     /// entry. Sent only once that entry stands.
-    fn report_stranded(&self, unlinked: &UnlinkedChild, stranded: &BTreeSet<NodeId>) {
-        for scope_root in stranded {
+    ///
+    /// A child ref is wire data that a writer can plant, so a root the live tree
+    /// still reaches is no strand: the vault root, the pass's own root, and a
+    /// root the base still links.
+    fn report_stranded(
+        &self,
+        scope: &DrainScope<'_>,
+        unlinked: &UnlinkedChild,
+        stranded: &BTreeSet<NodeId>,
+    ) {
+        let base = self.cells.base.borrow();
+        let reachable = |root: NodeId| {
+            root == base.root || root == scope.source.root || !base.links_to(root).is_empty()
+        };
+        for scope_root in stranded.iter().filter(|root| !reachable(**root)) {
             let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {
                 scope_root: *scope_root,
                 binned_folder: unlinked.node,

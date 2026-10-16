@@ -138,6 +138,24 @@ describe('engine warnings', () => {
     expect(notice.textContent).toContain('restore "plain" from the bin');
   });
 
+  it('names an unnamed binned folder as a folder', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'scopeRootStranded',
+        scopeRoot: new Uint8Array(16).fill(4),
+        binnedFolder: new Uint8Array(16).fill(5),
+        folderName: '',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('removed a folder that holds a shared folder');
+    expect(notice.textContent).not.toContain('""');
+  });
+
   it('gives one notice for a binned folder that holds many shared folders', async () => {
     const engine = fakeEngine();
     draw(engine.client);

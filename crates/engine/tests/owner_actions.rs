@@ -5593,6 +5593,138 @@ fn a_stranded_notice_waits_for_the_bin_entry() {
     );
 }
 
+/// Another writer plants a ref to `planted` in `plain`, then unlinks `plain`.
+/// Returns the stranded notices the owner saw and whether `plain` binned.
+fn capture_with_a_planted_ref(
+    planted: fn(&GrantScenario) -> NodeId,
+) -> (Vec<(NodeId, NodeId, String)>, usize, bool) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let planted = planted(&fx);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.push(named_child(planted, "planted", &write_name(planted))),
+    );
+    events_so_far(&mut fx._events);
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let seen = events_so_far(&mut fx._events);
+    let binned = published_bin_entries(&fx)
+        .iter()
+        .any(|entry| entry.node_id == plain.0);
+    (stranded_notices(&seen), abuse_events_in(&seen), binned)
+}
+
+/// A planted ref to a granted folder the vault still links elsewhere is no
+/// strand: the live tree still reaches the folder.
+#[test]
+fn a_planted_ref_to_a_linked_granted_folder_gives_no_notice() {
+    let (notices, abuse, binned) = capture_with_a_planted_ref(|fx| fx.folder);
+    assert!(binned, "the unlinked folder bins");
+    assert_eq!(abuse, 0, "no record is faulty");
+    assert!(notices.is_empty(), "the granted folder is still linked");
+}
+
+/// A planted ref to the vault root, which is also the pass's own scope root,
+/// is no strand.
+#[test]
+fn a_planted_ref_to_the_vault_root_gives_no_notice() {
+    let (notices, abuse, binned) = capture_with_a_planted_ref(|_| ROOT);
+    assert!(binned, "the unlinked folder bins");
+    assert_eq!(abuse, 0, "no record is faulty");
+    assert!(notices.is_empty(), "the vault root is no strand");
+}
+
+/// A bin entry that landed with no endpoint ack stands on the next pass, and
+/// that pass tells the owner once.
+#[test]
+fn a_stranded_notice_goes_out_from_a_standing_entry() {
+    let mut fx = GrantScenario::new();
+    let (outer, plain) = granted_folder_under_plain(&mut fx);
+    let bin = BinIndexKeys::derive(&SECRET);
+    fx.world.record_store.fail_put_for(bin.name().as_str());
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.world.record_store.heal_put_for(bin.name().as_str());
+    let endpoints = fx.world.record_store.endpoints();
+    for endpoint in &endpoints {
+        fx.world.record_store.land_puts_unacked_at(endpoint);
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the entry lands with no ack"
+    );
+    assert!(
+        stranded_notices(&events_so_far(&mut fx._events)).is_empty(),
+        "no notice on a publish with no ack"
+    );
+
+    for endpoint in &endpoints {
+        fx.world.record_store.heal_put_endpoint(endpoint);
+    }
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        stranded_notices(&events_so_far(&mut fx._events)),
+        [(fx.folder, plain, "plain".to_owned())],
+        "the standing entry tells once"
+    );
+}
+
+/// Each scope root in a binned folder gets its own event.
+#[test]
+fn a_binned_folder_with_two_granted_folders_reports_each() {
+    let mut fx = GrantScenario::new();
+    let (outer, plain) = granted_folder_under_plain(&mut fx);
+    let second =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "second");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: second,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    events_so_far(&mut fx._events);
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let mut notices = stranded_notices(&events_so_far(&mut fx._events));
+    notices.sort();
+    let mut expected = vec![
+        (fx.folder, plain, "plain".to_owned()),
+        (second, plain, "plain".to_owned()),
+    ];
+    expected.sort();
+    assert_eq!(notices, expected, "one event for each granted folder");
+}
+
 #[test]
 fn a_dual_link_tie_moves_with_a_grant_only_under_the_lower_parent_id() {
     assert_grant_and_delete_follow_the_link_rank(1);

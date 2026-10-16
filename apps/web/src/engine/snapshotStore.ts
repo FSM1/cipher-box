@@ -130,7 +130,9 @@ function nodeDropped(folder: string, cause: DropCause): string {
 
 /** Owner capture binned a folder that holds a shared folder; a restore of the binned folder reaches it again. */
 const scopeRootStrandedText = (folderName: string): string =>
-  `another writer removed the folder "${folderName}", which holds a shared folder - restore "${folderName}" from the bin`;
+  folderName === ''
+    ? 'another writer removed a folder that holds a shared folder - restore that folder from the bin'
+    : `another writer removed the folder "${folderName}", which holds a shared folder - restore "${folderName}" from the bin`;
 
 const IDLE: SnapshotState = { view: null, error: null };
 

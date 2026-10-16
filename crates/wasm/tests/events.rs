@@ -178,6 +178,22 @@ fn a_sweep_convergence_crosses_its_times_as_bigints_or_null() {
     );
 }
 
+/// A stranded scope root crosses each node id as bytes and the folder name as
+/// text, each under its own field.
+#[wasm_bindgen_test]
+fn a_stranded_scope_root_crosses_each_field() {
+    let js = crossed(Event::ScopeRootStranded {
+        scope_root: NodeId([3; 16]),
+        binned_folder: NodeId([4; 16]),
+        folder_name: "plain".to_owned(),
+    });
+    assert_eq!(field(&js, "kind"), JsValue::from_str("scopeRootStranded"));
+    assert_eq!(keys(&js).len(), 4);
+    assert_eq!(bytes(field(&js, "scopeRoot")), [3; 16]);
+    assert_eq!(bytes(field(&js, "binnedFolder")), [4; 16]);
+    assert_eq!(field(&js, "folderName"), JsValue::from_str("plain"));
+}
+
 /// Hosts switch on `kind`, so each variant crosses as its stable name, and a
 /// variant with no payload carries nothing else.
 #[wasm_bindgen_test]
@@ -362,9 +378,9 @@ fn each_event_kind_crosses_as_its_stable_name() {
         ),
         (
             Event::ScopeRootStranded {
-                scope_root: node,
-                binned_folder: node,
-                folder_name: String::new(),
+                scope_root: NodeId([3; 16]),
+                binned_folder: NodeId([4; 16]),
+                folder_name: "plain".to_owned(),
             },
             "scopeRootStranded",
             4,
