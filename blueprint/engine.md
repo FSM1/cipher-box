@@ -855,7 +855,11 @@ delete does (ADR 0043).
   the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
   target and reason sent to the host. Before any other queued delete
   publishes, the drain must prove the target's plane from its current record,
-  and then the plane of each node below it, under the same rules. Only a file
+  and then the plane of each node below it, under the same rules. The proof
+  reads a bounded number of records on each tick, and the session keeps it in
+  memory by op. A proof that spans ticks reads each node again before the
+  first publish: a node with another record starts the proof again, and a
+  grant section or a known scope root refuses the delete. Only a file
   whose own body this device has read skips the proof, as a ref kind is
   authored by any writer of the scope. A node every endpoint calls vacant, or
   one at a name the scope's write seed does not derive, has no proof to wait
@@ -863,13 +867,13 @@ delete does (ADR 0043).
   A missing index entry does not prove that the target is a plain folder. A
   target record with a grant section dead-letters the same way. A plain record
   that arrives while an endpoint failed is not a proof, because that endpoint
-  can withhold the grant. If the plane is unavailable, the delete holds the
-  queue head without a charge, as a reported hold that names the target. The
-  queue stays strict FIFO: the ops before the delete publish, and every op
-  after it waits, also an op that does not depend on it. The hold clears when
-  a pass proves the plane. A dead-lettered delete publishes nothing and raises
-  no trust violation. A record that fails the adoption gate still raises a
-  trust violation.
+  can withhold the grant. If the plane is unavailable or the proof is not
+  complete, the delete holds the queue head without a charge, as a reported
+  hold that names the target. The queue stays strict FIFO: the ops before the
+  delete publish, and every op after it waits, also an op that does not
+  depend on it. The hold clears when a pass proves the plane. A dead-lettered
+  delete publishes nothing and raises no trust violation. A record that fails
+  the adoption gate still raises a trust violation.
 - **A node the base links more than once unlinks from every one of them.** The
   delete removes the child ref from every folder the base links the node under
   and republishes each under its own plane, under one bin entry whose

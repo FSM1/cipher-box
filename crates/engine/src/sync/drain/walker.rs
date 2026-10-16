@@ -29,17 +29,19 @@ pub(crate) struct TwoSweep<K> {
 }
 
 /// Why a walk's read gave no record.
-pub(super) enum ReadFault {
+pub(super) enum ReadFault<F> {
     /// Any fault but a refusal, such as no answer: the read may land on a
     /// later tick.
     Unanswered,
     /// A refused record, or one served tied with other bytes at its sequence:
     /// what the walk read so far proves nothing.
     Untrusted,
+    /// A verdict that ends the walk.
+    Fatal(F),
 }
 
 /// Where one step left a walk.
-pub(super) enum Swept<E> {
+pub(super) enum Swept<S, F> {
     /// Every node read, and read again to the same record unless the policy
     /// settles on the first sweep.
     Complete,
@@ -47,9 +49,9 @@ pub(super) enum Swept<E> {
     Paused,
     /// A node read to another record on the second sweep.
     Moved,
-    Fault(ReadFault),
+    Fault(ReadFault<F>),
     /// The policy's visit ended the walk.
-    Stopped(E),
+    Stopped(S),
 }
 
 /// What one walk does that another does not.
@@ -109,11 +111,11 @@ impl<K: Clone> TwoSweep<K> {
 
     /// Spend the policy's budget on the walk: the first sweep, then the
     /// second, through `read`, which answers the node's record mark.
-    pub(super) async fn step<P: SweepPolicy<K>>(
+    pub(super) async fn step<P: SweepPolicy<K>, F>(
         &mut self,
         policy: &mut P,
-        read: impl AsyncFn(&P, &K, bool) -> Result<(RecordMark, P::Answer), ReadFault>,
-    ) -> Swept<P::Stop> {
+        read: impl AsyncFn(&P, &K, bool) -> Result<(RecordMark, P::Answer), ReadFault<F>>,
+    ) -> Swept<P::Stop, F> {
         loop {
             if self.pending.is_empty()
                 && (policy.settles_unconfirmed(self) || self.confirmed == self.read.len())
