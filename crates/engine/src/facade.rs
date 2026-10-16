@@ -3309,10 +3309,8 @@ impl EngineError {
             }
             // A parent root too large to re-seal is a size refusal on the share
             // site, not a verdict on the record.
-            CreateGrantError::ParentMint(ResealError::SectionNotResealable { .. }) => {
-                EngineError::UnsupportedTarget {
-                    check: "rot-reseal-section-not-resealable",
-                }
+            CreateGrantError::ParentMint(e @ ResealError::SectionNotResealable { .. }) => {
+                EngineError::UnsupportedTarget { check: e.check() }
             }
             terminal => EngineError::TrustViolation {
                 message: terminal.to_string(),

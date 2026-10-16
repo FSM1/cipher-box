@@ -68,6 +68,8 @@ const SHARE_REFUSALS: Record<string, string> = {
     'your whole vault has no write keys to rotate - rotate a shared folder inside it',
   'rotate-write-target-is-not-a-scope-root':
     'this folder is not shared, so it has no write keys of its own',
+  'rot-reseal-section-not-resealable':
+    'the shared folder that holds this one is too full to take a share inside it',
   'rotation-work-owed':
     'a change to who can open this folder is still finishing on this device - try again after it ends',
 };
