@@ -8,7 +8,11 @@ import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { UUID_RE } from '../../common/patterns';
-import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
+import {
+  DEFAULT_SWEEP_BATCH_SIZE,
+  MAX_SWEEP_BATCH_SIZE,
+  sweepExpiredRows,
+} from '../../common/sweep';
 import {
   IDENTITY_SUBJECT_KINDS,
   type IdentitySubjectKind,
@@ -194,26 +198,12 @@ export class IdentityTokenService implements OnModuleInit {
    * request. Returns the total deleted.
    */
   async sweepExpired(): Promise<number> {
-    const cutoff = new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS);
-    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
-  }
-
-  /**
-   * Bounded by `ctid`s under the cutoff, as Postgres has no `DELETE ... LIMIT`;
-   * `idx_spent_identity_tokens_expires_at` drives the scan. `SKIP LOCKED`
-   * yields rows that a sweep on another instance is already deleting.
-   */
-  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
-    const result = await this.dataSource
-      .createQueryBuilder()
-      .delete()
-      .from(SpentIdentityToken)
-      .where(
-        'ctid IN (SELECT ctid FROM spent_identity_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
-        { cutoff, limit: this.sweepBatchSize }
-      )
-      .execute();
-    return result.affected ?? 0;
+    return sweepExpiredRows(
+      this.dataSource.manager,
+      SpentIdentityToken,
+      new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS),
+      this.sweepBatchSize
+    );
   }
 
   /**

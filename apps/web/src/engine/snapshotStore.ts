@@ -10,8 +10,8 @@
  * that land in the gap.
  */
 
-import { EngineRequestError, toHex } from '@cipherbox/client';
-import type { EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
+import { EngineRequestError, OWED_GRANTS_DROPPED, toHex } from '@cipherbox/client';
+import type { DropCause, EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
 import { sameNode } from '../lib/nodeId';
 import { notificationStore } from '../stores/notification.store';
 
@@ -108,6 +108,25 @@ const WRITE_CUT_FAILED =
 /** The write cut met a record that failed verification; no retry clears that. */
 const WRITE_CUT_TRUST_STOP =
   'the write-access change of a shared folder stopped because a record in that folder failed verification - CipherBox will not finish it while that record stands';
+
+const SHARES_DROPPED =
+  'a change to who can open a shared folder removed every share of that folder - share the folder again with each person who must keep access';
+
+/** Why the name wave dropped a node from the moved tree (ADR 0065), in plain words. */
+const DROP_REASONS: Record<DropCause, string> = {
+  'record-refused': 'its record failed verification',
+  'epoch-unreachable': 'this device holds no key that opens its record',
+  'no-record': 'the network holds no record for it',
+  'endpoint-unavailable': 'no server answered for it',
+  'no-head-block': 'no server gave its data',
+  'below-sequence-floor': 'its record is older than one this device saw before',
+  'epoch-above-root': 'its record is newer than the shared folder that holds it',
+};
+
+function nodeDropped(folder: string, cause: DropCause): string {
+  const place = folder === '' ? 'a shared folder' : `the folder "${folder}"`;
+  return `an item left ${place} when its write access changed, because ${DROP_REASONS[cause]} - it and all its contents are no longer in the folder`;
+}
 
 const IDLE: SnapshotState = { view: null, error: null };
 
@@ -260,7 +279,11 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
         notificationStore.warn(`owed:${toHex(event.scopeRoot)}`, ROTATION_OWED);
       }
     } else if (event.kind === 'rotationWorkAbandoned') {
-      notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
+      if (event.detail === OWED_GRANTS_DROPPED) {
+        notificationStore.warn(`shares-dropped:${toHex(event.scopeRoot)}`, SHARES_DROPPED);
+      } else {
+        notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
+      }
     } else if (event.kind === 'sharePointerNotPosted') {
       notificationStore.warn(`unposted:${toHex(event.scopeRoot)}`, SHARE_POINTER_NOT_POSTED);
     } else if (event.kind === 'restoredFromServerCopy') {
@@ -297,6 +320,15 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       notificationStore.warn(
         `abuse:${event.description}`,
         `verification refused an update: ${event.description}`
+      );
+    } else if (event.kind === 'nodeDropped') {
+      // Only the listed folder can name where the item was, and only while it still lists it.
+      const folder = state.view?.children.some((child) => sameNode(child.id, event.nodeId))
+        ? state.view.folderName
+        : '';
+      notificationStore.warnMinor(
+        `dropped:${toHex(event.scopeRoot)}:${toHex(event.nodeId)}`,
+        nodeDropped(folder, event.cause)
       );
     }
   });

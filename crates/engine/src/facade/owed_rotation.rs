@@ -161,7 +161,7 @@ const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
 const OWED_CUT_REPLACED: &str = "owed-cut-replaced";
 /// A re-drive read the last copy of the root, so its cut removed every grant
 /// row and grant delivery (ADR 0068 D5).
-pub(super) const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy";
+pub const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy";
 /// The folder answers as no scope root, and nothing owner-signed proves the
 /// promotion never ran.
 const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
