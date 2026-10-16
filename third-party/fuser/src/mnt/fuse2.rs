@@ -78,8 +78,7 @@ impl Drop for Mount {
         // no indication of the error available to the caller. So we call unmount
         // directly, which is what osxfuse does anyway, since we already converted
         // to the real path when we first mounted.
-        let unmounted = super::libc_umount(&self.mountpoint);
-        if let Err(err) = &unmounted {
+        if let Err(err) = super::libc_umount(&self.mountpoint) {
             // Linux always returns EPERM for non-root users.  We have to let the
             // library go through the setuid-root "fusermount -u" to unmount.
             if err.kind() == PermissionDenied {
@@ -99,10 +98,7 @@ impl Drop for Mount {
         }
         // CipherBox patch: neither unmount above ends the FUSE-T server.
         #[cfg(fuser_fuse_t)]
-        self.server.release(
-            &self.listed_as,
-            unmounted.is_ok(),
-            super::fuse_t::mounted_at,
-        );
+        self.server
+            .release(&self.listed_as, super::fuse_t::mounted_at);
     }
 }

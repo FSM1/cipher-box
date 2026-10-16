@@ -58,9 +58,9 @@ the vendored crate, this time with a regression test), and dev-key mode as the
 headless e2e seam. New in v2, the vendored `fuser` also carries the FUSE-T
 server patch: an unmount does not end a mount's `go-nfsv4` server, which
 force-unmounts its mount point by path once its monitor socket closes. So
-`Mount::drop` closes that socket only when the path can carry no other mount,
-and a new mount waits until the last server at its path has exited
-(`src/mnt/fuse_t.rs` and its tests).
+`Mount::drop` closes that socket only when the mount table lists no mount at the
+path, even after an unmount that succeeded, and a new mount waits until the last
+server at its path has exited (`src/mnt/fuse_t.rs` and its tests).
 
 ## Component map
 

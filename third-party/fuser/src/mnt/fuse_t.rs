@@ -4,8 +4,9 @@
 //! the FUSE channel, and a monitor socket. An unmount, from inside the app or
 //! outside it, does not end the server. The server ends when its monitor socket
 //! reaches end-of-file, and it then force-unmounts the mount point by path.
-//! Thus a drop ends it only where that unmount can hit nothing but this mount,
-//! and no new mount lands at the path until it has exited.
+//! Thus a drop ends it only where the mount table lists no mount at the path,
+//! and a server the drop ends keeps its path until it exits: no new mount
+//! lands there first. A server the drop keeps runs until the app exits.
 //!
 //! `fuse_mount_compat25` keeps the monitor socket inside the library. The mount
 //! asks `fuse_kern_mount` for it instead: the library hands it to a callback
@@ -68,20 +69,19 @@ impl Server {
         }
     }
 
-    /// The mount at `at` dropped. Ends its server when the drop `unmounted`
-    /// the path, or when `mounted_there` proves no mount is left there. A
-    /// path that may carry another mount keeps the server.
+    /// The mount at `at` dropped. Ends its server only when `mounted_there`
+    /// proves no mount is left there: a successful unmount can still leave a
+    /// mount that the vault mount covered.
     pub(crate) fn release(
         &self,
         at: &CStr,
-        unmounted: bool,
         mounted_there: impl FnOnce(&CStr) -> io::Result<bool>,
     ) {
         let ended = std::mem::replace(&mut *locked(&self.0), State::Ended);
         let State::Held { monitor, server } = ended else {
             return;
         };
-        if unmounted || matches!(mounted_there(at), Ok(false)) {
+        if matches!(mounted_there(at), Ok(false)) {
             shut_down_and_reap(monitor, server, at);
         } else {
             let _ = monitor.into_raw_fd();
@@ -178,7 +178,17 @@ pub(crate) fn mounted_at(at: &CStr) -> io::Result<bool> {
     if read < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(table[..read as usize]
+    lists(&table, read as usize, at)
+}
+
+/// Whether the first `read` entries of `table` list a mount at `at`. A full
+/// table may have been cut short, so it answers nothing.
+#[cfg(any(fuser_fuse_t, all(test, target_os = "macos")))]
+fn lists(table: &[libc::statfs], read: usize, at: &CStr) -> io::Result<bool> {
+    if read >= table.len() {
+        return Err(io::Error::other("the mount table filled its buffer"));
+    }
+    Ok(table[..read]
         .iter()
         .any(|mounted| unsafe { CStr::from_ptr(mounted.f_mntonname.as_ptr()) } == at))
 }
@@ -219,7 +229,7 @@ fn reap(server: libc::pid_t, at: &CStr) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::FromRawFd;
+    use std::os::fd::{FromRawFd, RawFd};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
@@ -274,41 +284,47 @@ mod tests {
         Ok(false)
     }
 
-    #[test]
-    fn a_drop_that_unmounted_ends_the_server() {
-        let at = path("unmounted");
-        let (monitor, child) = spawn_server("/bin/cat", &[]);
-        let pid = pid_of(&child);
-        let server = Server::new();
-        server.deliver(monitor, pid);
-        assert!(running(pid), "the server runs while the mount does");
-
-        server.release(&at, true, |_| panic!("an unmount needs no table read"));
-        await_exits(&at, EXIT_WITHIN).expect("the server exits");
-        assert!(!running(pid), "the drop left the server running");
-    }
-
-    /// The watch saw the vault leave, and another mount took the path before
-    /// the drop: the unmount fails, and the server must not force-unmount it.
-    #[test]
-    fn a_foreign_mount_at_the_path_keeps_the_server() {
-        let at = path("foreign");
+    /// A server, delivered to a fresh [`Server`], whose monitor this test
+    /// closes itself.
+    fn held_server() -> (Server, libc::pid_t, RawFd) {
         let (monitor, child) = spawn_server("/bin/cat", &[]);
         let pid = pid_of(&child);
         let raw = monitor.as_raw_fd();
         let server = Server::new();
         server.deliver(monitor, pid);
+        (server, pid, raw)
+    }
 
-        server.release(&at, false, |_| Ok(true));
-        assert!(running(pid), "the server ended over another mount");
-        server.release(&at, false, |_| Err(io::Error::other("unread")));
-        assert!(running(pid), "an unread table ended the server");
-
+    /// Closes the monitor a kept server still holds, and waits for it to stop.
+    fn stop_kept(pid: libc::pid_t, raw: RawFd) {
         drop(unsafe { OwnedFd::from_raw_fd(raw) });
         assert!(
             within_a_second(|| !running(pid)),
             "the stand-in server did not stop"
         );
+    }
+
+    /// The path still carries a mount after the drop: one that took it after
+    /// the vault left, or one the vault mount covered, which a successful
+    /// unmount uncovers. The server must not force-unmount it.
+    #[test]
+    fn a_mount_left_at_the_path_keeps_the_server() {
+        let at = path("foreign");
+        let (server, pid, raw) = held_server();
+
+        server.release(&at, |_| Ok(true));
+        assert!(running(pid), "the server ended over another mount");
+        stop_kept(pid, raw);
+    }
+
+    #[test]
+    fn an_unread_mount_table_keeps_the_server() {
+        let at = path("unread");
+        let (server, pid, raw) = held_server();
+
+        server.release(&at, |_| Err(io::Error::other("unread")));
+        assert!(running(pid), "an unread table ended the server");
+        stop_kept(pid, raw);
     }
 
     #[test]
@@ -319,7 +335,9 @@ mod tests {
         let server = Server::new();
         server.deliver(monitor, pid);
 
-        server.release(&at, false, nothing_mounted);
+        assert!(running(pid), "the server runs while the mount does");
+
+        server.release(&at, nothing_mounted);
         await_exits(&at, EXIT_WITHIN).expect("the server exits");
         assert!(!running(pid), "the server outlived an empty mount point");
     }
@@ -328,19 +346,14 @@ mod tests {
     fn a_status_after_the_drop_leaves_the_server_alone() {
         let at = path("late");
         let server = Server::new();
-        server.release(&at, true, nothing_mounted);
+        server.release(&at, nothing_mounted);
 
         let (monitor, child) = spawn_server("/bin/cat", &[]);
         let pid = pid_of(&child);
         let raw = monitor.as_raw_fd();
         server.deliver(monitor, pid);
         assert!(running(pid), "the late status ended the server");
-
-        drop(unsafe { OwnedFd::from_raw_fd(raw) });
-        assert!(
-            within_a_second(|| !running(pid)),
-            "the stand-in server did not stop"
-        );
+        stop_kept(pid, raw);
     }
 
     /// A process forked after the mount holds a copy of the monitor socket.
@@ -353,7 +366,7 @@ mod tests {
         let server = Server::new();
         server.deliver(monitor, pid);
 
-        server.release(&at, true, nothing_mounted);
+        server.release(&at, nothing_mounted);
         await_exits(&at, EXIT_WITHIN).expect("the server exits");
         assert!(!running(pid), "the copy kept the server running");
         drop(copy);
@@ -369,7 +382,7 @@ mod tests {
         let server = Server::new();
         server.deliver(monitor, pid);
 
-        server.release(&at, true, nothing_mounted);
+        server.release(&at, nothing_mounted);
         let refused = await_exits(&at, Duration::from_millis(50)).expect_err("a live server");
         assert_eq!(refused.kind(), io::ErrorKind::ResourceBusy);
         await_exits(&path("elsewhere"), Duration::ZERO).expect("another path is free");
@@ -382,8 +395,8 @@ mod tests {
     fn a_mount_with_no_status_has_nothing_to_end() {
         let at = path("no-status");
         let server = Server::new();
-        server.release(&at, true, nothing_mounted);
-        server.release(&at, true, nothing_mounted);
+        server.release(&at, nothing_mounted);
+        server.release(&at, nothing_mounted);
         await_exits(&at, Duration::ZERO).expect("nothing exits");
     }
 
@@ -414,5 +427,45 @@ mod tests {
         let plain = CString::new(plain.as_os_str().as_encoded_bytes()).expect("no NUL");
         assert!(mounted_at(c"/").expect("the table reads"));
         assert!(!mounted_at(&plain).expect("the table reads"));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn entry(on: &str) -> libc::statfs {
+        let mut entry: libc::statfs = unsafe { std::mem::zeroed() };
+        for (to, from) in entry.f_mntonname.iter_mut().zip(on.bytes()) {
+            *to = from as libc::c_char;
+        }
+        entry
+    }
+
+    /// `getfsstat` stops at the buffer it was given, so a buffer it filled
+    /// may have left the path's mount out.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_full_mount_table_answers_nothing() {
+        let table = [entry("/"), entry("/Volumes/other")];
+        assert!(lists(&table, 2, c"/Volumes/vault").is_err());
+        assert!(!lists(&[entry("/"), entry("")], 1, c"/Volumes/vault").expect("room left"));
+        assert!(lists(&[entry("/Volumes/vault"), entry("")], 1, c"/Volumes/vault").expect("room left"));
+    }
+
+    /// The monitor's peer is the server once the server has used the socket,
+    /// as it does when it reports the mount status.
+    #[cfg(fuser_fuse_t)]
+    #[test]
+    fn the_status_callback_hands_over_the_server_and_its_monitor() {
+        let at = path("delivered");
+        let (monitor, child) = spawn_server("/bin/sh", &["-c", "echo up >&0; exec cat"]);
+        let pid = pid_of(&child);
+        let mut ready = [0u8; 3];
+        let read = unsafe { libc::read(monitor.as_raw_fd(), ready.as_mut_ptr().cast(), 3) };
+        assert_eq!(read, 3, "the stand-in server reported");
+        assert_eq!(peer_of(monitor.as_raw_fd()), Some(pid));
+
+        let server = Server::new();
+        unsafe { delivered(server.context(), 0, monitor.into_raw_fd()) };
+        server.release(&at, nothing_mounted);
+        await_exits(&at, EXIT_WITHIN).expect("the server exits");
+        assert!(!running(pid), "the delivered server outlived the drop");
     }
 }
