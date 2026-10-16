@@ -2568,6 +2568,28 @@ pub enum Event {
         /// Failure classification for a failed phase (no key material).
         error: Option<String>,
     },
+    /// Owner capture binned a folder that another writer unlinked, and the
+    /// folder holds a scope root. The bin re-key stops at that root, so its
+    /// scope and grants stay live with no path to them until a restore of the
+    /// binned folder (blueprint/engine.md "Owner capture").
+    ScopeRootStranded {
+        /// The scope root no live folder reaches.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// The binned folder whose restore reaches the scope root again.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        binned_folder: NodeId,
+        /// The binned folder's name.
+        folder_name: String,
+    },
 }
 
 impl fmt::Debug for Event {
@@ -2726,6 +2748,16 @@ impl fmt::Debug for Event {
                 .field("phase", phase)
                 .field("progress", progress)
                 .field("error", error)
+                .finish(),
+            Self::ScopeRootStranded {
+                scope_root,
+                binned_folder,
+                folder_name,
+            } => f
+                .debug_struct("ScopeRootStranded")
+                .field("scope_root", scope_root)
+                .field("binned_folder", binned_folder)
+                .field("folder_name", &RedactedText::of(folder_name))
                 .finish(),
         }
     }

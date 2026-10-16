@@ -5261,8 +5261,25 @@ fn a_move_under_a_write_granted_folder_is_no_capture() {
     assert_a_move_under_a_granted_folder_is_no_capture(Permission::Write);
 }
 
+/// Each stranded scope root `events` reported, with the binned folder and its
+/// name.
+fn stranded_notices(events: &[Event]) -> Vec<(NodeId, NodeId, String)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ScopeRootStranded {
+                scope_root,
+                binned_folder,
+                folder_name,
+            } => Some((*scope_root, *binned_folder, folder_name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A granted folder inside an unlinked folder is a scope root, so the re-key
-/// of the unlinked folder stops at it, and no record is reported faulty.
+/// of the unlinked folder stops at it, no record is reported faulty, and the
+/// owner is told the scope root is reachable only through a restore.
 #[test]
 fn the_rekey_of_a_captured_folder_stops_at_a_granted_folder_inside_it() {
     let mut fx = GrantScenario::new();
@@ -5303,12 +5320,18 @@ fn the_rekey_of_a_captured_folder_stops_at_a_granted_folder_inside_it() {
     for _ in 0..6 {
         tick(&fx.world, &second, &mut tasks);
     }
-    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    let seen = events_so_far(&mut events);
+    assert_eq!(abuse_events_in(&seen), 0, "no record is faulty");
     assert!(
         published_bin_entries(&fx)
             .iter()
             .any(|entry| entry.node_id == plain.0),
         "the unlinked folder bins"
+    );
+    assert_eq!(
+        stranded_notices(&seen),
+        [(fx.folder, plain, "plain".to_owned())],
+        "the owner is told once which scope root the bin holds"
     );
 }
 
@@ -5415,12 +5438,18 @@ fn assert_a_purge_stops_at_a_granted_folder_it_holds(permission: Permission) {
             .any(|entry| entry.node_id == plain.0),
         "the folder is in the bin"
     );
-    events_so_far(&mut fx._events);
+    assert_eq!(
+        stranded_notices(&events_so_far(&mut fx._events)),
+        [(fx.folder, plain, "plain".to_owned())],
+        "the capture tells the owner which scope root the bin holds"
+    );
     block_on(fx.engine.command(Command::Purge { node: plain })).expect("the purge journals");
     for _ in 0..8 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    let seen = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&seen), 0, "no record is faulty");
+    assert!(stranded_notices(&seen).is_empty(), "only a capture tells");
     assert!(
         block_on(fx.engine.status())
             .expect("the status reads")
@@ -5449,6 +5478,58 @@ fn a_purge_stops_at_a_read_granted_folder_it_holds() {
 #[test]
 fn a_purge_stops_at_a_write_granted_folder_it_holds() {
     assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Write);
+}
+
+/// A granted folder whose record no source serves after a restart is a known
+/// scope root the boundary walk did not prove. A capture of the folder above it
+/// stops at it and tells the owner, rather than read it under the bin key.
+#[test]
+fn a_capture_stops_at_a_granted_folder_no_walk_proved() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    block_on(fx.engine.command(Command::Relink {
+        node: fx.folder,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+    restart_owner(&mut fx);
+    block_on(fx.engine.command(Command::SetFocus { node: Some(outer) })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| children.retain(|child| child.id != plain.0),
+    );
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let seen = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&seen), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the unlinked folder bins"
+    );
+    assert_eq!(
+        stranded_notices(&seen),
+        [(fx.folder, plain, "plain".to_owned())]
+    );
 }
 
 #[test]

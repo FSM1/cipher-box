@@ -5140,6 +5140,7 @@ where
                 target,
                 deleted_at,
                 None,
+                scope.scope_roots,
             )
             .await?;
             None
@@ -5396,8 +5397,10 @@ where
             target,
             entry.deleted_at,
             None,
+            scope.scope_roots,
         )
         .await
+        .map(drop)
         .map_err(charge_bin_read)
     }
 
@@ -5449,6 +5452,7 @@ where
             pass.anchor_for(&binned_under)?,
             target,
             None,
+            scope.scope_roots,
         )
         .await
         .map_err(charge_bin_read)?;
@@ -5993,7 +5997,16 @@ where
             self.return_captures(taken);
             return;
         };
+        // A known root this session has not proved is a boundary too: its
+        // record seals under its own scope, so the bin plane cannot open it.
+        let stops: Vec<NodeId> = scope
+            .scope_roots
+            .iter()
+            .chain(scope.known_scope_roots)
+            .copied()
+            .collect();
         let mut added = Vec::new();
+        let mut strandings = Vec::new();
         let mut unfinished = Vec::new();
         let mut stopped = Vec::new();
         // Each other end's root, read once for the pass; `None` did not read.
@@ -6040,7 +6053,7 @@ where
             }
             let sealing_root = other_root.as_deref().unwrap_or(&root);
             let bin_name = opened.node.name.as_str().as_bytes().to_vec();
-            if self
+            let Ok(stranded) = self
                 .rekey_into_bin(
                     scope,
                     &end.at(sealing_root.epoch),
@@ -6048,16 +6061,18 @@ where
                     unlinked.node,
                     deleted_at,
                     Some(*opened),
+                    &stops,
                 )
                 .await
-                .is_err()
-            {
+            else {
                 unfinished.push(unlinked);
                 continue;
-            }
+            };
             if standing.is_some() {
+                self.report_stranded(&unlinked, &stranded);
                 continue;
             }
+            strandings.push(stranded);
             index.entries.push(BinEntry::new(
                 unlinked.node.0,
                 bin_name,
@@ -6079,6 +6094,10 @@ where
             // Re-keyed with no entry to name them: the next pass re-keys to the
             // same key and writes the entries it could not write here.
             unfinished.extend(added);
+        } else {
+            for (unlinked, stranded) in added.iter().zip(&strandings) {
+                self.report_stranded(unlinked, stranded);
+            }
         }
         self.return_captures(unfinished);
         if !stopped.is_empty() {
@@ -6090,6 +6109,19 @@ where
                 .extend(stopped.iter().map(capture_key));
         }
         hold_captures_first(self.cells.observed_unlinks, stopped);
+    }
+
+    /// Tell the owner of each scope root a capture left with no live path to
+    /// it. Sent only once the bin entry stands, since a restore of the binned
+    /// folder is the way back.
+    fn report_stranded(&self, unlinked: &UnlinkedChild, stranded: &BTreeSet<NodeId>) {
+        for scope_root in stranded {
+            let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {
+                scope_root: *scope_root,
+                binned_folder: unlinked.node,
+                folder_name: unlinked.name.clone(),
+            });
+        }
     }
 
     /// The own end whose key opens the record of `unlinked`'s node
@@ -6813,6 +6845,7 @@ where
 
     /// Re-seal the doomed subtree under the bin's held key, which is the access
     /// cut a soft delete owes (ADR 0010 item 3).
+    #[expect(clippy::too_many_arguments, reason = "one subtree's full re-key")]
     async fn rekey_into_bin(
         &self,
         scope: &DrainScope<'_>,
@@ -6821,10 +6854,11 @@ where
         root: NodeId,
         deleted_at: u64,
         opened: Option<Opened>,
-    ) -> Result<(), Halt> {
+        stops: &[NodeId],
+    ) -> Result<BTreeSet<NodeId>, Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = plane.held_plane(&held);
-        self.rekey_subtree(scope, plane, &binned, anchor, root, opened)
+        self.rekey_subtree(scope, plane, &binned, anchor, root, opened, stops)
             .await
     }
 
@@ -6844,6 +6878,10 @@ where
     ///
     /// `opened` is `root`'s record as the caller already read it under `from`
     /// or `to`, which the re-key seals in place of a second read.
+    ///
+    /// `stops` are the scope roots the walk stops at, and it returns each one it
+    /// met.
+    #[expect(clippy::too_many_arguments, reason = "one subtree's full re-key")]
     async fn rekey_subtree(
         &self,
         scope: &DrainScope<'_>,
@@ -6852,8 +6890,10 @@ where
         anchor: Anchor<'_>,
         root: NodeId,
         mut opened: Option<Opened>,
-    ) -> Result<(), Halt> {
+        stops: &[NodeId],
+    ) -> Result<BTreeSet<NodeId>, Halt> {
         let mut seen = BTreeSet::new();
+        let mut stopped_at = BTreeSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
             // Child refs are wire data, so a diamond or a cycle among them is
@@ -6877,12 +6917,14 @@ where
             } = loaded;
             let content_cids = match &body {
                 ReadBody::Folder { children, .. } => {
-                    pending.extend(
-                        children
-                            .iter()
-                            .filter(|child| in_this_scope(&from.end, scope.scope_roots, child))
-                            .map(|child| NodeId(child.id)),
-                    );
+                    for child in children {
+                        let child_id = NodeId(child.id);
+                        if in_this_scope(&from.end, stops, child) {
+                            pending.push(child_id);
+                        } else if stops.contains(&child_id) {
+                            stopped_at.insert(child_id);
+                        }
+                    }
                     Vec::new()
                 }
                 // Every retained version stays registered under this name, so
@@ -6915,7 +6957,7 @@ where
                 .map_err(Halt::from)?;
             self.hold(node.0, published.held);
         }
-        Ok(())
+        Ok(stopped_at)
     }
 
     /// Load a doomed node under whichever key seals it now, reporting whether

@@ -360,6 +360,15 @@ fn each_event_kind_crosses_as_its_stable_name() {
             "opProgress",
             6,
         ),
+        (
+            Event::ScopeRootStranded {
+                scope_root: node,
+                binned_folder: node,
+                folder_name: String::new(),
+            },
+            "scopeRootStranded",
+            4,
+        ),
     ] {
         let js = crossed(event);
         assert_eq!(field(&js, "kind"), JsValue::from_str(name));

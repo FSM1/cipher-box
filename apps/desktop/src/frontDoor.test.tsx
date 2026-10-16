@@ -268,6 +268,15 @@ describe('the front door', () => {
     );
   });
 
+  it('names the binned folder to restore for a stranded shared folder', () => {
+    const vault = vaultStatus({ warnings: [{ kind: 'scopeRootStranded', detail: 'plain' }] });
+    draw(model({ phase: 'signedIn', vault }), actions());
+    const raised = root.querySelector('[data-warning="scopeRootStranded"]');
+    expect(raised?.getAttribute('role')).toBe('alert');
+    expect(raised?.textContent).toContain('restore it from the bin');
+    expect(raised?.textContent).toContain('plain');
+  });
+
   it('says that the vault was restored from the server copy, as news the member drops', () => {
     const vault = vaultStatus({ warnings: [{ kind: 'restoredFromServerCopy', detail: null }] });
     const acted = actions();

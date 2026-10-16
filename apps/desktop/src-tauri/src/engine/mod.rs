@@ -181,6 +181,11 @@ impl Warnings {
                 kind: "scopeExitCutOwed",
                 detail: Some(detail.clone()),
             },
+            // The binned folder's name is what the member restores.
+            Event::ScopeRootStranded { folder_name, .. } => VaultWarning {
+                kind: "scopeRootStranded",
+                detail: Some(folder_name.clone()),
+            },
             _ => return,
         };
         self.push(warning);
@@ -1157,6 +1162,11 @@ mod tests {
             Event::RestoredFromServerCopy {
                 routing_key: "a-routing-key".to_owned(),
             },
+            Event::ScopeRootStranded {
+                scope_root: NodeId([1; 16]),
+                binned_folder: NodeId([2; 16]),
+                folder_name: "plain".to_owned(),
+            },
         ]);
 
         assert_eq!(
@@ -1165,8 +1175,14 @@ mod tests {
                 "attributableAbuse",
                 "withheldUpdateEscalation",
                 "renewalFailed",
-                "restoredFromServerCopy"
+                "restoredFromServerCopy",
+                "scopeRootStranded"
             ],
+        );
+        assert_eq!(
+            retained.last().and_then(|w| w.detail.as_deref()),
+            Some("plain"),
+            "the folder to restore is named",
         );
     }
 

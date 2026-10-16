@@ -121,6 +121,23 @@ describe('engine warnings', () => {
     expect(notice.textContent).toContain('share the folder with them again');
   });
 
+  it('renders a stranded shared folder as a warning that names the folder to restore', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'scopeRootStranded',
+        scopeRoot: new Uint8Array(16).fill(4),
+        binnedFolder: new Uint8Array(16).fill(5),
+        folderName: 'plain',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('restore "plain" from the bin');
+  });
+
   it('renders a vault restored from the server copy as one notice for the vault', async () => {
     const engine = fakeEngine();
     draw(engine.client);

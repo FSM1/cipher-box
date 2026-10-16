@@ -937,7 +937,10 @@ the grantee that removed it stops reading it.
   that may never run.
 - **A capture cannot refuse a nested scope root.** Residual: a captured folder
   that holds a scope root is binned, and the re-key stops at that root, so its
-  scope and its grants stay live with no path to them until a restore.
+  scope and its grants stay live with no path to them until a restore. The
+  re-key also stops at a known scope root that the boundary walk did not prove.
+  When the bin entry stands, the capture emits `scopeRootStranded` for each
+  root it stopped at, with the binned folder to restore.
 - **A capture outlives the pass that could not settle it.** The merge that saw
   the departure has already dropped the node from the base, so the next pass
   would see nothing; the session holds the unsettled captures and clears one
