@@ -39,7 +39,7 @@ const ENVELOPE_VERSION = 1;
 export type WrappingKeyStore = KeyRecordStore<CryptoKey>;
 
 /** The storage surface the Core Kit SDK drives. */
-export type CoreKitStorage = IAsyncStorage & Pick<SealedStore, 'removeItem'>;
+export type CoreKitStorage = IAsyncStorage;
 
 /** A view of the sealed store that its owner can cut off. */
 export interface RevocableStoreView {
@@ -94,18 +94,16 @@ export class SealedStore {
   }
 
   /**
-   * This store for one SDK instance. After `revoke`, no write or removal of the
-   * view lands, and that includes a write that was sealing when `revoke` ran.
+   * This store for one SDK instance. After `revoke`, the view reads nothing and
+   * changes nothing: no write lands, a write that was sealing when `revoke` ran
+   * included, and no read removes a value or mints a wrapping key.
    */
   revocableView(): RevocableStoreView {
     let live = true;
     return {
       store: {
-        getItem: (key) => this.getItem(key),
+        getItem: (key) => (live ? this.getItem(key) : Promise.resolve(null)),
         setItem: (key, value) => this.seal(key, value, () => live),
-        removeItem: async (key) => {
-          if (live) this.storage.removeItem(key);
-        },
       },
       get revoked() {
         return !live;
@@ -116,8 +114,9 @@ export class SealedStore {
     };
   }
 
-  /** `live` is read after the encrypt, at the one step that commits. */
+  /** `live` is read before the key is resolved, and again at the step that commits. */
   private async seal(key: string, value: string, live: () => boolean): Promise<void> {
+    if (!live()) return;
     const wrapping = await this.wrappingKey();
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = await crypto.subtle.encrypt(

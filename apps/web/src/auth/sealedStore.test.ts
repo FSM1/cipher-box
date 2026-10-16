@@ -264,14 +264,28 @@ describe('a revocable view of the store', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 
-  it('removes nothing once revoked', async () => {
+  it('reads nothing and removes nothing once revoked', async () => {
     const store = sealed(new MemoryKeys());
     await store.setItem(KEY, STORE_VALUE);
     const { store: view, revoke } = store.revocableView();
 
     revoke();
-    await view.removeItem(KEY);
 
+    await expect(view.getItem(KEY)).resolves.toBeNull();
     await expect(store.getItem(KEY)).resolves.toBe(STORE_VALUE);
+  });
+
+  it('mints no wrapping key for a write after a purge took the last one', async () => {
+    const keys = new MemoryKeys();
+    const store = sealed(keys);
+    await store.setItem(KEY, STORE_VALUE);
+    const { store: view, revoke } = store.revocableView();
+    revoke();
+    await store.purge(KEY);
+
+    await view.setItem(KEY, STORE_VALUE);
+
+    expect(keys.held).toBeNull();
+    expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 });

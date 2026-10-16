@@ -181,7 +181,8 @@ class Web3AuthSession implements WebCoreKitSession {
   /**
    * The store as `coreKit` sees it. Revoked when a key assignment ran out of
    * time: the SDK cannot cancel it, and a second login on that instance shares
-   * its state, so the next login builds a fresh one.
+   * its state, so the next login builds a fresh one. Until then the instance
+   * reports no session, whatever a late answer of the nodes sets its status to.
    */
   private storeView: RevocableStoreView;
 
@@ -209,7 +210,7 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   isLoggedIn(): boolean {
-    return this.coreKit.status === COREKIT_STATUS.LOGGED_IN;
+    return !this.storeView.revoked && this.coreKit.status === COREKIT_STATUS.LOGGED_IN;
   }
 
   async login(credential: IdentityCredential): Promise<void> {
@@ -377,7 +378,7 @@ class Web3AuthSession implements WebCoreKitSession {
 
   /** A login reached the factor policy and this device holds no factor. */
   private needsRecovery(): boolean {
-    return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
+    return !this.storeView.revoked && this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
   }
 
   accountId(): string {
@@ -413,8 +414,12 @@ class Web3AuthSession implements WebCoreKitSession {
 
   async logout(): Promise<void> {
     try {
-      // A session held short of reconstruction is still a live credential.
-      if (this.isLoggedIn() || this.needsRecovery()) await this.coreKit.logout();
+      // A session held short of reconstruction is still a live credential, and
+      // so is one a late answer gave an abandoned instance: read the SDK itself.
+      const { status } = this.coreKit;
+      if (status === COREKIT_STATUS.LOGGED_IN || status === COREKIT_STATUS.REQUIRED_SHARE) {
+        await this.coreKit.logout();
+      }
     } finally {
       this.signedInDisplay = null;
       this.signedInSubject = null;

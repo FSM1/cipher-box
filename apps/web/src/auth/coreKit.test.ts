@@ -9,13 +9,19 @@ import { Point } from '@tkey/common-types';
 import type BN from 'bn.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
-import type { SealedStore } from './sealedStore';
+import type { CoreKitStorage, SealedStore } from './sealedStore';
 import {
   createCoreKitSession,
   KeyAssignmentTimedOutError,
   KEY_ASSIGNMENT_TIMEOUT_MS,
 } from './coreKit';
-import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
+import {
+  createLoginFlow,
+  RecoveryRequiredError,
+  resetLoginFlowLatches,
+  type IdentityCredential,
+} from '@cipherbox/login';
+import { fakeIdentityExchange } from '../test/authFakes';
 
 const STORE_KEY = 'corekit_store';
 
@@ -91,8 +97,10 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.constructions += 1;
         this.storage = options.storage as typeof this.storage;
       }
+      /** The status a late completion gave this instance alone. */
+      private ownStatus: string | undefined;
       get status(): string {
-        return sdk.status;
+        return this.ownStatus ?? sdk.status;
       }
       init(): Promise<void> {
         sdk.inits += 1;
@@ -104,6 +112,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
           return new Promise<void>((resolve) => {
             sdk.lateLogin = async () => {
               await this.storage.setItem(STORE_KEY, LATE_SESSION);
+              this.ownStatus = COREKIT_STATUS.LOGGED_IN;
               resolve();
             };
           });
@@ -127,6 +136,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
+        if (this.ownStatus !== undefined) this.ownStatus = COREKIT_STATUS.INITIALIZED;
         return sdk.logoutError ? Promise.reject(sdk.logoutError) : Promise.resolve();
       }
       getDeviceFactor(): Promise<string | undefined> {
@@ -166,6 +176,9 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.factorPubs = sdk.factorPubs.filter((listed) => listed !== pub);
         if (factorKey) sdk.deleted.push(factorKey.toString('hex'));
         return Promise.resolve();
+      }
+      _UNSAFE_exportTssKey(): Promise<string> {
+        return Promise.resolve('0f'.repeat(32));
       }
       getKeyDetails(): Record<string, unknown> {
         if (sdk.keyDetailsError) throw sdk.keyDetailsError;
@@ -214,6 +227,7 @@ const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCreden
 });
 
 beforeEach(() => {
+  resetLoginFlowLatches();
   sdk.options = undefined;
   sdk.jwtLogin = undefined;
   sdk.loginHangs = false;
@@ -254,7 +268,7 @@ beforeEach(() => {
 describe('the Core Kit store', () => {
   it('hands the SDK the sealed store, so nothing it writes lands in the clear', async () => {
     session();
-    const sdkStorage = sdk.options?.storage as SealedStore;
+    const sdkStorage = sdk.options?.storage as CoreKitStorage;
     await sdkStorage.setItem(STORE_KEY, SESSION);
 
     expect(window.localStorage.getItem(STORE_KEY)).not.toContain('sessionId');
@@ -841,6 +855,45 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     await sdk.lateLogin!();
 
     await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
+  });
+
+  it('keeps the session of the retried login when the abandoned one completes', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    // The session the retried instance wrote through its own view.
+    await (sdk.options?.storage as CoreKitStorage).setItem(STORE_KEY, SESSION);
+
+    await sdk.lateLogin!();
+
+    await expect(store.getItem(STORE_KEY)).resolves.toBe(SESSION);
+  });
+
+  it('reports no session from an abandoned instance that a late answer signed in', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.logout();
+    await sdk.lateLogin!();
+    const engine = { start: vi.fn(() => Promise.resolve()), logout: () => Promise.resolve() };
+    const flow = createLoginFlow({
+      exchange: fakeIdentityExchange().exchange,
+      collector: {},
+      session: created,
+      facade: engine,
+      secrets: null,
+      account: { signedIn: () => undefined, signedOut: () => undefined },
+      progress: { begin: () => undefined, failed: () => undefined, end: () => undefined },
+      now: () => new Date(),
+    });
+
+    expect(created.isLoggedIn()).toBe(false);
+    await flow.resume();
+
+    expect(engine.start).not.toHaveBeenCalled();
+    // The logout still ends the session the late answer made.
+    const before = sdk.logoutCalls;
+    await created.logout();
+    expect(sdk.logoutCalls).toBe(before + 1);
   });
 
   it('keeps the instance after a login that settled inside the bound', async () => {
