@@ -41,6 +41,7 @@ describe('devnetFault', () => {
       'key-broadcast',
     ],
     ["Cannot read properties of undefined (reading 'ciphertext')", 'rss-envelope'],
+    ['the login provider did not assign your key in time — please try again', 'key-timeout'],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });
