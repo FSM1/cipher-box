@@ -25,6 +25,12 @@ describe('how a share refusal reads to the member', () => {
     expect(refusalLabel('link-ambiguous')).toContain('more than one link');
   });
 
+  it('says a share or a link under a folder too full to re-seal in words', () => {
+    expect(refusalText('unsupported target: rot-reseal-section-not-resealable')).toContain(
+      'too full to take a share'
+    );
+  });
+
   it('falls back to the engine’s own name for a refusal it has no phrasing for', () => {
     expect(refusalLabel('some-rule-a-later-build-added')).toBe('some-rule-a-later-build-added');
   });

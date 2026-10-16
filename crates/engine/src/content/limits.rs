@@ -79,8 +79,14 @@ const _: () = assert!(
     "a retained history link must fit the per-link share of the re-seal budget"
 );
 
-/// The owner blobs, the ascent link, the write history link, and the map
-/// framing around every run — none of them count-driven, all of them small.
+/// The owner blobs, the ascent link, the write history link, the map framing
+/// around every run, and the grant-set commitment's entries. The entries are
+/// count-driven, and no per-grant charge holds them, so
+/// at [`MAX_GRANT_BLOBS`](cipherbox_core::seal::MAX_GRANT_BLOBS) they need more
+/// than this slack and use the room the per-item charges leave. A sweep that
+/// keeps [`MAX_HISTORY_LINKS`](cipherbox_core::seal::MAX_HISTORY_LINKS) links
+/// at [`MAX_RETAINED_HISTORY_LINK_BYTES`] leaves too little of that room, so
+/// its re-seal can go over the budget.
 const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 
 /// The granularity [`resealable_section_bytes`] charges the committed grant
@@ -108,8 +114,9 @@ const GRANT_RESERVATION_STEP: usize = 64;
 /// too full. The remaining runs keep their frozen ceilings, because a committed
 /// writer authors both the child index and the carried links.
 ///
-/// A section over the budget is a **retryable** refusal on the record the next
-/// pass re-resolves, never a trust verdict. The clamp keeps
+/// A section over the budget is never a trust verdict. On a cut it is a
+/// **retryable** refusal on the record the next pass re-resolves; a sweep
+/// records it and moves on (`RotationPublishError::NotResealable`). The clamp keeps
 /// [`resealable_root_rest_bytes`]'s complement a total: every caller feeds a
 /// decode-bounded count, and an unclamped one would underflow it.
 pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {

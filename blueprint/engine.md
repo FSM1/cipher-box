@@ -1358,7 +1358,11 @@ a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
 re-sealed. Only a name the walk resolved current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
-never persist the superseded name that caused it (ADR 0041). Sweeps re-seal
+never persist the superseded name that caused it (ADR 0041). A repair whose
+re-seal is over the scope root's grant section budget does not land: the
+outcome records it, and the pass still converges the interior nodes. A lost
+race is also recorded, and the next pass re-derives the repair. Every other
+repair refusal still stops the pass. Sweeps re-seal
 metadata only; content bytes are never re-encrypted by any rotation path
 (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment
 (FSM1/cipher-box-next#26 handed it to FSM1/cipher-box-next#33, which did not fix
@@ -1757,7 +1761,9 @@ surviving committed grants uniformly in the republish it already does.
   in — a fresh mint needs no history) → for write grants, the write-scope cut
   (fresh write scope seed + name wave over the subtree) → update the parent
   scope's direct-child-scope index → publish → post the sealed share pointer
-  to the recipient's mailbox. A committed writer of the parent scope can splice
+  to the recipient's mailbox. A fresh mint re-seals the parent root before
+  any publish, so a parent root that cannot re-seal refuses the grant with
+  nothing published. A committed writer of the parent scope can splice
   a source-scope node into a stalled resume; the resume admits it, and the
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
