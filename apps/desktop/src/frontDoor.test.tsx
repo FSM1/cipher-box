@@ -273,8 +273,8 @@ describe('the front door', () => {
     draw(model({ phase: 'signedIn', vault }), actions());
     const raised = root.querySelector('[data-warning="scopeRootStranded"]');
     expect(raised?.getAttribute('role')).toBe('alert');
-    expect(raised?.textContent).toContain('restore it from the bin');
-    expect(raised?.textContent).toContain('plain');
+    expect(raised?.textContent).toContain('Restore that folder from the bin.');
+    expect(raised?.textContent).toContain('— plain');
   });
 
   it('says that the vault was restored from the server copy, as news the member drops', () => {

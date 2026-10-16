@@ -5526,9 +5526,12 @@ fn a_capture_does_not_stop_at_a_scope_root_no_walk_proved() {
         published_bin_entries(&fx)
             .iter()
             .all(|entry| entry.node_id != plain.0),
-        "the capture does not bin past an unproved root"
+        "the capture waits while the root is unproved"
     );
-    assert!(stranded_notices(&events_so_far(&mut fx._events)).is_empty());
+    assert!(
+        stranded_notices(&events_so_far(&mut fx._events)).is_empty(),
+        "no notice while the root is unproved"
+    );
 
     fx.world
         .record_store
@@ -5542,8 +5545,10 @@ fn a_capture_does_not_stop_at_a_scope_root_no_walk_proved() {
             .any(|entry| entry.node_id == plain.0),
         "the proved root lets the capture bin"
     );
+    let healed = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&healed), 0, "a proved root reads clean");
     assert_eq!(
-        stranded_notices(&events_so_far(&mut fx._events)),
+        stranded_notices(&healed),
         [(fx.folder, plain, "plain".to_owned())]
     );
 }

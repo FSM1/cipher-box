@@ -160,7 +160,7 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
   renewalFailed: 'CipherBox could not renew a record, so it may expire',
   scopeExitCutOwed: 'CipherBox could not rotate a shared folder a move left',
   scopeRootStranded:
-    'Another writer removed a folder that holds a shared folder; restore it from the bin to reach the shared folder',
+    'Another writer removed a folder that holds a shared folder. Restore that folder from the bin.',
   restoredFromServerCopy: 'CipherBox restored your vault from the server copy',
   unjournaledWrites: 'CipherBox could not save changes the disconnected drive still held',
 };

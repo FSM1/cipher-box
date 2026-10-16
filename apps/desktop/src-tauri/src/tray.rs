@@ -45,7 +45,9 @@ fn warning_label(kind: &str) -> &'static str {
         "withheldUpdateEscalation" => "A shared folder is being kept from its latest update",
         "renewalFailed" => "CipherBox could not renew a record, so it may expire",
         "scopeExitCutOwed" => "CipherBox could not rotate a shared folder a move left",
-        "scopeRootStranded" => "A removed folder holds a shared folder; restore it from the bin",
+        "scopeRootStranded" => {
+            "Another writer removed a folder that holds a shared folder. Restore that folder from the bin."
+        }
         _ => "CipherBox raised a condition it could not name",
     }
 }
@@ -322,7 +324,7 @@ mod tests {
         };
         let lines = Lines::of(&live(Staleness::Fresh, vec![stranded], 0));
         assert_eq!(lines.status, warning_label("scopeRootStranded"));
-        assert!(lines.status.contains("restore it from the bin"));
+        assert!(lines.status.contains("Restore that folder from the bin."));
     }
 
     #[test]
