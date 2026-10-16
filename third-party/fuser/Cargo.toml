@@ -36,15 +36,10 @@
 # its mount floor on the string the mount program receives, and `Session::new`
 # runs no option check of its own.
 #
-# It also carries the FUSE-T server patch: an unmount does not end the
-# `go-nfsv4` server FUSE-T forks for each mount, so every sign-out and every
-# external unmount left one running. Against FUSE-T (`fuser_fuse_t`, set by the
-# build script) `Mount::new` calls `fuse_kern_mount` with a status callback
-# that hands over the server's monitor socket. `Mount::drop` shuts that socket
-# down only when the path can carry no other mount, because the server
-# force-unmounts its path as it exits, and a reaper thread waits for the exit.
-# A new mount at the same path waits for it (`src/mnt/fuse_t.rs`, and the tests
-# beside it).
+# It also carries the FUSE-T server patch, which ends the `go-nfsv4` server of
+# a mount when the mount drops. `src/mnt/fuse_t.rs` holds it, its rationale and
+# its tests; `src/mnt/fuse2.rs`, `src/mnt/fuse2_sys.rs` and the `fuser_fuse_t`
+# cfg in `build.rs` wire it in.
 #
 # A workspace member, so it resolves through the one root `Cargo.lock` the
 # product links — a second lockfile would drift and the socket-read patch's

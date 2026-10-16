@@ -49,7 +49,7 @@ enum State {
 }
 
 /// The server of one mount. Shared with the library's mount-status thread.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Server(Arc<Mutex<State>>);
 
 impl Server {
@@ -75,14 +75,14 @@ impl Server {
         &self,
         at: &CStr,
         unmounted: bool,
-        mounted_there: impl FnOnce() -> io::Result<bool>,
+        mounted_there: impl FnOnce(&CStr) -> io::Result<bool>,
     ) {
         let ended = std::mem::replace(&mut *locked(&self.0), State::Ended);
         let State::Held { monitor, server } = ended else {
             return;
         };
-        if unmounted || matches!(mounted_there(), Ok(false)) {
-            shut_down_and_reap(monitor, server, at.to_owned());
+        if unmounted || matches!(mounted_there(at), Ok(false)) {
+            shut_down_and_reap(monitor, server, at);
         } else {
             let _ = monitor.into_raw_fd();
             warn!("the FUSE-T server {server} stays: its mount point may carry another mount");
@@ -188,16 +188,16 @@ pub(crate) fn mounted_at(at: &CStr) -> io::Result<bool> {
 ///
 /// A shutdown, not only a close: a process forked after the mount holds a copy
 /// of the socket, and a close of this copy alone sends no end-of-file.
-fn shut_down_and_reap(monitor: OwnedFd, server: libc::pid_t, at: CString) {
-    locked(&EXITING).push(at.clone());
+fn shut_down_and_reap(monitor: OwnedFd, server: libc::pid_t, at: &CStr) {
+    locked(&EXITING).push(at.to_owned());
     unsafe { libc::shutdown(monitor.as_raw_fd(), libc::SHUT_RDWR) };
     drop(monitor);
-    let reaping = at.clone();
+    let reaping = at.to_owned();
     let started = std::thread::Builder::new()
         .name("fuse-t-reaper".to_owned())
         .spawn(move || reap(server, &reaping));
     if started.is_err() {
-        reap(server, &at);
+        reap(server, at);
     }
 }
 
@@ -262,15 +262,15 @@ mod tests {
         unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) == 0 }
     }
 
-    /// Whether `pid` ends within a second once its monitor closes.
-    fn stops(pid: libc::pid_t) -> bool {
+    /// Whether `done` holds within a second.
+    fn within_a_second(mut done: impl FnMut() -> bool) -> bool {
         (0..100).any(|_| {
             std::thread::sleep(Duration::from_millis(10));
-            !running(pid)
+            done()
         })
     }
 
-    fn nothing_mounted() -> io::Result<bool> {
+    fn nothing_mounted(_: &CStr) -> io::Result<bool> {
         Ok(false)
     }
 
@@ -283,7 +283,7 @@ mod tests {
         server.deliver(monitor, pid);
         assert!(running(pid), "the server runs while the mount does");
 
-        server.release(&at, true, || panic!("an unmount needs no table read"));
+        server.release(&at, true, |_| panic!("an unmount needs no table read"));
         await_exits(&at, EXIT_WITHIN).expect("the server exits");
         assert!(!running(pid), "the drop left the server running");
     }
@@ -299,13 +299,16 @@ mod tests {
         let server = Server::new();
         server.deliver(monitor, pid);
 
-        server.release(&at, false, || Ok(true));
+        server.release(&at, false, |_| Ok(true));
         assert!(running(pid), "the server ended over another mount");
-        server.release(&at, false, || Err(io::Error::other("unread")));
+        server.release(&at, false, |_| Err(io::Error::other("unread")));
         assert!(running(pid), "an unread table ended the server");
 
         drop(unsafe { OwnedFd::from_raw_fd(raw) });
-        assert!(stops(pid), "the stand-in server did not stop");
+        assert!(
+            within_a_second(|| !running(pid)),
+            "the stand-in server did not stop"
+        );
     }
 
     #[test]
@@ -334,7 +337,10 @@ mod tests {
         assert!(running(pid), "the late status ended the server");
 
         drop(unsafe { OwnedFd::from_raw_fd(raw) });
-        assert!(stops(pid), "the stand-in server did not stop");
+        assert!(
+            within_a_second(|| !running(pid)),
+            "the stand-in server did not stop"
+        );
     }
 
     /// A process forked after the mount holds a copy of the monitor socket.
@@ -395,10 +401,7 @@ mod tests {
                 .expect("the session thread starts");
         drop(theirs);
         assert!(
-            (0..100).any(|_| {
-                std::thread::sleep(Duration::from_millis(10));
-                session.guard.is_finished()
-            }),
+            within_a_second(|| session.guard.is_finished()),
             "the session thread outlived its server"
         );
     }

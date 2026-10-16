@@ -99,9 +99,10 @@ impl Drop for Mount {
         }
         // CipherBox patch: neither unmount above ends the FUSE-T server.
         #[cfg(fuser_fuse_t)]
-        self.server
-            .release(&self.listed_as, unmounted.is_ok(), || {
-                super::fuse_t::mounted_at(&self.listed_as)
-            });
+        self.server.release(
+            &self.listed_as,
+            unmounted.is_ok(),
+            super::fuse_t::mounted_at,
+        );
     }
 }
