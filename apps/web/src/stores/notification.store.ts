@@ -35,7 +35,7 @@ function admit(notice: Notice): void {
   if (notices.some((standing) => standing.key === notice.key)) return;
   const next = [...notices, notice];
   if (next.length > MAX_NOTICES) {
-    const minor = next.findIndex((standing) => standing.minor === true);
+    const minor = next.findIndex((standing) => standing.minor);
     const evicted = minor === -1 ? 0 : minor;
     if (next[evicted] === notice) return;
     next.splice(evicted, 1);

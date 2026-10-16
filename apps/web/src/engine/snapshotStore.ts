@@ -11,12 +11,7 @@
  */
 
 import { EngineRequestError, OWED_GRANTS_DROPPED, toHex } from '@cipherbox/client';
-import type {
-  EngineClient,
-  EventDescriptor,
-  SnapshotDescriptor,
-  Staleness,
-} from '@cipherbox/client';
+import type { DropCause, EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
 import { sameNode } from '../lib/nodeId';
 import { notificationStore } from '../stores/notification.store';
 
@@ -116,8 +111,6 @@ const WRITE_CUT_TRUST_STOP =
 
 const SHARES_DROPPED =
   'a change to who can open a shared folder removed every share of that folder - share the folder again with each person who must keep access';
-
-type DropCause = Extract<EventDescriptor, { kind: 'nodeDropped' }>['cause'];
 
 /** Why the name wave dropped a node from the moved tree (ADR 0065), in plain words. */
 const DROP_REASONS: Record<DropCause, string> = {

@@ -70,6 +70,7 @@ export type {
   OpProgressPhase,
   BlockProgress,
   DeadLetterReason,
+  DropCause,
   DeadLetterDescriptor,
   SettingsHoldCheck,
   SettingsHoldDescriptor,
