@@ -55,6 +55,10 @@ enum Verb {
     Refresh,
     /// Exit through the normal Tauri path.
     Quit,
+    /// End the session the way a member's sign-out does, and keep the shell.
+    SignOut,
+    /// Start a session again on the dev key, in this process.
+    SignIn,
 }
 
 /// One verb's answer body: the `status` object, or nothing.
@@ -68,14 +72,27 @@ pub struct Control {
     status: Box<dyn Fn() -> Answering + Send + Sync>,
     refresh: Box<dyn Fn() -> Answering + Send + Sync>,
     quit: Box<dyn Fn() + Send + Sync>,
+    sign_out: Box<dyn Fn() -> Answering + Send + Sync>,
+    sign_in: Box<dyn Fn() -> Answering + Send + Sync>,
 }
 
 impl Control {
     /// The endpoint over a running shell, published at `control_file`.
-    pub fn over(app: &AppHandle, token: Zeroizing<String>, control_file: PathBuf) -> Self {
+    ///
+    /// It holds the only copy of `dev_key` outside a live engine, for the life
+    /// of the process: every sign-in, the first included, starts on a clone of
+    /// it, which `start` takes by value and zeroizes where it dies.
+    pub fn over(
+        app: &AppHandle,
+        token: Zeroizing<String>,
+        control_file: PathBuf,
+        dev_key: Zeroizing<Vec<u8>>,
+    ) -> Self {
         let reading = app.clone();
         let refreshing = app.clone();
         let quitting = app.clone();
+        let signing_out = app.clone();
+        let signing_in = app.clone();
         Self {
             token,
             status: Box::new(move || {
@@ -94,7 +111,28 @@ impl Control {
             // The normal exit path: `RunEvent::Exit` ends the session, so the
             // mount is quiesced and unmounted before the process goes.
             quit: Box::new(move || retire(&control_file, || quitting.exit(0))),
+            sign_out: Box::new(move || {
+                let app = signing_out.clone();
+                Box::pin(async move { crate::session::session_logout(app).await.map(|()| None) })
+            }),
+            sign_in: Box::new(move || {
+                let app = signing_in.clone();
+                let dev_key = dev_key.clone();
+                Box::pin(async move {
+                    let env = crate::session::session_env(&app)?;
+                    app.state::<EngineHost>()
+                        .start(dev_key, None, env)
+                        .await
+                        .map(|()| None)
+                })
+            }),
         }
+    }
+
+    /// Starts a session on the dev key: the headless start, and the `sign-in`
+    /// verb.
+    pub(super) async fn sign_in(&self) -> Result<(), String> {
+        (self.sign_in)().await.map(|_| ())
     }
 }
 
@@ -279,6 +317,8 @@ async fn answer(mut stream: TcpStream, control: Arc<Control>) {
         Verb::Status => (control.status)().await,
         Verb::Refresh => (control.refresh)().await,
         Verb::Quit => Ok(None),
+        Verb::SignOut => (control.sign_out)().await,
+        Verb::SignIn => (control.sign_in)().await,
     };
     respond(&mut stream, &response(answered)).await;
     if verb == Verb::Quit {
@@ -302,6 +342,8 @@ fn request(line: &str, token: &str) -> Result<Verb, String> {
         "status" => Ok(Verb::Status),
         "refresh" => Ok(Verb::Refresh),
         "quit" => Ok(Verb::Quit),
+        "sign-out" => Ok(Verb::SignOut),
+        "sign-in" => Ok(Verb::SignIn),
         _ => Err(NO_SUCH_VERB.to_owned()),
     }
 }
@@ -391,7 +433,8 @@ mod tests {
     }
 
     /// An endpoint over a stand-in shell: `status` answers a fixed object,
-    /// `refresh` answers nothing, and `quit` is counted.
+    /// `refresh`, `sign-out` and `sign-in` answer nothing, and `quit` is
+    /// counted.
     fn control() -> Arc<Control> {
         Arc::new(Control {
             token: Zeroizing::new(TOKEN.to_owned()),
@@ -400,6 +443,8 @@ mod tests {
             quit: Box::new(|| {
                 QUITS.fetch_add(1, Ordering::Relaxed);
             }),
+            sign_out: Box::new(|| Box::pin(async { Ok(None) })),
+            sign_in: Box::new(|| Box::pin(async { Ok(None) })),
         })
     }
 
@@ -543,6 +588,24 @@ mod tests {
             Ok(Verb::Refresh)
         );
         assert_eq!(request(&format!("{TOKEN} quit"), TOKEN), Ok(Verb::Quit));
+        assert_eq!(
+            request(&format!("{TOKEN} sign-out\n"), TOKEN),
+            Ok(Verb::SignOut)
+        );
+        assert_eq!(
+            request(&format!("{TOKEN} sign-in\n"), TOKEN),
+            Ok(Verb::SignIn)
+        );
+    }
+
+    #[tokio::test]
+    async fn answers_sign_out_and_sign_in_with_no_body() {
+        let (port, serving) = listening().await;
+        for verb in ["sign-out", "sign-in"] {
+            let answer = ask(port, &format!("{TOKEN} {verb}\n")).await;
+            assert_eq!(answer.trim_end(), r#"{"ok":true}"#, "{verb}");
+        }
+        serving.abort();
     }
 
     #[test]

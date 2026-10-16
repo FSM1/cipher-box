@@ -24,6 +24,10 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   session status into the refusal that names it, and the next session mounts
   at the same mount point and serves a file; the Windows leg skips it, because
   the suite has no tool that unmounts a WinFsp mount from outside
+- `remount-in-process` — after an unmount from outside, a sign-out and a
+  sign-in in the same process mount the vault again and serve a file; on macOS
+  the detach and the sign-out each end the FUSE-T server of their mount; the
+  Windows leg skips it, for the same reason
 - `offline-replay` — a write taken while the API is down reads back at once on
   the instance that took it, and reaches a second instance once the API returns
 
@@ -38,7 +42,8 @@ the 64 hex characters of the login secret from standard input, starts headless,
 and writes `<port> <token>` to the control file. The secret crosses on standard
 input rather than in an argument, because every local user can read a process
 argument vector. The suite then sends `<token> <verb>` over loopback and reads one
-JSON line back. The verbs are `status`, `refresh` and `quit`.
+JSON line back. The verbs are `status`, `refresh`, `sign-out`, `sign-in` and
+`quit`.
 
 Challenge-signature login creates the account on first contact, so each
 scenario's fresh 32-byte secret is a fresh, isolated vault. Two instances of
