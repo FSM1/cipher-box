@@ -11286,12 +11286,11 @@ where {
     /// or beside it can name a scope root the legs would read as a plain
     /// child. A record below it is an availability outcome. The name is the one
     /// the last walk or graft gated, else `name`. A moved root reads nothing
-    /// until the next walk. The sequence floor is no proof of a walk, as a gated
+    /// until the next walk, which judges a replay (ADR 0071 D1 or D4). The sequence floor is no proof of a walk, as a gated
     /// read outside a walk raises it, so it bars only a replay: a served
     /// record below it, or a floor store with no answer, also counts as moved.
     /// An unavailable plane counts as moved; an absent record names no scope.
     /// The probe adopts nothing and raises no floor.
-    /// The verdict on a replay, ADR 0071 D1 or D4, is the next walk's.
     async fn scope_root_moved(
         &self,
         probes: &RootProbes,
@@ -21921,9 +21920,11 @@ mod focus_access_tests {
     }
 
     fn engine() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
-        let world = FakeWorld::new();
-        let device = world.device(b"alice-pk");
-        let scheduler = world.scheduler.clone();
+        engine_on(&FakeWorld::new().device(b"alice-pk"))
+    }
+
+    /// [`engine`] over `device`, whose record store a test seeds.
+    fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, VirtualScheduler) {
         let (engine, _events) = Engine::new(
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
@@ -21933,7 +21934,7 @@ mod focus_access_tests {
             ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
-        (engine, scheduler)
+        (engine, device.scheduler.clone())
     }
 
     /// The same engine holding what a navigation leg runs under: a live session,
@@ -21944,17 +21945,9 @@ mod focus_access_tests {
         started_engine_on(&FakeWorld::new().device(b"alice-pk"))
     }
 
-    /// [`started_engine`] over `device`, whose record store a test seeds.
+    /// [`started_engine`] over `device`.
     fn started_engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
-        let (mut engine, _events) = Engine::new(
-            device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
-            SyncTimingProfile::CI,
-            ContentProfile::CI,
-            StoragePolicy::CI,
-            ApiBaseUrl::offline(),
-            GatewayConfig::disabled(),
-        );
+        let (mut engine, _clock) = engine_on(device);
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
@@ -22657,6 +22650,7 @@ mod focus_access_tests {
     /// records no miss.
     #[test]
     fn a_descendant_root_below_the_floor_leaves_its_rows_queued() {
+        use crate::testkit::account::{EOL, TTL_NANOS};
         use cipherbox_core::ipns::IpnsRecord;
 
         let device = FakeWorld::new().device(b"alice-pk");
@@ -22677,13 +22671,7 @@ mod focus_access_tests {
         );
         let signer = kdf::ipns_keypair(&[6u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        let record = IpnsRecord::create_v2(
-            &signer,
-            b"/ipfs/bafkqaaa",
-            2,
-            2_000_000_000,
-            "2099-01-01T00:00:00Z",
-        );
+        let record = IpnsRecord::create_v2(&signer, b"/ipfs/bafkqaaa", 2, TTL_NANOS, EOL);
         for endpoint in device.record_store.endpoints() {
             device
                 .record_store
@@ -22704,20 +22692,14 @@ mod focus_access_tests {
 
         block_on(engine.set_focus(Some(UNLISTED))).expect("the route resolves");
 
+        let stamped = engine.state.focus_refreshed.borrow();
         assert!(
-            !engine
-                .state
-                .focus_refreshed
-                .borrow()
-                .contains_key(&shared_file),
-            "no leg read the scope"
+            stamped.contains_key(&own_file),
+            "the vault's own row was attempted under the vault's seed"
         );
         assert!(
-            engine
-                .state
-                .focus_refreshed
-                .borrow()
-                .contains_key(&own_file)
+            !stamped.contains_key(&shared_file),
+            "the shared scope's row was not resolved under the vault's seed"
         );
         assert_eq!(engine.queued_focus_files(), vec![shared_file]);
         assert_eq!(

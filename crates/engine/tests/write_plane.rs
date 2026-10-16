@@ -17186,31 +17186,32 @@ fn a_navigation_after_the_first_pass_paints_a_plain_folders_row() {
 }
 
 /// Device B after its first walk and a create of its own under the vault root,
-/// with the root's previous record served again: at every endpoint, or at one
-/// endpoint while the other fails its GETs at the root name (ADR 0071 D2).
+/// with the root's previous record served again (ADR 0071 D2).
 struct ReplayedRoot {
     world: FakeWorld,
     bob: FakeDevice,
     engine_b: Engine<FakeSeamTypes>,
     events_b: EventStream,
     tasks_b: Vec<BoxedTask>,
-    root_name: IpnsName,
     row: NodeId,
 }
 
-fn root_replayed_below_the_floor(endpoint_failed: bool) -> ReplayedRoot {
+/// Where the root's previous record is served again.
+enum Replay {
+    AtEveryEndpoint,
+    /// At one endpoint, while the other fails its GETs at the root name.
+    BesideAFailingEndpoint,
+}
+
+fn root_replayed_below_the_floor(replay: Replay) -> ReplayedRoot {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let root_name = seed_account(&world, &blocks);
+    seed_account(&world, &blocks);
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     tick(&world, &engine_b, &mut tasks_b);
-    let endpoints = world.record_store.endpoints();
-    let old = world
-        .record_store
-        .record_at(&endpoints[1], root_name.as_str())
-        .expect("the owner published the root");
-    let old_sequence = sequence_at(&world, &root_name);
+    let old = root_record(&world, 1);
+    let old_sequence = root_sequence(&world, 1);
     block_on(engine_b.command(Command::Create {
         parent: ROOT,
         name: "unwritten.bin".to_owned(),
@@ -17219,25 +17220,29 @@ fn root_replayed_below_the_floor(endpoint_failed: bool) -> ReplayedRoot {
     .expect("the create commits");
     tick(&world, &engine_b, &mut tasks_b);
     assert!(
-        sequence_at(&world, &root_name) > old_sequence,
+        root_sequence(&world, 0) > old_sequence,
         "device B published the root over the record it walked"
     );
     let row = child_id(&engine_b, ROOT, "unwritten.bin");
-    if endpoint_failed {
-        world
-            .record_store
-            .seed_record(&endpoints[1], root_name.as_str(), old);
-        world
-            .record_store
-            .fail_get_at_for(&endpoints[0], root_name.as_str());
-    } else {
-        for endpoint in &endpoints {
+    let root_name = write_name(ROOT);
+    let endpoints = world.record_store.endpoints();
+    match replay {
+        Replay::AtEveryEndpoint => {
+            for endpoint in &endpoints {
+                world
+                    .record_store
+                    .seed_record(endpoint, root_name.as_str(), old.clone());
+            }
+        }
+        Replay::BesideAFailingEndpoint => {
             world
                 .record_store
-                .seed_record(endpoint, root_name.as_str(), old.clone());
+                .seed_record(&endpoints[1], root_name.as_str(), old);
+            world
+                .record_store
+                .fail_get_at_for(&endpoints[0], root_name.as_str());
         }
     }
-    world.scheduler.advance(SyncTimingProfile::CI.stale_after);
     let _ = events_so_far(&mut events_b);
     ReplayedRoot {
         world,
@@ -17245,39 +17250,40 @@ fn root_replayed_below_the_floor(endpoint_failed: bool) -> ReplayedRoot {
         engine_b,
         events_b,
         tasks_b,
-        root_name,
         row,
     }
 }
 
-/// The navigation probe reads a root below the floor as moved: no leg runs,
-/// the row stays queued for the tick, and the probe accuses nobody.
-fn assert_the_navigation_read_nothing(fx: &mut ReplayedRoot) {
+/// The record resolves of B's row that a navigation to the vault root runs,
+/// once the window is stale.
+fn root_navigation_legs(fx: &mut ReplayedRoot) -> usize {
+    fx.world
+        .scheduler
+        .advance(SyncTimingProfile::CI.stale_after);
     let before = record_resolves(&fx.bob, fx.row);
     block_on(fx.engine_b.command(Command::SetFocus { node: Some(ROOT) }))
         .expect("the window opens");
-    assert_eq!(record_resolves(&fx.bob, fx.row), before, "no leg ran");
+    record_resolves(&fx.bob, fx.row) - before
+}
+
+/// The navigation probe reads a root below the floor as moved.
+fn assert_the_navigation_read_nothing(fx: &mut ReplayedRoot) {
+    assert_eq!(root_navigation_legs(fx), 0, "no leg ran");
     assert_eq!(fx.engine_b.queued_focus_files(), vec![fx.row]);
-    assert_the_replay_is_not_rendered(fx);
+    assert_the_row_is_still_listed(fx);
     assert!(accused_nobody(&mut fx.events_b), "the probe gates nothing");
 }
 
-fn assert_the_replay_is_not_rendered(fx: &ReplayedRoot) {
-    assert!(
-        block_on(fx.engine_b.view())
-            .unwrap()
-            .children(ROOT)
-            .iter()
-            .any(|child| child.id == fx.row),
-        "the view keeps the row the replayed root does not list"
-    );
+/// The view keeps the row that the replayed root does not list.
+fn assert_the_row_is_still_listed(fx: &ReplayedRoot) {
+    assert_eq!(child_id(&fx.engine_b, ROOT, "unwritten.bin"), fx.row);
 }
 
 /// ADR 0071 D4: every endpoint answered, so the walk after the navigation
 /// refuses the replay as a trust violation.
 #[test]
 fn a_root_replayed_at_every_endpoint_waits_for_the_walk_to_refuse_it() {
-    let mut fx = root_replayed_below_the_floor(false);
+    let mut fx = root_replayed_below_the_floor(Replay::AtEveryEndpoint);
     assert_the_navigation_read_nothing(&mut fx);
 
     let refreshed =
@@ -17294,14 +17300,14 @@ fn a_root_replayed_at_every_endpoint_waits_for_the_walk_to_refuse_it() {
         )),
         "the walk sends the trust event"
     );
-    assert_the_replay_is_not_rendered(&fx);
+    assert_the_row_is_still_listed(&fx);
 }
 
 /// ADR 0071 D1: an endpoint failed, so the walk reads the replay as
 /// unavailable, and the navigation reads the root once the endpoint heals.
 #[test]
 fn a_root_replayed_while_an_endpoint_fails_reads_on_the_navigation_after_it_heals() {
-    let mut fx = root_replayed_below_the_floor(true);
+    let mut fx = root_replayed_below_the_floor(Replay::BesideAFailingEndpoint);
     assert_the_navigation_read_nothing(&mut fx);
 
     let refreshed =
@@ -17311,16 +17317,12 @@ fn a_root_replayed_while_an_endpoint_fails_reads_on_the_navigation_after_it_heal
         "{refreshed:?}"
     );
     assert!(accused_nobody(&mut fx.events_b));
-    assert_the_replay_is_not_rendered(&fx);
+    assert_the_row_is_still_listed(&fx);
 
-    fx.world.record_store.heal_get_for(fx.root_name.as_str());
     fx.world
-        .scheduler
-        .advance(SyncTimingProfile::CI.stale_after);
-    let before = record_resolves(&fx.bob, fx.row);
-    block_on(fx.engine_b.command(Command::SetFocus { node: Some(ROOT) }))
-        .expect("the window opens");
-    assert!(record_resolves(&fx.bob, fx.row) > before, "the leg ran");
+        .record_store
+        .heal_get_for(write_name(ROOT).as_str());
+    assert!(root_navigation_legs(&mut fx) > 0, "the leg ran");
     assert!(fx.engine_b.queued_focus_files().is_empty());
     assert!(accused_nobody(&mut fx.events_b));
 }
