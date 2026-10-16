@@ -18,7 +18,11 @@ import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
-import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
+import {
+  DEFAULT_SWEEP_BATCH_SIZE,
+  MAX_SWEEP_BATCH_SIZE,
+  sweepExpiredRows,
+} from '../../common/sweep';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { refreshRowState } from '../refresh-liveness';
@@ -199,32 +203,17 @@ export class TokenService {
   /**
    * Reclaim every account's expired refresh rows, whether or not that account
    * ever comes back. An expired row stops authenticating at the expiry check,
-   * so this is table growth only and runs outside any request.
+   * so this is table growth only and runs outside any request. A rotation or
+   * a revocation deletes rows under the account's `session-credential` lock,
+   * and the sweep skips those rows.
    */
   async sweepExpired(): Promise<number> {
-    const cutoff = this.clock.now();
-    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
-  }
-
-  /**
-   * Postgres has no `DELETE ... LIMIT`, so the batch is bounded by selecting
-   * `ctid`s under the cutoff and deleting exactly those; `expires_at` ordering
-   * lets `idx_refresh_tokens_expires_at` drive the scan. `SKIP LOCKED` yields
-   * any row a rotation or a revocation is already deleting under the account's
-   * `session-credential` lock, so the account-wide and the table-wide delete
-   * take their row locks in whatever order they like without forming a cycle.
-   */
-  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
-    const result = await this.refreshTokenRepository
-      .createQueryBuilder()
-      .delete()
-      .from(RefreshToken)
-      .where(
-        'ctid IN (SELECT ctid FROM refresh_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
-        { cutoff, limit: this.sweepBatchSize }
-      )
-      .execute();
-    return result.affected ?? 0;
+    return sweepExpiredRows(
+      this.refreshTokenRepository.manager,
+      RefreshToken,
+      this.clock.now(),
+      this.sweepBatchSize
+    );
   }
 
   get refreshTokenTtlMs(): number {

@@ -20,6 +20,7 @@ import {
 import { Clock } from '../../common/clock';
 import { isUniqueViolation } from '../../common/pg-errors';
 import { AccountDevice } from '../../device-approval/entities/account-device.entity';
+import { UNBOUND_ACCOUNT_MESSAGE } from '../../device-approval/services/account-device.service';
 import {
   AUTH_METHOD_IDENTIFIER_UNIQUE,
   AuthMethod,
@@ -318,7 +319,7 @@ export class AuthService {
       await runLockGuardedTransaction(this.dataSource, async (manager) => {
         const bound = await this.boundSubjectOf(manager, userId);
         if (bound === null) {
-          throw new ConflictException('This account has no bound identity subject');
+          throw new ConflictException(UNBOUND_ACCOUNT_MESSAGE);
         }
         await boundedAcquire(
           manager,
