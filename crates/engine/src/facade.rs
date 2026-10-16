@@ -11286,11 +11286,12 @@ where {
     /// or beside it can name a scope root the legs would read as a plain
     /// child. A record below it is an availability outcome. The name is the one
     /// the last walk or graft gated, else `name`. A moved root reads nothing
-    /// until the next walk, which judges a replay (ADR 0071 D1 or D4). The sequence floor is no proof of a walk, as a gated
+    /// until the next walk. The sequence floor is no proof of a walk, as a gated
     /// read outside a walk raises it, so it bars only a replay: a served
     /// record below it, or a floor store with no answer, also counts as moved.
     /// An unavailable plane counts as moved; an absent record names no scope.
     /// The probe adopts nothing and raises no floor.
+    /// The verdict on a replay, ADR 0071 D1 or D4, is the next walk's.
     async fn scope_root_moved(
         &self,
         probes: &RootProbes,
@@ -22399,17 +22400,8 @@ mod focus_access_tests {
         use crate::testkit::fakes::InMemoryFloorStore;
         use cipherbox_core::ipns::IpnsRecord;
 
-        let world = FakeWorld::new();
-        let device = world.device(b"alice-pk");
-        let (mut engine, _events) = Engine::new(
-            device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
-            SyncTimingProfile::CI,
-            ContentProfile::CI,
-            StoragePolicy::CI,
-            ApiBaseUrl::offline(),
-            GatewayConfig::disabled(),
-        );
+        let device = FakeWorld::new().device(b"alice-pk");
+        let (mut engine, _) = engine_on(&device);
         block_on(engine.start(LoginSecret::new(vec![7; 32]), None)).unwrap();
         let signer = kdf::ipns_keypair(&[6u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
@@ -22699,7 +22691,7 @@ mod focus_access_tests {
         );
         assert!(
             !stamped.contains_key(&shared_file),
-            "the shared scope's row was not resolved under the vault's seed"
+            "no leg read the scope: the probe read its root as moved"
         );
         assert_eq!(engine.queued_focus_files(), vec![shared_file]);
         assert_eq!(
