@@ -37,6 +37,19 @@ const ENVELOPE_VERSION = 1;
 /** Where the wrapping key lives. Its handle is storable; its bytes are not. */
 export type WrappingKeyStore = KeyRecordStore<CryptoKey>;
 
+/** The storage surface the Core Kit SDK drives. */
+export interface CoreKitStorage {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+}
+
+/** A view of the sealed store that its owner can cut off. */
+export interface RevocableStoreView {
+  store: CoreKitStorage;
+  revoke(): void;
+}
+
 /**
  * `IAsyncStorage` for the Core Kit SDK, which awaits every store read and write.
  * A value it cannot open is dropped rather than surfaced, so an evicted key or a
@@ -74,7 +87,36 @@ export class SealedStore {
     return opened;
   }
 
-  async setItem(key: string, value: string): Promise<void> {
+  setItem(key: string, value: string): Promise<void> {
+    return this.seal(key, value, () => true);
+  }
+
+  async removeItem(key: string): Promise<void> {
+    this.storage.removeItem(key);
+  }
+
+  /**
+   * This store for one SDK instance. After `revoke`, no write or removal of the
+   * view lands, and that includes a write that was sealing when `revoke` ran.
+   */
+  revocableView(): RevocableStoreView {
+    let live = true;
+    return {
+      store: {
+        getItem: (key) => this.getItem(key),
+        setItem: (key, value) => this.seal(key, value, () => live),
+        removeItem: async (key) => {
+          if (live) this.storage.removeItem(key);
+        },
+      },
+      revoke: () => {
+        live = false;
+      },
+    };
+  }
+
+  /** `live` is read again after the encrypt, at the one step that commits. */
+  private async seal(key: string, value: string, live: () => boolean): Promise<void> {
     const wrapping = await this.wrappingKey();
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = await crypto.subtle.encrypt(
@@ -82,11 +124,7 @@ export class SealedStore {
       wrapping,
       new TextEncoder().encode(value)
     );
-    this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
-  }
-
-  async removeItem(key: string): Promise<void> {
-    this.storage.removeItem(key);
+    if (live()) this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
   }
 
   /** `null` for anything the key does not authenticate under this envelope. */

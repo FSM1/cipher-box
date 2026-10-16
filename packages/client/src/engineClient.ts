@@ -108,7 +108,7 @@ interface ParkedStart {
  * a hang; each step is a lock hand-off, so a handful of engine-less tabs still
  * clear well inside it.
  */
-const YIELD_TIMEOUT_MS = 5000;
+export const YIELD_TIMEOUT_MS = 5000;
 
 /**
  * The shortest interval between two stand-downs by the same tab. The greeting

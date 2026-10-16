@@ -7,12 +7,12 @@ import {
 } from '@web3auth/mpc-core-kit';
 import { Point } from '@tkey/common-types';
 import type BN from 'bn.js';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import {
   createCoreKitSession,
-  KEY_ASSIGNMENT_TIMED_OUT,
+  KeyAssignmentTimedOutError,
   KEY_ASSIGNMENT_TIMEOUT_MS,
 } from './coreKit';
 import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
@@ -22,6 +22,9 @@ const STORE_KEY = 'corekit_store';
 /** What the SDK writes under its one key; nothing here is real key material. */
 const SESSION = '{"sessionId":"not-a-real-session-id"}';
 
+/** What a login the session gave up on writes when it completes late. */
+const LATE_SESSION = '{"sessionId":"a-late-session-id"}';
+
 // The SDK reaches for the Web3Auth network on construction; the seam is what
 // lets the persistence options it is handed be read back, and what drives the
 // login and logout outcomes a device can actually land in.
@@ -30,6 +33,11 @@ const sdk = vi.hoisted(() => ({
   jwtLogin: undefined as Record<string, unknown> | undefined,
   /** Set to keep `loginWithJWT` pending, as the SDK does when the nodes refuse. */
   loginHangs: false,
+  /**
+   * Completes each pending login in turn. The SDK writes its session to its
+   * storage when the nodes answer, so a late completion does too.
+   */
+  lateLogins: [] as (() => Promise<void>)[],
   /** Set to make `loginWithJWT` reject with this refusal. */
   loginError: undefined as Error | undefined,
   /** How many SDK instances were built, and how many `init` calls they saw. */
@@ -77,9 +85,11 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
     ...actual,
     Web3AuthMPCCoreKit: class {
       readonly _storageKey = STORE_KEY;
+      private readonly storage: { setItem(key: string, value: string): Promise<void> };
       constructor(options: Record<string, unknown>) {
         sdk.options = options;
         sdk.constructions += 1;
+        this.storage = options.storage as typeof this.storage;
       }
       get status(): string {
         return sdk.status;
@@ -90,7 +100,14 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       loginWithJWT(params: Record<string, unknown>): Promise<void> {
         sdk.jwtLogin = params;
-        if (sdk.loginHangs) return new Promise<void>(() => undefined);
+        if (sdk.loginHangs) {
+          return new Promise<void>((resolve) => {
+            sdk.lateLogins.push(async () => {
+              await this.storage.setItem(STORE_KEY, LATE_SESSION);
+              resolve();
+            });
+          });
+        }
         if (sdk.loginError) return Promise.reject(sdk.loginError);
         sdk.status = sdk.statusAfterLogin;
         return Promise.resolve();
@@ -201,6 +218,7 @@ beforeEach(() => {
   sdk.options = undefined;
   sdk.jwtLogin = undefined;
   sdk.loginHangs = false;
+  sdk.lateLogins = [];
   sdk.loginError = undefined;
   sdk.constructions = 0;
   sdk.inits = 0;
@@ -237,10 +255,11 @@ beforeEach(() => {
 describe('the Core Kit store', () => {
   it('hands the SDK the sealed store, so nothing it writes lands in the clear', async () => {
     session();
-    await store.setItem(STORE_KEY, SESSION);
+    const sdkStorage = sdk.options?.storage as SealedStore;
+    await sdkStorage.setItem(STORE_KEY, SESSION);
 
-    expect(sdk.options?.storage).toBe(store);
     expect(window.localStorage.getItem(STORE_KEY)).not.toContain('sessionId');
+    await expect(store.getItem(STORE_KEY)).resolves.toBe(SESSION);
   });
 
   it('is left standing when a restore failed only because the key store was unreachable', async () => {
@@ -766,61 +785,93 @@ describe('a Core Kit login', () => {
   });
 });
 
+/** A login on `created` whose key assignment hangs until the bound passes. */
+async function timedOutLogin(created: ReturnType<typeof session>): Promise<unknown> {
+  sdk.status = COREKIT_STATUS.INITIALIZED;
+  sdk.loginHangs = true;
+  const failure = created.login(credential()).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+  sdk.loginHangs = false;
+  return failure;
+}
+
+describe('a key assignment the Web3Auth nodes do not answer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('refuses the login once the bound passes, rather than hanging', async () => {
+    const created = session();
+
+    expect(await timedOutLogin(created)).toBeInstanceOf(KeyAssignmentTimedOutError);
+    expect(created.isLoggedIn()).toBe(false);
+  });
+
+  it('signs in on a fresh SDK instance at the next attempt', async () => {
+    const created = session();
+    await timedOutLogin(created);
+
+    await created.login(credential());
+
+    // The pending call still holds the first instance, so the retry must not.
+    expect(sdk.constructions).toBe(2);
+    expect(sdk.inits).toBe(1);
+    expect(created.isLoggedIn()).toBe(true);
+  });
+
+  it('keeps a late session out of the store after the next login signed out', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    await created.logout();
+
+    await sdk.lateLogins[0]();
+
+    // A reload would restore whatever the store holds.
+    await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
+  });
+
+  it('keeps a late session out of the store after a sign-out with no retry', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.logout();
+
+    await sdk.lateLogins[0]();
+
+    await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
+  });
+
+  it('keeps the instance after a login that settled inside the bound', async () => {
+    const created = session();
+    await created.login(credential());
+    await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+
+    await created.login(credential());
+
+    expect(sdk.constructions).toBe(1);
+  });
+
+  it('passes the refusal of the SDK through as it came, and keeps the instance', async () => {
+    const created = session();
+    sdk.loginError = new Error('unable to assign key, All auth network nodes are currently busy');
+
+    await expect(created.login(credential())).rejects.toThrow('unable to assign key');
+    await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+    sdk.loginError = undefined;
+    await created.login(credential());
+
+    expect(sdk.constructions).toBe(1);
+  });
+});
+
 /**
  * The mint commits the factor before an approver can seal it, so an approval
  * that then fails needs a handle on it. The seal transfers the bytes away, so
  * the handle is the factor's public point and nothing else.
  */
-describe('a key assignment the Web3Auth nodes do not answer', () => {
-  it('refuses the login once the bound passes, rather than hanging', async () => {
-    vi.useFakeTimers();
-    try {
-      const created = session();
-      sdk.status = COREKIT_STATUS.INITIALIZED;
-      sdk.loginHangs = true;
-
-      const failure = created.login(credential()).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
-
-      expect(await failure).toMatchObject({ message: KEY_ASSIGNMENT_TIMED_OUT });
-      expect(created.isLoggedIn()).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('signs in on a fresh SDK instance at the next attempt', async () => {
-    vi.useFakeTimers();
-    try {
-      const created = session();
-      sdk.status = COREKIT_STATUS.INITIALIZED;
-      sdk.loginHangs = true;
-      const failure = created.login(credential()).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
-      await failure;
-      expect(sdk.constructions).toBe(1);
-
-      sdk.loginHangs = false;
-      await created.login(credential());
-
-      // The pending call still holds the first instance, so the retry must not.
-      expect(sdk.constructions).toBe(2);
-      expect(sdk.inits).toBe(1);
-      expect(created.isLoggedIn()).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('passes the refusal of the SDK through as it came', async () => {
-    const created = session();
-    sdk.loginError = new Error('unable to assign key, All auth network nodes are currently busy');
-
-    await expect(created.login(credential())).rejects.toThrow('unable to assign key');
-    expect(sdk.constructions).toBe(1);
-  });
-});
-
 describe('the factor an approval mints', () => {
   it('reports an identifier the delete then names that same factor by', async () => {
     const active = session();

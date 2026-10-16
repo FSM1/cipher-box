@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
-import { EngineClient, type EngineClientConfig, type LoginSecret } from './engineClient.js';
+import {
+  EngineClient,
+  YIELD_TIMEOUT_MS,
+  type EngineClientConfig,
+  type LoginSecret,
+} from './engineClient.js';
 import { LeaderRelay } from './leaderRelay.js';
 import type { LockManagerLike } from './leadership.js';
 import {
@@ -811,33 +816,41 @@ describe('EngineClient leadership + transport swap', () => {
     }
   });
 
+  /**
+   * The leader goes while a sign-in is in flight, so the start parks only after
+   * the promotion has begun its export. The export waits for the test.
+   */
+  async function parkDuringPromotion() {
+    const { tab, workers } = origin();
+    let settle!: { resolve(secret: LoginSecret): void; reject(failure: Error): void };
+    const secretSource = {
+      provideSecret: (): Promise<LoginSecret> =>
+        new Promise<LoginSecret>((resolve, reject) => (settle = { resolve, reject })),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource });
+    await tick();
+    await startTab(leader);
+
+    const started = follower.facade
+      .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
+      .then(
+        () => null,
+        (failure: unknown) => failure
+      );
+    await leader.dispose();
+    for (let i = 0; i < 20 && settle === undefined; i += 1) await tick();
+    expect(settle).toBeDefined();
+    // Past the deadline a parked start has outside a promotion.
+    await vi.advanceTimersByTimeAsync(YIELD_TIMEOUT_MS + 1_000);
+    return { follower, workers, started, settle };
+  }
+
   it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const { tab, workers } = origin();
-      let release!: (secret: LoginSecret) => void;
-      const secretSource = {
-        provideSecret: (): Promise<LoginSecret> =>
-          new Promise<LoginSecret>((resolve) => (release = resolve)),
-      };
-      const leader = tab();
-      const follower = tab({ secretSource });
-      await tick();
-      await startTab(leader);
-
-      // The leader goes while the sign-in is in flight, so the start parks only
-      // after the promotion has begun its export.
-      const started = follower.facade
-        .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
-        .then(
-          () => null,
-          (failure: unknown) => failure
-        );
-      await leader.dispose();
-      for (let i = 0; i < 20 && release === undefined; i += 1) await tick();
-      expect(release).toBeTypeOf('function');
-      await vi.advanceTimersByTimeAsync(6_000);
-      release(fakeLoginSecret([5]));
+      const { follower, workers, started, settle } = await parkDuringPromotion();
+      settle.resolve(fakeLoginSecret([5]));
 
       expect(await started).toBeNull();
       expect(follower.currentRole()).toBe('leader');
@@ -847,6 +860,33 @@ describe('EngineClient leadership + transport swap', () => {
       expect(coldStart?.identityToken).toBe('identity.jwt');
 
       await follower.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a start that parked during a promotion whose export failed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { follower, started, settle } = await parkDuringPromotion();
+      settle.reject(new Error('no session to export'));
+
+      expect(await started).toMatchObject({ message: 'no session to export' });
+      expect(follower.currentRole()).not.toBe('leader');
+
+      await follower.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a start that parked during a promotion when the client closes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { follower, started } = await parkDuringPromotion();
+      await follower.dispose();
+
+      expect(await started).toMatchObject({ message: 'engine client closed' });
     } finally {
       vi.useRealTimers();
     }

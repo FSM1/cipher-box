@@ -30,7 +30,12 @@ import {
 } from '@cipherbox/login';
 import { environment, loginEnv } from '../engine/config';
 import type { DeviceIdentity, DeviceIdentityStore } from './deviceIdentity';
-import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
+import {
+  indexedDbWrappingKeys,
+  SealedStore,
+  type CoreKitStorage,
+  type RevocableStoreView,
+} from './sealedStore';
 
 /** The Core Kit surface the web host drives beyond the shared login flow. */
 export interface WebCoreKitSession extends CoreKitSession {
@@ -143,14 +148,17 @@ function isRecoveryFactor(entry: string): boolean {
 
 /**
  * How long a key assignment may take. Devnet nodes have answered a working
- * login after about 40 s for each of two rounds, so the bound sits above that
- * and still shows the refusal inside a 180 s wait with room for a retry.
+ * login after about 40 s for each of two rounds, so the bound sits above that.
  */
 export const KEY_ASSIGNMENT_TIMEOUT_MS = 100_000;
 
-/** The refusal a login gets when the Web3Auth nodes do not assign a key in time. */
-export const KEY_ASSIGNMENT_TIMED_OUT =
-  'the login provider did not assign your key in time — please try again';
+/** The Web3Auth nodes did not assign a key in time. */
+export class KeyAssignmentTimedOutError extends Error {
+  constructor() {
+    super('the login provider did not assign your key in time — please try again');
+    this.name = 'KeyAssignmentTimedOutError';
+  }
+}
 
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements WebCoreKitSession {
@@ -170,6 +178,8 @@ class Web3AuthSession implements WebCoreKitSession {
   private readonly owedRemovals = new Set<string>();
 
   private coreKit: Web3AuthMPCCoreKit;
+  /** The store as `coreKit` sees it; revoked with an abandoned instance. */
+  private storeView: RevocableStoreView;
 
   /**
    * Set when a key assignment ran out of time. The SDK cannot cancel it, and a
@@ -179,12 +189,13 @@ class Web3AuthSession implements WebCoreKitSession {
   private abandoned = false;
 
   constructor(
-    private readonly build: () => Web3AuthMPCCoreKit,
+    private readonly build: (storage: CoreKitStorage) => Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
     private readonly identities: DeviceIdentityStore,
     private readonly verifier: string
   ) {
-    this.coreKit = build();
+    this.storeView = store.revocableView();
+    this.coreKit = build(this.storeView.store);
   }
 
   async restore(): Promise<void> {
@@ -206,8 +217,10 @@ class Web3AuthSession implements WebCoreKitSession {
 
   async login(credential: IdentityCredential): Promise<void> {
     if (this.abandoned) {
-      const fresh = this.build();
+      const view = this.store.revocableView();
+      const fresh = this.build(view.store);
       await fresh.init();
+      this.storeView = view;
       this.coreKit = fresh;
       this.abandoned = false;
     }
@@ -238,8 +251,11 @@ class Web3AuthSession implements WebCoreKitSession {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
       deadline = setTimeout(() => {
+        // The call can still complete and write its session, after a sign-out
+        // or over the session of the next login.
+        this.storeView.revoke();
         this.abandoned = true;
-        reject(new Error(KEY_ASSIGNMENT_TIMED_OUT));
+        reject(new KeyAssignmentTimedOutError());
       }, KEY_ASSIGNMENT_TIMEOUT_MS);
     });
     try {
@@ -645,12 +661,12 @@ export function createCoreKitSession(
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
-  const build = () =>
+  const build = (storage: CoreKitStorage) =>
     new Web3AuthMPCCoreKit({
       web3AuthClientId,
       web3AuthNetwork:
         environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
-      storage: store,
+      storage,
       sessionTime: SESSION_SECONDS,
       manualSync: true,
       tssLib,
