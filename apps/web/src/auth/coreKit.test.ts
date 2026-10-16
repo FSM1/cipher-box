@@ -44,6 +44,10 @@ const sdk = vi.hoisted(() => ({
    * when the nodes answer, so a late completion does too.
    */
   lateLogin: undefined as (() => Promise<void>) | undefined,
+  /** The status a late completion gives its instance. */
+  lateStatus: 'LOGGED_IN' as string,
+  /** The construction index of each instance that logged out, in order. */
+  loggedOut: [] as number[],
   /** Set to make `loginWithJWT` reject with this refusal. */
   loginError: undefined as Error | undefined,
   /** How many SDK instances were built, and how many `init` calls they saw. */
@@ -92,9 +96,12 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
     Web3AuthMPCCoreKit: class {
       readonly _storageKey = STORE_KEY;
       private readonly storage: { setItem(key: string, value: string): Promise<void> };
+      /** 1 for the first instance built, 2 for the next. */
+      private readonly index: number;
       constructor(options: Record<string, unknown>) {
         sdk.options = options;
         sdk.constructions += 1;
+        this.index = sdk.constructions;
         this.storage = options.storage as typeof this.storage;
       }
       /** The status a late completion gave this instance alone. */
@@ -112,7 +119,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
           return new Promise<void>((resolve) => {
             sdk.lateLogin = async () => {
               await this.storage.setItem(STORE_KEY, LATE_SESSION);
-              this.ownStatus = COREKIT_STATUS.LOGGED_IN;
+              this.ownStatus = sdk.lateStatus;
               resolve();
             };
           });
@@ -136,6 +143,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
+        sdk.loggedOut.push(this.index);
         if (this.ownStatus !== undefined) this.ownStatus = COREKIT_STATUS.INITIALIZED;
         return sdk.logoutError ? Promise.reject(sdk.logoutError) : Promise.resolve();
       }
@@ -232,6 +240,8 @@ beforeEach(() => {
   sdk.jwtLogin = undefined;
   sdk.loginHangs = false;
   sdk.lateLogin = undefined;
+  sdk.lateStatus = COREKIT_STATUS.LOGGED_IN;
+  sdk.loggedOut = [];
   sdk.loginError = undefined;
   sdk.constructions = 0;
   sdk.inits = 0;
@@ -873,13 +883,25 @@ describe('a key assignment the Web3Auth nodes do not answer', () => {
     const created = session();
     await timedOutLogin(created);
     await created.login(credential());
-    const before = sdk.logoutCalls;
 
     await sdk.lateLogin!();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(sdk.logoutCalls).toBe(before + 1);
+    // Instance 1 is the abandoned one; instance 2 holds the retried session.
+    expect(sdk.loggedOut).toEqual([1]);
     expect(created.isLoggedIn()).toBe(true);
+  });
+
+  it('logs out an abandoned instance that a late answer held at the factor policy', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    sdk.lateStatus = COREKIT_STATUS.REQUIRED_SHARE;
+    await sdk.lateLogin!();
+
+    await created.logout();
+
+    expect(sdk.loggedOut).toContain(1);
   });
 
   it('reports no session from an abandoned instance that a late answer signed in', async () => {

@@ -249,7 +249,9 @@ class Web3AuthSession implements WebCoreKitSession {
 
   /** `loginWithJWT`, bounded: the SDK keeps it pending when the nodes refuse. */
   private async assignKey(credential: IdentityCredential): Promise<void> {
-    const assigned = this.coreKit.loginWithJWT({
+    const instance = this.coreKit;
+    const view = this.storeView;
+    const assigned = instance.loginWithJWT({
       verifier: this.verifier,
       verifierId: credential.verifierId,
       idToken: credential.token,
@@ -259,8 +261,7 @@ class Web3AuthSession implements WebCoreKitSession {
       deadline = setTimeout(() => {
         // The call can still complete and write its session, after a sign-out
         // or over the session of the next login.
-        this.storeView.revoke();
-        const instance = this.coreKit;
+        view.revoke();
         this.abandoned.add(instance);
         assigned.then(
           () => this.endAbandoned(instance),

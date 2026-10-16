@@ -852,7 +852,7 @@ describe('EngineClient leadership + transport swap', () => {
       expect(settle).toBeDefined();
       // Past the deadline a parked start has outside a promotion.
       await vi.advanceTimersByTimeAsync(YIELD_TIMEOUT_MS + 1_000);
-      return { follower, workers, started, settle };
+      return { follower, workers, started, settle, tab };
     }
 
     it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
@@ -903,6 +903,28 @@ describe('EngineClient leadership + transport swap', () => {
       expect([...new Uint8Array(late.secret)]).toEqual([0]);
       expect(workers.slice(spawned).some((worker) => !worker.terminated)).toBe(false);
 
+      await follower.dispose();
+    });
+
+    // The tab that timed out leaves the election, so the next host is another tab.
+    it('frees the lock after an export ran out of time for a tab that then signs in', async () => {
+      const { follower, workers, started, tab } = await parkDuringPromotion();
+      await vi.advanceTimersByTimeAsync(SECRET_EXPORT_TIMEOUT_MS);
+      await started;
+
+      const next = tab({
+        secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret([7])) },
+      });
+      for (let i = 0; i < 20 && next.currentRole() !== 'leader'; i += 1) await turn();
+      expect(next.currentRole()).toBe('leader');
+      await next.facade.start(Uint8Array.from([7]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+
+      const coldStart = workers[workers.length - 1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(coldStart?.identityToken).toBe('identity.jwt');
+
+      await next.dispose();
       await follower.dispose();
     });
   });
