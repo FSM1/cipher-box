@@ -7,16 +7,29 @@ import {
 } from '@web3auth/mpc-core-kit';
 import { Point } from '@tkey/common-types';
 import type BN from 'bn.js';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
-import type { SealedStore } from './sealedStore';
-import { createCoreKitSession } from './coreKit';
-import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
+import type { CoreKitStorage, SealedStore } from './sealedStore';
+import {
+  createCoreKitSession,
+  KeyAssignmentTimedOutError,
+  KEY_ASSIGNMENT_TIMEOUT_MS,
+} from './coreKit';
+import {
+  createLoginFlow,
+  RecoveryRequiredError,
+  resetLoginFlowLatches,
+  type IdentityCredential,
+} from '@cipherbox/login';
+import { fakeIdentityExchange } from '../test/authFakes';
 
 const STORE_KEY = 'corekit_store';
 
 /** What the SDK writes under its one key; nothing here is real key material. */
 const SESSION = '{"sessionId":"not-a-real-session-id"}';
+
+/** What a login the session gave up on writes when it completes late. */
+const LATE_SESSION = '{"sessionId":"a-late-session-id"}';
 
 // The SDK reaches for the Web3Auth network on construction; the seam is what
 // lets the persistence options it is handed be read back, and what drives the
@@ -24,6 +37,22 @@ const SESSION = '{"sessionId":"not-a-real-session-id"}';
 const sdk = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   jwtLogin: undefined as Record<string, unknown> | undefined,
+  /** Set to keep `loginWithJWT` pending, as the SDK does when the nodes refuse. */
+  loginHangs: false,
+  /**
+   * Completes the pending login. The SDK writes its session to its storage
+   * when the nodes answer, so a late completion does too.
+   */
+  lateLogin: undefined as (() => Promise<void>) | undefined,
+  /** The status a late completion gives its instance. */
+  lateStatus: 'LOGGED_IN' as string,
+  /** The construction index of each instance that logged out, in order. */
+  loggedOut: [] as number[],
+  /** Set to make `loginWithJWT` reject with this refusal. */
+  loginError: undefined as Error | undefined,
+  /** How many SDK instances were built, and how many `init` calls they saw. */
+  constructions: 0,
+  inits: 0,
   userInfo: undefined as Record<string, unknown> | undefined,
   status: 'LOGGED_IN',
   statusAfterLogin: 'LOGGED_IN',
@@ -66,17 +95,36 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
     ...actual,
     Web3AuthMPCCoreKit: class {
       readonly _storageKey = STORE_KEY;
+      private readonly storage: { setItem(key: string, value: string): Promise<void> };
+      /** 1 for the first instance built, 2 for the next. */
+      private readonly index: number;
       constructor(options: Record<string, unknown>) {
         sdk.options = options;
+        sdk.constructions += 1;
+        this.index = sdk.constructions;
+        this.storage = options.storage as typeof this.storage;
       }
+      /** The status a late completion gave this instance alone. */
+      private ownStatus: string | undefined;
       get status(): string {
-        return sdk.status;
+        return this.ownStatus ?? sdk.status;
       }
       init(): Promise<void> {
+        sdk.inits += 1;
         return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
       async loginWithJWT(params: Record<string, unknown>): Promise<void> {
         sdk.jwtLogin = params;
+        if (sdk.loginHangs) {
+          return new Promise<void>((resolve) => {
+            sdk.lateLogin = async () => {
+              await this.storage.setItem(STORE_KEY, LATE_SESSION);
+              this.ownStatus = sdk.lateStatus;
+              resolve();
+            };
+          });
+        }
+        if (sdk.loginError) throw sdk.loginError;
         sdk.status = sdk.statusAfterLogin;
       }
       getUserInfo(): Record<string, unknown> {
@@ -95,6 +143,8 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
+        sdk.loggedOut.push(this.index);
+        if (this.ownStatus !== undefined) this.ownStatus = COREKIT_STATUS.INITIALIZED;
         return sdk.logoutError ? Promise.reject(sdk.logoutError) : Promise.resolve();
       }
       getDeviceFactor(): Promise<string | undefined> {
@@ -134,6 +184,9 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.factorPubs = sdk.factorPubs.filter((listed) => listed !== pub);
         if (factorKey) sdk.deleted.push(factorKey.toString('hex'));
         return Promise.resolve();
+      }
+      _UNSAFE_exportTssKey(): Promise<string> {
+        return Promise.resolve('0f'.repeat(32));
       }
       getKeyDetails(): Record<string, unknown> {
         if (sdk.keyDetailsError) throw sdk.keyDetailsError;
@@ -182,8 +235,16 @@ const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCreden
 });
 
 beforeEach(() => {
+  resetLoginFlowLatches();
   sdk.options = undefined;
   sdk.jwtLogin = undefined;
+  sdk.loginHangs = false;
+  sdk.lateLogin = undefined;
+  sdk.lateStatus = COREKIT_STATUS.LOGGED_IN;
+  sdk.loggedOut = [];
+  sdk.loginError = undefined;
+  sdk.constructions = 0;
+  sdk.inits = 0;
   sdk.userInfo = undefined;
   sdk.status = COREKIT_STATUS.LOGGED_IN;
   sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
@@ -217,10 +278,11 @@ beforeEach(() => {
 describe('the Core Kit store', () => {
   it('hands the SDK the sealed store, so nothing it writes lands in the clear', async () => {
     session();
-    await store.setItem(STORE_KEY, SESSION);
+    const sdkStorage = sdk.options?.storage as CoreKitStorage;
+    await sdkStorage.setItem(STORE_KEY, SESSION);
 
-    expect(sdk.options?.storage).toBe(store);
     expect(window.localStorage.getItem(STORE_KEY)).not.toContain('sessionId');
+    await expect(store.getItem(STORE_KEY)).resolves.toBe(SESSION);
   });
 
   it('is left standing when a restore failed only because the key store was unreachable', async () => {
@@ -743,6 +805,152 @@ describe('a Core Kit login', () => {
     const restored = session();
     await restored.restore();
     expect(restored.display()).toBeNull();
+  });
+});
+
+/** A login on `created` whose key assignment hangs until the bound passes. */
+async function timedOutLogin(created: ReturnType<typeof session>): Promise<unknown> {
+  sdk.status = COREKIT_STATUS.INITIALIZED;
+  sdk.loginHangs = true;
+  const failure = created.login(credential()).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+  sdk.loginHangs = false;
+  return failure;
+}
+
+describe('a key assignment the Web3Auth nodes do not answer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('refuses the login once the bound passes, rather than hanging', async () => {
+    const created = session();
+
+    expect(await timedOutLogin(created)).toBeInstanceOf(KeyAssignmentTimedOutError);
+    expect(created.isLoggedIn()).toBe(false);
+  });
+
+  it('signs in on a fresh SDK instance at the next attempt', async () => {
+    const created = session();
+    await timedOutLogin(created);
+
+    await created.login(credential());
+
+    // The pending call still holds the first instance, so the retry must not.
+    expect(sdk.constructions).toBe(2);
+    expect(sdk.inits).toBe(1);
+    expect(created.isLoggedIn()).toBe(true);
+  });
+
+  it('keeps a late session out of the store after the next login signed out', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    await created.logout();
+
+    await sdk.lateLogin!();
+
+    // A reload would restore whatever the store holds.
+    await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
+  });
+
+  it('keeps a late session out of the store after a sign-out with no retry', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.logout();
+
+    await sdk.lateLogin!();
+
+    await expect(store.getItem(STORE_KEY)).resolves.toBeNull();
+  });
+
+  it('keeps the session of the retried login when the abandoned one completes', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    // The session the retried instance wrote through its own view.
+    await (sdk.options?.storage as CoreKitStorage).setItem(STORE_KEY, SESSION);
+
+    await sdk.lateLogin!();
+
+    await expect(store.getItem(STORE_KEY)).resolves.toBe(SESSION);
+  });
+
+  it('logs out an abandoned instance that a late answer signed in, after a retry', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+
+    await sdk.lateLogin!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Instance 1 is the abandoned one; instance 2 holds the retried session.
+    expect(sdk.loggedOut).toEqual([1]);
+    expect(created.isLoggedIn()).toBe(true);
+  });
+
+  it('logs out an abandoned instance that a late answer held at the factor policy', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.login(credential());
+    sdk.lateStatus = COREKIT_STATUS.REQUIRED_SHARE;
+    await sdk.lateLogin!();
+
+    await created.logout();
+
+    expect(sdk.loggedOut).toContain(1);
+  });
+
+  it('reports no session from an abandoned instance that a late answer signed in', async () => {
+    const created = session();
+    await timedOutLogin(created);
+    await created.logout();
+    const before = sdk.logoutCalls;
+    await sdk.lateLogin!();
+    const engine = { start: vi.fn(() => Promise.resolve()), logout: () => Promise.resolve() };
+    const flow = createLoginFlow({
+      exchange: fakeIdentityExchange().exchange,
+      collector: {},
+      session: created,
+      facade: engine,
+      secrets: null,
+      account: { signedIn: () => undefined, signedOut: () => undefined },
+      progress: { begin: () => undefined, failed: () => undefined, end: () => undefined },
+      now: () => new Date(),
+    });
+
+    expect(created.isLoggedIn()).toBe(false);
+    await flow.resume();
+
+    expect(engine.start).not.toHaveBeenCalled();
+    // The session the late answer made still ends.
+    await created.logout();
+    expect(sdk.logoutCalls).toBe(before + 1);
+  });
+
+  it('keeps the instance after a login that settled inside the bound', async () => {
+    const created = session();
+    await created.login(credential());
+    await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+
+    await created.login(credential());
+
+    expect(sdk.constructions).toBe(1);
+  });
+
+  it('passes the refusal of the SDK through as it came, and keeps the instance', async () => {
+    const created = session();
+    sdk.loginError = new Error('unable to assign key, All auth network nodes are currently busy');
+
+    await expect(created.login(credential())).rejects.toThrow('unable to assign key');
+    await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+    sdk.loginError = undefined;
+    await created.login(credential());
+
+    expect(sdk.constructions).toBe(1);
   });
 });
 

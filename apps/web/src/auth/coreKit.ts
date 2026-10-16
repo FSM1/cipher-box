@@ -30,7 +30,12 @@ import {
 } from '@cipherbox/login';
 import { environment, loginEnv } from '../engine/config';
 import type { DeviceIdentity, DeviceIdentityStore } from './deviceIdentity';
-import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
+import {
+  indexedDbWrappingKeys,
+  SealedStore,
+  type CoreKitStorage,
+  type RevocableStoreView,
+} from './sealedStore';
 
 /** The Core Kit surface the web host drives beyond the shared login flow. */
 export interface WebCoreKitSession extends CoreKitSession {
@@ -121,6 +126,13 @@ const ACCOUNT_LABELS_KEY = 'cipherbox_account_email';
  */
 const UNENROLLED_FACTORS = 2;
 
+/** A session held short of reconstruction is still a live credential. */
+function holdsSession(coreKit: Web3AuthMPCCoreKit): boolean {
+  return (
+    coreKit.status === COREKIT_STATUS.LOGGED_IN || coreKit.status === COREKIT_STATUS.REQUIRED_SHARE
+  );
+}
+
 /**
  * Whether one of the SDK's flattened factor descriptions is the recovery
  * factor. The share index carries it as well as the label, because the SDK
@@ -141,6 +153,20 @@ function isRecoveryFactor(entry: string): boolean {
   );
 }
 
+/**
+ * How long a key assignment may take. Devnet nodes have answered a working
+ * login after about 40 s for each of two rounds, so the bound sits above that.
+ */
+export const KEY_ASSIGNMENT_TIMEOUT_MS = 100_000;
+
+/** The Web3Auth nodes did not assign a key in time. */
+export class KeyAssignmentTimedOutError extends Error {
+  constructor() {
+    super('the login provider did not assign your key in time — please try again');
+    this.name = 'KeyAssignmentTimedOutError';
+  }
+}
+
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements WebCoreKitSession {
   /** The label the exchange reported; the token deliberately carries no PII. */
@@ -158,12 +184,26 @@ class Web3AuthSession implements WebCoreKitSession {
    */
   private readonly owedRemovals = new Set<string>();
 
+  private coreKit: Web3AuthMPCCoreKit;
+  /**
+   * The store as `coreKit` sees it. Revoked when a key assignment ran out of
+   * time: the SDK cannot cancel it, and a second login on that instance shares
+   * its state, so the next login builds a fresh one. Until then the instance
+   * reports no session, whatever a late answer of the nodes sets its status to.
+   */
+  private storeView: RevocableStoreView;
+  /** Abandoned instances whose key assignment can still give them a session. */
+  private readonly abandoned = new Set<Web3AuthMPCCoreKit>();
+
   constructor(
-    private readonly coreKit: Web3AuthMPCCoreKit,
+    private readonly build: (storage: CoreKitStorage) => Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
     private readonly identities: DeviceIdentityStore,
     private readonly verifier: string
-  ) {}
+  ) {
+    this.storeView = store.revocableView();
+    this.coreKit = build(this.storeView.store);
+  }
 
   async restore(): Promise<void> {
     try {
@@ -179,15 +219,18 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   isLoggedIn(): boolean {
-    return this.coreKit.status === COREKIT_STATUS.LOGGED_IN;
+    return !this.storeView.revoked && this.coreKit.status === COREKIT_STATUS.LOGGED_IN;
   }
 
   async login(credential: IdentityCredential): Promise<void> {
-    await this.coreKit.loginWithJWT({
-      verifier: this.verifier,
-      verifierId: credential.verifierId,
-      idToken: credential.token,
-    });
+    if (this.storeView.revoked) {
+      const view = this.store.revocableView();
+      const fresh = this.build(view.store);
+      await fresh.init();
+      this.storeView = view;
+      this.coreKit = fresh;
+    }
+    await this.assignKey(credential);
     this.signedInDisplay = credential.display;
     this.signedInSubject = credential.verifierId;
     this.signedInToken = credential.token;
@@ -202,6 +245,47 @@ class Web3AuthSession implements WebCoreKitSession {
     // own guard refuses the phrase they type into it.
     if (!this.needsRecovery()) throw new Error(`the sign-in stopped at ${this.coreKit.status}`);
     throw new RecoveryRequiredError();
+  }
+
+  /** `loginWithJWT`, bounded: the SDK keeps it pending when the nodes refuse. */
+  private async assignKey(credential: IdentityCredential): Promise<void> {
+    const instance = this.coreKit;
+    const view = this.storeView;
+    const assigned = instance.loginWithJWT({
+      verifier: this.verifier,
+      verifierId: credential.verifierId,
+      idToken: credential.token,
+    });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => {
+        // The call can still complete and write its session, after a sign-out
+        // or over the session of the next login.
+        view.revoke();
+        this.abandoned.add(instance);
+        assigned.then(
+          () => this.endAbandoned(instance),
+          () => this.abandoned.delete(instance)
+        );
+        reject(new KeyAssignmentTimedOutError());
+      }, KEY_ASSIGNMENT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([assigned, timedOut]);
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+
+  /** Ends the node-side session a late answer gave an abandoned instance. */
+  private async endAbandoned(instance: Web3AuthMPCCoreKit): Promise<void> {
+    try {
+      if (holdsSession(instance)) await instance.logout();
+    } catch {
+      // Best effort: the session expires at `SESSION_SECONDS` regardless.
+    } finally {
+      this.abandoned.delete(instance);
+    }
   }
 
   hasRecoveryPhrase(): boolean {
@@ -321,7 +405,7 @@ class Web3AuthSession implements WebCoreKitSession {
 
   /** A login reached the factor policy and this device holds no factor. */
   private needsRecovery(): boolean {
-    return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
+    return !this.storeView.revoked && this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
   }
 
   accountId(): string {
@@ -357,8 +441,10 @@ class Web3AuthSession implements WebCoreKitSession {
 
   async logout(): Promise<void> {
     try {
-      // A session held short of reconstruction is still a live credential.
-      if (this.isLoggedIn() || this.needsRecovery()) await this.coreKit.logout();
+      await Promise.all([...this.abandoned].map((instance) => this.endAbandoned(instance)));
+      // Read the SDK itself: a late answer can give an abandoned instance that
+      // is still current a session that `isLoggedIn` does not report.
+      if (holdsSession(this.coreKit)) await this.coreKit.logout();
     } finally {
       this.signedInDisplay = null;
       this.signedInSubject = null;
@@ -600,14 +686,16 @@ export function createCoreKitSession(
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
-  const coreKit = new Web3AuthMPCCoreKit({
-    web3AuthClientId,
-    web3AuthNetwork:
-      environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
-    storage: store,
-    sessionTime: SESSION_SECONDS,
-    manualSync: true,
-    tssLib,
-  });
-  return new Web3AuthSession(coreKit, store, identities, verifier);
+  const web3AuthNetwork =
+    environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET;
+  const build = (storage: CoreKitStorage) =>
+    new Web3AuthMPCCoreKit({
+      web3AuthClientId,
+      web3AuthNetwork,
+      storage,
+      sessionTime: SESSION_SECONDS,
+      manualSync: true,
+      tssLib,
+    });
+  return new Web3AuthSession(build, store, identities, verifier);
 }

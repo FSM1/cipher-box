@@ -22,6 +22,7 @@ type RecoveryRoute = 'choose' | 'approve' | 'phrase';
 export function SignInPanel() {
   const {
     isReady,
+    isSignedOut,
     isBusy,
     error,
     heldElsewhere,
@@ -35,6 +36,9 @@ export function SignInPanel() {
   const { googleClientId } = useIdentity();
   const { saveDevice } = useAuthState();
   const [route, setRoute] = useState<RecoveryRoute>('choose');
+  // `isSignedOut` stays false while a saved session resumes, and that resume
+  // holds the login gate whichever surface started it.
+  const methodsDisabled = !isReady || !isSignedOut || isBusy;
 
   // A resolved prompt leaves no route behind, so the next one starts at the ask.
   useEffect(() => {
@@ -104,7 +108,7 @@ export function SignInPanel() {
           <GoogleLoginButton
             clientId={googleClientId}
             onCredential={loginWithGoogle}
-            disabled={!isReady || isBusy}
+            disabled={methodsDisabled}
           />
 
           <div className="login-divider">
@@ -114,7 +118,7 @@ export function SignInPanel() {
           <EmailLoginForm
             onSendCode={sendEmailCode}
             onVerify={loginWithEmailCode}
-            disabled={!isReady || isBusy}
+            disabled={methodsDisabled}
           />
 
           <div className="login-divider">
@@ -124,7 +128,7 @@ export function SignInPanel() {
           <WalletLoginButton
             requestNonce={walletNonce}
             onLogin={loginWithWallet}
-            disabled={!isReady || isBusy}
+            disabled={methodsDisabled}
           />
         </div>
       )}
