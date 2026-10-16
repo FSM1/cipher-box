@@ -49,7 +49,13 @@ export function sweepExpiredRows(
   cutoff: Date,
   batchSize: number
 ): Promise<number> {
-  const table = manager.connection.getMetadata(target).tableName;
+  // The subquery must name the table the outer `DELETE` does, schema included.
+  const { connection } = manager;
+  const table = connection
+    .getMetadata(target)
+    .tablePath.split('.')
+    .map((part) => connection.driver.escape(part))
+    .join('.');
   return drainBatches(batchSize, async () => {
     const result = await manager
       .createQueryBuilder()

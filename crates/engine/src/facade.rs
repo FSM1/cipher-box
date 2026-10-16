@@ -191,6 +191,7 @@ use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
+pub use self::owed_rotation::OWED_GRANTS_DROPPED;
 pub use crate::rotation::DropCause;
 pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;

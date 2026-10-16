@@ -10,7 +10,7 @@
  * that land in the gap.
  */
 
-import { EngineRequestError, toHex } from '@cipherbox/client';
+import { EngineRequestError, OWED_GRANTS_DROPPED, toHex } from '@cipherbox/client';
 import type {
   EngineClient,
   EventDescriptor,
@@ -114,15 +114,12 @@ const WRITE_CUT_FAILED =
 const WRITE_CUT_TRUST_STOP =
   'the write-access change of a shared folder stopped because a record in that folder failed verification - CipherBox will not finish it while that record stands';
 
-/** The `rotationWorkAbandoned` detail of a cut that read the last copy of its root (ADR 0068 D5). */
-const OWED_GRANTS_DROPPED = 'owed-grants-dropped-from-last-copy';
-
 const SHARES_DROPPED =
   'a change to who can open a shared folder removed every share of that folder - share the folder again with each person who must keep access';
 
 type DropCause = Extract<EventDescriptor, { kind: 'nodeDropped' }>['cause'];
 
-/** Why a write cut left an item out of the moved tree (ADR 0065), in plain words. */
+/** Why the name wave dropped a node from the moved tree (ADR 0065), in plain words. */
 const DROP_REASONS: Record<DropCause, string> = {
   'record-refused': 'its record failed verification',
   'epoch-unreachable': 'this device holds no key that opens its record',
@@ -336,7 +333,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       const folder = state.view?.children.some((child) => sameNode(child.id, event.nodeId))
         ? state.view.folderName
         : '';
-      notificationStore.warn(
+      notificationStore.warnMinor(
         `dropped:${toHex(event.scopeRoot)}:${toHex(event.nodeId)}`,
         nodeDropped(folder, event.cause)
       );
