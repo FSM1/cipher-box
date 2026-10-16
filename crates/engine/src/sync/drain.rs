@@ -5140,7 +5140,6 @@ where
                 target,
                 deleted_at,
                 None,
-                scope.scope_roots,
             )
             .await?;
             None
@@ -5397,7 +5396,6 @@ where
             target,
             entry.deleted_at,
             None,
-            scope.scope_roots,
         )
         .await
         .map(drop)
@@ -5452,7 +5450,6 @@ where
             pass.anchor_for(&binned_under)?,
             target,
             None,
-            scope.scope_roots,
         )
         .await
         .map_err(charge_bin_read)?;
@@ -5997,16 +5994,7 @@ where
             self.return_captures(taken);
             return;
         };
-        // A known root this session has not proved is a boundary too: its
-        // record seals under its own scope, so the bin plane cannot open it.
-        let stops: Vec<NodeId> = scope
-            .scope_roots
-            .iter()
-            .chain(scope.known_scope_roots)
-            .copied()
-            .collect();
         let mut added = Vec::new();
-        let mut strandings = Vec::new();
         let mut unfinished = Vec::new();
         let mut stopped = Vec::new();
         // Each other end's root, read once for the pass; `None` did not read.
@@ -6061,7 +6049,6 @@ where
                     unlinked.node,
                     deleted_at,
                     Some(*opened),
-                    &stops,
                 )
                 .await
             else {
@@ -6072,7 +6059,6 @@ where
                 self.report_stranded(&unlinked, &stranded);
                 continue;
             }
-            strandings.push(stranded);
             index.entries.push(BinEntry::new(
                 unlinked.node.0,
                 bin_name,
@@ -6088,14 +6074,14 @@ where
                         .held_key(&unlinked.node.0, unlinked.deleted_at),
                 ),
             ));
-            added.push(unlinked);
+            added.push((unlinked, stranded));
         }
         if !added.is_empty() && self.publish_bin(index).await.is_err() {
             // Re-keyed with no entry to name them: the next pass re-keys to the
             // same key and writes the entries it could not write here.
-            unfinished.extend(added);
+            unfinished.extend(added.into_iter().map(|(unlinked, _)| unlinked));
         } else {
-            for (unlinked, stranded) in added.iter().zip(&strandings) {
+            for (unlinked, stranded) in &added {
                 self.report_stranded(unlinked, stranded);
             }
         }
@@ -6845,7 +6831,6 @@ where
 
     /// Re-seal the doomed subtree under the bin's held key, which is the access
     /// cut a soft delete owes (ADR 0010 item 3).
-    #[expect(clippy::too_many_arguments, reason = "one subtree's full re-key")]
     async fn rekey_into_bin(
         &self,
         scope: &DrainScope<'_>,
@@ -6854,11 +6839,10 @@ where
         root: NodeId,
         deleted_at: u64,
         opened: Option<Opened>,
-        stops: &[NodeId],
     ) -> Result<BTreeSet<NodeId>, Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = plane.held_plane(&held);
-        self.rekey_subtree(scope, plane, &binned, anchor, root, opened, stops)
+        self.rekey_subtree(scope, plane, &binned, anchor, root, opened)
             .await
     }
 
@@ -6879,9 +6863,7 @@ where
     /// `opened` is `root`'s record as the caller already read it under `from`
     /// or `to`, which the re-key seals in place of a second read.
     ///
-    /// `stops` are the scope roots the walk stops at, and it returns each one it
-    /// met.
-    #[expect(clippy::too_many_arguments, reason = "one subtree's full re-key")]
+    /// Returns the scope roots the walk stopped at.
     async fn rekey_subtree(
         &self,
         scope: &DrainScope<'_>,
@@ -6890,7 +6872,6 @@ where
         anchor: Anchor<'_>,
         root: NodeId,
         mut opened: Option<Opened>,
-        stops: &[NodeId],
     ) -> Result<BTreeSet<NodeId>, Halt> {
         let mut seen = BTreeSet::new();
         let mut stopped_at = BTreeSet::new();
@@ -6919,9 +6900,9 @@ where
                 ReadBody::Folder { children, .. } => {
                     for child in children {
                         let child_id = NodeId(child.id);
-                        if in_this_scope(&from.end, stops, child) {
+                        if in_this_scope(&from.end, scope.scope_roots, child) {
                             pending.push(child_id);
-                        } else if stops.contains(&child_id) {
+                        } else if scope.scope_roots.contains(&child_id) {
                             stopped_at.insert(child_id);
                         }
                     }

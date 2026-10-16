@@ -5480,12 +5480,9 @@ fn a_purge_stops_at_a_write_granted_folder_it_holds() {
     assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Write);
 }
 
-/// A granted folder whose record no source serves after a restart is a known
-/// scope root the boundary walk did not prove. A capture of the folder above it
-/// stops at it and tells the owner, rather than read it under the bin key.
-#[test]
-fn a_capture_stops_at_a_granted_folder_no_walk_proved() {
-    let mut fx = GrantScenario::new();
+/// The owner device holds a granted folder under `plain`, and another writer
+/// unlinks `plain` from `outer`. Returns `(outer, plain)`.
+fn granted_folder_under_an_unlinked_folder(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     assert_eq!(
         fx.grant_folder_at(Permission::Read),
         Ok(CommandOutcome::Done)
@@ -5500,10 +5497,11 @@ fn a_capture_stops_at_a_granted_folder_no_walk_proved() {
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    fx.world
-        .record_store
-        .fail_get_for(write_name(fx.folder).as_str());
-    restart_owner(&mut fx);
+    (outer, plain)
+}
+
+/// Another writer unlinks `plain` from `outer`, as seen by the owner engine.
+fn unlink_plain(fx: &mut GrantScenario, outer: NodeId, plain: NodeId) {
     block_on(fx.engine.command(Command::SetFocus { node: Some(outer) })).unwrap();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     concurrent_edit(
@@ -5514,21 +5512,86 @@ fn a_capture_stops_at_a_granted_folder_no_walk_proved() {
         SCOPE,
         |children| children.retain(|child| child.id != plain.0),
     );
+}
+
+/// A scope root the boundary walk did not prove is no boundary to the capture
+/// re-key: an unproved claim does not keep a node out of the cut. The capture
+/// bins and tells only once a walk proves the root.
+#[test]
+fn a_capture_does_not_stop_at_a_scope_root_no_walk_proved() {
+    let mut fx = GrantScenario::new();
+    let (outer, plain) = granted_folder_under_an_unlinked_folder(&mut fx);
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+    restart_owner(&mut fx);
+    unlink_plain(&mut fx, outer, plain);
     for _ in 0..8 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != plain.0),
+        "the capture does not bin past an unproved root"
+    );
+    assert!(stranded_notices(&events_so_far(&mut fx._events)).is_empty());
 
-    let seen = events_so_far(&mut fx._events);
-    assert_eq!(abuse_events_in(&seen), 0, "no record is faulty");
+    fx.world
+        .record_store
+        .heal_get_for(write_name(fx.folder).as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
     assert!(
         published_bin_entries(&fx)
             .iter()
             .any(|entry| entry.node_id == plain.0),
-        "the unlinked folder bins"
+        "the proved root lets the capture bin"
     );
     assert_eq!(
-        stranded_notices(&seen),
+        stranded_notices(&events_so_far(&mut fx._events)),
         [(fx.folder, plain, "plain".to_owned())]
+    );
+}
+
+/// A capture whose bin index publish fails sends no notice. The retry that
+/// lands the entry sends it once.
+#[test]
+fn a_stranded_notice_waits_for_the_bin_entry() {
+    let mut fx = GrantScenario::new();
+    let (outer, plain) = granted_folder_under_an_unlinked_folder(&mut fx);
+    let bin = BinIndexKeys::derive(&SECRET);
+    fx.world.record_store.fail_put_for(bin.name().as_str());
+    unlink_plain(&mut fx, outer, plain);
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != plain.0),
+        "no entry lands"
+    );
+    assert!(
+        stranded_notices(&events_so_far(&mut fx._events)).is_empty(),
+        "no notice before the entry"
+    );
+
+    fx.world.record_store.heal_put_for(bin.name().as_str());
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the retry lands the entry"
+    );
+    assert_eq!(
+        stranded_notices(&events_so_far(&mut fx._events)),
+        [(fx.folder, plain, "plain".to_owned())],
+        "the notice goes out once"
     );
 }
 

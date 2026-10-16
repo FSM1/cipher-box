@@ -110,7 +110,7 @@ const WRITE_CUT_TRUST_STOP =
   'the write-access change of a shared folder stopped because a record in that folder failed verification - CipherBox will not finish it while that record stands';
 
 /** Owner capture binned a folder that holds a shared folder; a restore of the binned folder reaches it again. */
-const scopeRootStranded = (folderName: string): string =>
+const scopeRootStrandedText = (folderName: string): string =>
   `another writer removed the folder "${folderName}", which holds a shared folder - restore "${folderName}" from the bin to reach the shared folder again`;
 
 const IDLE: SnapshotState = { view: null, error: null };
@@ -305,7 +305,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     } else if (event.kind === 'scopeRootStranded') {
       notificationStore.warn(
         `stranded:${toHex(event.scopeRoot)}`,
-        scopeRootStranded(event.folderName)
+        scopeRootStrandedText(event.folderName)
       );
     }
   });
