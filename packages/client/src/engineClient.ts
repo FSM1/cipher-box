@@ -335,6 +335,9 @@ export class EngineClient implements EngineTransport {
   private secretSource: SecretSource | null;
   // Starts parked on an engine for this tab becoming reachable (`awaitEngine`).
   private readonly parkedStarts = new Set<ParkedStart>();
+  // True while a promotion opens the engine those starts wait for; a start that
+  // parks then gets no deadline (`holdParkedStarts`).
+  private promoting = false;
   private ownFocus: Uint8Array | null = null;
   // The stand-down throttle (`yieldLeadership`): the cooldown timer that is
   // running, and whether a greeting arrived while it was.
@@ -506,7 +509,7 @@ export class EngineClient implements EngineTransport {
           else reject(failure ?? refusal);
         },
       };
-      deadline = setTimeout(() => parked.settle(refusal), YIELD_TIMEOUT_MS);
+      if (!this.promoting) deadline = setTimeout(() => parked.settle(refusal), YIELD_TIMEOUT_MS);
       this.parkedStarts.add(parked);
     });
   }
@@ -800,6 +803,7 @@ export class EngineClient implements EngineTransport {
     });
     try {
       if (hasSession) {
+        this.promoting = true;
         this.holdParkedStarts();
         const { secret, accountId } = await this.provideFailoverSecret();
         try {
@@ -842,6 +846,8 @@ export class EngineClient implements EngineTransport {
       this.settleParkedStarts(null);
     } catch (error) {
       this.abortPromotion(local, error);
+    } finally {
+      this.promoting = false;
     }
   }
 

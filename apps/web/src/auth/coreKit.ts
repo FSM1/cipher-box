@@ -141,6 +141,17 @@ function isRecoveryFactor(entry: string): boolean {
   );
 }
 
+/**
+ * How long a key assignment may take. Devnet nodes have answered a working
+ * login after about 40 s for each of two rounds, so the bound sits above that
+ * and still shows the refusal inside a 180 s wait with room for a retry.
+ */
+export const KEY_ASSIGNMENT_TIMEOUT_MS = 100_000;
+
+/** The refusal a login gets when the Web3Auth nodes do not assign a key in time. */
+export const KEY_ASSIGNMENT_TIMED_OUT =
+  'the login provider did not assign your key in time — please try again';
+
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements WebCoreKitSession {
   /** The label the exchange reported; the token deliberately carries no PII. */
@@ -158,12 +169,23 @@ class Web3AuthSession implements WebCoreKitSession {
    */
   private readonly owedRemovals = new Set<string>();
 
+  private coreKit: Web3AuthMPCCoreKit;
+
+  /**
+   * Set when a key assignment ran out of time. The SDK cannot cancel it, and a
+   * second login on that instance shares its state, so the next login builds a
+   * fresh one.
+   */
+  private abandoned = false;
+
   constructor(
-    private readonly coreKit: Web3AuthMPCCoreKit,
+    private readonly build: () => Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
     private readonly identities: DeviceIdentityStore,
     private readonly verifier: string
-  ) {}
+  ) {
+    this.coreKit = build();
+  }
 
   async restore(): Promise<void> {
     try {
@@ -183,11 +205,13 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   async login(credential: IdentityCredential): Promise<void> {
-    await this.coreKit.loginWithJWT({
-      verifier: this.verifier,
-      verifierId: credential.verifierId,
-      idToken: credential.token,
-    });
+    if (this.abandoned) {
+      const fresh = this.build();
+      await fresh.init();
+      this.coreKit = fresh;
+      this.abandoned = false;
+    }
+    await this.assignKey(credential);
     this.signedInDisplay = credential.display;
     this.signedInSubject = credential.verifierId;
     this.signedInToken = credential.token;
@@ -202,6 +226,27 @@ class Web3AuthSession implements WebCoreKitSession {
     // own guard refuses the phrase they type into it.
     if (!this.needsRecovery()) throw new Error(`the sign-in stopped at ${this.coreKit.status}`);
     throw new RecoveryRequiredError();
+  }
+
+  /** `loginWithJWT`, bounded: the SDK keeps it pending when the nodes refuse. */
+  private async assignKey(credential: IdentityCredential): Promise<void> {
+    const assigned = this.coreKit.loginWithJWT({
+      verifier: this.verifier,
+      verifierId: credential.verifierId,
+      idToken: credential.token,
+    });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => {
+        this.abandoned = true;
+        reject(new Error(KEY_ASSIGNMENT_TIMED_OUT));
+      }, KEY_ASSIGNMENT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([assigned, timedOut]);
+    } finally {
+      clearTimeout(deadline);
+    }
   }
 
   hasRecoveryPhrase(): boolean {
@@ -600,14 +645,15 @@ export function createCoreKitSession(
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
-  const coreKit = new Web3AuthMPCCoreKit({
-    web3AuthClientId,
-    web3AuthNetwork:
-      environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
-    storage: store,
-    sessionTime: SESSION_SECONDS,
-    manualSync: true,
-    tssLib,
-  });
-  return new Web3AuthSession(coreKit, store, identities, verifier);
+  const build = () =>
+    new Web3AuthMPCCoreKit({
+      web3AuthClientId,
+      web3AuthNetwork:
+        environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
+      storage: store,
+      sessionTime: SESSION_SECONDS,
+      manualSync: true,
+      tssLib,
+    });
+  return new Web3AuthSession(build, store, identities, verifier);
 }

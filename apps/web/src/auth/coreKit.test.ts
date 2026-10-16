@@ -10,7 +10,11 @@ import type BN from 'bn.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
-import { createCoreKitSession } from './coreKit';
+import {
+  createCoreKitSession,
+  KEY_ASSIGNMENT_TIMED_OUT,
+  KEY_ASSIGNMENT_TIMEOUT_MS,
+} from './coreKit';
 import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
 
 const STORE_KEY = 'corekit_store';
@@ -24,6 +28,13 @@ const SESSION = '{"sessionId":"not-a-real-session-id"}';
 const sdk = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   jwtLogin: undefined as Record<string, unknown> | undefined,
+  /** Set to keep `loginWithJWT` pending, as the SDK does when the nodes refuse. */
+  loginHangs: false,
+  /** Set to make `loginWithJWT` reject with this refusal. */
+  loginError: undefined as Error | undefined,
+  /** How many SDK instances were built, and how many `init` calls they saw. */
+  constructions: 0,
+  inits: 0,
   userInfo: undefined as Record<string, unknown> | undefined,
   status: 'LOGGED_IN',
   statusAfterLogin: 'LOGGED_IN',
@@ -68,16 +79,21 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       readonly _storageKey = STORE_KEY;
       constructor(options: Record<string, unknown>) {
         sdk.options = options;
+        sdk.constructions += 1;
       }
       get status(): string {
         return sdk.status;
       }
       init(): Promise<void> {
+        sdk.inits += 1;
         return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
-      async loginWithJWT(params: Record<string, unknown>): Promise<void> {
+      loginWithJWT(params: Record<string, unknown>): Promise<void> {
         sdk.jwtLogin = params;
+        if (sdk.loginHangs) return new Promise<void>(() => undefined);
+        if (sdk.loginError) return Promise.reject(sdk.loginError);
         sdk.status = sdk.statusAfterLogin;
+        return Promise.resolve();
       }
       getUserInfo(): Record<string, unknown> {
         if (!sdk.userInfo) throw new Error('no user info');
@@ -184,6 +200,10 @@ const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCreden
 beforeEach(() => {
   sdk.options = undefined;
   sdk.jwtLogin = undefined;
+  sdk.loginHangs = false;
+  sdk.loginError = undefined;
+  sdk.constructions = 0;
+  sdk.inits = 0;
   sdk.userInfo = undefined;
   sdk.status = COREKIT_STATUS.LOGGED_IN;
   sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
@@ -751,6 +771,56 @@ describe('a Core Kit login', () => {
  * that then fails needs a handle on it. The seal transfers the bytes away, so
  * the handle is the factor's public point and nothing else.
  */
+describe('a key assignment the Web3Auth nodes do not answer', () => {
+  it('refuses the login once the bound passes, rather than hanging', async () => {
+    vi.useFakeTimers();
+    try {
+      const created = session();
+      sdk.status = COREKIT_STATUS.INITIALIZED;
+      sdk.loginHangs = true;
+
+      const failure = created.login(credential()).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+
+      expect(await failure).toMatchObject({ message: KEY_ASSIGNMENT_TIMED_OUT });
+      expect(created.isLoggedIn()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('signs in on a fresh SDK instance at the next attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const created = session();
+      sdk.status = COREKIT_STATUS.INITIALIZED;
+      sdk.loginHangs = true;
+      const failure = created.login(credential()).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(KEY_ASSIGNMENT_TIMEOUT_MS);
+      await failure;
+      expect(sdk.constructions).toBe(1);
+
+      sdk.loginHangs = false;
+      await created.login(credential());
+
+      // The pending call still holds the first instance, so the retry must not.
+      expect(sdk.constructions).toBe(2);
+      expect(sdk.inits).toBe(1);
+      expect(created.isLoggedIn()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes the refusal of the SDK through as it came', async () => {
+    const created = session();
+    sdk.loginError = new Error('unable to assign key, All auth network nodes are currently busy');
+
+    await expect(created.login(credential())).rejects.toThrow('unable to assign key');
+    expect(sdk.constructions).toBe(1);
+  });
+});
+
 describe('the factor an approval mints', () => {
   it('reports an identifier the delete then names that same factor by', async () => {
     const active = session();

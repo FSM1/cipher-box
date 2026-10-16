@@ -811,6 +811,47 @@ describe('EngineClient leadership + transport swap', () => {
     }
   });
 
+  it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { tab, workers } = origin();
+      let release!: (secret: LoginSecret) => void;
+      const secretSource = {
+        provideSecret: (): Promise<LoginSecret> =>
+          new Promise<LoginSecret>((resolve) => (release = resolve)),
+      };
+      const leader = tab();
+      const follower = tab({ secretSource });
+      await tick();
+      await startTab(leader);
+
+      // The leader goes while the sign-in is in flight, so the start parks only
+      // after the promotion has begun its export.
+      const started = follower.facade
+        .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
+        .then(
+          () => null,
+          (failure: unknown) => failure
+        );
+      await leader.dispose();
+      for (let i = 0; i < 20 && release === undefined; i += 1) await tick();
+      expect(release).toBeTypeOf('function');
+      await vi.advanceTimersByTimeAsync(6_000);
+      release(fakeLoginSecret([5]));
+
+      expect(await started).toBeNull();
+      expect(follower.currentRole()).toBe('leader');
+      const coldStart = workers[workers.length - 1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(coldStart?.identityToken).toBe('identity.jwt');
+
+      await follower.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hosts again after standing down, once the tab it stepped aside for goes', async () => {
     const { tab } = origin();
     const secretSource = {
