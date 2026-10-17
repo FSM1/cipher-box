@@ -97,9 +97,12 @@ impl Lines {
                 warnings,
                 ..
             } => Self {
+                // `min_by_key` keeps the oldest of equal keys, so the order
+                // within one class holds.
                 status: match warnings
                     .iter()
-                    .find(|warning| warning.kind != RESTORED_FROM_SERVER_COPY)
+                    .filter(|warning| warning.kind != RESTORED_FROM_SERVER_COPY)
+                    .min_by_key(|warning| warning.is_minor())
                 {
                     Some(warning) => warning_label(warning.kind).to_owned(),
                     None => rung_label(*staleness).to_owned(),
@@ -313,6 +316,52 @@ mod tests {
             Lines::of(&alerted).status,
             warning_label("attributableAbuse")
         );
+    }
+
+    fn warning(kind: &'static str) -> VaultWarning {
+        VaultWarning { kind, detail: None }
+    }
+
+    /// A minor warning the member cannot dismiss must not hide a later trust
+    /// warning from the tray line.
+    #[test]
+    fn a_trust_warning_takes_the_line_before_an_older_minor_one() {
+        let state = live(
+            Staleness::Fresh,
+            vec![warning("scopeRootStranded"), warning("attributableAbuse")],
+            0,
+        );
+        assert_eq!(Lines::of(&state).status, warning_label("attributableAbuse"));
+    }
+
+    #[test]
+    fn of_two_trust_warnings_the_older_takes_the_line() {
+        let state = live(
+            Staleness::Fresh,
+            vec![
+                warning("scopeRootStranded"),
+                warning("withheldUpdateEscalation"),
+                warning("attributableAbuse"),
+            ],
+            0,
+        );
+        assert_eq!(
+            Lines::of(&state).status,
+            warning_label("withheldUpdateEscalation")
+        );
+    }
+
+    #[test]
+    fn a_minor_warning_alone_takes_the_line() {
+        let state = live(
+            Staleness::Fresh,
+            vec![
+                warning(RESTORED_FROM_SERVER_COPY),
+                warning("scopeRootStranded"),
+            ],
+            0,
+        );
+        assert_eq!(Lines::of(&state).status, warning_label("scopeRootStranded"));
     }
 
     /// A stranded shared folder says what to do, never the fallback.

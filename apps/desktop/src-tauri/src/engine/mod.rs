@@ -55,9 +55,7 @@ const UNENDED: &str = "the session did not answer; restart CipherBox and sign ou
 /// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
 const MAX_WARNINGS: usize = 8;
 
-/// The kind of the stranded-scope notice. It is minor: past the bound it
-/// evicts only another stranded warning, and never evicts a warning of another
-/// kind.
+/// The kind of the stranded-scope notice, the one minor warning class.
 const SCOPE_ROOT_STRANDED: &str = "scopeRootStranded";
 
 /// Shown when a peer wrote the binned folder with no name.
@@ -100,6 +98,15 @@ pub struct VaultWarning {
     /// which record it happened to: an IPNS name resolves for anyone who reads
     /// it off this window, and links a member to one object's write history.
     pub detail: Option<String>,
+}
+
+impl VaultWarning {
+    /// A minor warning yields to every other class: past the bound it evicts
+    /// only another minor warning, and it takes the tray line only when no
+    /// other warning stands.
+    pub fn is_minor(&self) -> bool {
+        self.kind == SCOPE_ROOT_STRANDED
+    }
 }
 
 /// What the tray renders. Off [`Engine::status`] rather than a rendered
@@ -229,12 +236,11 @@ impl Warnings {
             return;
         }
         if self.0.len() == MAX_WARNINGS {
-            let minor = |w: &VaultWarning| w.kind == SCOPE_ROOT_STRANDED;
-            match self.0.iter().position(minor) {
+            match self.0.iter().position(VaultWarning::is_minor) {
                 Some(oldest) => {
                     self.0.remove(oldest);
                 }
-                None if minor(&warning) => return,
+                None if warning.is_minor() => return,
                 None => {
                     self.0.pop_front();
                 }
