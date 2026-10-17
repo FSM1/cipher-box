@@ -153,11 +153,23 @@ jobs:
           printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w "%{http_code}" \
             -H @"$AUTH_HEADER" "${GRAFANA_URL}/api/v1/provisioning/alert-rules") || HTTP_CODE=000
+          GRANT="Give its service account the alerting rules read and write permissions and folder create (or the Editor role)."
           if [[ "$HTTP_CODE" =~ ^(401|403)$ ]]; then
-            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP $HTTP_CODE from the alerting provisioning API. Give its service account the Alerting rules read and write permissions (or the Editor role), and folder create."
+            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP $HTTP_CODE from the alerting provisioning API. $GRANT"
             exit 0
           elif [[ "$HTTP_CODE" != "200" ]]; then
             echo "::error::The alerting provisioning API returned HTTP $HTTP_CODE"
             exit 1
           fi
-          bash docker/grafana/scripts/provision-alerts.sh
+          # A key that reads rules but cannot write a rule or create the folder
+          # gets a 401 or 403 inside the script.
+          LOG="${RUNNER_TEMP}/provision-alerts.log"
+          if bash docker/grafana/scripts/provision-alerts.sh > "$LOG" 2>&1; then
+            cat "$LOG"
+          elif grep -qE 'HTTP 40[13]' "$LOG"; then
+            cat "$LOG"
+            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP 401 or 403 on a write. $GRANT"
+          else
+            cat "$LOG"
+            exit 1
+          fi

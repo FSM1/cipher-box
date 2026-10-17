@@ -24,6 +24,8 @@
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
           "expr": "count(up{job=\"api\"}) or vector(0)",
+          "instant": true,
+          "range": false,
           "intervalMs": 30000,
           "maxDataPoints": 43200,
           "refId": "A"
