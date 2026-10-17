@@ -21,6 +21,7 @@ import { crossClientConvergence } from './scenarios/crossClientConvergence';
 import { externalUnmount } from './scenarios/externalUnmount';
 import { mountLifecycle } from './scenarios/mountLifecycle';
 import { offlineReplay } from './scenarios/offlineReplay';
+import { remountInProcess } from './scenarios/remountInProcess';
 import { writeRoundTrip } from './scenarios/writeRoundTrip';
 
 // The lifecycle first: every scenario after it stands on a mount that opens.
@@ -31,6 +32,7 @@ const SCENARIOS: Scenario[] = [
   conflictOutcomes,
   crossClientConvergence,
   externalUnmount,
+  remountInProcess,
   offlineReplay,
 ];
 

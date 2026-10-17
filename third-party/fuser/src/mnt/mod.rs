@@ -4,6 +4,8 @@
 
 #[cfg(fuser_mount_impl = "libfuse2")]
 mod fuse2;
+#[cfg(any(fuser_fuse_t, test))]
+mod fuse_t;
 #[cfg(any(feature = "libfuse", test))]
 mod fuse2_sys;
 #[cfg(fuser_mount_impl = "libfuse3")]

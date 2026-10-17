@@ -17,10 +17,8 @@ import {
   withInstances,
   type Scenario,
   type ScenarioContext,
+  unmountAndAwaitRefusal,
 } from '../scenario';
-
-/** The words of the refusal the shell shows after an external unmount. */
-const UNMOUNTED_OUTSIDE = /unmounted outside CipherBox/;
 
 const AFTER_FILE = 'after-the-unmount.txt';
 const AFTER_TEXT = 'served again';
@@ -44,19 +42,7 @@ export const externalUnmount: Scenario = {
         }
       );
 
-      await a.unmountExternally();
-      const ended = await poll(
-        () => a.status(),
-        (status) => status.mount.state === 'refused',
-        {
-          what: 'the session to report the external unmount',
-          timeoutMs: context.deadlines.mountMs,
-          intervalMs: context.deadlines.intervalMs,
-          release: () => a.abandon(),
-        }
-      );
-      if (ended.mount.state !== 'refused') assert.fail('the poll accepts a refusal only');
-      assert.match(ended.mount.reason, UNMOUNTED_OUTSIDE);
+      const ended = await unmountAndAwaitRefusal(context, a);
       assert.equal(ended.deadLetters, 0, 'an unmount dead-letters nothing');
       assert.deepEqual(ended.warnings, [], 'an unmount with no write in flight owes no warning');
       assert.equal(await isMounted(a.mountRoot), false, 'the mount point carries no vault');

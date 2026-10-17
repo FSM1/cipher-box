@@ -36,6 +36,11 @@
 # its mount floor on the string the mount program receives, and `Session::new`
 # runs no option check of its own.
 #
+# It also carries the FUSE-T server patch, which ends the `go-nfsv4` server of
+# a mount when the mount drops. `src/mnt/fuse_t.rs` holds it, its rationale and
+# its tests; `src/mnt/fuse2.rs`, `src/mnt/fuse2_sys.rs` and the `fuser_fuse_t`
+# cfg in `build.rs` wire it in.
+#
 # A workspace member, so it resolves through the one root `Cargo.lock` the
 # product links — a second lockfile would drift and the socket-read patch's
 # regression test would then run against a graph nothing ships. The general

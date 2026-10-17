@@ -242,3 +242,50 @@ describe('purging the sealed store', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 });
+
+describe('a revocable view of the store', () => {
+  it('writes through to the store while it is live', async () => {
+    const store = sealed(new MemoryKeys());
+    const { store: view } = store.revocableView();
+
+    await view.setItem(KEY, STORE_VALUE);
+
+    await expect(store.getItem(KEY)).resolves.toBe(STORE_VALUE);
+  });
+
+  it('drops a write that was still sealing when it was revoked', async () => {
+    const store = sealed(new MemoryKeys());
+    const { store: view, revoke } = store.revocableView();
+
+    const write = view.setItem(KEY, STORE_VALUE);
+    revoke();
+    await write;
+
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('reads nothing and removes nothing once revoked', async () => {
+    const store = sealed(new MemoryKeys());
+    await store.setItem(KEY, STORE_VALUE);
+    const { store: view, revoke } = store.revocableView();
+
+    revoke();
+
+    await expect(view.getItem(KEY)).resolves.toBeNull();
+    await expect(store.getItem(KEY)).resolves.toBe(STORE_VALUE);
+  });
+
+  it('mints no wrapping key for a write after a purge took the last one', async () => {
+    const keys = new MemoryKeys();
+    const store = sealed(keys);
+    await store.setItem(KEY, STORE_VALUE);
+    const { store: view, revoke } = store.revocableView();
+    revoke();
+    await store.purge(KEY);
+
+    await view.setItem(KEY, STORE_VALUE);
+
+    expect(keys.held).toBeNull();
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+  });
+});

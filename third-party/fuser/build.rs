@@ -4,6 +4,7 @@ fn main() {
     println!(
         "cargo:rustc-check-cfg=cfg(fuser_mount_impl, values(\"pure-rust\", \"libfuse2\", \"libfuse3\"))"
     );
+    println!("cargo:rustc-check-cfg=cfg(fuser_fuse_t)");
 
     // fuser is Unix-only. On Windows the crate is resolved by [patch.crates-io]
     // but compiles as an empty crate (lib.rs gates all content behind #[cfg(unix)]).
@@ -37,6 +38,7 @@ fn unix_build() {
                 .is_ok()
             {
                 println!("cargo:rustc-cfg=fuser_mount_impl=\"libfuse2\"");
+                println!("cargo:rustc-cfg=fuser_fuse_t");
             } else if pkg_config::Config::new()
                 .atleast_version("2.6.0")
                 .probe("fuse") // for macFUSE 4.x

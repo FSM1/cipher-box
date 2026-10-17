@@ -9,7 +9,7 @@
 import { readFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 
-export type ControlVerb = 'status' | 'refresh' | 'quit';
+export type ControlVerb = 'status' | 'refresh' | 'quit' | 'sign-out' | 'sign-in';
 
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
@@ -244,6 +244,16 @@ export async function refresh(endpoint: ControlEndpoint, timeoutMs: number): Pro
 
 export async function quit(endpoint: ControlEndpoint, timeoutMs: number): Promise<void> {
   await sendOrThrow(endpoint, 'quit', timeoutMs);
+}
+
+/** Ends the session the way a member's sign-out does. The shell runs on. */
+export async function signOut(endpoint: ControlEndpoint, timeoutMs: number): Promise<void> {
+  await sendOrThrow(endpoint, 'sign-out', timeoutMs);
+}
+
+/** Starts a session again on the dev key, in the same process. */
+export async function signIn(endpoint: ControlEndpoint, timeoutMs: number): Promise<void> {
+  await sendOrThrow(endpoint, 'sign-in', timeoutMs);
 }
 
 function exchange(endpoint: ControlEndpoint, request: string, timeoutMs: number): Promise<string> {

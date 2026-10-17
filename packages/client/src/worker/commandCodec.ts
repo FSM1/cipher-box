@@ -126,6 +126,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   sweepConvergence: true,
   granteeJoined: true,
   opProgress: true,
+  scopeRootStranded: true,
 };
 
 const RENDEZVOUS_RESULT_KINDS: Record<DeviceRendezvousResult['kind'], true> = {

@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
-import { EngineClient, type EngineClientConfig, type LoginSecret } from './engineClient.js';
+import {
+  EngineClient,
+  SECRET_EXPORT_TIMEOUT_MS,
+  YIELD_TIMEOUT_MS,
+  type EngineClientConfig,
+  type LoginSecret,
+} from './engineClient.js';
 import { LeaderRelay } from './leaderRelay.js';
 import type { LockManagerLike } from './leadership.js';
 import {
@@ -809,6 +815,118 @@ describe('EngineClient leadership + transport swap', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('a start that parks while a promotion exports', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * The leader goes while a sign-in is in flight, so the start parks only after
+     * the promotion has begun its export. The export waits for the test.
+     */
+    async function parkDuringPromotion() {
+      const { tab, workers } = origin();
+      let settle!: { resolve(secret: LoginSecret): void; reject(failure: Error): void };
+      const secretSource = {
+        provideSecret: (): Promise<LoginSecret> =>
+          new Promise<LoginSecret>((resolve, reject) => (settle = { resolve, reject })),
+      };
+      const leader = tab();
+      const follower = tab({ secretSource });
+      await turn();
+      await startTab(leader);
+
+      const started = follower.facade
+        .start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt')
+        .then(
+          () => null,
+          (failure: unknown) => failure
+        );
+      await leader.dispose();
+      for (let i = 0; i < 20 && settle === undefined; i += 1) await turn();
+      expect(settle).toBeDefined();
+      // Past the deadline a parked start has outside a promotion.
+      await vi.advanceTimersByTimeAsync(YIELD_TIMEOUT_MS + 1_000);
+      return { follower, workers, started, settle, tab };
+    }
+
+    it('keeps the identity token of a start that parks while a slow promotion exports', async () => {
+      const { follower, workers, started, settle } = await parkDuringPromotion();
+      settle.resolve(fakeLoginSecret([5]));
+
+      expect(await started).toBeNull();
+      expect(follower.currentRole()).toBe('leader');
+      const coldStart = workers[workers.length - 1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(coldStart?.identityToken).toBe('identity.jwt');
+
+      await follower.dispose();
+    });
+
+    it('refuses a start that parked during a promotion whose export failed', async () => {
+      const { follower, started, settle } = await parkDuringPromotion();
+      settle.reject(new Error('no session to export'));
+
+      expect(await started).toMatchObject({ message: 'no session to export' });
+      expect(follower.currentRole()).not.toBe('leader');
+
+      await follower.dispose();
+    });
+
+    it('refuses a start that parked during a promotion when the client closes', async () => {
+      const { follower, started } = await parkDuringPromotion();
+      await follower.dispose();
+
+      expect(await started).toMatchObject({ message: 'engine client closed' });
+    });
+
+    it('refuses a start that parked during a promotion whose export hangs', async () => {
+      const { follower, workers, started, settle } = await parkDuringPromotion();
+      const spawned = workers.length;
+      await vi.advanceTimersByTimeAsync(SECRET_EXPORT_TIMEOUT_MS);
+
+      expect(await started).toMatchObject({
+        message: 'the login secret export did not finish in time',
+      });
+      expect(follower.currentRole()).not.toBe('leader');
+
+      // A secret that arrives after the limit is scrubbed and starts no worker.
+      const late = fakeLoginSecret([5]);
+      settle.resolve(late);
+      await turn();
+      expect([...new Uint8Array(late.secret)]).toEqual([0]);
+      expect(workers.slice(spawned).some((worker) => !worker.terminated)).toBe(false);
+
+      await follower.dispose();
+    });
+
+    // The tab that timed out leaves the election, so the next host is another tab.
+    it('frees the lock after an export ran out of time for a tab that then signs in', async () => {
+      const { follower, workers, started, tab } = await parkDuringPromotion();
+      await vi.advanceTimersByTimeAsync(SECRET_EXPORT_TIMEOUT_MS);
+      await started;
+
+      const next = tab({
+        secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret([7])) },
+      });
+      for (let i = 0; i < 20 && next.currentRole() !== 'leader'; i += 1) await turn();
+      expect(next.currentRole()).toBe('leader');
+      await next.facade.start(Uint8Array.from([7]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+
+      const coldStart = workers[workers.length - 1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(coldStart?.identityToken).toBe('identity.jwt');
+
+      await next.dispose();
+      await follower.dispose();
+    });
   });
 
   it('hosts again after standing down, once the tab it stepped aside for goes', async () => {

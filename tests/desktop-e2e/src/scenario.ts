@@ -192,3 +192,30 @@ export async function refuses(
   }
   assert.fail(`${what} must be refused, and it succeeded`);
 }
+
+/** The words of the refusal the shell shows after an external unmount. */
+const UNMOUNTED_OUTSIDE = /unmounted outside CipherBox/;
+
+/**
+ * Unmounts `instance` from outside the app and waits for the session to name
+ * that unmount in its refusal. Returns the status that carried it.
+ */
+export async function unmountAndAwaitRefusal(
+  context: ScenarioContext,
+  instance: Instance
+): Promise<VaultStatus> {
+  await instance.unmountExternally();
+  const ended = await poll(
+    () => instance.status(),
+    (status) => status.mount.state === 'refused',
+    {
+      what: `${instance.name}: the session to report the external unmount`,
+      timeoutMs: context.deadlines.mountMs,
+      intervalMs: context.deadlines.intervalMs,
+      release: () => instance.abandon(),
+    }
+  );
+  if (ended.mount.state !== 'refused') assert.fail('the poll accepts a refusal only');
+  assert.match(ended.mount.reason, UNMOUNTED_OUTSIDE);
+  return ended;
+}

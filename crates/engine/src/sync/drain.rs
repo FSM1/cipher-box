@@ -5616,6 +5616,7 @@ where
             None,
         )
         .await
+        .map(drop)
         .map_err(charge_bin_read)
     }
 
@@ -6258,7 +6259,7 @@ where
             }
             let sealing_root = other_root.as_deref().unwrap_or(&root);
             let bin_name = opened.node.name.as_str().as_bytes().to_vec();
-            if self
+            let Ok(stranded) = self
                 .rekey_into_bin(
                     scope,
                     &end.at(sealing_root.epoch),
@@ -6268,12 +6269,12 @@ where
                     Some(*opened),
                 )
                 .await
-                .is_err()
-            {
+            else {
                 unfinished.push(unlinked);
                 continue;
-            }
+            };
             if standing.is_some() {
+                self.report_stranded(scope, &unlinked, &stranded);
                 continue;
             }
             index.entries.push(BinEntry::new(
@@ -6291,12 +6292,16 @@ where
                         .held_key(&unlinked.node.0, unlinked.deleted_at),
                 ),
             ));
-            added.push(unlinked);
+            added.push((unlinked, stranded));
         }
         if !added.is_empty() && self.publish_bin(index).await.is_err() {
             // Re-keyed with no entry to name them: the next pass re-keys to the
             // same key and writes the entries it could not write here.
-            unfinished.extend(added);
+            unfinished.extend(added.into_iter().map(|(unlinked, _)| unlinked));
+        } else {
+            for (unlinked, stranded) in &added {
+                self.report_stranded(scope, unlinked, stranded);
+            }
         }
         self.return_captures(unfinished);
         if !stopped.is_empty() {
@@ -6308,6 +6313,28 @@ where
                 .extend(stopped.iter().map(capture_key));
         }
         hold_captures_first(self.cells.observed_unlinks, stopped);
+    }
+
+    /// Report each root in `stranded` as reachable through `unlinked`'s bin
+    /// entry. Sent only once that entry stands. A planted ref can name the
+    /// vault root or the pass's own root, which are never stranded.
+    fn report_stranded(
+        &self,
+        scope: &DrainScope<'_>,
+        unlinked: &UnlinkedChild,
+        stranded: &BTreeSet<NodeId>,
+    ) {
+        let vault_root = self.cells.base.borrow().root;
+        for scope_root in stranded
+            .iter()
+            .filter(|root| **root != vault_root && **root != scope.source.root)
+        {
+            let _ = self.seams.events.unbounded_send(Event::ScopeRootStranded {
+                scope_root: *scope_root,
+                binned_folder: unlinked.node,
+                folder_name: unlinked.name.clone(),
+            });
+        }
     }
 
     /// The own end whose key opens the record of `unlinked`'s node
@@ -7021,7 +7048,7 @@ where
         root: NodeId,
         deleted_at: u64,
         opened: Option<Opened>,
-    ) -> Result<(), Halt> {
+    ) -> Result<BTreeSet<NodeId>, Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = plane.held_plane(&held);
         self.rekey_subtree(scope, plane, &binned, anchor, root, opened)
@@ -7035,9 +7062,10 @@ where
     /// The whole subtree is re-keyed in this pass, not left to the lazy wave: a
     /// binned node takes no ordinary write, so nothing would ever carry it.
     ///
-    /// A descendant that is a scope root is a boundary, not a member. Its
-    /// subtree is sealed under its own scope's seed, which no grantee of the
-    /// source scope holds, and cutting that scope's grantees is a rotation.
+    /// A descendant that is a scope root is a boundary, not a member, and is
+    /// returned. Its subtree is sealed under its own scope's seed, which no
+    /// grantee of the source scope holds, and cutting that scope's grantees is
+    /// a rotation.
     ///
     /// Every failure returns before the caller publishes the link it is about
     /// to move, so a subtree this pass could not re-key stays as it was.
@@ -7052,8 +7080,9 @@ where
         anchor: Anchor<'_>,
         root: NodeId,
         mut opened: Option<Opened>,
-    ) -> Result<(), Halt> {
+    ) -> Result<BTreeSet<NodeId>, Halt> {
         let mut seen = BTreeSet::new();
+        let mut stopped_at = BTreeSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
             // Child refs are wire data, so a diamond or a cycle among them is
@@ -7077,12 +7106,14 @@ where
             } = loaded;
             let content_cids = match &body {
                 ReadBody::Folder { children, .. } => {
-                    pending.extend(
-                        children
-                            .iter()
-                            .filter(|child| in_this_scope(&from.end, scope.scope_roots, child))
-                            .map(|child| NodeId(child.id)),
-                    );
+                    for child in children {
+                        let child_id = NodeId(child.id);
+                        if scope.scope_roots.contains(&child_id) {
+                            stopped_at.insert(child_id);
+                        } else if names_this_scope(&from.end, child) {
+                            pending.push(child_id);
+                        }
+                    }
                     Vec::new()
                 }
                 // Every retained version stays registered under this name, so
@@ -7115,7 +7146,7 @@ where
                 .map_err(Halt::from)?;
             self.hold(node.0, published.held);
         }
-        Ok(())
+        Ok(stopped_at)
     }
 
     /// Load a doomed node under whichever key seals it now, reporting whether

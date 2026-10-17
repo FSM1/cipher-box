@@ -346,6 +346,40 @@ describe('snapshotStore', () => {
     notificationStore.clear();
   });
 
+  it('names the listed folder that held a dropped node', async () => {
+    notificationStore.clear();
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    store.setFocus(new Uint8Array(16).fill(3));
+    engine.pulls[0].resolve({
+      ...view(new Uint8Array(16).fill(3), 'fresh', 2),
+      folderName: 'Photos',
+    });
+    await flush();
+    const scopeRoot = new Uint8Array(16).fill(9);
+
+    // `view()` gives its second child the id 0x02 in every byte.
+    engine.emit({
+      kind: 'nodeDropped',
+      scopeRoot,
+      nodeId: new Uint8Array(16).fill(2),
+      cause: 'no-record',
+    });
+    engine.emit({
+      kind: 'nodeDropped',
+      scopeRoot,
+      nodeId: new Uint8Array(16).fill(7),
+      cause: 'no-record',
+    });
+
+    const messages = notificationStore.getState().map((notice) => notice.message);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain('the folder "Photos"');
+    expect(messages[1]).toContain('a shared folder');
+    expect(messages[1]).not.toContain('Photos');
+    notificationStore.clear();
+  });
+
   it('serves a stable empty state before an engine client exists', () => {
     expect(idleSnapshotStore.getSnapshot()).toBe(idleSnapshotStore.getSnapshot());
     expect(idleSnapshotStore.getSnapshot()).toEqual({ view: null, error: null });

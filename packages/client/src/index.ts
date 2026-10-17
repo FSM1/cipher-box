@@ -58,7 +58,7 @@ export { FetchRecordTransport } from './seams/recordTransport.js';
 export type { IpnsRecordReader, IpnsRecordReading } from './ipnsRecord.js';
 
 // The wire descriptors the UI exchanges with the engine over the transport.
-export { KEEP_STORED_BEARER } from './worker/protocol.js';
+export { KEEP_STORED_BEARER, OWED_GRANTS_DROPPED } from './worker/protocol.js';
 export type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -70,6 +70,7 @@ export type {
   OpProgressPhase,
   BlockProgress,
   DeadLetterReason,
+  DropCause,
   DeadLetterDescriptor,
   SettingsHoldCheck,
   SettingsHoldDescriptor,
