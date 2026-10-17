@@ -10,6 +10,7 @@
 #
 # Each leg uploads its `soak-results.jsonl`. The report joins them, and a
 # failed night opens or comments on the `ci: the staging soak failed` issue.
+# The issue also says whether the origin stopped or restarted in the run.
 name: Staging Soak
 
 on:
@@ -80,7 +81,13 @@ jobs:
       sha: ${{ steps.check.outputs.sha }}
       base_url: ${{ steps.check.outputs.base_url }}
       label: ${{ steps.check.outputs.label }}
+      started: ${{ steps.started.outputs.started }}
     steps:
+      # The start of the run window that the report reads the origin over.
+      - name: Record the run start
+        id: started
+        run: echo "started=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
       # The check comes from the revision of this workflow, not from the ref
       # it checks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -266,6 +273,8 @@ jobs:
     needs: [guard, web-vault, web-shares, desktop-macos, desktop-linux, desktop-windows]
     if: always()
     runs-on: ubuntu-latest
+    # For the Grafana read token and URL that the origin check of a failed night uses.
+    environment: staging
     timeout-minutes: 15
     permissions:
       contents: read
@@ -304,6 +313,10 @@ jobs:
           SOAK_NEEDS: ${{ toJSON(needs) }}
           SOAK_SUITE: ${{ needs.guard.outputs.label && format('{0} at {1}', needs.guard.outputs.label, needs.guard.outputs.sha) || '' }}
           SOAK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOAK_STARTED: ${{ needs.guard.outputs.started }}
+          GRAFANA_PROMETHEUS_URL: ${{ vars.GRAFANA_PROMETHEUS_URL }}
+          GRAFANA_PROMETHEUS_USERNAME: ${{ vars.GRAFANA_PROMETHEUS_USERNAME }}
+          STAGING_GRAFANA_READ_TOKEN: ${{ secrets.STAGING_GRAFANA_READ_TOKEN }}
         run: |
           set -euo pipefail
           pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/reportNight.ts \

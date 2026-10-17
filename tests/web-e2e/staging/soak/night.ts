@@ -169,6 +169,11 @@ function suiteLine(suite: string): string[] {
   return suite === '' ? [] : [`Suite: ${suite}`, ''];
 }
 
+/** The origin line of `origin.ts`, for a failed night only. */
+function originLines(origin: string): string[] {
+  return origin === '' ? [] : [origin, ''];
+}
+
 function legTable(night: Night): string[] {
   return [
     '| Leg | Job | Verdict | Checks | Note |',
@@ -180,20 +185,28 @@ function legTable(night: Night): string[] {
 }
 
 /** The job summary of the report: the legs, then every check that a leg recorded. */
-export function renderNight(night: Night, runUrl: string, suite = ''): string {
+export function renderNight(night: Night, runUrl: string, suite = '', origin = ''): string {
   const out = ['## Staging soak night', '', VERDICT_LINE[night.verdict], '', `Run: ${runUrl}`, ''];
-  out.push(...suiteLine(suite), ...guardLine(night), ...legTable(night), '', '');
+  out.push(
+    ...suiteLine(suite),
+    ...originLines(origin),
+    ...guardLine(night),
+    ...legTable(night),
+    '',
+    ''
+  );
   const joined = night.legs.flatMap((leg) => leg.records);
   return `${out.join('\n')}${renderSummary(joined)}`;
 }
 
 /** The issue text of a failed night; `null` for a night that did not fail. */
-export function issueBody(night: Night, runUrl: string, suite = ''): string | null {
+export function issueBody(night: Night, runUrl: string, suite = '', origin = ''): string | null {
   if (night.verdict !== 'failed') return null;
   const out = [
     `The staging soak failed. Run: ${runUrl}`,
     '',
     ...suiteLine(suite),
+    ...originLines(origin),
     ...guardLine(night),
     ...legTable(night),
   ];

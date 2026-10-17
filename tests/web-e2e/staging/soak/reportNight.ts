@@ -5,7 +5,8 @@
  *   `GITHUB_OUTPUT`.
  * - `report <results-dir> <out-dir>` reads `SOAK_NEEDS` (`toJSON(needs)`) and
  *   `SOAK_RUN_URL`, and the optional `SOAK_SUITE`, writes `summary.md`, and writes `issue.md` only for a
- *   failed night.
+ *   failed night. A failed night also reads the origin from Grafana Cloud
+ *   (`origin.ts`) for the run that started at `SOAK_STARTED`.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -18,6 +19,7 @@ import {
   renderNight,
   unbootstrapped,
 } from './night';
+import { originReport } from './origin';
 import { parseRecords } from './summary';
 
 function required(name: string): string {
@@ -44,9 +46,13 @@ if (command === 'unbootstrapped' && first !== undefined) {
   const runUrl = required('SOAK_RUN_URL');
   const suite = process.env.SOAK_SUITE?.trim() ?? '';
   const night = classifyNight(jobResults(required('SOAK_NEEDS')), await readLegResults(first));
+  const origin =
+    night.verdict === 'failed'
+      ? await originReport(process.env, process.env.SOAK_STARTED, Math.floor(Date.now() / 1000))
+      : '';
   await mkdir(second, { recursive: true });
-  await writeFile(join(second, 'summary.md'), renderNight(night, runUrl, suite));
-  const body = issueBody(night, runUrl, suite);
+  await writeFile(join(second, 'summary.md'), renderNight(night, runUrl, suite, origin));
+  const body = issueBody(night, runUrl, suite, origin);
   if (body !== null) await writeFile(join(second, 'issue.md'), body);
   process.stdout.write(`The soak night: ${night.verdict}.\n`);
 } else {
