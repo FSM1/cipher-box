@@ -137,7 +137,8 @@ jobs:
       # The upsert in the script matches a rule by title, group and folder, so a
       # re-run updates the rule. A key with no alerting-provisioning right skips
       # this step with a notice; the dashboard push above needs no such right.
-      # Only origin-down.json: the other rule files do not evaluate as written.
+      # Only origin-down.json: the other rule files do not set "instant", and the
+      # live rules are not yet read.
       - name: Provision the alert rules
         env:
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
@@ -167,7 +168,7 @@ jobs:
           rc=0
           bash docker/grafana/scripts/provision-alerts.sh || rc=$?
           if [[ "$rc" == 77 ]]; then
-            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP 401 or 403 on a write. $GRANT"
+            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP 401 or 403 on a call. $GRANT"
           elif [[ "$rc" != 0 ]]; then
             exit "$rc"
           fi

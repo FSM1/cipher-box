@@ -144,7 +144,7 @@ The staging VPS has 2 vCPU and the Grafana Cloud tier is small. Do not widen the
 
 ## Alert Rules
 
-`docker/grafana/alerts/*.json` holds the rule definitions. `docker/grafana/scripts/provision-alerts.sh` posts them to the Grafana provisioning API. Each file holds either one rule object or an array of rule objects. Each staging deploy runs the script in `.github/workflows/provision-dashboard.yml`, after the dashboard push, with `ALERT_FILES=origin-down.json`. The other rule files do not set `"instant": true`, so Grafana evaluates them as range queries and refuses the threshold. That step needs `GRAFANA_API_KEY` to have the alert rule writer role and folder create. Without them, the script exits 77 and the step skips with a notice. Any other failure fails the step.
+`docker/grafana/alerts/*.json` holds the rule definitions. `docker/grafana/scripts/provision-alerts.sh` posts them to the Grafana provisioning API. Each file holds either one rule object or an array of rule objects. Each staging deploy runs the script in `.github/workflows/provision-dashboard.yml`, after the dashboard push, with `ALERT_FILES=origin-down.json`. The other rule files do not set `"instant": true`. The live rules are not yet read. That step needs `GRAFANA_API_KEY` to have the alert rule writer role and folder create. Without them, the script exits 77 and the step skips with a notice. Any other failure fails the step.
 
 The script replaces two literal placeholders in every file. Keep both spellings exact:
 
