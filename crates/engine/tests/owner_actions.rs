@@ -7348,6 +7348,7 @@ fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
         })),
         Ok(CommandOutcome::Done)
     );
+    let grant_sequence = sequence_at(&fx.world, &write_name(granted));
     events_so_far(&mut fx._events);
     let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
     for _ in 0..8 {
@@ -7360,6 +7361,11 @@ fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
     assert!(dead_lettered_as_scope_root(&events, op_id, outer));
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert!(published_bin_entries(&fx).is_empty());
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(granted)),
+        grant_sequence,
+        "the grant stands"
+    );
     let view = block_on(fx.engine.view()).unwrap();
     assert!(view.children(ROOT).iter().any(|child| child.id == outer));
 }
@@ -7429,6 +7435,7 @@ fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
         Ok(CommandOutcome::Done)
     );
     publish_value_at(&fx.world, ROOT, &unindexed);
+    let grant_sequence = sequence_at(&fx.world, &write_name(granted));
     events_so_far(&mut fx._events);
     let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
     fx.world.record_store.heal_get_for(failing.as_str());
@@ -7442,26 +7449,36 @@ fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
     assert!(dead_lettered_as_scope_root(&events, op_id, outer));
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert!(published_bin_entries(&fx).is_empty());
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(granted)),
+        grant_sequence,
+        "the grant stands"
+    );
 }
 
-/// A node past the first tick of a large subtree does not answer. Each tick
-/// of the outage reads only that node, and the delete completes when it
-/// answers.
-#[test]
-fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
+/// A node past the first tick of a large subtree does not answer, from its
+/// first read or from its second-sweep read. Each later tick of the outage
+/// reads only that node, and the delete completes when it answers.
+fn assert_a_large_subtree_outage_holds_and_recovers(second_sweep: bool) {
     let (mut fx, outer) = GrantScenario::nested();
     let inner = fx.folder;
     let side = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "side");
     let below = create_large_subtree(&mut fx, side);
     let failing = write_name(inner);
-    fx.world.record_store.fail_get_for(failing.as_str());
+    let one_read = fx.world.record_store.endpoints().len();
+    match second_sweep {
+        true => fx
+            .world
+            .record_store
+            .fail_get_for_after(failing.as_str(), one_read),
+        false => fx.world.record_store.fail_get_for(failing.as_str()),
+    }
     let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
         .expect("the delete queues")
         .op_id()
         .unwrap();
     let mut subtree = below.clone();
     subtree.extend([outer, inner, side]);
-    let one_read = fx.world.record_store.endpoints().len();
     let before = reads_of(&fx, &[inner]);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(
@@ -7480,8 +7497,9 @@ fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
             delete_plane_hold(op_id, outer)
         );
     }
+    // The second sweep reads with no bound up to the failing node.
     assert!(
-        outage[0] <= 128 * one_read,
+        second_sweep || outage[0] <= 128 * one_read,
         "the tick that reaches the failing node stays under the bound: {outage:?}"
     );
     assert_eq!(
@@ -7506,6 +7524,16 @@ fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
             .is_empty()
     );
     assert_eq!(published_bin_entries(&fx)[0].node_id, outer.0);
+}
+
+#[test]
+fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
+    assert_a_large_subtree_outage_holds_and_recovers(false);
+}
+
+#[test]
+fn a_large_subtree_whose_second_sweep_read_fails_probes_that_node_alone() {
+    assert_a_large_subtree_outage_holds_and_recovers(true);
 }
 
 /// A descendant ref that no proof will ever answer charges the delete, which

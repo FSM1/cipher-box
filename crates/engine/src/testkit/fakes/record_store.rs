@@ -508,7 +508,9 @@ impl InMemoryRecordStore {
         self.stalling_keys.lock().expect("lock").get(routing_key) == Some(&0)
     }
 
-    /// Whether `routing_key`'s GET is currently injected to fail everywhere.
+    /// Whether `routing_key`'s GET is injected to fail everywhere. Each call
+    /// spends one answer of a [`fail_get_for_after`](Self::fail_get_for_after)
+    /// count, so call it once for each GET.
     fn get_failing_key(&self, routing_key: &str) -> bool {
         let spent = self
             .get_failing_after

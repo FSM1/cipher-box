@@ -856,16 +856,21 @@ delete does (ADR 0043).
   target and reason sent to the host. Before any other queued delete
   publishes, the drain must prove the target's plane from its current record,
   and then the plane of each node below it, under the same rules. The session
-  keeps the proof in memory by op. A tick that does not publish reads at most
-  the tick bound. When the proof spans ticks, the publish tick reads the whole
-  subtree again with no bound: a node with another record starts the proof
-  again, and a grant section or a known scope root refuses the delete. A read
-  of that sweep that does not answer holds the delete, and the next tick
-  reads that node first and alone. A proof past the node bound of the other
-  walks holds the delete and reads no more. Only a file whose own body this device has read skips the proof, as a ref kind is
-  authored by any writer of the scope. A node every endpoint calls vacant, or
-  one at a name the scope's write seed does not derive, has no proof to wait
-  for: the delete is charged, and it dead-letters having published nothing.
+  keeps the proof in memory by op. A tick that does not run a second sweep
+  reads at most the tick bound. When the first sweep spans ticks, a second
+  sweep reads the whole subtree again in one tick with no bound, and the
+  delete publishes in that tick if the sweep completes. A node with another
+  record, or a skipped file that the base no longer calls a file, starts the
+  proof again. A grant section or a known scope root refuses the delete. A
+  second-sweep read that does not answer holds the delete. The next tick reads
+  that node first, and reads the whole second sweep only if the node answers
+  with the same record. A proof past the node bound of the other walks reads
+  the whole subtree in one sweep on each tick, with no bound, and keeps
+  nothing between ticks. Only a file whose own body this device has read
+  skips the proof, as a ref kind is authored by any writer of the scope. A
+  node every endpoint calls vacant, or one at a name the scope's write seed
+  does not derive, has no proof to wait for: the delete is charged, and it
+  dead-letters having published nothing.
   A missing index entry does not prove that the target is a plain folder. A
   target record with a grant section dead-letters the same way. A plain record
   that arrives while an endpoint failed is not a proof, because that endpoint
