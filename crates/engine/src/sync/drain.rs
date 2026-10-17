@@ -70,6 +70,7 @@ use crate::net::author::{
     AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
+use crate::net::gated_read::{BelowFloor, sequence_refusal};
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict, PutMark,
@@ -78,7 +79,6 @@ use crate::net::record_publish::{
     HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
     publish_record_placed,
 };
-use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
     Acknowledged, AcknowledgedSlot, HeldMarks, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
     StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
@@ -112,10 +112,12 @@ use crate::sync::doomed::{
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
     record_matches_manifest, seal_reclamation,
 };
+use crate::sync::kept_judge::{
+    KeptJudge, KeptPlace, LiveChecks, LiveReads, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
+    live_anchor, live_reads, needs_result, on_halt, scan_reads,
+};
 use crate::sync::kept_op::{
-    KeptNote, KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue,
-    is_kept, keeps, kept_outcome, kept_verdict, live_head, live_place, load_kept_notes,
-    needs_result, shows_a_flip, store_kept_notes,
+    KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -846,6 +848,55 @@ struct Queue {
     /// The kept ops that wait out of this pass, still queued.
     kept: Vec<OpId>,
     all_ids: BTreeSet<OpId>,
+}
+
+/// Why an op leaves the queue, which names the step that follows the dequeue
+/// ([`Drain::depart`]).
+enum Departure<'o> {
+    /// Restore residue, at or below the drained-op mark.
+    Residue,
+    /// It leaves with no apply and no notice.
+    Dropped,
+    /// A kept op that leaves on the scan: its staged blocks go with it.
+    Expired(&'o Op),
+    /// A delete that a published bin restore cancels: its note goes with it.
+    CancelledByRestore,
+    /// Its publish completed it.
+    Completed,
+    /// A cancel undid it.
+    Cancelled,
+    /// It leaves as a dead letter.
+    DeadLetter {
+        op: &'o Op,
+        reason: DeadLetterReason,
+        blocks: DeadLetterBlocks,
+    },
+}
+
+impl<'o> Departure<'o> {
+    /// A dead letter that drops the version no preserved entry holds.
+    fn unpreserved(op: &'o Op, reason: DeadLetterReason, preserved: Preservation) -> Self {
+        Self::DeadLetter {
+            op,
+            reason: preserved.observed(reason),
+            blocks: DeadLetterBlocks::Unpreserved(preserved),
+        }
+    }
+}
+
+/// Proof that the note step of a publish ran, and whether it stored a note
+/// ([`Drain::keep_published`]).
+#[must_use]
+struct Noted(bool);
+
+/// What a dead letter does with its staged blocks once it left the queue.
+enum DeadLetterBlocks {
+    /// Release them.
+    Release,
+    /// Keep them.
+    Keep,
+    /// Drop the version no preserved entry holds ([`Drain::release_unpreserved`]).
+    Unpreserved(Preservation),
 }
 
 /// Why the queue head is held over rather than failed. Each reason names its
@@ -2210,17 +2261,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     delete_proof_nodes: usize,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
-    /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
-    keeps_op: Cell<bool>,
-    /// The folder that op writes under, from the base before its publish, for
-    /// its kept-op note.
-    kept_parent: Cell<Option<NodeId>>,
-    /// The result that op made, for the note of a kind that needs one
-    /// ([`needs_result`]).
-    kept_result: RefCell<Option<KeptResult>>,
-    /// Whether that op's note or the published-op mark landed, so the op stays
-    /// queued as a kept op.
-    kept_now: Cell<bool>,
+    /// The kept-op note of the op this pass publishes now.
+    note_draft: RefCell<NoteDraft>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
     /// The reads one pass spends to find sealing scopes ([`MAX_SEALER_READS`]).
@@ -2252,10 +2294,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             sealer_reads: MAX_SEALER_READS,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
             mirror: RefCell::default(),
-            keeps_op: Cell::new(false),
-            kept_parent: Cell::new(None),
-            kept_result: RefCell::new(None),
-            kept_now: Cell::new(false),
+            note_draft: RefCell::default(),
         }
     }
 
@@ -3203,8 +3242,8 @@ where
                     .moved_tree_decides(scope, &mut moved, &kept, (*op_id, op), root)
                     .await
                 {
-                    self.dequeue_op(*op_id).await?;
-                    report.dropped.push(*op_id);
+                    self.depart(scope, *op_id, Departure::Dropped, report)
+                        .await?;
                     decided.push(*op_id);
                     continue;
                 }
@@ -3251,8 +3290,8 @@ where
             // A kept op's version landed, and a live record may still name what
             // it registered: it leaves with no retire and no notice.
             if kept.holds(*op_id, op) {
-                self.dequeue_op(*op_id).await?;
-                report.dropped.push(*op_id);
+                self.depart(scope, *op_id, Departure::Dropped, report)
+                    .await?;
                 continue;
             }
             // A terminally unrebasable op keeps its staged bytes, and this is
@@ -3261,14 +3300,20 @@ where
             let preserved = self
                 .preserve_dead_letter(scope, *op_id, op, *reason)
                 .await?;
-            self.abandon(scope, *op_id, op).await?;
-            // The abandonment retired what the op registered.
-            if preserved == Preservation::Refused {
-                self.release_staged_blocks(op).await;
-            }
-            report
-                .dead_letters
-                .push((*op_id, op.target, preserved.observed(*reason)));
+            let blocks = if preserved == Preservation::Refused {
+                DeadLetterBlocks::Release
+            } else {
+                DeadLetterBlocks::Keep
+            };
+            self.abandon(
+                scope,
+                *op_id,
+                op,
+                preserved.observed(*reason),
+                blocks,
+                report,
+            )
+            .await?;
         }
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
@@ -3292,8 +3337,8 @@ where
             {
                 let _ = cache.remove(&op.target.0).await;
             }
-            self.dequeue_op(*op_id).await?;
-            report.dropped.push(*op_id);
+            self.depart(scope, *op_id, Departure::Dropped, report)
+                .await?;
         }
         // A dropped relocation is the move already landed, so its cut has no
         // publish left to derive the planes from and the replay's own verdict is
@@ -3314,7 +3359,7 @@ where
             }
             self.release_hold_of(applied.op_id);
             // A published bin restore cancels its nearest earlier delete, also
-            // one that became kept in this pass ([`overtaken_by_a_later_op`]).
+            // one that became kept in this pass (`kept_judge::overtaken_by_a_later_op`).
             // The delete leaves first: a restore left queued leaves at its
             // replay, and a kept delete left alone would bin the node again.
             if matches!(applied.op.kind, OpKind::Restore { .. })
@@ -3326,18 +3371,13 @@ where
                     })
                     .last()
             {
-                self.dequeue_op(*delete).await?;
-                let mut notes = self.kept_notes(scope).await?;
-                notes.remove(*delete);
-                self.store_kept_notes(scope, &notes).await?;
-                if !report.dropped.contains(delete) && !report.completed.contains(delete) {
-                    report.dropped.push(*delete);
-                }
+                self.depart(scope, *delete, Departure::CancelledByRestore, report)
+                    .await?;
             }
             // An op that is not kept leaves at its publish ([`keeps`]).
-            if !self.kept_now.get() {
-                self.dequeue_op(applied.op_id).await?;
-                report.completed.push(applied.op_id);
+            if !self.note_draft.borrow().kept() {
+                self.depart(scope, applied.op_id, Departure::Completed, report)
+                    .await?;
             }
             self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
@@ -3406,16 +3446,13 @@ where
             self.release_hold();
         }
         // A kept op leaves with no notice, as its rebase dead letter does.
-        if matches!(halt, Halt::Permanent(_))
-            && keeps(&op.kind)
+        if on_halt(matches!(halt, Halt::Permanent(_)), op)
             && self
                 .kept_ops(scope)
                 .await
                 .is_ok_and(|kept| kept.holds(op_id, op))
         {
-            if self.dequeue_op(op_id).await.is_ok() {
-                report.dropped.push(op_id);
-            }
+            let _ = self.depart(scope, op_id, Departure::Dropped, report).await;
             return;
         }
         match halt {
@@ -3454,9 +3491,9 @@ where
             // leading leaves of something still publishable would land a
             // version whose blocks are gone.
             Halt::Cancelled => {
-                if self.dequeue_op(op_id).await.is_ok() {
-                    self.retire_cancelled(op_id).await;
-                }
+                let _ = self
+                    .depart(scope, op_id, Departure::Cancelled, report)
+                    .await;
             }
             Halt::Attempt
             | Halt::UploadAttempt
@@ -3489,11 +3526,9 @@ where
                 } else {
                     Ok(())
                 };
-                if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
-                    self.release_unpreserved(scope, preserved, op).await;
-                    report
-                        .dead_letters
-                        .push((op_id, op.target, preserved.observed(reason)));
+                if handed_back.is_ok() {
+                    let departure = Departure::unpreserved(op, reason, preserved);
+                    let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
             // A conditional-edit loser keeps its staged version and retires
@@ -3515,13 +3550,9 @@ where
                 else {
                     return;
                 };
-                if self.retire_unreferenced_name(scope, op).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
-                    self.release_unpreserved(scope, preserved, op).await;
-                    report
-                        .dead_letters
-                        .push((op_id, op.target, preserved.observed(reason)));
+                if self.retire_unreferenced_name(scope, op).await.is_ok() {
+                    let departure = Departure::unpreserved(op, reason, preserved);
+                    let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
             Halt::Permanent(reason) => {
@@ -3651,108 +3682,74 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
-        let overtaken = overtaken_by_a_later_op(&scan.mine);
+        let judge = KeptJudge::new(&scan.mine, self.inputs.deferred_raises, now);
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
-                self.dequeue_op(op_id).await?;
-                report.restore_residue.push(op_id);
+                self.depart(scope, op_id, Departure::Residue, report)
+                    .await?;
                 continue;
             }
             if is_kept(op_id, published, &notes) {
                 // Its record publish was confirmed, so its version is live.
-                let verdict = if keeps(&op.kind) {
+                let fate = if keeps(&op.kind) {
                     let note = notes.note_at(op_id, now);
                     let mut place = self.kept_place(scope, &op, note.parent, note.scope).await?;
-                    // This pass cannot check the op, so the floor of the root
-                    // it published under decides whether the bound runs. A
-                    // delete whose anchor the base does not hold under a proved
-                    // root leaves at the bound, and at once when a read of this
-                    // session at the live parent name saw the folder its note
-                    // names unlinked: the node went with it (ADR 0069 D6). A
-                    // base after a cold start lacks deep folders, so absence
-                    // alone shows nothing.
-                    let mut gone = false;
-                    // ADR 0069 D5: a flip dead-letters any other kept op whose
-                    // folder a read of this session saw unlinked at its live
-                    // parent name, under a proved root.
-                    let mut unanchored = false;
-                    if place == KeptPlace::Elsewhere
-                        && let Some(root) = note.scope
-                    {
-                        let anchor = kept_anchor(&op, note.parent);
-                        let anchored = self.cells.base.borrow().contains(anchor);
-                        let proved = scope.scope_roots.contains(&root);
-                        let delete = matches!(op.kind, OpKind::Delete { .. });
-                        if !delete || anchored || !proved {
-                            let folder = kept_folder(&op, note.parent);
-                            unanchored = !anchored
-                                && proved
-                                && self
+                    let reads = scan_reads(
+                        &op,
+                        &note,
+                        place,
+                        &self.cells.base.borrow(),
+                        scope.scope_roots,
+                    );
+                    let mut facts = ScanFacts::default();
+                    match reads {
+                        ScanReads::None => {}
+                        ScanReads::Unchecked { root, unlinked } => {
+                            if let Some(nodes) = unlinked {
+                                facts.unanchored = self
                                     .unlinked_at_its_live_name(
                                         scope,
                                         root,
-                                        &[folder, anchor],
+                                        &nodes,
                                         note.write_epoch,
                                     )
                                     .await?;
+                            }
                             place = self.unchecked_place(scope, root).await?;
-                        } else if let Some(folder) =
-                            note.parent.filter(|_| reads_kept_parent(&op, note.parent))
-                        {
-                            gone = self
+                        }
+                        ScanReads::Gone { root, folder } => {
+                            facts.gone = self
                                 .unlinked_at_its_live_name(scope, root, &[folder], note.write_epoch)
                                 .await?;
                         }
                     }
-                    // ADR 0069 D6 ([`overtaken_by_a_later_op`]).
-                    let later = overtaken.get(&op_id).copied();
-                    if gone
-                        || later == Some(Overtaken::ByRestore)
-                        || (later == Some(Overtaken::ByDelete) && shows_a_flip(&note, place))
-                        // With no result, a check cannot tell a later write.
-                        || (needs_result(&op.kind) && note.result.is_none())
-                    {
-                        KeptVerdict::Expired
-                    } else {
-                        // A deferred raise can hide a flip, so the bound
-                        // waits for a follow that lands it (blueprint/engine.md
-                        // "kept op").
-                        let deferred = note
-                            .scope
-                            .or_else(|| place.root())
-                            .is_some_and(|root| self.inputs.deferred_raises.contains(&root));
-                        match kept_verdict(&note, place, now) {
-                            KeptVerdict::Expired if deferred => KeptVerdict::Stay,
-                            KeptVerdict::Stay
-                                if unanchored && !deferred && shows_a_flip(&note, place) =>
-                            {
-                                if self
-                                    .abandon_keeping_its_name(
-                                        scope,
-                                        op_id,
-                                        &op,
-                                        DeadLetterReason::TargetGone,
-                                        report,
-                                    )
-                                    .await
-                                {
-                                    notes.remove(op_id);
-                                    continue;
-                                }
-                                KeptVerdict::Stay
-                            }
-                            verdict => verdict,
-                        }
-                    }
+                    judge.scan(op_id, &op, &note, place, facts)
                 } else {
-                    KeptVerdict::Expired
+                    ScanFate::Expire
                 };
-                match verdict {
-                    KeptVerdict::Stay => {
+                match fate {
+                    ScanFate::Stay => {
                         kept.push(op_id);
                         continue;
                     }
-                    KeptVerdict::Expired => {
+                    ScanFate::TargetGone => {
+                        let left = self
+                            .abandon_keeping_its_name(
+                                scope,
+                                op_id,
+                                &op,
+                                DeadLetterReason::TargetGone,
+                                report,
+                            )
+                            .await;
+                        if left {
+                            notes.remove(op_id);
+                        } else {
+                            kept.push(op_id);
+                        }
+                        continue;
+                    }
+                    ScanFate::Expire => {
                         // A relocation the mark drops may have stopped before its
                         // crossing committed, so the cut it owes is owed here, and
                         // the op stays until that debt is durable. Owing a cut
@@ -3770,13 +3767,12 @@ where
                             kept.push(op_id);
                             continue;
                         }
-                        self.dequeue_op(op_id).await?;
-                        self.release_staged_blocks(&op).await;
+                        self.depart(scope, op_id, Departure::Expired(&op), report)
+                            .await?;
                         notes.remove(op_id);
-                        report.dropped.push(op_id);
                         continue;
                     }
-                    KeptVerdict::Recheck => {}
+                    ScanFate::Recheck => {}
                 }
             }
             mine.push((op_id, op));
@@ -3825,7 +3821,7 @@ where
     }
 
     /// Where the write scope of a kept op stands for this pass: the nearest
-    /// known scope root above the node the op writes under ([`kept_anchor`]),
+    /// known scope root above the node the op writes under ([`live_anchor`]),
     /// when the boundary walk proved it. An unproved root reports its durable
     /// write-epoch floor ([`KeptPlace::Unchecked`]). `parent` is the folder
     /// the op's note names.
@@ -3836,7 +3832,7 @@ where
         parent: Option<NodeId>,
         noted_root: Option<NodeId>,
     ) -> Result<KeptPlace, Halt> {
-        let anchor = kept_anchor(op, parent);
+        let (anchor, reads_parent) = live_anchor(op, parent);
         let (nearest, anchor_name) = {
             let base = self.cells.base.borrow();
             let Some(meta) = base.node(anchor) else {
@@ -3878,7 +3874,7 @@ where
         // repaints its own scope root from the live root before the rebase,
         // and reads the parent of a kept delete ([`Self::read_kept_parents`]).
         let anchor_read_live = anchor == scope.source.root
-            || reads_kept_parent(op, parent)
+            || reads_parent
             || anchor_name.as_deref() == Some(end.write_name(&anchor.0).as_str().as_bytes());
         Ok(KeptPlace::Writes {
             root,
@@ -3959,37 +3955,30 @@ where
     /// Note the scope root and write epoch of `end` and the time for an op of
     /// a kept kind whose last record just confirmed, so it stays queued as a kept op
     /// (ADR 0069 D2, D4). Written before the published-op mark rises: the note
-    /// alone makes the op kept. Best-effort, as [`Self::mark_published`] is: an
-    /// op with no note gets one check.
-    async fn keep_published(&self, scope: &DrainScope<'_>, end: &ScopeEnd<'_>, op_id: OpId) {
-        if !self.keeps_op.get() {
-            return;
+    /// alone makes the op kept, and [`Self::mark_published`] takes the
+    /// [`Noted`] this returns. Best-effort, as the mark is: an op with no note
+    /// gets one check.
+    async fn keep_published(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        op_id: OpId,
+    ) -> Noted {
+        if !self.note_draft.borrow().keeps() {
+            return Noted(false);
         }
         let (Ok(write_epoch), Ok(mut notes)) =
             (self.write_epoch_of(end).await, self.kept_notes(scope).await)
         else {
-            return;
+            return Noted(false);
         };
-        let noted = notes.insert(
-            op_id,
-            KeptNote {
-                scope: Some(end.root),
-                write_epoch,
-                published_at: self.seams.scheduler.now(),
-                parent: self.kept_parent.get(),
-                result: self.kept_result.take(),
-            },
-        );
-        if noted.is_ok() && self.store_kept_notes(scope, &notes).await.is_ok() {
-            self.kept_now.set(true);
-        }
-    }
-
-    /// Record the result of the op this pass publishes now, which makes a kind
-    /// that needs one a kept op ([`needs_result`]).
-    fn keep_result(&self, result: KeptResult) {
-        self.kept_result.replace(Some(result));
-        self.keeps_op.set(true);
+        let note =
+            self.note_draft
+                .borrow_mut()
+                .note(end.root, write_epoch, self.seams.scheduler.now());
+        Noted(
+            notes.insert(op_id, note).is_ok() && self.store_kept_notes(scope, &notes).await.is_ok(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -4084,7 +4073,7 @@ where
     }
 
     /// Read at its live name the folder that each kept delete under a flip
-    /// unlinked its node from (ADR 0069 D6). The read repaints the base, so
+    /// unlinked its node from ([`LiveReads::Parent`]). The read repaints the base, so
     /// the rebase applies the delete again when the node is alive, and drops
     /// it when the node is gone. Return the deletes whose folder its old
     /// parent no longer names: the node went with it.
@@ -4098,21 +4087,25 @@ where
         let mut gone = BTreeSet::new();
         for (op_id, op) in queued {
             // Only a noted op names a parent, and a note makes the op kept.
-            let parent = kept.parent(*op_id);
-            if !matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+            let LiveReads::Parent { folder } = live_reads(
+                op,
+                kept.parent(*op_id),
+                kept.result(*op_id),
+                kept.holds(*op_id, op),
+            ) else {
                 continue;
-            }
+            };
             let at = |halt| HeadHalt {
                 halt,
                 at: Some(*op_id),
             };
             let place = self
-                .kept_place(scope, op, parent, kept.scope(*op_id))
+                .kept_place(scope, op, Some(folder), kept.scope(*op_id))
                 .await
                 .map_err(at)?;
-            if let (KeptPlace::Writes { .. }, Some(parent)) = (place, parent)
+            if matches!(place, KeptPlace::Writes { .. })
                 && !self
-                    .read_live_folder(scope, pass, parent)
+                    .read_live_folder(scope, pass, folder)
                     .await
                     .map_err(at)?
             {
@@ -4123,12 +4116,8 @@ where
     }
 
     /// Read at their live names the folders that each kept rename or move
-    /// under a flip names, and compare the node there with the result of the
-    /// op ([`kept_outcome`]). A landed op leaves as satisfied, and an
-    /// overtaken one leaves so the later write stays. A lost op joins the
-    /// rebase and applies again. An earlier op of this device that the rebase
-    /// applies again, a create the base lacks or a lost rename or move, sets
-    /// the place that the next op on its node is compared with.
+    /// under a flip names ([`LiveReads::Places`]), and check the node there
+    /// ([`LiveChecks::place_check`]). Return the ops that leave.
     async fn read_kept_places(
         &self,
         scope: &DrainScope<'_>,
@@ -4137,66 +4126,43 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut leaving = BTreeMap::new();
-        let mut created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
-        let mut replayed: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
+        let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
-            if let OpKind::Create { parent, name, .. } = &op.kind {
-                created.insert(op.target, (*parent, Zeroizing::new(name.clone())));
-            }
-            let parent = kept.parent(*op_id);
+            checks.queued(op);
             let Some(result) = kept.result(*op_id) else {
                 continue;
             };
-            if matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+            let reads = live_reads(
+                op,
+                kept.parent(*op_id),
+                Some(result),
+                kept.holds(*op_id, op),
+            );
+            let LiveReads::Places { parent, .. } = reads else {
                 continue;
-            }
+            };
             let at = |halt| HeadHalt {
                 halt,
                 at: Some(*op_id),
             };
-            let (KeptPlace::Writes { .. }, Some(parent)) = (
-                self.kept_place(scope, op, parent, kept.scope(*op_id))
+            if !matches!(
+                self.kept_place(scope, op, Some(parent), kept.scope(*op_id))
                     .await
                     .map_err(at)?,
-                parent,
-            ) else {
+                KeptPlace::Writes { .. }
+            ) {
                 continue;
-            };
-            // The source first: the read of the destination then unlinks a
-            // node that the source still holds.
-            let mut folders = vec![parent];
-            if let KeptResult::Move { to, .. } = result
-                && *to != parent
-            {
-                folders.push(*to);
             }
-            for folder in folders {
+            for folder in reads.folders() {
                 if self.cells.base.borrow().contains(folder) {
                     self.read_live_folder(scope, pass, folder)
                         .await
                         .map_err(at)?;
                 }
             }
-            let place = replayed
-                .get(&op.target)
-                .cloned()
-                .or_else(|| place_in(&self.cells.base.borrow(), op.target))
-                .or_else(|| created.get(&op.target).cloned());
-            match kept_outcome(result, live_place(result, parent, place.as_ref())) {
-                KeptOutcome::Landed => {
-                    leaving.insert(*op_id, DropReason::AlreadySatisfied);
-                }
-                KeptOutcome::Overtaken => {
-                    leaving.insert(*op_id, DropReason::TargetAdvanced);
-                }
-                KeptOutcome::Lost => {
-                    let after = match result {
-                        KeptResult::Rename { after, .. } => (parent, after.clone()),
-                        KeptResult::Move { to, to_name, .. } => (*to, to_name.clone()),
-                        KeptResult::RestoreVersion { .. } => continue,
-                    };
-                    replayed.insert(op.target, after);
-                }
+            let base_place = || place_in(&self.cells.base.borrow(), op.target);
+            if let Some(reason) = checks.place_check(op, parent, result, base_place) {
+                leaving.insert(*op_id, reason);
             }
         }
         Ok(leaving)
@@ -4227,11 +4193,9 @@ where
         Ok(true)
     }
 
-    /// Read the live record of each file that a kept content edit checks, and
-    /// return the edits whose version the history names. A folder read at the
-    /// live name carries a file's name, not its head, so the base can still
-    /// hold the head from before the flip. A later edit or restore moves the
-    /// head, so only the history shows that this edit landed.
+    /// Read the live record of each file that a kept content edit or version
+    /// restore checks ([`LiveChecks::head_check`]), and return the ops that
+    /// leave.
     async fn read_kept_heads(
         &self,
         scope: &DrainScope<'_>,
@@ -4240,19 +4204,11 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut landed = BTreeMap::new();
-        // The head that an edit or a restore of this device, which the rebase
-        // applies again, sets for the next op on its file.
-        let mut replayed: BTreeMap<NodeId, Vec<u8>> = BTreeMap::new();
+        let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
-            let restored = match op.kind {
-                OpKind::UpdateContent { .. } => None,
-                OpKind::RestoreVersion { .. } => match kept.result(*op_id) {
-                    Some(result) => Some(result),
-                    None => continue,
-                },
-                _ => continue,
-            };
-            if !kept.holds(*op_id, op) {
+            let result = kept.result(*op_id);
+            let reads = live_reads(op, kept.parent(*op_id), result, kept.holds(*op_id, op));
+            if reads != LiveReads::Head {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -4280,30 +4236,8 @@ where
             let ReadBody::File { versions, .. } = &loaded.body else {
                 return Err(at(Halt::Unclassified));
             };
-            if let Some(result) = restored {
-                let live = match replayed.get(&op.target) {
-                    Some(head) => LiveValue::Head(head),
-                    None => live_head(versions),
-                };
-                match kept_outcome(result, live) {
-                    KeptOutcome::Landed => {
-                        landed.insert(*op_id, DropReason::AlreadySatisfied);
-                    }
-                    KeptOutcome::Overtaken => {
-                        landed.insert(*op_id, DropReason::TargetAdvanced);
-                    }
-                    KeptOutcome::Lost => {
-                        if let KeptResult::RestoreVersion { after, .. } = result {
-                            replayed.insert(op.target, after.clone());
-                        }
-                    }
-                }
-            } else if let Some(content) = op.staged_content() {
-                if lists_version(versions, content) {
-                    landed.insert(*op_id, DropReason::AlreadySatisfied);
-                } else {
-                    replayed.insert(op.target, content.root_cid.clone());
-                }
+            if let Some(reason) = checks.head_check(op, result, versions) {
+                landed.insert(*op_id, reason);
             }
             if let Some(head) = versions.first() {
                 project_child_version(
@@ -5023,16 +4957,13 @@ where
         rebased: &Snapshot,
     ) -> Result<(), Halt> {
         self.mirror.take();
-        // A kind that needs a result stays kept only once its publish records
-        // one ([`Self::keep_result`]).
-        self.keeps_op
-            .set(keeps(&applied.op.kind) && !needs_result(&applied.op.kind));
-        self.kept_result.replace(None);
-        self.kept_parent.set(match &applied.op.kind {
+        let parent = match &applied.op.kind {
             OpKind::Create { parent, .. } => Some(*parent),
             _ => self.cells.base.borrow().parent_of(applied.op.target),
-        });
-        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, self.kept_parent.get())
+        };
+        self.note_draft
+            .replace(NoteDraft::begin(&applied.op.kind, parent));
+        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, parent)
             && let Some(chain) = chain_to(&self.cells.base.borrow(), parent)
         {
             self.cells
@@ -5040,7 +4971,6 @@ where
                 .borrow_mut()
                 .insert(applied.op_id, chain);
         }
-        self.kept_now.set(false);
         self.publish_op(scope, pass, applied, rebased).await?;
         let shortfall = mirror_shortfall(&self.mirror.borrow());
         self.emit_mirror_shortfall(applied, shortfall);
@@ -5575,7 +5505,8 @@ where
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
-                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+                if sequence_refusal(&rejection.reason, endpoint_failed)
+                    == Some(BelowFloor::Unavailable) =>
             {
                 Halt::DeletePlaneUnavailable
             }
@@ -7647,15 +7578,17 @@ where
                     .as_ref()
                     .map_or_else(|| moved.name.clone(), |name| name.to_string()),
             );
-            self.keep_result(match applied.op.kind {
-                OpKind::Rename { .. } => KeptResult::Rename { before, after },
-                _ => KeptResult::Move {
-                    from: source,
-                    from_name: before,
-                    to: dest,
-                    to_name: after,
-                },
-            });
+            self.note_draft
+                .borrow_mut()
+                .with_result(match applied.op.kind {
+                    OpKind::Rename { .. } => KeptResult::Rename { before, after },
+                    _ => KeptResult::Move {
+                        from: source,
+                        from_name: before,
+                        to: dest,
+                        to_name: after,
+                    },
+                });
         }
         if let Some(new_name) = new_name {
             moved.rename(new_name.to_string());
@@ -8504,10 +8437,12 @@ where
         {
             return Ok(());
         }
-        self.keep_result(KeptResult::RestoreVersion {
-            before: versions[0].content_cid.clone(),
-            after: content_cid.to_vec(),
-        });
+        self.note_draft
+            .borrow_mut()
+            .with_result(KeptResult::RestoreVersion {
+                before: versions[0].content_cid.clone(),
+                after: content_cid.to_vec(),
+            });
         // A rotate rather than a remove-and-insert, so no version's content key
         // is moved out of the list it is owned by.
         versions[..=at].rotate_right(1);
@@ -9734,7 +9669,7 @@ where
             // The duty is read off the material this end publishes under, never
             // off the section being carried: an end with an ascent authority is
             // an interior scope root, whose record the child gate refuses
-            // without its link (`net/rotation.rs::gate_root_pass`).
+            // without its link (`net/gated_read.rs::gate_root_pass`).
             let owes_ascent_link = plane.end.ascent_node_seed.is_some();
             author_scope_root_envelope(authoring, name, scope.owner_identity, owes_ascent_link)
         } else {
@@ -9850,8 +9785,8 @@ where
                         data: signed_data(name, &record_bytes).unwrap_or_default(),
                     });
             }
-            self.keep_published(scope, &plane.end, op_id).await;
-            self.mark_published(scope, op_id).await;
+            let noted = self.keep_published(scope, &plane.end, op_id).await;
+            self.mark_published(scope, op_id, noted).await;
         }
         // The record is live from here: everything below is a local step.
         let Ok(Ok(observed)) = self
@@ -10086,6 +10021,47 @@ where
         Ok(())
     }
 
+    /// The one queue exit: dequeue `op_id`, then take the step its `departure`
+    /// names and report it. A failed dequeue takes no step.
+    async fn depart(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        departure: Departure<'_>,
+        report: &mut DrainReport,
+    ) -> Result<(), Halt> {
+        self.dequeue_op(op_id).await?;
+        match departure {
+            Departure::Residue => report.restore_residue.push(op_id),
+            Departure::Dropped => report.dropped.push(op_id),
+            Departure::Expired(op) => {
+                self.release_staged_blocks(op).await;
+                report.dropped.push(op_id);
+            }
+            Departure::CancelledByRestore => {
+                let mut notes = self.kept_notes(scope).await?;
+                notes.remove(op_id);
+                self.store_kept_notes(scope, &notes).await?;
+                if !report.dropped.contains(&op_id) && !report.completed.contains(&op_id) {
+                    report.dropped.push(op_id);
+                }
+            }
+            Departure::Completed => report.completed.push(op_id),
+            Departure::Cancelled => self.retire_cancelled(op_id).await,
+            Departure::DeadLetter { op, reason, blocks } => {
+                match blocks {
+                    DeadLetterBlocks::Release => self.release_staged_blocks(op).await,
+                    DeadLetterBlocks::Keep => {}
+                    DeadLetterBlocks::Unpreserved(preserved) => {
+                        self.release_unpreserved(scope, preserved, op).await;
+                    }
+                }
+                report.dead_letters.push((op_id, op.target, reason));
+            }
+        }
+        Ok(())
+    }
+
     /// Note one head block as orphaned.
     ///
     /// A head the live set still names never enters the queue: its only
@@ -10209,23 +10185,26 @@ where
         let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
             return false;
         };
-        if self.dequeue_op(op_id).await.is_err() {
-            return false;
-        }
-        self.release_unpreserved(scope, preserved, op).await;
-        report
-            .dead_letters
-            .push((op_id, op.target, preserved.observed(reason)));
-        true
+        let departure = Departure::unpreserved(op, reason, preserved);
+        self.depart(scope, op_id, departure, report).await.is_ok()
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
-    /// the queue.
-    async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
+    /// the queue as a dead letter.
+    async fn abandon(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        op: &Op,
+        reason: DeadLetterReason,
+        blocks: DeadLetterBlocks,
+        report: &mut DrainReport,
+    ) -> Result<(), Halt> {
         retire(&self.seams.api, &self.registered_by(scope, op).await)
             .await
             .map_err(|_| Halt::UploadAttempt)?;
-        self.dequeue_op(op_id).await
+        let departure = Departure::DeadLetter { op, reason, blocks };
+        self.depart(scope, op_id, departure, report).await
     }
 
     /// Dead-letter one op. A failed retire leaves it queued for the next pass
@@ -10238,10 +10217,9 @@ where
         reason: DeadLetterReason,
         report: &mut DrainReport,
     ) {
-        if self.abandon(scope, op_id, op).await.is_ok() {
-            self.release_staged_blocks(op).await;
-            report.dead_letters.push((op_id, op.target, reason));
-        }
+        let _ = self
+            .abandon(scope, op_id, op, reason, DeadLetterBlocks::Release, report)
+            .await;
     }
 
     /// Retire only the name half of [`Self::registered_by`], for an abandonment
@@ -10454,16 +10432,14 @@ where
     /// already live by the time this runs, so failing the op over the mark would
     /// *cause* the replay the mark exists to prevent. The dequeue that follows
     /// is the primary guard; the mark is what survives losing it.
-    async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId) {
+    async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId, Noted(noted): Noted) {
         let raised = self
             .raise_op_mark(
                 &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, scope.enc_secret),
                 op_id.0,
             )
             .await;
-        if raised.is_ok() && self.keeps_op.get() {
-            self.kept_now.set(true);
-        }
+        self.note_draft.borrow_mut().settle(noted, raised.is_ok());
     }
 
     /// Raise the op-id high-water at `key` to `max(stored, mark)`.
@@ -10866,39 +10842,6 @@ fn paint_folder(
     }
 }
 
-/// The node a kept op anchors at: the parent of a create, the destination
-/// of a restore, the folder its note names for a delete, a rename or a move,
-/// and else the node itself.
-fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
-    match (&op.kind, parent) {
-        (OpKind::Create { parent, .. }, _) => *parent,
-        (OpKind::Restore { into, .. }, _) => *into,
-        (
-            OpKind::Delete { .. }
-            | OpKind::Rename { .. }
-            | OpKind::Move { .. }
-            | OpKind::Relink { .. },
-            Some(parent),
-        ) => parent,
-        _ => op.target,
-    }
-}
-
-/// The folder a kept op writes under ([`KeptNote::parent`]), and else its
-/// anchor. It differs from the anchor only for an edit and a version
-/// restore, which anchor at their file.
-fn kept_folder(op: &Op, parent: Option<NodeId>) -> NodeId {
-    parent.unwrap_or_else(|| kept_anchor(op, parent))
-}
-
-/// Whether a file's version list names the version `content` staged
-/// ([`Drain::read_kept_heads`]).
-fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
-    versions
-        .iter()
-        .any(|version| version.content_cid == content.root_cid)
-}
-
 /// The folders from the root down to `folder`, root first, or `None` when
 /// `base` does not hold `folder`.
 fn chain_to(base: &Snapshot, folder: NodeId) -> Option<Vec<NodeId>> {
@@ -10915,58 +10858,6 @@ fn place_in(base: &Snapshot, node: NodeId) -> Option<(NodeId, Zeroizing<String>)
     base.parent_of(node)
         .zip(base.node(node))
         .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())))
-}
-
-/// How a later op of this device on the same node decides an earlier op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Overtaken {
-    /// A later delete removes the node.
-    ByDelete,
-    /// A later bin restore cancels this delete.
-    ByRestore,
-}
-
-/// The ops of `queue` that a later op of this device on the same node
-/// decides: a later delete expires every earlier op on its node once a
-/// flip shows, a later bin restore cancels that delete so the earlier
-/// ops stay, and no other later op expires an earlier op (ADR 0069 D6). A
-/// cancelled delete leaves at once; before a flip, a bin restore can still
-/// cancel a delete, so the ops under it wait. A restore that publishes
-/// cancels its delete durably ([`Drain::publish_queue`]).
-fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
-    let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
-    let mut overtaken = BTreeMap::new();
-    for (op_id, op) in queue.iter().rev() {
-        let (deleted, restoring) = later.entry(op.target).or_default();
-        let delete = matches!(op.kind, OpKind::Delete { .. });
-        if *deleted {
-            overtaken.insert(*op_id, Overtaken::ByDelete);
-        } else if delete && *restoring {
-            overtaken.insert(*op_id, Overtaken::ByRestore);
-        }
-        if delete && !*deleted {
-            *deleted = !*restoring;
-            *restoring = false;
-        }
-        if matches!(op.kind, OpKind::Restore { .. }) && !*deleted {
-            *restoring = true;
-        }
-    }
-    overtaken
-}
-
-/// Whether the drain reads the anchor of a kept op itself: the folder its
-/// note names for a delete, a rename or a move, which a flip moved to a new
-/// name ([`Drain::read_kept_parents`], [`Drain::read_kept_places`]).
-fn reads_kept_parent(op: &Op, parent: Option<NodeId>) -> bool {
-    parent.is_some()
-        && matches!(
-            op.kind,
-            OpKind::Delete { .. }
-                | OpKind::Rename { .. }
-                | OpKind::Move { .. }
-                | OpKind::Relink { .. }
-        )
 }
 
 /// The queue replayed onto `base`.
@@ -11112,6 +11003,7 @@ mod tests {
     use crate::record_plane::{LapsedHead, Unopened};
     use crate::seams::SeamError;
     use crate::settings::{PlacementRefusal, SettingsRefusal};
+    use crate::sync::kept_op::KeptNote;
     use crate::sync::model::NodeMeta;
 
     const SOURCE_ROOT: NodeId = NodeId([1; 16]);
@@ -13374,6 +13266,67 @@ mod tests {
             attempts,
             op_id,
             still_queued: harness.queued_op_ids(),
+        }
+    }
+
+    /// A kept op that a pass halts for good leaves with no notice, as its
+    /// rebase dead letter does. The same op with no note dead-letters.
+    #[test]
+    fn a_kept_op_that_halts_for_good_leaves_with_no_dead_letter() {
+        let gone = Halt::Permanent(DeadLetterReason::TargetGone);
+        for (kept, halt) in [(true, gone), (false, gone), (true, Halt::Unclassified)] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let op = Op::rename(KEPT_NODE, "after", 1, UnixMillis(0));
+            let op_id = harness.queue_an_op(&op);
+            let drain = harness.drain();
+            let scope = harness.scope();
+            if kept {
+                let mut notes = KeptNotes::default();
+                notes
+                    .insert(
+                        op_id,
+                        KeptNote {
+                            published_at: harness.seams.scheduler.now(),
+                            result: Some(KeptResult::Rename {
+                                before: Zeroizing::new("before".to_owned()),
+                                after: Zeroizing::new("after".to_owned()),
+                            }),
+                            ..cut_note()
+                        },
+                    )
+                    .expect("the note is in bounds");
+                block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
+            }
+            let mut report = DrainReport::default();
+
+            block_on(drain.apply_valve(
+                &scope,
+                op_id,
+                &op,
+                halt,
+                &mut Attempts::default(),
+                &mut report,
+            ));
+
+            if halt == Halt::Unclassified {
+                assert_eq!(
+                    harness.queued_op_ids(),
+                    vec![op_id],
+                    "a transient halt keeps it"
+                );
+                assert!(report.dropped.is_empty());
+                continue;
+            }
+            assert!(harness.queued_op_ids().is_empty(), "kept {kept}: it left");
+            if kept {
+                assert!(report.dead_letters.is_empty(), "no notice");
+                assert_eq!(report.dropped, vec![op_id]);
+            } else {
+                assert_eq!(
+                    report.dead_letters,
+                    vec![(op_id, KEPT_NODE, DeadLetterReason::TargetGone)]
+                );
+            }
         }
     }
 

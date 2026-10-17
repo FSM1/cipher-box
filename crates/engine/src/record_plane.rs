@@ -22,6 +22,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use crate::content::Gateway;
 use crate::gate::floor;
 use crate::net::eol::is_expired;
+use crate::net::gated_read::{BelowFloor, below_floor};
 use crate::net::liveness::{HeldRecord, HeldValue};
 use crate::net::publish::head_cid_from_value;
 use crate::net::{fanout_get_verify_failed, fetch_head_block};
@@ -478,11 +479,10 @@ where
     let lapsed = matches!(plane.eol, EolRule::RefuseAt(now) if is_expired(now, &verified.validity));
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
-    if !lapsed && sequence < floor {
-        return Err(if endpoint_failed {
-            DefaultsReason::Suppressed
-        } else {
-            DefaultsReason::RolledBack { floor, sequence }
+    if !lapsed && let Some(below) = below_floor(sequence, floor, endpoint_failed) {
+        return Err(match below {
+            BelowFloor::Unavailable => DefaultsReason::Suppressed,
+            BelowFloor::Rollback => DefaultsReason::RolledBack { floor, sequence },
         });
     }
 

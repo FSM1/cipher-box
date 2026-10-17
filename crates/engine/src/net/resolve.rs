@@ -20,6 +20,7 @@ use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_tied_classified;
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
+use super::gated_read::{BelowFloor, sequence_refusal};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
@@ -360,16 +361,6 @@ struct GatedParts {
     committed_floor: Option<u64>,
 }
 
-/// Whether a gate refusal reads as unavailable: the sequence stage refused a
-/// record strictly below the floor while an endpoint failed (ADR 0071 D1).
-pub(crate) fn unavailable_below_floor(reason: &RejectionReason, endpoint_failed: bool) -> bool {
-    endpoint_failed
-        && matches!(
-            reason,
-            RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor
-        )
-}
-
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
 /// driver.
 pub(crate) async fn resolve_gated<T, S, A>(
@@ -526,7 +517,10 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                reason if unavailable_below_floor(reason, fetch.endpoint_failed) => {
+                reason
+                    if sequence_refusal(reason, fetch.endpoint_failed)
+                        == Some(BelowFloor::Unavailable) =>
+                {
                     withheld = true;
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
