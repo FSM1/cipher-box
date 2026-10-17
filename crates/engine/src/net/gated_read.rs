@@ -12,9 +12,10 @@ use super::fanout::{TiedFetch, fanout_get_tied_classified};
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::publish::{Observed, PublishError};
-use crate::gate::{Candidate, GateError, PendingAdoption, RejectionReason};
+use crate::gate::floor::{self, Strictness};
+use crate::gate::{Candidate, GateError, GateRejection, PendingAdoption, RejectionReason};
 use crate::rotation::{ResolveFailure, SweepResolveFailure};
-use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
+use crate::seams::{FloorStore, Http, RecordTransport, SeamError, SnapshotCache};
 
 /// What a record strictly below its sequence floor reads as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -641,5 +642,236 @@ mod tests {
             panic!("the record is served");
         };
         assert_eq!((pick.sequence, bytes, endpoint_failed), (4, record, true));
+    }
+}
+
+/// One leaf read: the fan-out of a read that is not a scope root read, and the
+/// below-floor rule over the check the route runs on its pick. Each route keeps
+/// its own check and the order of it.
+pub(crate) struct LeafRead {
+    pub(crate) pick: VerifiedRecord,
+    pub(crate) bytes: Vec<u8>,
+    /// The other records served at the pick's sequence ([`TiedFetch::pick`]).
+    pub(crate) tied: Vec<Vec<u8>>,
+    /// [`TiedFetch::endpoint_failed`].
+    pub(crate) endpoint_failed: bool,
+}
+
+/// A leaf read that no endpoint served a record for.
+pub(crate) struct Unserved {
+    /// [`TiedFetch::absent`].
+    pub(crate) absent: bool,
+}
+
+/// The error of a leaf read's check, folded by the below-floor rule.
+#[derive(Debug)]
+pub(crate) enum LeafRefusal {
+    Seam(SeamError),
+    /// A record below the sequence floor while an endpoint failed (ADR 0071 D1).
+    Withheld,
+    /// A trust rejection. A record below the floor that every endpoint
+    /// answered for is one (ADR 0071 D4).
+    Rejected(GateRejection),
+}
+
+impl LeafRefusal {
+    pub(crate) fn of(error: GateError, endpoint_failed: bool) -> Self {
+        match error {
+            GateError::Seam(seam) => Self::Seam(seam),
+            GateError::Rejected(rejection) => {
+                match sequence_refusal(&rejection.reason, endpoint_failed) {
+                    Some(BelowFloor::Unavailable) => Self::Withheld,
+                    Some(BelowFloor::Rollback) | None => Self::Rejected(rejection),
+                }
+            }
+        }
+    }
+}
+
+impl LeafRead {
+    /// The record the fan-out at `name` picks.
+    pub(crate) async fn fetch<T: RecordTransport>(
+        transport: &T,
+        name: &IpnsName,
+    ) -> Result<Self, Unserved> {
+        let TiedFetch {
+            pick,
+            absent,
+            endpoint_failed,
+        } = fanout_get_tied_classified(transport, name).await;
+        let (pick, bytes, tied) = pick.ok_or(Unserved { absent })?;
+        Ok(Self {
+            pick,
+            bytes,
+            tied,
+            endpoint_failed,
+        })
+    }
+
+    /// [`LeafRefusal::of`] for a check on this pick.
+    pub(crate) fn refusal(&self, error: GateError) -> LeafRefusal {
+        LeafRefusal::of(error, self.endpoint_failed)
+    }
+
+    /// The pick's sequence at or above the floor of `key`.
+    pub(crate) async fn check_floor<F: FloorStore>(
+        &self,
+        floors: &F,
+        key: &[u8],
+    ) -> Result<(), LeafRefusal> {
+        floor::check_sequence(floors, key, self.pick.sequence, Strictness::AtOrAboveFloor)
+            .await
+            .map_err(|error| self.refusal(error))
+    }
+}
+
+#[cfg(test)]
+mod leaf_read_tests {
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+    use super::*;
+    use crate::gate::GateStage;
+    use crate::seams::EndpointId;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::{InMemoryFloorStore, InMemoryRecordStore};
+
+    const FLOOR: u64 = 5;
+
+    /// Two endpoints, a record on the second, and a sequence floor of
+    /// [`FLOOR`] at the name.
+    struct Served {
+        name: IpnsName,
+        store: InMemoryRecordStore,
+        endpoints: Vec<EndpointId>,
+        floors: InMemoryFloorStore,
+    }
+
+    impl Served {
+        fn new(sequence: Option<u64>) -> Self {
+            let signer = Ed25519Signer::from_seed([5u8; 32]);
+            let name = IpnsName::from_public_key(&signer.verifying_key());
+            let endpoints = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(endpoints.clone());
+            if let Some(sequence) = sequence {
+                let record = IpnsRecord::create_v2(
+                    &signer,
+                    b"/ipfs/leaf",
+                    sequence,
+                    1,
+                    "2099-01-01T00:00:00Z",
+                )
+                .marshal();
+                store.seed_record(&endpoints[1], name.as_str(), record);
+            }
+            let floors = InMemoryFloorStore::default();
+            block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), FLOOR))
+                .expect("the floor is raised");
+            Self {
+                name,
+                store,
+                endpoints,
+                floors,
+            }
+        }
+
+        fn failing(sequence: Option<u64>, failed: bool) -> Self {
+            let served = Self::new(sequence);
+            if failed {
+                served.store.fail_endpoint(&served.endpoints[0]);
+            }
+            served
+        }
+
+        fn fetch(&self) -> Result<LeafRead, Unserved> {
+            block_on(LeafRead::fetch(&self.store, &self.name))
+        }
+
+        fn checked(&self) -> Result<(), LeafRefusal> {
+            let Ok(read) = self.fetch() else {
+                panic!("the record is served");
+            };
+            block_on(read.check_floor(&self.floors, self.name.as_str().as_bytes()))
+        }
+    }
+
+    #[test]
+    fn a_leaf_record_at_or_above_the_floor_passes_and_one_below_it_does_not() {
+        for failed in [false, true] {
+            for sequence in [FLOOR, FLOOR + 1] {
+                assert!(
+                    Served::failing(Some(sequence), failed).checked().is_ok(),
+                    "sequence {sequence}, endpoint failed {failed}"
+                );
+            }
+            assert!(
+                Served::failing(Some(FLOOR - 1), failed).checked().is_err(),
+                "below the floor, endpoint failed {failed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_leaf_record_below_the_floor_is_withheld_while_an_endpoint_fails() {
+        assert!(matches!(
+            Served::failing(Some(FLOOR - 1), true).checked(),
+            Err(LeafRefusal::Withheld)
+        ));
+    }
+
+    /// ADR 0071 D4.
+    #[test]
+    fn a_leaf_record_below_the_floor_is_a_rejection_when_every_endpoint_answers() {
+        match Served::failing(Some(FLOOR - 1), false).checked() {
+            Err(LeafRefusal::Rejected(rejection)) => assert_eq!(
+                rejection,
+                GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: FLOOR,
+                        sequence: FLOOR - 1,
+                    },
+                }
+            ),
+            other => panic!("a rollback is a rejection, got {other:?}"),
+        }
+    }
+
+    /// Only a below-floor pick is withheld while an endpoint fails. A seam
+    /// fault and every other rejection keep their class.
+    #[test]
+    fn a_seam_fault_and_another_rejection_keep_their_class_while_an_endpoint_fails() {
+        let served = Served::failing(Some(FLOOR - 1), true);
+        served
+            .floors
+            .fail_sequence_floor_reads_for(served.name.as_str().as_bytes());
+        assert!(matches!(served.checked(), Err(LeafRefusal::Seam(_))));
+
+        let other = GateRejection {
+            stage: GateStage::Epoch,
+            reason: RejectionReason::EpochBelowFloor { floor: 5, epoch: 4 },
+        };
+        for failed in [false, true] {
+            match LeafRefusal::of(GateError::Rejected(other.clone()), failed) {
+                LeafRefusal::Rejected(rejection) => assert_eq!(rejection, other),
+                refusal => panic!("another rejection stays one, got {refusal:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_leaf_read_with_no_record_is_absent_only_when_every_endpoint_answers() {
+        assert!(matches!(
+            Served::failing(None, false).fetch(),
+            Err(Unserved { absent: true })
+        ));
+        assert!(matches!(
+            Served::failing(None, true).fetch(),
+            Err(Unserved { absent: false })
+        ));
+        let Ok(read) = Served::failing(Some(FLOOR), true).fetch() else {
+            panic!("the record is served");
+        };
+        assert_eq!((read.pick.sequence, read.endpoint_failed), (FLOOR, true));
     }
 }

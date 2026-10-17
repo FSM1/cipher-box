@@ -70,7 +70,7 @@ use crate::net::author::{
     AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
-use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::gated_read::{LeafRead, LeafRefusal, Unserved};
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict, PutMark,
@@ -85,10 +85,10 @@ use crate::net::retire::{
 };
 use crate::net::signed_data;
 use crate::net::{
-    Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
-    HeldRecord, HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome,
-    RootAdopter, assemble_head_envelope, fanout_get_answered, fanout_get_classified,
-    fanout_get_verify, observed_at, resolve, resolve_gated,
+    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
+    HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_classified, fanout_get_verify, observed_at, resolve,
+    resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -5492,25 +5492,20 @@ where
     ) -> Result<(RecordMark, ReadBody), Halt> {
         let name =
             crate::net::rotation::scope_name(&child.ipns_name).map_err(|_| Halt::Unclassified)?;
-        let AnsweredFetch {
-            record,
+        let LeafRead {
+            bytes,
             endpoint_failed,
             ..
-        } = fanout_get_answered(&self.seams.transport, &name).await;
-        let bytes = match record {
-            FanoutRecord::Found(_, bytes) => bytes,
-            FanoutRecord::Absent => return Err(Halt::Unclassified),
-            FanoutRecord::Unavailable(_) => return Err(Halt::DeletePlaneUnavailable),
+        } = match LeafRead::fetch(&self.seams.transport, &name).await {
+            Ok(read) => read,
+            Err(Unserved { absent: true }) => return Err(Halt::Unclassified),
+            Err(Unserved { absent: false }) => return Err(Halt::DeletePlaneUnavailable),
         };
-        let fault = |error| match error {
-            GateError::Seam(_) => Halt::DeletePlaneUnavailable,
-            GateError::Rejected(rejection)
-                if sequence_refusal(&rejection.reason, endpoint_failed)
-                    == Some(BelowFloor::Unavailable) =>
-            {
-                Halt::DeletePlaneUnavailable
+        let fault = |error| match LeafRefusal::of(error, endpoint_failed) {
+            LeafRefusal::Seam(_) | LeafRefusal::Withheld => Halt::DeletePlaneUnavailable,
+            LeafRefusal::Rejected(rejection) => {
+                refuse_record(&self.seams.events, &name, &rejection)
             }
-            GateError::Rejected(rejection) => refuse_record(&self.seams.events, &name, &rejection),
         };
         let (sequence, envelope, _) =
             assemble_head_envelope(&self.seams.gateway, &self.seams.http, &name, &bytes, None)

@@ -18,9 +18,8 @@ use core::cell::RefCell;
 use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
-use super::fanout::fanout_get_tied_classified;
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
-use super::gated_read::{BelowFloor, sequence_refusal};
+use super::gated_read::{LeafRead, LeafRefusal, Unserved};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
@@ -386,12 +385,17 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let fetch = fanout_get_tied_classified(transport, name).await;
-    let absent = fetch.absent;
+    let fetch = LeafRead::fetch(transport, name).await;
+    let absent = matches!(fetch, Err(Unserved { absent: true }));
     let mut withheld = false;
-    let (fetched, tied) = match fetch.pick {
-        Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
-        None => (None, Vec::new()),
+    let (fetched, tied, endpoint_failed) = match fetch {
+        Ok(LeafRead {
+            pick,
+            bytes,
+            tied,
+            endpoint_failed,
+        }) => (Some((pick, bytes)), tied, endpoint_failed),
+        Err(_) => (None, Vec::new(), false),
     };
     let (outcome, mut parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
@@ -454,8 +458,11 @@ where
             // the liveness loop holds them without a re-fetch.
             // A strictly older sequence is a rollback unless an endpoint failed
             // (ADR 0071); every other gate rejection stays a trust violation.
-            Err(GateError::Rejected(rejection)) => match &rejection.reason {
-                RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
+            Err(error) => match LeafRefusal::of(error, endpoint_failed) {
+                LeafRefusal::Rejected(GateRejection {
+                    reason: RejectionReason::SequenceNotNewer { floor, sequence },
+                    ..
+                }) if sequence == floor => {
                     // Our own current root at exactly the floor: recover the
                     // owner's own scope seeds so the liveness loop can
                     // hold+renew it before its EOL lapses and the write plane
@@ -517,19 +524,16 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                reason
-                    if sequence_refusal(reason, fetch.endpoint_failed)
-                        == Some(BelowFloor::Unavailable) =>
-                {
+                LeafRefusal::Withheld => {
                     withheld = true;
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
-                _ => (
+                LeafRefusal::Rejected(rejection) => (
                     ResolveOutcome::TrustViolation(rejection),
                     GatedParts::default(),
                 ),
+                LeafRefusal::Seam(error) => return Err(error),
             },
-            Err(GateError::Seam(error)) => return Err(error),
         },
     };
     let recovered_owner = if let ResolveOutcome::TrustViolation(rejection) = &outcome {

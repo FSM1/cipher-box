@@ -37,9 +37,9 @@ use crate::entropy::Entropy;
 use crate::facade::{Event, NodeId, emit_trust_violation, published_grant_blobs};
 use crate::gate::GateError;
 use crate::mailbox::{VerifiedMailboxItem, poll_verified};
-use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::assemble_candidate;
+use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::scope_name;
-use crate::net::{assemble_candidate, fanout_get_verify_failed};
 use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore};
 
 use super::accept::{
@@ -201,14 +201,11 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             let Ok(name) = scope_name(&pointer.scope_root_name) else {
                 continue;
             };
-            let Some((_, record_bytes, endpoint_failed)) =
-                fanout_get_verify_failed(self.transport, &name).await
-            else {
+            let Ok(read) = LeafRead::fetch(self.transport, &name).await else {
                 continue;
             };
             let candidate =
-                match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await
-                {
+                match assemble_candidate(self.gateway, self.http, &name, &read.bytes, None).await {
                     Ok(candidate) => candidate,
                     Err(e @ GateError::Rejected(_)) => {
                         report(events, name.as_str(), &AcceptError::Gate(e));
@@ -233,10 +230,15 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .await
             {
                 Ok(_) => (),
-                // ADR 0071 D1: unavailable; the item waits for the next pass.
-                Err(AcceptError::Gate(GateError::Rejected(rejection)))
-                    if sequence_refusal(&rejection.reason, endpoint_failed)
-                        == Some(BelowFloor::Unavailable) => {}
+                Err(AcceptError::Gate(error)) => match read.refusal(error) {
+                    LeafRefusal::Rejected(rejection) => report(
+                        events,
+                        name.as_str(),
+                        &AcceptError::Gate(GateError::Rejected(rejection)),
+                    ),
+                    // ADR 0071 D1: unavailable; the item waits for the next pass.
+                    LeafRefusal::Withheld | LeafRefusal::Seam(_) => {}
+                },
                 Err(e) => report(events, name.as_str(), &e),
             }
         }

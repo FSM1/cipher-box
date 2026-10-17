@@ -33,10 +33,10 @@ use crate::gate::{
     adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
-use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::scope_name;
 use crate::net::signed_data;
-use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
+use crate::net::{PointerConsultError, assemble_candidate};
 use crate::profile::SyncTimingProfile;
 use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed, drop_seed_in};
 use crate::seams::{
@@ -1251,36 +1251,23 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .ok()?;
 
         let name = scope_name(&share.scope_root_name).ok()?;
-        let (verified, record_bytes, endpoint_failed) =
-            fanout_get_verify_failed(self.transport, &name).await?;
+        let read = LeafRead::fetch(self.transport, &name).await.ok()?;
         // Fan-out has no memory — it answers with the best of what endpoints
         // served. A suppressing relay could otherwise re-serve the record that
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        let withheld = match floor::check_sequence(
-            self.floors,
-            &share.scope_root_name,
-            verified.sequence,
-            floor::Strictness::AtOrAboveFloor,
-        )
-        .await
-        {
+        let withheld = match read.check_floor(self.floors, &share.scope_root_name).await {
             Ok(()) => false,
-            Err(GateError::Rejected(rejection))
-                if sequence_refusal(&rejection.reason, endpoint_failed)
-                    == Some(BelowFloor::Unavailable) =>
-            {
-                true
-            }
-            Err(GateError::Rejected(rejection)) => {
+            Err(LeafRefusal::Withheld) => true,
+            Err(LeafRefusal::Rejected(rejection)) => {
                 report_refusal(events, share, &rejection);
                 return None;
             }
-            Err(GateError::Seam(_)) => return None,
+            Err(LeafRefusal::Seam(_)) => return None,
         };
         let candidate =
-            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
+            match assemble_candidate(self.gateway, self.http, &name, &read.bytes, None).await {
                 Ok(candidate) => candidate,
                 Err(GateError::Rejected(rejection)) => {
                     report_refusal(events, share, &rejection);
