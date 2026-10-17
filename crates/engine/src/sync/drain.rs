@@ -848,6 +848,39 @@ struct Queue {
     all_ids: BTreeSet<OpId>,
 }
 
+/// Why an op leaves the queue, which names the step that follows the dequeue
+/// ([`Drain::depart`]).
+enum Departure<'o> {
+    /// Restore residue, at or below the drained-op mark.
+    Residue,
+    /// It leaves with no apply and no notice.
+    Dropped,
+    /// A kept op that leaves on the scan: its staged blocks go with it.
+    Expired(&'o Op),
+    /// A delete that a published bin restore cancels: its note goes with it.
+    CancelledByRestore,
+    /// Its publish completed it.
+    Completed,
+    /// A cancel undid it.
+    Cancelled,
+    /// It leaves as a dead letter.
+    DeadLetter {
+        op: &'o Op,
+        reason: DeadLetterReason,
+        blocks: DeadLetterBlocks,
+    },
+}
+
+/// What a dead letter does with its staged blocks once it left the queue.
+enum DeadLetterBlocks {
+    /// Release them.
+    Release,
+    /// Keep them.
+    Keep,
+    /// Drop the version no preserved entry holds ([`Drain::release_unpreserved`]).
+    Unpreserved(Preservation),
+}
+
 /// Why the queue head is held over rather than failed. Each reason names its
 /// own exit, and [`Drain::hold_admits_the_head`] is the one gate that tries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3203,8 +3236,8 @@ where
                     .moved_tree_decides(scope, &mut moved, &kept, (*op_id, op), root)
                     .await
                 {
-                    self.dequeue_op(*op_id).await?;
-                    report.dropped.push(*op_id);
+                    self.depart(scope, *op_id, Departure::Dropped, report)
+                        .await?;
                     decided.push(*op_id);
                     continue;
                 }
@@ -3251,8 +3284,8 @@ where
             // A kept op's version landed, and a live record may still name what
             // it registered: it leaves with no retire and no notice.
             if kept.holds(*op_id, op) {
-                self.dequeue_op(*op_id).await?;
-                report.dropped.push(*op_id);
+                self.depart(scope, *op_id, Departure::Dropped, report)
+                    .await?;
                 continue;
             }
             // A terminally unrebasable op keeps its staged bytes, and this is
@@ -3261,14 +3294,18 @@ where
             let preserved = self
                 .preserve_dead_letter(scope, *op_id, op, *reason)
                 .await?;
-            self.abandon(scope, *op_id, op).await?;
             // The abandonment retired what the op registered.
-            if preserved == Preservation::Refused {
-                self.release_staged_blocks(op).await;
-            }
-            report
-                .dead_letters
-                .push((*op_id, op.target, preserved.observed(*reason)));
+            let blocks = if preserved == Preservation::Refused {
+                DeadLetterBlocks::Release
+            } else {
+                DeadLetterBlocks::Keep
+            };
+            let departure = Departure::DeadLetter {
+                op,
+                reason: preserved.observed(*reason),
+                blocks,
+            };
+            self.abandon(scope, *op_id, op, departure, report).await?;
         }
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
@@ -3292,8 +3329,8 @@ where
             {
                 let _ = cache.remove(&op.target.0).await;
             }
-            self.dequeue_op(*op_id).await?;
-            report.dropped.push(*op_id);
+            self.depart(scope, *op_id, Departure::Dropped, report)
+                .await?;
         }
         // A dropped relocation is the move already landed, so its cut has no
         // publish left to derive the planes from and the replay's own verdict is
@@ -3326,18 +3363,13 @@ where
                     })
                     .last()
             {
-                self.dequeue_op(*delete).await?;
-                let mut notes = self.kept_notes(scope).await?;
-                notes.remove(*delete);
-                self.store_kept_notes(scope, &notes).await?;
-                if !report.dropped.contains(delete) && !report.completed.contains(delete) {
-                    report.dropped.push(*delete);
-                }
+                self.depart(scope, *delete, Departure::CancelledByRestore, report)
+                    .await?;
             }
             // An op that is not kept leaves at its publish ([`keeps`]).
             if !self.kept_now.get() {
-                self.dequeue_op(applied.op_id).await?;
-                report.completed.push(applied.op_id);
+                self.depart(scope, applied.op_id, Departure::Completed, report)
+                    .await?;
             }
             self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
@@ -3413,9 +3445,7 @@ where
                 .await
                 .is_ok_and(|kept| kept.holds(op_id, op))
         {
-            if self.dequeue_op(op_id).await.is_ok() {
-                report.dropped.push(op_id);
-            }
+            let _ = self.depart(scope, op_id, Departure::Dropped, report).await;
             return;
         }
         match halt {
@@ -3454,9 +3484,9 @@ where
             // leading leaves of something still publishable would land a
             // version whose blocks are gone.
             Halt::Cancelled => {
-                if self.dequeue_op(op_id).await.is_ok() {
-                    self.retire_cancelled(op_id).await;
-                }
+                let _ = self
+                    .depart(scope, op_id, Departure::Cancelled, report)
+                    .await;
             }
             Halt::Attempt
             | Halt::UploadAttempt
@@ -3489,11 +3519,13 @@ where
                 } else {
                     Ok(())
                 };
-                if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
-                    self.release_unpreserved(scope, preserved, op).await;
-                    report
-                        .dead_letters
-                        .push((op_id, op.target, preserved.observed(reason)));
+                if handed_back.is_ok() {
+                    let departure = Departure::DeadLetter {
+                        op,
+                        reason: preserved.observed(reason),
+                        blocks: DeadLetterBlocks::Unpreserved(preserved),
+                    };
+                    let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
             // A conditional-edit loser keeps its staged version and retires
@@ -3515,13 +3547,13 @@ where
                 else {
                     return;
                 };
-                if self.retire_unreferenced_name(scope, op).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
-                    self.release_unpreserved(scope, preserved, op).await;
-                    report
-                        .dead_letters
-                        .push((op_id, op.target, preserved.observed(reason)));
+                if self.retire_unreferenced_name(scope, op).await.is_ok() {
+                    let departure = Departure::DeadLetter {
+                        op,
+                        reason: preserved.observed(reason),
+                        blocks: DeadLetterBlocks::Unpreserved(preserved),
+                    };
+                    let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
             Halt::Permanent(reason) => {
@@ -3654,8 +3686,8 @@ where
         let overtaken = overtaken_by_a_later_op(&scan.mine);
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
-                self.dequeue_op(op_id).await?;
-                report.restore_residue.push(op_id);
+                self.depart(scope, op_id, Departure::Residue, report)
+                    .await?;
                 continue;
             }
             if is_kept(op_id, published, &notes) {
@@ -3770,10 +3802,9 @@ where
                             kept.push(op_id);
                             continue;
                         }
-                        self.dequeue_op(op_id).await?;
-                        self.release_staged_blocks(&op).await;
+                        self.depart(scope, op_id, Departure::Expired(&op), report)
+                            .await?;
                         notes.remove(op_id);
-                        report.dropped.push(op_id);
                         continue;
                     }
                     KeptVerdict::Recheck => {}
@@ -10086,6 +10117,47 @@ where
         Ok(())
     }
 
+    /// The one queue exit: dequeue `op_id`, then take the step its `departure`
+    /// names and report it. A failed dequeue takes no step.
+    async fn depart(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        departure: Departure<'_>,
+        report: &mut DrainReport,
+    ) -> Result<(), Halt> {
+        self.dequeue_op(op_id).await?;
+        match departure {
+            Departure::Residue => report.restore_residue.push(op_id),
+            Departure::Dropped => report.dropped.push(op_id),
+            Departure::Expired(op) => {
+                self.release_staged_blocks(op).await;
+                report.dropped.push(op_id);
+            }
+            Departure::CancelledByRestore => {
+                let mut notes = self.kept_notes(scope).await?;
+                notes.remove(op_id);
+                self.store_kept_notes(scope, &notes).await?;
+                if !report.dropped.contains(&op_id) && !report.completed.contains(&op_id) {
+                    report.dropped.push(op_id);
+                }
+            }
+            Departure::Completed => report.completed.push(op_id),
+            Departure::Cancelled => self.retire_cancelled(op_id).await,
+            Departure::DeadLetter { op, reason, blocks } => {
+                match blocks {
+                    DeadLetterBlocks::Release => self.release_staged_blocks(op).await,
+                    DeadLetterBlocks::Keep => {}
+                    DeadLetterBlocks::Unpreserved(preserved) => {
+                        self.release_unpreserved(scope, preserved, op).await;
+                    }
+                }
+                report.dead_letters.push((op_id, op.target, reason));
+            }
+        }
+        Ok(())
+    }
+
     /// Note one head block as orphaned.
     ///
     /// A head the live set still names never enters the queue: its only
@@ -10209,23 +10281,34 @@ where
         let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
             return false;
         };
-        if self.dequeue_op(op_id).await.is_err() {
-            return false;
-        }
-        self.release_unpreserved(scope, preserved, op).await;
-        report
-            .dead_letters
-            .push((op_id, op.target, preserved.observed(reason)));
-        true
+        self.depart(
+            scope,
+            op_id,
+            Departure::DeadLetter {
+                op,
+                reason: preserved.observed(reason),
+                blocks: DeadLetterBlocks::Unpreserved(preserved),
+            },
+            report,
+        )
+        .await
+        .is_ok()
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
     /// the queue.
-    async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
+    async fn abandon(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        op: &Op,
+        departure: Departure<'_>,
+        report: &mut DrainReport,
+    ) -> Result<(), Halt> {
         retire(&self.seams.api, &self.registered_by(scope, op).await)
             .await
             .map_err(|_| Halt::UploadAttempt)?;
-        self.dequeue_op(op_id).await
+        self.depart(scope, op_id, departure, report).await
     }
 
     /// Dead-letter one op. A failed retire leaves it queued for the next pass
@@ -10238,10 +10321,12 @@ where
         reason: DeadLetterReason,
         report: &mut DrainReport,
     ) {
-        if self.abandon(scope, op_id, op).await.is_ok() {
-            self.release_staged_blocks(op).await;
-            report.dead_letters.push((op_id, op.target, reason));
-        }
+        let departure = Departure::DeadLetter {
+            op,
+            reason,
+            blocks: DeadLetterBlocks::Release,
+        };
+        let _ = self.abandon(scope, op_id, op, departure, report).await;
     }
 
     /// Retire only the name half of [`Self::registered_by`], for an abandonment
