@@ -11416,6 +11416,40 @@ fn an_op_with_a_note_and_no_mark_stays_kept_across_a_restart() {
     );
 }
 
+/// The mark is best-effort. When its write fails after the note stored, the
+/// note alone keeps the published op queued.
+#[test]
+fn a_noted_op_whose_mark_write_fails_stays_queued() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    alice
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&mark_key());
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(published_op_mark(&alice), None, "the mark did not rise");
+    child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        block_on(engine.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
+    );
+    assert!(raw_queue_holds(&alice, op_id), "the note keeps the op");
+}
+
 /// A restart while the root record is dark paints the last-known-good root. A
 /// kept op stays out of the render, so without that paint the folder it created
 /// is in neither plane and everything below it falls outside the vault.

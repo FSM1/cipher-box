@@ -27,14 +27,16 @@ read an old name again.** The gated reads of "rotateScopeWrite" stay as they are
 party that knows what it wrote, and the new write seed is the proof that it can still write. The
 wave gets no re-read, no re-walk and no new bound, so a revokee gets no new way to hold the cut.
 
-**D2 — A published op stays in the durable op queue until it is visible from the live root of its
-write scope.** The live root is the scope root that the scope pointer names, at the current write
+**D2 — A published op stays in the durable op queue. It leaves only at `Drain::depart`, on a verdict
+of the kept-op judge or of a kept-op read of the drain.** The live root is the scope root that the scope pointer names, at the current write
 epoch. The confirm of the last record of the op's plan (`Drain::mark_published`) does not remove the
-op. The op leaves the queue (`Drain::drain_queue`) only when a pass shows its effect from the live
-root. Until then its staged blocks stay pinned, and the pending-op overlay shows the op as the state
-law of "Sync core" states. Thus the write of an honest writer is not lost, at any time before or
-after the flip. Amended on 2026-10-03: D7 replaces the overlay clause. Amended on 2026-10-03: only a
-create, a delete and a content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
+op. The op leaves the queue only at the one queue exit of the drain (`Drain::depart`), on a verdict of the kept-op judge (`sync::kept_judge`) or of a
+kept-op read of the drain: the rebase dead letter through `KeptOps::holds`, the keyless drop through
+`Drain::moved_tree_decides`, or the bin restore that cancels a kept delete. Until then its staged
+blocks stay pinned, and the pending-op overlay shows the op as the state law of "Sync core" states.
+Thus the write of an honest writer is not lost, at any time before or after the flip. Amended on
+2026-10-03: D7 replaces the overlay clause. Amended on 2026-10-03: only a create, a delete and a
+content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
 other kind leaves the queue at its publish, as before this ADR: the live tree cannot show if a later
 writer overtook it, so a second apply could undo the later write (FSM1/cipher-box#2285).
 Amended on 2026-10-06 (owner ruling on FSM1/cipher-box#2285, option B): a rename, a move inside one
@@ -59,8 +61,9 @@ amendment of this ADR in place. D4 to D7 record the rulings. Each sentence that 
 "Proposed" is not a ruling and waits for the owner.
 
 **D4 — A kept op stays queued after its publish, and a note records it.** The drain writes the note
-before the published-op mark rises (`Drain::keep_published`), into one bookkeeping record of the
-identity (`sync::kept_op`). The note holds the write epoch of the op's write scope and the time of
+from the note draft of the kept-op judge (`sync::kept_judge`, `Drain::keep_published`) before the
+published-op mark rises (`Drain::mark_published` takes the proof that the note step ran), into one
+bookkeeping record of the identity (`sync::kept_op`). The note holds the write epoch of the op's write scope and the time of
 the publish. Proposed: the note also holds the scope root, so the record seals as the owner-local
 `kept-ops` kind, and an op with a note and no mark is a kept op, so a crash between the two writes
 keeps the op. The previous release removes a queued op at or below the mark as published, and its

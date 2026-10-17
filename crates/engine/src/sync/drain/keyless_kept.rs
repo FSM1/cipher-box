@@ -9,7 +9,7 @@ use std::collections::btree_map::Entry;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
-use super::{Drain, DrainScope, chain_to, lists_version, place_in};
+use super::{Drain, DrainScope, chain_to, place_in};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::grants::grafted::FloorNamespace;
 use crate::grants::link_read::held_scope_pointer;
@@ -21,7 +21,10 @@ use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SharerScopedFloorStore,
     SnapshotCache, StagingStore,
 };
-use crate::sync::kept_op::{KeptOps, KeptOutcome, KeptResult, kept_outcome, live_head, live_place};
+use crate::sync::kept_judge::{
+    KeptOutcome, delete_decided, kept_outcome, lists_version, live_head, live_place,
+};
+use crate::sync::kept_op::{KeptOps, KeptResult};
 use crate::sync::op::{Op, OpKind};
 use crate::sync::refresh::RefreshVerdict;
 use crate::sync::tick::ResolveMode;
@@ -39,19 +42,6 @@ pub(super) struct MovedRoot {
 /// The moved roots one publish has read, by scope root. `None` for a scope
 /// whose moved tree this device cannot read.
 pub(super) type MovedRoots = BTreeMap<NodeId, Option<MovedRoot>>;
-
-/// Whether a kept delete leaves: its folder is gone from the moved tree, or
-/// the folder no longer links its node. A contested id leaves the base with
-/// no read of its own, so it decides nothing.
-fn delete_decided(folder_gone: bool, contested: bool, linked: Option<bool>) -> Option<bool> {
-    if contested {
-        return None;
-    }
-    if folder_gone {
-        return Some(true);
-    }
-    linked.map(|alive| !alive)
-}
 
 /// The verdict on a kept delete: `read` reads its folder in the moved tree
 /// and answers whether the folder is gone. The read can contest the node, so
@@ -356,7 +346,7 @@ where
 mod tests {
     use core::cell::Cell;
 
-    use super::{decide_delete, delete_decided};
+    use super::decide_delete;
     use crate::testkit::block_on;
 
     /// The folder read finds the node uncontested at its start and contests
@@ -374,15 +364,5 @@ mod tests {
             || Some(false),
         ));
         assert_eq!(decided, None);
-    }
-
-    #[test]
-    fn a_delete_whose_node_the_read_contested_decides_nothing() {
-        assert_eq!(delete_decided(true, true, None), None);
-        assert_eq!(delete_decided(false, true, Some(false)), None);
-        assert_eq!(delete_decided(true, false, None), Some(true));
-        assert_eq!(delete_decided(false, false, Some(false)), Some(true));
-        assert_eq!(delete_decided(false, false, Some(true)), Some(false));
-        assert_eq!(delete_decided(false, false, None), None);
     }
 }
