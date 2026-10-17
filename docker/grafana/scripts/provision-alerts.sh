@@ -24,6 +24,11 @@
 #   GRAFANA_URL          Grafana Cloud instance URL
 #   GRAFANA_API_KEY      Service account token
 #   GRAFANA_DS_UID       Mimir/Prometheus datasource UID
+#   ALERT_FILES          Space-separated file names in docker/grafana/alerts to
+#                        provision (default: every *.json file)
+#
+# Exit status: 0 on success, 77 (EX_NOPERM) when every failure was an HTTP 401
+# or 403 (the key lacks a right), non-zero on any other failure.
 #
 # Positional args override env vars when both are set.
 #
@@ -97,11 +102,40 @@ if [[ ! -d "$ALERT_DIR" ]]; then
   exit 1
 fi
 
-JSON_FILES=("$ALERT_DIR"/*.json)
+if [[ -n "${ALERT_FILES:-}" ]]; then
+  JSON_FILES=()
+  read -r -a SELECTED <<<"$ALERT_FILES"
+  for name in "${SELECTED[@]}"; do
+    if [[ ! -f "$ALERT_DIR/$name" ]]; then
+      echo "ERROR: ALERT_FILES names a file that is not in $ALERT_DIR: $name"
+      exit 1
+    fi
+    JSON_FILES+=("$ALERT_DIR/$name")
+  done
+else
+  JSON_FILES=("$ALERT_DIR"/*.json)
+fi
 
 if [[ ${#JSON_FILES[@]} -eq 0 || ! -f "${JSON_FILES[0]}" ]]; then
   echo "ERROR: No JSON files found in $ALERT_DIR"
   exit 1
+fi
+
+AUTH_REFUSED=77
+
+# Exits for a failed setup call: AUTH_REFUSED for a 401 or 403, else 1.
+fail_setup() {
+  [[ "$1" == "401" || "$1" == "403" ]] && exit "$AUTH_REFUSED"
+  exit 1
+}
+
+# The key goes through a 0600 header file, never curl's argv.
+AUTH_HEADER=""
+if [[ "$DRY_RUN" == false ]]; then
+  AUTH_HEADER=$(mktemp)
+  trap 'rm -f "$AUTH_HEADER"' EXIT
+  chmod 600 "$AUTH_HEADER"
+  printf 'Authorization: Bearer %s\n' "$API_KEY" >"$AUTH_HEADER"
 fi
 
 # --- Discover or create alerts folder ---
@@ -112,8 +146,8 @@ if [[ "$DRY_RUN" == false ]]; then
   echo "Discovering or creating 'CipherBox Alerts' folder..."
 
   FOLDERS_RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-    -H "Authorization: Bearer $API_KEY" \
-    "$GRAFANA_URL/api/folders")
+    -H @"$AUTH_HEADER" \
+    "$GRAFANA_URL/api/folders") || FOLDERS_RESPONSE=$'\n000'
 
   FOLDERS_HTTP_CODE=$(echo "$FOLDERS_RESPONSE" | tail -1)
   FOLDERS_BODY=$(echo "$FOLDERS_RESPONSE" | sed '$d')
@@ -121,7 +155,7 @@ if [[ "$DRY_RUN" == false ]]; then
   if [[ "$FOLDERS_HTTP_CODE" -ne 200 ]]; then
     echo "ERROR: Failed to list folders (HTTP $FOLDERS_HTTP_CODE)"
     echo "$FOLDERS_BODY"
-    exit 1
+    fail_setup "$FOLDERS_HTTP_CODE"
   fi
 
   FOLDER_UID=$(echo "$FOLDERS_BODY" | jq -r '.[] | select(.title == "CipherBox Alerts") | .uid // empty')
@@ -131,9 +165,9 @@ if [[ "$DRY_RUN" == false ]]; then
 
     CREATE_RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
       -X POST "$GRAFANA_URL/api/folders" \
-      -H "Authorization: Bearer $API_KEY" \
+      -H @"$AUTH_HEADER" \
       -H "Content-Type: application/json" \
-      -d '{"title": "CipherBox Alerts"}')
+      -d '{"title": "CipherBox Alerts"}') || CREATE_RESPONSE=$'\n000'
 
     CREATE_HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -1)
     CREATE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
@@ -141,7 +175,7 @@ if [[ "$DRY_RUN" == false ]]; then
     if [[ "$CREATE_HTTP_CODE" -ne 200 ]]; then
       echo "ERROR: Failed to create folder (HTTP $CREATE_HTTP_CODE)"
       echo "$CREATE_BODY"
-      exit 1
+      fail_setup "$CREATE_HTTP_CODE"
     fi
 
     FOLDER_UID=$(echo "$CREATE_BODY" | jq -r '.uid')
@@ -158,15 +192,22 @@ fi
 
 SUCCESS_COUNT=0
 FAIL_COUNT=0
+AUTH_FAIL_COUNT=0
 UPDATE_COUNT=0
 TOTAL_RULES=0
 
 # Fetch existing alert rules once for upsert lookups
 EXISTING_RULES=""
 if [[ "$DRY_RUN" == false ]]; then
-  EXISTING_RULES=$(curl -s --connect-timeout 10 --max-time 30 \
-    -H "Authorization: Bearer $API_KEY" \
-    "$GRAFANA_URL/api/v1/provisioning/alert-rules" 2>/dev/null || echo "[]")
+  RULES_RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+    -H @"$AUTH_HEADER" \
+    "$GRAFANA_URL/api/v1/provisioning/alert-rules") || RULES_RESPONSE=$'\n000'
+  RULES_HTTP_CODE=$(echo "$RULES_RESPONSE" | tail -1)
+  if [[ "$RULES_HTTP_CODE" != "200" ]]; then
+    echo "ERROR: Failed to list alert rules (HTTP $RULES_HTTP_CODE)"
+    fail_setup "$RULES_HTTP_CODE"
+  fi
+  EXISTING_RULES=$(echo "$RULES_RESPONSE" | sed '$d')
 fi
 
 echo ""
@@ -228,10 +269,10 @@ for rule_file in "${JSON_FILES[@]}"; do
 
       RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
         -X "$METHOD" "$URL" \
-        -H "Authorization: Bearer $API_KEY" \
+        -H @"$AUTH_HEADER" \
         -H "Content-Type: application/json" \
         -H "X-Disable-Provenance: true" \
-        -d "$rule")
+        -d "$rule") || RESPONSE=$'\n000'
 
       HTTP_CODE=$(echo "$RESPONSE" | tail -1)
       BODY=$(echo "$RESPONSE" | sed '$d')
@@ -248,6 +289,9 @@ for rule_file in "${JSON_FILES[@]}"; do
         echo "  FAILED (HTTP $HTTP_CODE)"
         echo "  Response: $BODY"
         FAIL_COUNT=$((FAIL_COUNT + 1))
+        if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+          AUTH_FAIL_COUNT=$((AUTH_FAIL_COUNT + 1))
+        fi
       fi
     fi
   done
@@ -271,6 +315,7 @@ else
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
     echo ""
     echo "WARNING: $FAIL_COUNT rule(s) failed to provision."
+    [[ "$AUTH_FAIL_COUNT" -eq "$FAIL_COUNT" ]] && exit "$AUTH_REFUSED"
     exit 1
   fi
 fi
