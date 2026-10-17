@@ -56,7 +56,7 @@ pub(crate) fn sequence_refusal(
 }
 
 /// Whether a root with `envelope` and `section` is the child `expected_child`
-/// names: that id, with an ascent link. `None` binds nothing.
+/// names: that id, with an ascent link. `None` accepts any root.
 fn binds_child(
     expected_child: Option<[u8; 16]>,
     envelope: &Envelope,

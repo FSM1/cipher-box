@@ -18228,6 +18228,17 @@ mod tests {
                     Err(RootGateVerdict::BelowFloor)
                 )
             );
+            let net = world.net();
+            assert_eq!(
+                failed_then_healed(&world.harness, || block_on(
+                    net.resolve_plan(&world.granted[0])
+                )
+                .map(|_| ())),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
+                )
+            );
         }
 
         #[test]
