@@ -176,6 +176,7 @@ const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
   targetLinkedAcrossScopes: true,
   graftedScopeVaultSurface: true,
   newerRelease: true,
+  scopeDissolved: true,
 };
 
 const NODE_KINDS: Record<NodeKind, true> = { file: true, folder: true };

@@ -35,6 +35,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     'this change is inside a folder someone shared with you, and it needs your own bin or your own storage bookkeeping, which the share does not reach; copy the item into your own vault first, then make the change there',
   newerRelease:
     'a device that saved this folder runs a newer version of CipherBox, which this one cannot read; update this app, then make the change again',
+  scopeDissolved:
+    'this item was in a shared folder that its owner turned back into a plain folder, so the change could not be saved there',
 };
 
 /**

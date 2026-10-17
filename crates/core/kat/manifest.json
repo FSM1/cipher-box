@@ -715,6 +715,11 @@
         "name": "dead-letter-names",
         "discriminator": 13,
         "hpkeInfo": "cipherbox/v2/owner-local/dead-letter-names"
+      },
+      {
+        "name": "subtree-reseal",
+        "discriminator": 14,
+        "hpkeInfo": "cipherbox/v2/owner-local/subtree-reseal"
       }
     ],
     "reserved": [
@@ -725,11 +730,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 14
+      "count": 15
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 142,
+      "count": 166,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

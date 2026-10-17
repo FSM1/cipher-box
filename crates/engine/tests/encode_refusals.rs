@@ -45,6 +45,10 @@ use cipherbox_engine::sync::kept_op::{KeptNote, KeptNoteError, KeptNotes, KeptRe
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
 };
+use cipherbox_engine::sync::reseal_journal::{
+    MAX_RESEAL_PAYLOAD, ResealEnvelope, ResealEnvelopeError, decode_reseal_envelope,
+    encode_reseal_envelope,
+};
 use cipherbox_engine::sync::{BookkeepingSeal, UNATTRIBUTED_BUDGET};
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::{
@@ -149,6 +153,42 @@ fn a_dead_letter_name_the_decoder_reads_as_no_name_is_refused() {
     for refused in ["", "k51qzowningrecord", long.as_str()] {
         assert!(encode_dead_letter_name(OpId(9), &root, refused).is_err());
     }
+}
+
+/// The decoder refuses a subtree re-seal envelope with no caller, one that
+/// names a source root other than its key, or a payload over its cap. So the
+/// encode refuses each (ADR 0077 D3).
+#[test]
+fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
+    let root = NodeId([0x51; 16]);
+    let envelope = |caller| ResealEnvelope {
+        caller,
+        source_root: root,
+        payload: b"rows".to_vec(),
+    };
+    let body = encode_reseal_envelope(&envelope(1), root).expect("an envelope encodes");
+    assert_eq!(decode_reseal_envelope(&body, root), Ok(envelope(1)));
+    assert_eq!(
+        encode_reseal_envelope(&envelope(0), root).map(|_| ()),
+        Err(ResealEnvelopeError::NoCaller)
+    );
+    assert_eq!(
+        encode_reseal_envelope(&envelope(1), NodeId([0x52; 16])).map(|_| ()),
+        Err(ResealEnvelopeError::RootMismatch)
+    );
+    let at_cap = ResealEnvelope {
+        payload: vec![0; MAX_RESEAL_PAYLOAD],
+        ..envelope(1)
+    };
+    assert!(encode_reseal_envelope(&at_cap, root).is_ok());
+    let over_cap = ResealEnvelope {
+        payload: vec![0; MAX_RESEAL_PAYLOAD + 1],
+        ..envelope(1)
+    };
+    assert_eq!(
+        encode_reseal_envelope(&over_cap, root).map(|_| ()),
+        Err(ResealEnvelopeError::PayloadTooLarge)
+    );
 }
 
 /// The kept-op note decoder reads a body with a name or a content CID past

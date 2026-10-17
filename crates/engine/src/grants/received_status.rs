@@ -1696,6 +1696,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x9a; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         }
     }
 
@@ -2617,6 +2619,8 @@ mod tests {
                 permission,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             });
             self.persist(&list).expect("the bookmark persists");
         }
@@ -2638,6 +2642,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             });
             self.persist(&list)
         }
@@ -2656,6 +2662,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -2688,6 +2696,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -3732,6 +3742,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             block_on(
@@ -4493,6 +4505,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: Some(pointer_name()),
+                grant_cut: None,
+                ended: None,
             };
             let key = share.key();
             list.reconcile(share);
@@ -4616,6 +4630,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             }
         }
 
@@ -4964,6 +4980,8 @@ mod tests {
                         permission: Permission::Read,
                         pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                         scope_pointer_name: None,
+                        grant_cut: None,
+                        ended: None,
                     });
                     block_on(store.persist(&list)).expect("the join persists");
                 }))),
@@ -5063,6 +5081,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: Some(pointer_name()),
+                grant_cut: None,
+                ended: None,
             };
             let other_key = other.key();
             list.reconcile(other);
@@ -5284,6 +5304,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: name,
+                grant_cut: None,
+                ended: None,
             });
             fx.persist(&list).expect("the bookmark persists");
             serve_pointer(&fx, &sharer_signer(), 1);
@@ -5374,6 +5396,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                     scope_pointer_name: Some(scope_pointer_name(&POINTER_SEED, scope)),
+                    grant_cut: None,
+                    ended: None,
                 };
                 let key = share.key();
                 list.reconcile(share);

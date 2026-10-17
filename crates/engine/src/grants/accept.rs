@@ -180,6 +180,13 @@ pub struct ReceivedShare {
     /// pointer or the invite fragment (ADR 0074 D1). `None` follows nothing
     /// until the owner posts again (D2).
     pub scope_pointer_name: Option<IpnsName>,
+    /// The `grantCut` value: the cut epoch of the latest verified commitment
+    /// whose personal grant blob this device opened. This build sets none and
+    /// keeps the value it read.
+    pub(crate) grant_cut: Option<u64>,
+    /// The `ended` value: the cut epoch of the verified commitment that left
+    /// the personal tag out. This build sets none and keeps the value it read.
+    pub(crate) ended: Option<u64>,
 }
 
 impl ReceivedShare {
@@ -196,7 +203,7 @@ impl ReceivedShare {
     /// Whether two bookmarks for the same scope carry identical authority and
     /// discovery bytes — the "true no-op re-accept" test. A drift in the
     /// re-pointed scope-root name, the committed permission, the rotated pointer
-    /// read key, or the courtesy display fields means the freshly-verified
+    /// read key, the grant cut, or the courtesy display fields means the freshly-verified
     /// metadata is authority and the stored entry must self-heal to it.
     fn same_bookmark(&self, other: &ReceivedShare) -> bool {
         self.key() == other.key()
@@ -205,6 +212,7 @@ impl ReceivedShare {
             && self.permission == other.permission
             && self.pointer_read_key == other.pointer_read_key
             && self.scope_pointer_name == other.scope_pointer_name
+            && self.grant_cut == other.grant_cut
     }
 }
 
@@ -442,13 +450,17 @@ impl ReceivedSharesList {
     /// durable persist then fails.
     ///
     /// A share with no scope pointer name keeps the name the bookmark holds,
-    /// so a post from an older owner build drops nothing (ADR 0074 D2).
+    /// so a post from an older owner build drops nothing (ADR 0074 D2). The
+    /// bookmark keeps its `ended` value and the higher `grantCut`.
     pub(crate) fn reconcile(&mut self, mut share: ReceivedShare) -> Reconciled {
         let position = self.position(&share.key());
-        if share.scope_pointer_name.is_none()
-            && let Some(i) = position
-        {
-            share.scope_pointer_name = self.entries[i].scope_pointer_name.clone();
+        if let Some(i) = position {
+            let held = &self.entries[i];
+            if share.scope_pointer_name.is_none() {
+                share.scope_pointer_name = held.scope_pointer_name.clone();
+            }
+            share.grant_cut = share.grant_cut.max(held.grant_cut);
+            share.ended = held.ended;
         }
         match position {
             None => {
@@ -659,6 +671,12 @@ pub(crate) fn encode_stored_list(
             if let Some(name) = &share.scope_pointer_name {
                 m.insert("scopePointerName", Value::Text(name.as_str().to_owned()));
             }
+            if let Some(ended) = share.ended {
+                m.insert("ended", Value::Unsigned(ended));
+            }
+            if let Some(grant_cut) = share.grant_cut {
+                m.insert("grantCut", Value::Unsigned(grant_cut));
+            }
             m.insert(
                 "permission",
                 Value::Text(share.permission.as_wire().to_string()),
@@ -722,6 +740,8 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
                 "claimNextPost",
                 "claimPosts",
                 "displayName",
+                "ended",
+                "grantCut",
                 "linkDeadline",
                 "linkSecret",
                 "permission",
@@ -755,6 +775,8 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             scope_id: fixed::<16>(req(share, "scopeId")?, "scopeId")?,
             scope_root_name,
             scope_pointer_name: scope_pointer_name(share)?,
+            grant_cut: optional_unsigned(share, "grantCut")?,
+            ended: optional_unsigned(share, "ended")?,
         };
         let key = decoded.key();
         if entries.iter().any(|e| e.key() == key) {
@@ -766,6 +788,11 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
         entries.push(decoded);
     }
     Ok(ReceivedSharesList { entries, links })
+}
+
+/// The unsigned value of an optional bookmark key.
+fn optional_unsigned(share: &Map, key: &str) -> Result<Option<u64>, CodecError> {
+    Ok(share.get(key).map(Value::as_unsigned).transpose()?)
 }
 
 /// The claim keys of one stored bookmark: all four or none.
@@ -1350,6 +1377,8 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         permission,
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
         scope_pointer_name: pointer.scope_pointer_name.clone(),
+        grant_cut: None,
+        ended: None,
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
     // A personal blob opened, so the link keys go (ADR 0024 D2).
@@ -1515,6 +1544,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         };
         assert!(matches!(list.reconcile(share.clone()), Reconciled::Added));
         assert!(
@@ -1559,6 +1590,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         };
         assert!(matches!(list.reconcile(base.clone()), Reconciled::Added));
 
@@ -1591,6 +1624,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         };
         let key = base.key();
 
@@ -1631,6 +1666,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([key_byte; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         }
     }
 
@@ -1643,6 +1680,8 @@ mod tests {
             permission,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         }
     }
 
@@ -1887,6 +1926,275 @@ mod tests {
             decoded.iter().next().unwrap().pointer_read_key(),
             &[0x8A; 32]
         ));
+    }
+
+    /// A list the previous release wrote: the link-held bookmark of
+    /// `held_share` with `link_hold`, and the personal bookmark
+    /// `share(b"k51otherroot", 0x3c)`.
+    const PREVIOUS_RELEASE_LIST: &str = concat!(
+        "a26176026673686172657382a66773636f70654964503c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+        "3c3c6a7065726d697373696f6e64726561646b646973706c61794e616d6561736d73636f",
+        "7065526f6f744e616d654c6b35316f74686572726f6f746e706f696e746572526561644b",
+        "657958203c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+        "707368617265724964656e74697479506b58210202020202020202020202020202020202",
+        "02020202020202020202020202020202ad65636c61696d58aca4646e616d656547726163",
+        "6567636c61696d496450717171717171717171717171717171716b636f6e74616374436f",
+        "646558280202020202020202020202020202020202020202020202020202020202020202",
+        "02020202020202027073636f7065506f696e7465724e616d65783e6b3531717a69357571",
+        "753564696a363764393437336a75697a67736c32367670653079636c7061377135316e38",
+        "73746d6f6163743178633673383832716a6773636f70654964508a8a8a8a8a8a8a8a8a8a",
+        "8a8a8a8a8a8a68636c61696d4b6579506b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6a636c61",
+        "696d506f737473016a6c696e6b53656372657458204e4e4e4e4e4e4e4e4e4e4e4e4e4e4e",
+        "4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e6a7065726d697373696f6e64726561646b6469",
+        "73706c61794e616d6561736c6c696e6b446561646c696e651b0000018bcfe568006d636c",
+        "61696d4e657874506f73741b000001748777a7c06d73636f7065526f6f744e616d654c6b",
+        "353173636f7065726f6f746e706f696e746572526561644b657958208a8a8a8a8a8a8a8a",
+        "8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a7073636f7065506f696e7465",
+        "724e616d65783e6b3531717a69357571753564696a363764393437336a75697a67736c32",
+        "367670653079636c7061377135316e3873746d6f6163743178633673383832716a707368",
+        "617265724964656e74697479506b58210202020202020202020202020202020202020202",
+        "02020202020202020202020202",
+    );
+
+    fn previous_release_list() -> Vec<u8> {
+        hex::decode(PREVIOUS_RELEASE_LIST).expect("hex")
+    }
+
+    /// The previous release wrote neither `ended` nor `grantCut`: its list
+    /// reads with no value and writes back the same bytes.
+    #[test]
+    fn a_list_the_previous_release_wrote_reads_with_no_ended_or_grant_cut() {
+        let decoded = decode_stored_list(&previous_release_list()).expect("the list reads");
+        assert_eq!(decoded.len(), 2);
+        assert!(decoded.link_hold(&held_share().key()) == Some(&link_hold()));
+        assert!(
+            decoded
+                .iter()
+                .all(|share| share.ended.is_none() && share.grant_cut.is_none())
+        );
+        assert_eq!(
+            encode_stored_list(&decoded).expect("encodes").to_vec(),
+            previous_release_list()
+        );
+    }
+
+    /// `bytes` with `field` set on each bookmark: `held` on the bookmark of
+    /// `held_share`, `personal` on the one of scope `0x3c`.
+    fn with_field(bytes: &[u8], field: &str, held: Value, personal: Value) -> Vec<u8> {
+        let tree = decode(bytes).unwrap();
+        let mut map = tree.as_map().unwrap().clone();
+        let shares = map
+            .get("shares")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let mut entry = entry.as_map().unwrap().clone();
+                let is_held =
+                    entry.get("scopeId") == Some(&Value::Bytes(held_share().scope_id.to_vec()));
+                entry.insert(
+                    field,
+                    if is_held {
+                        held.clone()
+                    } else {
+                        personal.clone()
+                    },
+                );
+                Value::Map(entry)
+            })
+            .collect();
+        map.insert("shares", Value::Array(shares));
+        encode(&Value::Map(map)).unwrap()
+    }
+
+    /// The list a later release wrote: `ended` 7 and `grantCut` 5 on the held
+    /// bookmark, `ended` 0 and `grantCut` 3 on the personal one.
+    fn marked_list() -> Vec<u8> {
+        let ended = with_field(
+            &previous_release_list(),
+            "ended",
+            Value::Unsigned(7),
+            Value::Unsigned(0),
+        );
+        with_field(&ended, "grantCut", Value::Unsigned(5), Value::Unsigned(3))
+    }
+
+    /// The `(ended, grantCut)` values of the bookmark of `scope_id` in a
+    /// stored list.
+    fn marks_in(bytes: &[u8], scope_id: [u8; 16]) -> (Option<Value>, Option<Value>) {
+        let tree = decode(bytes).unwrap();
+        let entry = tree
+            .as_map()
+            .unwrap()
+            .get("shares")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.as_map().unwrap())
+            .find(|entry| entry.get("scopeId") == Some(&Value::Bytes(scope_id.to_vec())))
+            .expect("the bookmark");
+        (entry.get("ended").cloned(), entry.get("grantCut").cloned())
+    }
+
+    /// A list that a later release marked goes through a read, the change
+    /// that each bookmark writer makes, and a write. Both values of each
+    /// bookmark come back as they were, in memory and in the bytes, and no
+    /// change sets a value.
+    #[test]
+    fn ended_and_grant_cut_survive_the_change_of_each_bookmark_writer() {
+        type Change = fn(&mut ReceivedSharesList, BookmarkKey, BookmarkKey);
+        let held = held_share().key();
+        let personal = share(b"k51otherroot", 0x3c).key();
+        let writers: [(&str, Change); 10] = [
+            ("accept_share adds a bookmark", |list, _, _| {
+                assert!(matches!(
+                    list.reconcile(share(b"k51newroot", 0x4d)),
+                    Reconciled::Added
+                ));
+            }),
+            ("accept_share replaces a bookmark", |list, _, _| {
+                let mut healed = share(b"k51otherroot", 0x3c);
+                healed.display_name = "renamed".into();
+                assert!(matches!(list.reconcile(healed), Reconciled::Healed(_)));
+            }),
+            ("accept_share replaces the held bookmark", |list, _, _| {
+                let mut healed = held_share();
+                healed.permission = Permission::Write;
+                assert!(matches!(list.reconcile(healed), Reconciled::Healed(_)));
+            }),
+            (
+                "accept_share re-accepts an unchanged bookmark",
+                |list, _, _| {
+                    assert!(matches!(
+                        list.reconcile(share(b"k51otherroot", 0x3c)),
+                        Reconciled::Unchanged
+                    ));
+                },
+            ),
+            ("accept_share adds a pointer name", |list, held, _| {
+                list.set_scope_pointer_name(&held, Some(a_name(0x5e)));
+            }),
+            (
+                "claim_invite_link replaces a bookmark and holds a link",
+                |list, _, personal| {
+                    assert!(matches!(
+                        list.reconcile(ReceivedShare {
+                            scope_pointer_name: Some(a_name(0x5f)),
+                            ..share(b"k51otherroot", 0x3c)
+                        }),
+                        Reconciled::Healed(_)
+                    ));
+                    list.hold_link(personal, link_hold());
+                },
+            ),
+            ("repost_held_claims counts a post", |list, _, _| {
+                for (_, hold) in list.link_holds_mut() {
+                    hold.claim
+                        .as_mut()
+                        .expect("a claim")
+                        .posted(UnixMillis(1_800_000_000_000));
+                }
+            }),
+            ("follow_from heals a root name", |list, _, personal| {
+                list.heal_root_name(&personal, b"k51movedroot".to_vec());
+            }),
+            ("refresh sets a link deadline", |list, held, _| {
+                list.set_link_deadline(&held, Some(UnixMillis(1_900_000_000_000)));
+            }),
+            ("refresh drops a link", |list, held, _| {
+                list.drop_link(&held);
+            }),
+        ];
+        for (writer, change) in writers {
+            let mut list = decode_stored_list(&marked_list()).expect("reads");
+            change(&mut list, held, personal);
+
+            for (key, ended, grant_cut) in [(held, 7, 5), (personal, 0, 3)] {
+                let share = list.find(&key).expect("the bookmark");
+                assert_eq!(
+                    (share.ended, share.grant_cut),
+                    (Some(ended), Some(grant_cut)),
+                    "{writer}"
+                );
+            }
+            assert!(
+                list.find(&share(b"k51newroot", 0x4d).key())
+                    .is_none_or(|share| share.ended.is_none() && share.grant_cut.is_none()),
+                "{writer}"
+            );
+            let written = encode_stored_list(&list).expect("encodes");
+            assert_eq!(
+                marks_in(&written, held.1),
+                (Some(Value::Unsigned(7)), Some(Value::Unsigned(5))),
+                "{writer}"
+            );
+            assert_eq!(
+                marks_in(&written, personal.1),
+                (Some(Value::Unsigned(0)), Some(Value::Unsigned(3))),
+                "{writer}"
+            );
+        }
+    }
+
+    /// A re-accept keeps the bookmark's `ended` value and the higher
+    /// `grantCut`. Only a higher `grantCut` is a change that persists.
+    #[test]
+    fn a_reconcile_keeps_ended_and_the_higher_grant_cut() {
+        let key = share(b"k51otherroot", 0x3c).key();
+        let incoming = |grant_cut, ended| ReceivedShare {
+            grant_cut,
+            ended,
+            ..share(b"k51otherroot", 0x3c)
+        };
+        for (grant_cut, ended, outcome, kept_cut) in [
+            (None, None, "unchanged", 3),
+            (Some(2), Some(1), "unchanged", 3),
+            (Some(3), None, "unchanged", 3),
+            (Some(9), None, "healed", 9),
+        ] {
+            let mut list = decode_stored_list(&marked_list()).expect("reads");
+            let reconciled = list.reconcile(incoming(grant_cut, ended));
+            assert_eq!(
+                matches!(reconciled, Reconciled::Healed(_)),
+                outcome == "healed",
+                "{grant_cut:?}"
+            );
+            let share = list.find(&key).expect("the bookmark");
+            assert_eq!(
+                (share.ended, share.grant_cut),
+                (Some(0), Some(kept_cut)),
+                "{grant_cut:?}"
+            );
+        }
+    }
+
+    /// An `ended` or `grantCut` value that is not an unsigned number refuses
+    /// the list, as a malformed `linkDeadline` does.
+    #[test]
+    fn a_malformed_ended_or_grant_cut_value_refuses_the_list() {
+        for field in ["ended", "grantCut", "linkDeadline"] {
+            for malformed in [
+                Value::Bool(true),
+                Value::Negative(0),
+                Value::Text("7".into()),
+                Value::Bytes(vec![7]),
+            ] {
+                assert!(
+                    matches!(
+                        decode_stored_list(&with_field(
+                            &previous_release_list(),
+                            field,
+                            malformed.clone(),
+                            Value::Unsigned(1),
+                        )),
+                        Err(ReceivedSharesCodecError::Codec(_))
+                    ),
+                    "{field}"
+                );
+            }
+        }
     }
 
     fn link_hold() -> LinkHold {
@@ -2245,6 +2553,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0xAB; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         };
         let debug = format!("{share:?}");
         assert!(debug.contains("<redacted>"));

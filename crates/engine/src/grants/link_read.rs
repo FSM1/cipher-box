@@ -72,6 +72,8 @@ pub(crate) fn pending_link_bookmark(
             permission: Permission::Read,
             pointer_read_key: fragment.pointer_read_key.clone(),
             scope_pointer_name: Some(fragment.scope_pointer_name.clone()),
+            grant_cut: None,
+            ended: None,
         },
         LinkHold::new(fragment.invite_secret.clone()),
     )
@@ -565,7 +567,9 @@ pub(crate) async fn repost_held_claims<M, St, E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::codec::{Value, decode, encode};
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::{OwnerLocalKind, open_owner_local, seal_owner_local};
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -596,6 +600,12 @@ mod tests {
 
     impl Holder {
         fn new(deadline: Option<UnixMillis>) -> Self {
+            Self::marked(deadline, (None, None))
+        }
+
+        /// The holder, with `marks` as the `(ended, grantCut)` values of its
+        /// bookmark.
+        fn marked(deadline: Option<UnixMillis>, marks: (Option<u64>, Option<u64>)) -> Self {
             let staging = InMemoryStagingStore::default();
             let entropy = RefCell::new(SeededEntropy::new(7));
             let enc = kdf::enc_subkey(&HOLDER);
@@ -613,6 +623,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x8a; 32]),
                 scope_pointer_name: Some(pointer.clone()),
+                grant_cut: marks.1,
+                ended: marks.0,
             };
             let key = share.key();
             let mut list = ReceivedSharesList::new();
@@ -679,6 +691,74 @@ mod tests {
         );
         let keys = holder.repost_at(FIRST.0 + 3 * WAIT);
         assert_eq!(keys, vec![hex_lower(&KEY); 2]);
+    }
+
+    /// A re-post writes the list back with the `ended` and `grantCut` values
+    /// that a later release set, and sets none.
+    #[test]
+    fn a_repost_writes_back_ended_and_grant_cut_unchanged() {
+        for marks in [(Some(9), Some(4)), (None, None)] {
+            let holder = Holder::marked(None, marks);
+            assert_eq!(holder.repost_at(FIRST.0 + WAIT).len(), 1, "one re-post");
+
+            let store =
+                StagingReceivedShareStore::new(&holder.staging, &holder.enc, &holder.entropy);
+            let list = block_on(store.load()).expect("the list reads");
+            let share = list.iter().next().expect("the bookmark");
+            assert_eq!((share.ended, share.grant_cut), marks);
+            assert_eq!(
+                list.link_hold(&share.key())
+                    .and_then(|hold| hold.claim.as_ref())
+                    .map(|claim| claim.posts),
+                Some(2),
+                "the post count is the write that carried the mark"
+            );
+        }
+    }
+
+    /// A list whose `ended` value does not read stops the re-post before it
+    /// writes, so the stored bytes stay as they are.
+    #[test]
+    fn a_list_with_a_malformed_ended_value_is_never_rewritten() {
+        let holder = Holder::new(None);
+        let store = StagingReceivedShareStore::new(&holder.staging, &holder.enc, &holder.entropy);
+        let blob = block_on(holder.staging.staged_bytes(store.staging_key()))
+            .expect("read")
+            .expect("stored");
+        let body =
+            open_owner_local(&holder.enc, OwnerLocalKind::ReceivedShares, &blob).expect("opens");
+        let mut tree = decode(&body).expect("det-CBOR");
+        let mut map = tree.as_map().expect("a map").clone();
+        let mut entry = map
+            .get("shares")
+            .expect("shares")
+            .as_array()
+            .expect("an array")[0]
+            .as_map()
+            .expect("a map")
+            .clone();
+        entry.insert("ended", Value::Bool(true));
+        map.insert("shares", Value::Array(vec![Value::Map(entry)]));
+        tree = Value::Map(map);
+        let malformed = seal_owner_local(
+            &holder.enc,
+            OwnerLocalKind::ReceivedShares,
+            &[0x44; 32],
+            &encode(&tree).expect("encodes"),
+        )
+        .expect("seals");
+        block_on(
+            holder
+                .staging
+                .put_staged_bytes(store.staging_key(), &malformed),
+        )
+        .expect("put");
+
+        assert!(holder.repost_at(FIRST.0 + WAIT).is_empty(), "nothing posts");
+        assert_eq!(
+            block_on(holder.staging.staged_bytes(store.staging_key())).expect("read"),
+            Some(malformed)
+        );
     }
 
     /// A claim the owner never converts stops at its post bound, so a link
