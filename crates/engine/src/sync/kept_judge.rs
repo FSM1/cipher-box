@@ -21,6 +21,7 @@ pub(crate) struct NoteDraft {
     keeps: bool,
     parent: Option<NodeId>,
     result: Option<KeptResult>,
+    kept: bool,
 }
 
 impl NoteDraft {
@@ -32,6 +33,7 @@ impl NoteDraft {
             keeps: keeps(kind) && !needs_result(kind),
             parent,
             result: None,
+            kept: false,
         }
     }
 
@@ -66,8 +68,20 @@ impl NoteDraft {
 
     /// Whether the op stays queued: its note landed, or the mark rose over
     /// an op that keeps.
-    pub(crate) fn stays(&self, noted: bool, marked: bool) -> bool {
+    fn stays(&self, noted: bool, marked: bool) -> bool {
         noted || (marked && self.keeps)
+    }
+
+    /// Record whether the note landed and the mark rose ([`Self::kept`]).
+    pub(crate) fn settle(&mut self, noted: bool, marked: bool) {
+        if self.stays(noted, marked) {
+            self.kept = true;
+        }
+    }
+
+    /// Whether the op stays queued as a kept op after its publish.
+    pub(crate) fn kept(&self) -> bool {
+        self.kept
     }
 }
 
@@ -210,9 +224,59 @@ pub(crate) fn scan_reads(
     }
 }
 
+/// The live reads of one kept op before the rebase of a pass, under a flip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveReads {
+    /// None: the rebase decides.
+    None,
+    /// A kept delete: read the folder its note names.
+    Parent { folder: NodeId },
+    /// A kept rename or move under `parent`: read its folders
+    /// ([`Self::folders`]), then check the place of its node
+    /// ([`LiveChecks::place_check`]).
+    Places { parent: NodeId, to: Option<NodeId> },
+    /// A kept content edit or version restore: read the record of its file
+    /// ([`LiveChecks::head_check`]).
+    Head,
+}
+
+impl LiveReads {
+    /// The folders to read at their live names, in order.
+    pub(crate) fn folders(self) -> impl Iterator<Item = NodeId> {
+        let (first, then) = match self {
+            Self::Parent { folder } => (Some(folder), None),
+            Self::Places { parent, to } => (Some(parent), to),
+            Self::None | Self::Head => (None, None),
+        };
+        first.into_iter().chain(then)
+    }
+}
+
+/// The live reads of `op`, from the `parent` and the `result` its note
+/// names, and whether it `holds` as a kept op.
+pub(crate) fn live_reads(
+    op: &Op,
+    parent: Option<NodeId>,
+    result: Option<&KeptResult>,
+    holds: bool,
+) -> LiveReads {
+    if let Some(folder) = parent_read(op, parent) {
+        return LiveReads::Parent { folder };
+    }
+    if let Some(result) = result
+        && let Some((parent, to)) = place_reads(op, parent, result)
+    {
+        return LiveReads::Places { parent, to };
+    }
+    if holds && reads_head(op, result) {
+        return LiveReads::Head;
+    }
+    LiveReads::None
+}
+
 /// The folder whose live name a kept delete reads: the `parent` its note
 /// names (ADR 0069 D6).
-pub(crate) fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
+fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
     parent.filter(|_| matches!(op.kind, OpKind::Delete { .. }))
 }
 
@@ -220,7 +284,7 @@ pub(crate) fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
 /// the source, and the destination of a move to another folder. The source
 /// reads first: the read of the destination then unlinks a node that the
 /// source still holds. `None` for any other op.
-pub(crate) fn place_reads(
+fn place_reads(
     op: &Op,
     parent: Option<NodeId>,
     result: &KeptResult,
@@ -238,7 +302,7 @@ pub(crate) fn place_reads(
 
 /// Whether a live head check reads `op`: a content edit, and a version
 /// restore with a `result`.
-pub(crate) fn reads_head(op: &Op, result: Option<&KeptResult>) -> bool {
+fn reads_head(op: &Op, result: Option<&KeptResult>) -> bool {
     match op.kind {
         OpKind::UpdateContent { .. } => true,
         OpKind::RestoreVersion { .. } => result.is_some(),
@@ -1164,6 +1228,120 @@ mod tests {
         assert!(reads_head(&restore, Some(&restored)));
         assert!(!reads_head(&restore, None));
         assert!(!reads_head(&create(), Some(&restored)));
+    }
+
+    /// The live read plan of each kept kind, and the order of its folders.
+    #[test]
+    fn the_live_reads_follow_the_kind_the_note_and_the_hold() {
+        let rename = op(OpKind::Rename {
+            new_name: "b".into(),
+        });
+        let relocation = op(OpKind::Move {
+            from_parent: PARENT,
+            new_parent: DEST,
+            new_name: "b".into(),
+            replacing: None,
+            crossing: crate::sync::op::ScopeCrossing::Intra,
+        });
+        let relink = op(OpKind::Relink {
+            from_parent: PARENT,
+            new_parent: DEST,
+            crossing: crate::sync::op::ScopeCrossing::Intra,
+        });
+        let restore = op(OpKind::RestoreVersion {
+            content_cid: vec![2; 4],
+        });
+        let restored = KeptResult::RestoreVersion {
+            before: vec![1; 4],
+            after: vec![2; 4],
+        };
+        let prune = op(OpKind::DeleteVersion {
+            content_cid: vec![1; 4],
+        });
+        let renamed = rename_result();
+        let to_dest = moved(DEST);
+        let in_place = moved(PARENT);
+        let places = |to| LiveReads::Places { parent: PARENT, to };
+        type Row<'r> = (
+            &'r Op,
+            Option<NodeId>,
+            Option<&'r KeptResult>,
+            bool,
+            LiveReads,
+        );
+        let rows: [Row<'_>; 13] = [
+            (&create(), Some(PARENT), None, true, LiveReads::None),
+            (
+                &delete(),
+                Some(PARENT),
+                None,
+                true,
+                LiveReads::Parent { folder: PARENT },
+            ),
+            (
+                &delete(),
+                Some(PARENT),
+                None,
+                false,
+                LiveReads::Parent { folder: PARENT },
+            ),
+            (&delete(), None, None, true, LiveReads::None),
+            (&rename, Some(PARENT), Some(&renamed), true, places(None)),
+            (&rename, Some(PARENT), None, true, LiveReads::None),
+            (
+                &relocation,
+                Some(PARENT),
+                Some(&to_dest),
+                true,
+                places(Some(DEST)),
+            ),
+            (
+                &relocation,
+                Some(PARENT),
+                Some(&in_place),
+                true,
+                places(None),
+            ),
+            (
+                &relink,
+                Some(PARENT),
+                Some(&to_dest),
+                true,
+                places(Some(DEST)),
+            ),
+            (&edit(&[1; 4]), Some(PARENT), None, true, LiveReads::Head),
+            (&edit(&[1; 4]), Some(PARENT), None, false, LiveReads::None),
+            (
+                &restore,
+                Some(PARENT),
+                Some(&restored),
+                true,
+                LiveReads::Head,
+            ),
+            (&restore, Some(PARENT), None, true, LiveReads::None),
+        ];
+        for (index, (op, parent, result, holds, plan)) in rows.into_iter().enumerate() {
+            assert_eq!(live_reads(op, parent, result, holds), plan, "row {index}");
+        }
+        assert_eq!(live_reads(&prune, None, None, true), LiveReads::None);
+
+        assert_eq!(
+            LiveReads::Places {
+                parent: PARENT,
+                to: Some(DEST)
+            }
+            .folders()
+            .collect::<Vec<_>>(),
+            [PARENT, DEST],
+            "the source reads first"
+        );
+        assert_eq!(
+            LiveReads::Parent { folder: PARENT }
+                .folders()
+                .collect::<Vec<_>>(),
+            [PARENT]
+        );
+        assert_eq!(LiveReads::Head.folders().count(), 0);
     }
 
     fn rename_result() -> KeptResult {

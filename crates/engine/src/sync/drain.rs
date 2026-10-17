@@ -113,9 +113,8 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_judge::{
-    KeptJudge, KeptPlace, LiveChecks, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
-    kept_anchor, needs_result, on_halt, parent_read, place_reads, reads_head, reads_kept_parent,
-    scan_reads,
+    KeptJudge, KeptPlace, LiveChecks, LiveReads, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
+    kept_anchor, live_reads, needs_result, on_halt, reads_kept_parent, scan_reads,
 };
 use crate::sync::kept_op::{
     KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
@@ -2264,9 +2263,6 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     mirror: RefCell<OpMirror>,
     /// The kept-op note of the op this pass publishes now.
     note_draft: RefCell<NoteDraft>,
-    /// Whether that op's note or the published-op mark landed, so the op stays
-    /// queued as a kept op ([`NoteDraft::stays`]).
-    kept_now: Cell<bool>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
     /// The reads one pass spends to find sealing scopes ([`MAX_SEALER_READS`]).
@@ -2299,7 +2295,6 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
             mirror: RefCell::default(),
             note_draft: RefCell::default(),
-            kept_now: Cell::new(false),
         }
     }
 
@@ -3380,7 +3375,7 @@ where
                     .await?;
             }
             // An op that is not kept leaves at its publish ([`keeps`]).
-            if !self.kept_now.get() {
+            if !self.note_draft.borrow().kept() {
                 self.depart(scope, applied.op_id, Departure::Completed, report)
                     .await?;
             }
@@ -4078,7 +4073,7 @@ where
     }
 
     /// Read at its live name the folder that each kept delete under a flip
-    /// unlinked its node from ([`parent_read`]). The read repaints the base, so
+    /// unlinked its node from ([`LiveReads::Parent`]). The read repaints the base, so
     /// the rebase applies the delete again when the node is alive, and drops
     /// it when the node is gone. Return the deletes whose folder its old
     /// parent no longer names: the node went with it.
@@ -4092,7 +4087,12 @@ where
         let mut gone = BTreeSet::new();
         for (op_id, op) in queued {
             // Only a noted op names a parent, and a note makes the op kept.
-            let Some(folder) = parent_read(op, kept.parent(*op_id)) else {
+            let LiveReads::Parent { folder } = live_reads(
+                op,
+                kept.parent(*op_id),
+                kept.result(*op_id),
+                kept.holds(*op_id, op),
+            ) else {
                 continue;
             };
             let at = |halt| HeadHalt {
@@ -4116,7 +4116,7 @@ where
     }
 
     /// Read at their live names the folders that each kept rename or move
-    /// under a flip names ([`place_reads`]), and check the node there
+    /// under a flip names ([`LiveReads::Places`]), and check the node there
     /// ([`LiveChecks::place_check`]). Return the ops that leave.
     async fn read_kept_places(
         &self,
@@ -4129,11 +4129,16 @@ where
         let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
             checks.queued(op);
-            let parent = kept.parent(*op_id);
             let Some(result) = kept.result(*op_id) else {
                 continue;
             };
-            let Some((parent, to)) = place_reads(op, parent, result) else {
+            let reads = live_reads(
+                op,
+                kept.parent(*op_id),
+                Some(result),
+                kept.holds(*op_id, op),
+            );
+            let LiveReads::Places { parent, .. } = reads else {
                 continue;
             };
             let at = |halt| HeadHalt {
@@ -4148,7 +4153,7 @@ where
             ) {
                 continue;
             }
-            for folder in core::iter::once(parent).chain(to) {
+            for folder in reads.folders() {
                 if self.cells.base.borrow().contains(folder) {
                     self.read_live_folder(scope, pass, folder)
                         .await
@@ -4202,7 +4207,8 @@ where
         let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
             let result = kept.result(*op_id);
-            if !reads_head(op, result) || !kept.holds(*op_id, op) {
+            let reads = live_reads(op, kept.parent(*op_id), result, kept.holds(*op_id, op));
+            if reads != LiveReads::Head {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -4965,7 +4971,6 @@ where
                 .borrow_mut()
                 .insert(applied.op_id, chain);
         }
-        self.kept_now.set(false);
         self.publish_op(scope, pass, applied, rebased).await?;
         let shortfall = mirror_shortfall(&self.mirror.borrow());
         self.emit_mirror_shortfall(applied, shortfall);
@@ -10433,9 +10438,7 @@ where
                 op_id.0,
             )
             .await;
-        if self.note_draft.borrow().stays(noted, raised.is_ok()) {
-            self.kept_now.set(true);
-        }
+        self.note_draft.borrow_mut().settle(noted, raised.is_ok());
     }
 
     /// Raise the op-id high-water at `key` to `max(stored, mark)`.
