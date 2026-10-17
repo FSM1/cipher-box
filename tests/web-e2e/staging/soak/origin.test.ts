@@ -81,6 +81,19 @@ const NIGHT_JOBS: Job[] = [
 // The same legs in attempt 1, when the VPS stopped under the desktop legs.
 const OUTAGE_JOBS: Job[] = [
   job('Staging Soak / Soak: Web Vault', '2026-10-17T09:53:02Z', '2026-10-17T10:02:36Z'),
+  job('Staging Soak / Soak: Web Shares', '2026-10-17T10:02:39Z', '2026-10-17T10:17:30Z'),
+  job(
+    'Staging Soak / Soak: Desktop (macos) / Desktop Leg',
+    '2026-10-17T10:17:38Z',
+    '2026-10-17T10:24:19Z',
+    'failure'
+  ),
+  job(
+    'Staging Soak / Soak: Desktop (linux) / Desktop Leg',
+    '2026-10-17T10:24:22Z',
+    '2026-10-17T10:28:17Z',
+    'failure'
+  ),
   job(
     'Staging Soak / Soak: Desktop (windows) / Desktop Leg',
     '2026-10-17T10:28:20Z',
@@ -88,6 +101,14 @@ const OUTAGE_JOBS: Job[] = [
     'failure'
   ),
 ];
+
+/** `NIGHT_JOBS` with the conclusion of each named leg changed. */
+function withConclusions(conclusions: Record<string, string>): Job[] {
+  return NIGHT_JOBS.map((j) => {
+    const os = /Desktop \((\w+)\)/.exec(j.name)?.[1];
+    return os && conclusions[os] ? { ...j, conclusion: conclusions[os] } : j;
+  });
+}
 
 function vector(...values: number[]): unknown {
   return {
@@ -118,10 +139,25 @@ afterEach(() => {
 });
 
 describe('the run window', () => {
-  it('spans the leg jobs that ran, from the job times', () => {
+  it('spans every leg that ran when all legs passed', () => {
     expect(legWindow(NIGHT_JOBS)).toEqual({
       startS: at('2026-10-17T09:53:02Z'),
       endS: at('2026-10-17T16:22:01Z'),
+    });
+  });
+
+  it('spans only the legs that did not pass, not the time between two attempts', () => {
+    expect(legWindow(withConclusions({ windows: 'failure' }))).toEqual({
+      startS: at('2026-10-17T16:12:14Z'),
+      endS: at('2026-10-17T16:22:01Z'),
+    });
+    expect(legWindow(withConclusions({ macos: 'cancelled', linux: 'timed_out' }))).toEqual({
+      startS: at('2026-10-17T15:54:47Z'),
+      endS: at('2026-10-17T16:12:10Z'),
+    });
+    expect(legWindow(OUTAGE_JOBS)).toEqual({
+      startS: at('2026-10-17T10:17:38Z'),
+      endS: at('2026-10-17T10:33:25Z'),
     });
   });
 
@@ -209,6 +245,7 @@ describe('the origin report', () => {
     const fetched = stubFetch(null, (q) => {
       if (q.includes('process_start_time_seconds')) return [restart];
       if (q.includes('count_over_time')) return [0];
+      if (q.includes('== 1')) return [OUTAGE_RUN.endS - 50];
       return [OUTAGE_RUN.endS - 20];
     });
     const readings = await readOrigin(
@@ -217,7 +254,7 @@ describe('the origin report', () => {
     );
     expect(readings).toEqual({
       anySampleS: OUTAGE_RUN.endS - 20,
-      lastUpS: OUTAGE_RUN.endS - 20,
+      lastUpS: OUTAGE_RUN.endS - 50,
       latestStartS: restart,
       gapBeforeStart: true,
     });
@@ -236,7 +273,7 @@ describe('the origin report', () => {
     const line = await originReport({ ...GRAFANA, ...RUN }, at('2026-10-17T10:40:00Z'));
     expect(line).toBe(
       'Origin stop: the staging origin sent no metric after 2026-10-17T10:20:30Z, inside the run ' +
-        'window (2026-10-17T09:53:02Z to 2026-10-17T10:33:25Z). Treat this failure as infra and run it again.'
+        'window (2026-10-17T10:17:38Z to 2026-10-17T10:33:25Z). Treat this failure as infra and run it again.'
     );
   });
 

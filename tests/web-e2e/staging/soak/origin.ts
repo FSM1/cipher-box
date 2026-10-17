@@ -12,6 +12,9 @@ import { grafanaAccess, query, type GrafanaAccess } from './counters';
 /** Alloy scrapes every 30 seconds; no `up` sample for longer than this is a gap. */
 export const SILENT_AFTER_S = 180;
 
+/** How far before the restart the gap query looks, so an earlier, unrelated gap does not count. */
+const GAP_LOOK_BACK_S = 600;
+
 const QUERY_TIMEOUT_MS = 15_000;
 
 export const STARTED_ENV = 'SOAK_STARTED';
@@ -105,9 +108,9 @@ export async function readOrigin(
   ]);
   let gapBeforeStart = false;
   if (latestStartS !== null && latestStartS >= window.startS) {
-    // The fewest `up` samples in any SILENT_AFTER_S span from the run start to the restart.
+    // The fewest `up` samples in any SILENT_AFTER_S span of the GAP_LOOK_BACK_S before the restart.
     const fewest = await at(
-      `min_over_time((sum(count_over_time(up{job="api"}[${SILENT_AFTER_S}s])) or vector(0))[${range(window.startS, latestStartS)}:30s])`,
+      `min_over_time((sum(count_over_time(up{job="api"}[${SILENT_AFTER_S}s])) or vector(0))[${GAP_LOOK_BACK_S}s:30s])`,
       latestStartS
     );
     gapBeforeStart = fewest === 0;
@@ -115,16 +118,22 @@ export async function readOrigin(
   return { anySampleS, lastUpS, latestStartS, gapBeforeStart };
 }
 
-/** The span of the soak legs that ran: the earliest start to the latest end. */
+/**
+ * The span of the soak legs that did not pass, or of every leg that ran when all
+ * passed. A re-run of failed legs keeps the times of the legs that passed before,
+ * and the deploy can run between the two attempts.
+ */
 export function legWindow(jobs: readonly Job[]): { startS: number; endS: number } {
-  const legs = jobs.filter(
+  const ran = jobs.filter(
     (job) =>
       LEG_JOB.test(job.name) &&
       job.conclusion !== 'skipped' &&
       job.started_at !== null &&
       job.completed_at !== null
   );
-  if (legs.length === 0) throw new Error('no soak leg ran');
+  if (ran.length === 0) throw new Error('no soak leg ran');
+  const failed = ran.filter((job) => job.conclusion !== 'success');
+  const legs = failed.length > 0 ? failed : ran;
   const seconds = (iso: string | null): number => Date.parse(iso!) / 1000;
   const startS = Math.min(...legs.map((job) => seconds(job.started_at)));
   const endS = Math.max(...legs.map((job) => seconds(job.completed_at)));
