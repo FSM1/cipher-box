@@ -83,7 +83,7 @@ jobs:
       label: ${{ steps.check.outputs.label }}
       started: ${{ steps.started.outputs.started }}
     steps:
-      # The start of the run window that the report reads the origin over.
+      # The fallback start of the origin window, when the job times are not read.
       - name: Record the run start
         id: started
         run: echo "started=$(date -u +%s)" >> "$GITHUB_OUTPUT"
@@ -279,6 +279,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # The leg job times bound the window of the origin check.
+      actions: read
     outputs:
       reported: ${{ steps.reported.outputs.reported }}
 
@@ -314,6 +316,7 @@ jobs:
           SOAK_SUITE: ${{ needs.guard.outputs.label && format('{0} at {1}', needs.guard.outputs.label, needs.guard.outputs.sha) || '' }}
           SOAK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SOAK_STARTED: ${{ needs.guard.outputs.started }}
+          SOAK_GITHUB_TOKEN: ${{ github.token }}
           GRAFANA_PROMETHEUS_URL: ${{ vars.GRAFANA_PROMETHEUS_URL }}
           GRAFANA_PROMETHEUS_USERNAME: ${{ vars.GRAFANA_PROMETHEUS_USERNAME }}
           STAGING_GRAFANA_READ_TOKEN: ${{ secrets.STAGING_GRAFANA_READ_TOKEN }}

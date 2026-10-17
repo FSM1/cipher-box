@@ -169,7 +169,7 @@ function suiteLine(suite: string): string[] {
   return suite === '' ? [] : [`Suite: ${suite}`, ''];
 }
 
-/** The origin line of `origin.ts`, for a failed night only. */
+/** The origin line of `origin.ts`. */
 function originLines(origin: string): string[] {
   return origin === '' ? [] : [origin, ''];
 }

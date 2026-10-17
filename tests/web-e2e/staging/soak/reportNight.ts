@@ -6,7 +6,7 @@
  * - `report <results-dir> <out-dir>` reads `SOAK_NEEDS` (`toJSON(needs)`) and
  *   `SOAK_RUN_URL`, and the optional `SOAK_SUITE`, writes `summary.md`, and writes `issue.md` only for a
  *   failed night. A failed night also reads the origin from Grafana Cloud
- *   (`origin.ts`) for the run that started at `SOAK_STARTED`.
+ *   (`origin.ts`) over the span of the leg jobs, or from `SOAK_STARTED`.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -48,7 +48,7 @@ if (command === 'unbootstrapped' && first !== undefined) {
   const night = classifyNight(jobResults(required('SOAK_NEEDS')), await readLegResults(first));
   const origin =
     night.verdict === 'failed'
-      ? await originReport(process.env, process.env.SOAK_STARTED, Math.floor(Date.now() / 1000))
+      ? await originReport(process.env, Math.floor(Date.now() / 1000))
       : '';
   await mkdir(second, { recursive: true });
   await writeFile(join(second, 'summary.md'), renderNight(night, runUrl, suite, origin));
