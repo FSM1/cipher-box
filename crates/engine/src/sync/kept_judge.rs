@@ -11,6 +11,7 @@ use crate::facade::NodeId;
 use crate::seams::{OpId, UnixMillis};
 use crate::sync::duration_millis;
 use crate::sync::kept_op::{KEPT_OP_BOUND, KeptNote, KeptResult};
+use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 
 /// The note of the op a pass publishes now, which its publish fills in.
@@ -66,6 +67,139 @@ impl NoteDraft {
     /// an op that keeps.
     pub(crate) fn stays(&self, noted: bool, marked: bool) -> bool {
         noted || (marked && self.keeps)
+    }
+}
+
+/// The judge of the kept ops of one queue scan.
+pub(crate) struct KeptJudge<'a> {
+    overtaken: BTreeMap<OpId, Overtaken>,
+    /// The scope roots whose floor raise waits.
+    deferred: &'a [NodeId],
+    now: UnixMillis,
+}
+
+/// The reads the scan of one kept op runs after it reads its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanReads {
+    /// None: the place decides.
+    None,
+    /// Read the place at `root` as [`KeptPlace::Unchecked`]. Before it, when
+    /// `unlinked` is set, read whether this session saw one of those nodes
+    /// unlinked at its live parent name ([`ScanFacts::unanchored`]).
+    Unchecked {
+        root: NodeId,
+        unlinked: Option<[NodeId; 2]>,
+    },
+    /// Read whether this session saw `folder` unlinked at its live parent
+    /// name under `root` ([`ScanFacts::gone`]).
+    Gone { root: NodeId, folder: NodeId },
+}
+
+/// What the reads of [`ScanReads`] showed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ScanFacts {
+    /// A read saw the folder or the anchor of an op whose anchor the base
+    /// lacks unlinked, under a proved root.
+    pub(crate) unanchored: bool,
+    /// A read saw the folder of a kept delete unlinked: the node went with it.
+    pub(crate) gone: bool,
+}
+
+/// The fate of one kept op at the queue scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanFate {
+    /// It waits in the queue, out of this pass.
+    Stay,
+    /// It joins this pass ([`KeptVerdict::Recheck`]).
+    Recheck,
+    /// It leaves the queue, once the cut it owes is durable.
+    Expire,
+    /// It dead-letters as `TargetGone` (ADR 0069 D5), and stays when that fails.
+    Gone,
+}
+
+impl<'a> KeptJudge<'a> {
+    /// The judge of a scan of `queue` at `now`, under the scope roots whose
+    /// floor raise waits.
+    pub(crate) fn new(queue: &[(OpId, Op)], deferred: &'a [NodeId], now: UnixMillis) -> Self {
+        Self {
+            overtaken: overtaken_by_a_later_op(queue),
+            deferred,
+            now,
+        }
+    }
+
+    /// The reads a kept op at `place` needs before [`Self::scan`]. Only an op
+    /// whose place this pass cannot check, under the root its note names,
+    /// reads more. The floor of that root decides whether the bound runs. A
+    /// delete whose anchor `base` lacks under a proved root leaves at the
+    /// bound, and at once when a read of this session at the live parent name
+    /// saw the folder its note names unlinked: the node went with it (ADR 0069
+    /// D6). A base after a cold start lacks deep folders, so absence alone
+    /// shows nothing.
+    pub(crate) fn scan_reads(
+        op: &Op,
+        note: &KeptNote,
+        place: KeptPlace,
+        base: &Snapshot,
+        proved_roots: &[NodeId],
+    ) -> ScanReads {
+        let (KeptPlace::Elsewhere, Some(root)) = (place, note.scope) else {
+            return ScanReads::None;
+        };
+        let anchor = kept_anchor(op, note.parent);
+        let anchored = base.contains(anchor);
+        let proved = proved_roots.contains(&root);
+        if !matches!(op.kind, OpKind::Delete { .. }) || anchored || !proved {
+            let folder = kept_folder(op, note.parent);
+            return ScanReads::Unchecked {
+                root,
+                unlinked: (!anchored && proved).then_some([folder, anchor]),
+            };
+        }
+        match note.parent.filter(|_| reads_kept_parent(op, note.parent)) {
+            Some(folder) => ScanReads::Gone { root, folder },
+            None => ScanReads::None,
+        }
+    }
+
+    /// The fate of the kept op `op_id` at `place`, with what its reads showed.
+    pub(crate) fn scan(
+        &self,
+        op_id: OpId,
+        op: &Op,
+        note: &KeptNote,
+        place: KeptPlace,
+        facts: ScanFacts,
+    ) -> ScanFate {
+        // ADR 0069 D6 ([`overtaken_by_a_later_op`]).
+        let later = self.overtaken.get(&op_id).copied();
+        if facts.gone
+            || later == Some(Overtaken::ByRestore)
+            || (later == Some(Overtaken::ByDelete) && shows_a_flip(note, place))
+            // With no result, a check cannot tell a later write.
+            || (needs_result(&op.kind) && note.result.is_none())
+        {
+            return ScanFate::Expire;
+        }
+        // A deferred raise can hide a flip, so the bound waits for a follow
+        // that lands it (blueprint/engine.md "kept op").
+        let deferred = note
+            .scope
+            .or_else(|| place.root())
+            .is_some_and(|root| self.deferred.contains(&root));
+        match kept_verdict(note, place, self.now) {
+            KeptVerdict::Expired if deferred => ScanFate::Stay,
+            KeptVerdict::Expired => ScanFate::Expire,
+            // ADR 0069 D5: a flip dead-letters any other kept op whose folder
+            // a read of this session saw unlinked at its live parent name,
+            // under a proved root.
+            KeptVerdict::Stay if facts.unanchored && !deferred && shows_a_flip(note, place) => {
+                ScanFate::Gone
+            }
+            KeptVerdict::Stay => ScanFate::Stay,
+            KeptVerdict::Recheck => ScanFate::Recheck,
+        }
     }
 }
 
@@ -654,5 +788,176 @@ mod tests {
         assert_eq!(delete_decided(false, false, Some(false)), Some(true));
         assert_eq!(delete_decided(false, false, Some(true)), Some(false));
         assert_eq!(delete_decided(false, false, None), None);
+    }
+
+    const TARGET: NodeId = NodeId([8; 16]);
+
+    fn op(kind: OpKind) -> Op {
+        Op {
+            target: TARGET,
+            base_sequence: 0,
+            authored_at: UnixMillis(0),
+            kind,
+        }
+    }
+
+    fn create() -> Op {
+        op(OpKind::Create {
+            parent: PARENT,
+            name: "n".into(),
+            node: crate::sync::op::NewNode::Folder,
+        })
+    }
+
+    fn delete() -> Op {
+        op(OpKind::Delete {
+            target_sequence: 1,
+            to_bin: false,
+        })
+    }
+
+    fn base_with(nodes: &[NodeId]) -> Snapshot {
+        let mut base = Snapshot::new(NodeId([9; 16]));
+        for node in nodes {
+            base.upsert_node(crate::sync::model::NodeMeta::new(
+                *node,
+                "f",
+                crate::facade::NodeKind::Folder,
+            ));
+        }
+        base
+    }
+
+    /// ADR 0069 D5 and D6: only an op whose place this pass cannot check
+    /// reads more, and a kept delete whose anchor a proved base lacks reads
+    /// only whether its folder went.
+    #[test]
+    fn the_scan_reads_follow_the_place_the_anchor_and_the_root() {
+        let noted = KeptNote {
+            parent: Some(PARENT),
+            ..note(2)
+        };
+        let unscoped = KeptNote {
+            scope: None,
+            ..noted.clone()
+        };
+        let proved = [SCOPE];
+        let reads = |op: Op, note: &KeptNote, place, held: &[NodeId], proved: &[NodeId]| {
+            KeptJudge::scan_reads(&op, note, place, &base_with(held), proved)
+        };
+        let unchecked = |unlinked| ScanReads::Unchecked {
+            root: SCOPE,
+            unlinked,
+        };
+        let elsewhere = KeptPlace::Elsewhere;
+        assert_eq!(
+            reads(create(), &noted, here(2, true), &[], &proved),
+            ScanReads::None
+        );
+        assert_eq!(
+            reads(create(), &unscoped, elsewhere, &[], &proved),
+            ScanReads::None
+        );
+        assert_eq!(
+            reads(create(), &noted, elsewhere, &[PARENT], &proved),
+            unchecked(None)
+        );
+        assert_eq!(
+            reads(create(), &noted, elsewhere, &[], &proved),
+            unchecked(Some([PARENT, PARENT]))
+        );
+        assert_eq!(
+            reads(create(), &noted, elsewhere, &[], &[]),
+            unchecked(None)
+        );
+        assert_eq!(
+            reads(delete(), &noted, elsewhere, &[], &proved),
+            ScanReads::Gone {
+                root: SCOPE,
+                folder: PARENT,
+            }
+        );
+        assert_eq!(
+            reads(delete(), &note(2), elsewhere, &[], &proved),
+            ScanReads::None
+        );
+        assert_eq!(
+            reads(delete(), &noted, elsewhere, &[PARENT], &proved),
+            unchecked(None)
+        );
+    }
+
+    /// ADR 0069 D5 and D6: what the reads showed, a later op on the node, a
+    /// missing result, a deferred raise and the bound decide the fate.
+    #[test]
+    fn the_scan_fate_follows_the_facts_the_later_ops_and_the_bound() {
+        let edit_id = OpId(1);
+        let restored_id = OpId(3);
+        let alone = OpId(9);
+        let edit = create();
+        // A later delete overtakes the edit, and a later restore cancels the
+        // delete at `restored_id`.
+        let queue = [
+            (edit_id, edit.clone()),
+            (OpId(2), delete()),
+            (restored_id, delete()),
+            (
+                OpId(4),
+                op(OpKind::Restore {
+                    into: PARENT,
+                    name: "n".into(),
+                    kind: crate::facade::NodeKind::Folder,
+                }),
+            ),
+        ];
+        let rename = op(OpKind::Rename {
+            new_name: "b".into(),
+        });
+        let none = ScanFacts::default();
+        let gone = ScanFacts { gone: true, ..none };
+        let unanchored = ScanFacts {
+            unanchored: true,
+            ..none
+        };
+        let flip = KeptPlace::Unchecked {
+            root: SCOPE,
+            live_write_epoch: 3,
+        };
+        let still = here(2, false);
+        let fate = |deferred: &[NodeId], op_id, op: &Op, place, facts, after| {
+            KeptJudge::new(&queue, deferred, at(after)).scan(op_id, op, &note(2), place, facts)
+        };
+        let deferred = [SCOPE];
+        let expire = ScanFate::Expire;
+        let stay = ScanFate::Stay;
+        assert_eq!(fate(&[], alone, &edit, still, gone, JUST_BEFORE), expire);
+        assert_eq!(
+            fate(&[], restored_id, &delete(), still, none, JUST_BEFORE),
+            expire
+        );
+        assert_eq!(fate(&[], edit_id, &edit, flip, none, JUST_BEFORE), expire);
+        assert_eq!(fate(&[], edit_id, &edit, still, none, JUST_BEFORE), stay);
+        assert_eq!(fate(&[], alone, &rename, still, none, JUST_BEFORE), expire);
+        assert_eq!(fate(&[], alone, &edit, still, none, KEPT_OP_BOUND), expire);
+        assert_eq!(
+            fate(&deferred, alone, &edit, still, none, KEPT_OP_BOUND),
+            stay
+        );
+        assert_eq!(
+            fate(&[], alone, &edit, flip, unanchored, JUST_BEFORE),
+            ScanFate::Gone
+        );
+        assert_eq!(
+            fate(&deferred, alone, &edit, flip, unanchored, JUST_BEFORE),
+            stay
+        );
+        assert_eq!(
+            fate(&[], alone, &edit, still, unanchored, JUST_BEFORE),
+            stay
+        );
+        assert_eq!(
+            fate(&[], alone, &edit, here(3, true), none, JUST_BEFORE),
+            ScanFate::Recheck
+        );
     }
 }

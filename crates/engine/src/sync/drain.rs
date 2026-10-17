@@ -113,9 +113,8 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_judge::{
-    KeptOutcome, KeptPlace, KeptVerdict, LiveValue, NoteDraft, Overtaken, keeps, kept_anchor,
-    kept_folder, kept_outcome, kept_verdict, live_head, live_place, needs_result,
-    overtaken_by_a_later_op, reads_kept_parent, shows_a_flip,
+    KeptJudge, KeptOutcome, KeptPlace, LiveValue, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
+    kept_anchor, kept_outcome, live_head, live_place, needs_result, reads_kept_parent,
 };
 use crate::sync::kept_op::{
     KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
@@ -3683,7 +3682,7 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
-        let overtaken = overtaken_by_a_later_op(&scan.mine);
+        let judge = KeptJudge::new(&scan.mine, self.inputs.deferred_raises, now);
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.depart(scope, op_id, Departure::Residue, report)
@@ -3692,99 +3691,65 @@ where
             }
             if is_kept(op_id, published, &notes) {
                 // Its record publish was confirmed, so its version is live.
-                let verdict = if keeps(&op.kind) {
+                let fate = if keeps(&op.kind) {
                     let note = notes.note_at(op_id, now);
                     let mut place = self.kept_place(scope, &op, note.parent, note.scope).await?;
-                    // This pass cannot check the op, so the floor of the root
-                    // it published under decides whether the bound runs. A
-                    // delete whose anchor the base does not hold under a proved
-                    // root leaves at the bound, and at once when a read of this
-                    // session at the live parent name saw the folder its note
-                    // names unlinked: the node went with it (ADR 0069 D6). A
-                    // base after a cold start lacks deep folders, so absence
-                    // alone shows nothing.
-                    let mut gone = false;
-                    // ADR 0069 D5: a flip dead-letters any other kept op whose
-                    // folder a read of this session saw unlinked at its live
-                    // parent name, under a proved root.
-                    let mut unanchored = false;
-                    if place == KeptPlace::Elsewhere
-                        && let Some(root) = note.scope
-                    {
-                        let anchor = kept_anchor(&op, note.parent);
-                        let anchored = self.cells.base.borrow().contains(anchor);
-                        let proved = scope.scope_roots.contains(&root);
-                        let delete = matches!(op.kind, OpKind::Delete { .. });
-                        if !delete || anchored || !proved {
-                            let folder = kept_folder(&op, note.parent);
-                            unanchored = !anchored
-                                && proved
-                                && self
+                    let reads = KeptJudge::scan_reads(
+                        &op,
+                        &note,
+                        place,
+                        &self.cells.base.borrow(),
+                        scope.scope_roots,
+                    );
+                    let mut facts = ScanFacts::default();
+                    match reads {
+                        ScanReads::None => {}
+                        ScanReads::Unchecked { root, unlinked } => {
+                            if let Some(nodes) = unlinked {
+                                facts.unanchored = self
                                     .unlinked_at_its_live_name(
                                         scope,
                                         root,
-                                        &[folder, anchor],
+                                        &nodes,
                                         note.write_epoch,
                                     )
                                     .await?;
+                            }
                             place = self.unchecked_place(scope, root).await?;
-                        } else if let Some(folder) =
-                            note.parent.filter(|_| reads_kept_parent(&op, note.parent))
-                        {
-                            gone = self
+                        }
+                        ScanReads::Gone { root, folder } => {
+                            facts.gone = self
                                 .unlinked_at_its_live_name(scope, root, &[folder], note.write_epoch)
                                 .await?;
                         }
                     }
-                    // ADR 0069 D6 ([`overtaken_by_a_later_op`]).
-                    let later = overtaken.get(&op_id).copied();
-                    if gone
-                        || later == Some(Overtaken::ByRestore)
-                        || (later == Some(Overtaken::ByDelete) && shows_a_flip(&note, place))
-                        // With no result, a check cannot tell a later write.
-                        || (needs_result(&op.kind) && note.result.is_none())
-                    {
-                        KeptVerdict::Expired
-                    } else {
-                        // A deferred raise can hide a flip, so the bound
-                        // waits for a follow that lands it (blueprint/engine.md
-                        // "kept op").
-                        let deferred = note
-                            .scope
-                            .or_else(|| place.root())
-                            .is_some_and(|root| self.inputs.deferred_raises.contains(&root));
-                        match kept_verdict(&note, place, now) {
-                            KeptVerdict::Expired if deferred => KeptVerdict::Stay,
-                            KeptVerdict::Stay
-                                if unanchored && !deferred && shows_a_flip(&note, place) =>
-                            {
-                                if self
-                                    .abandon_keeping_its_name(
-                                        scope,
-                                        op_id,
-                                        &op,
-                                        DeadLetterReason::TargetGone,
-                                        report,
-                                    )
-                                    .await
-                                {
-                                    notes.remove(op_id);
-                                    continue;
-                                }
-                                KeptVerdict::Stay
-                            }
-                            verdict => verdict,
-                        }
-                    }
+                    judge.scan(op_id, &op, &note, place, facts)
                 } else {
-                    KeptVerdict::Expired
+                    ScanFate::Expire
                 };
-                match verdict {
-                    KeptVerdict::Stay => {
+                match fate {
+                    ScanFate::Stay => {
                         kept.push(op_id);
                         continue;
                     }
-                    KeptVerdict::Expired => {
+                    ScanFate::Gone => {
+                        let left = self
+                            .abandon_keeping_its_name(
+                                scope,
+                                op_id,
+                                &op,
+                                DeadLetterReason::TargetGone,
+                                report,
+                            )
+                            .await;
+                        if left {
+                            notes.remove(op_id);
+                        } else {
+                            kept.push(op_id);
+                        }
+                        continue;
+                    }
+                    ScanFate::Expire => {
                         // A relocation the mark drops may have stopped before its
                         // crossing committed, so the cut it owes is owed here, and
                         // the op stays until that debt is durable. Owing a cut
@@ -3807,7 +3772,7 @@ where
                         notes.remove(op_id);
                         continue;
                     }
-                    KeptVerdict::Recheck => {}
+                    ScanFate::Recheck => {}
                 }
             }
             mine.push((op_id, op));
