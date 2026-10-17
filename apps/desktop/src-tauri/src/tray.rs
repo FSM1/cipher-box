@@ -48,6 +48,7 @@ fn warning_label(kind: &str) -> &'static str {
         "scopeRootStranded" => {
             "Another writer removed a folder that holds a shared folder. Restore that folder from the bin."
         }
+        "unjournaledWrites" => "CipherBox could not save changes the disconnected drive still held",
         _ => "CipherBox raised a condition it could not name",
     }
 }
@@ -362,6 +363,21 @@ mod tests {
             0,
         );
         assert_eq!(Lines::of(&state).status, warning_label("scopeRootStranded"));
+    }
+
+    /// The minor warning yields the line to an unjournaled-writes warning,
+    /// which the tray names rather than rendering the fallback.
+    #[test]
+    fn unjournaled_writes_take_the_line_with_their_own_label() {
+        let state = live(
+            Staleness::Fresh,
+            vec![warning("scopeRootStranded"), warning("unjournaledWrites")],
+            0,
+        );
+        assert_eq!(
+            Lines::of(&state).status,
+            "CipherBox could not save changes the disconnected drive still held"
+        );
     }
 
     /// A stranded shared folder says what to do, never the fallback.

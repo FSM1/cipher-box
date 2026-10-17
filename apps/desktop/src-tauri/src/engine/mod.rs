@@ -103,7 +103,7 @@ pub struct VaultWarning {
 impl VaultWarning {
     /// A minor warning yields to every other class: past the bound it evicts
     /// only another minor warning, and it takes the tray line only when no
-    /// other warning stands.
+    /// other condition stands.
     pub fn is_minor(&self) -> bool {
         self.kind == SCOPE_ROOT_STRANDED
     }
