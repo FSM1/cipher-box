@@ -867,7 +867,12 @@ delete does (ADR 0043).
   second sweep only if the node answers with the same record. A proof past the
   node bound reads the whole subtree in one sweep on each tick, with no bound,
   and keeps only the mark that it passed the bound. The tick where it passes
-  the bound reads up to the tick bound, and then the whole subtree. Only a
+  the bound reads up to the tick bound, and then the whole subtree. A hard
+  delete walks its doomed subtree after the first sweep and before the
+  second, under the same tick bound, and the session keeps the walk with the
+  proof. A walk past the node bound reads the whole subtree in one tick, as
+  the proof does. The soft re-key reads the whole subtree in the tick that
+  writes the bin entry. Only a
   file whose own body this device has read skips the proof, as a ref kind is
   authored by any writer of the scope. A node every endpoint calls vacant, or
   one at a name the scope's write seed does not derive, has no proof to wait

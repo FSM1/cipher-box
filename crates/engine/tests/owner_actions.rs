@@ -7652,6 +7652,125 @@ fn a_large_subtree_whose_second_sweep_read_fails_probes_that_node_alone() {
     assert_a_large_subtree_outage_holds_and_recovers(true);
 }
 
+/// The records one tick reads for delete proofs and doomed walks.
+const DELETE_TICK_READS: usize = 128;
+
+/// A plain folder `outer` over [`create_large_subtree`], with the owner's bin
+/// retention at `retention`, and the nodes of the subtree.
+fn large_delete_scenario(retention: u32) -> (GrantScenario, NodeId, Vec<NodeId>) {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, retention);
+    let inner = fx.folder;
+    let mut subtree = vec![outer, inner];
+    subtree.extend(create_large_subtree(&mut fx, inner));
+    (fx, outer, subtree)
+}
+
+/// Tick until the queue drains, at most `ticks` times, with the subtree reads
+/// of each tick, in records.
+fn reads_per_tick(fx: &mut GrantScenario, subtree: &[NodeId], ticks: usize) -> Vec<usize> {
+    let one_read = fx.world.record_store.endpoints().len();
+    let mut per_tick = Vec::new();
+    while per_tick.len() < ticks && queued_ops(&fx.owner_device) > 0 {
+        let before = reads_of(fx, subtree);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        per_tick.push((reads_of(fx, subtree) - before) / one_read);
+    }
+    per_tick
+}
+
+/// Each tick that does not unlink reads at most the share. The tick that
+/// unlinks also reads the whole subtree once, fresh, and the hard delete
+/// completes.
+fn assert_a_bounded_hard_delete(
+    fx: &GrantScenario,
+    outer: NodeId,
+    subtree: &[NodeId],
+    per_tick: &[usize],
+) {
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
+        "the delete completes: {per_tick:?}"
+    );
+    let (last, held) = per_tick.split_last().expect("the delete ticks");
+    assert!(
+        held.iter().all(|reads| *reads <= DELETE_TICK_READS),
+        "a tick that does not unlink reads at most the share: {per_tick:?}"
+    );
+    assert!(
+        *last <= DELETE_TICK_READS + subtree.len(),
+        "the unlink tick reads the share and one fresh sweep: {per_tick:?}"
+    );
+    let status = block_on(fx.engine.status()).unwrap();
+    assert!(status.dead_letters.is_empty());
+    assert_eq!(status.queue_hold, None);
+    assert!(published_bin_entries(fx).is_empty());
+    assert!(
+        retired(&fx.owner_device).contains(&write_name(outer).as_str().to_owned()),
+        "the hard delete retires its target"
+    );
+}
+
+/// The doomed walk of a hard delete larger than one tick's share spans
+/// ticks, and holds the delete until it completes.
+#[test]
+fn a_hard_delete_of_a_large_subtree_reads_at_most_the_share_on_each_tick() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let mut per_tick = reads_per_tick(&mut fx, &subtree, 2);
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer),
+        "the walk holds the delete after the first sweep ends: {per_tick:?}"
+    );
+    per_tick.extend(reads_per_tick(&mut fx, &subtree, 8));
+    assert_a_bounded_hard_delete(&fx, outer, &subtree, &per_tick);
+}
+
+/// A restart drops the carried walk. The new session walks again from the
+/// target, under the same share, and completes the delete.
+#[test]
+fn a_hard_delete_restarted_mid_walk_walks_again_and_completes() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let before = reads_per_tick(&mut fx, &subtree, 2);
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer),
+        "the walk is not complete: {before:?}"
+    );
+    restart_owner(&mut fx);
+    let after = reads_per_tick(&mut fx, &subtree, 8);
+    assert!(
+        after.len() > 1,
+        "the new session reads the subtree again under the share: {after:?}"
+    );
+    assert_a_bounded_hard_delete(&fx, outer, &subtree, &after);
+}
+
+/// The soft branch re-keys the whole subtree in the tick that writes the bin
+/// entry, and unlinks in that tick.
+#[test]
+fn a_soft_delete_of_a_large_subtree_re_keys_it_in_its_entry_tick() {
+    let (mut fx, outer, subtree) = large_delete_scenario(30);
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    let per_tick = reads_per_tick(&mut fx, &subtree, 8);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    assert_eq!(per_tick.len(), 2, "{per_tick:?}");
+    assert!(
+        per_tick[1] > DELETE_TICK_READS + subtree.len(),
+        "the entry tick reads the second sweep and the whole re-key: {per_tick:?}"
+    );
+    assert_eq!(published_bin_entries(&fx)[0].node_id, outer.0);
+}
+
 /// A descendant ref that no proof will ever answer charges the delete, which
 /// dead-letters having published nothing, and the op behind it publishes.
 fn assert_an_unprovable_descendant_charges_the_delete(plant: impl FnOnce(&GrantScenario)) {

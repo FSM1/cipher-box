@@ -1547,10 +1547,19 @@ pub(crate) struct DeleteProof {
     /// whole subtree in one first sweep with no bound, and the session keeps
     /// only this mark.
     overflowed: bool,
+    /// The doomed walk of a hard delete. It runs between the two sweeps, so
+    /// the tick that ends it reads the subtree fresh before the unlink.
+    walk: Option<DoomedWalk>,
 }
 
 impl DeleteProof {
-    fn new(origin: NodeId, plane_root: NodeId, target: &ChildRef, overflowed: bool) -> Self {
+    fn new(
+        origin: NodeId,
+        plane_root: NodeId,
+        target: &ChildRef,
+        overflowed: bool,
+        doomed: bool,
+    ) -> Self {
         let mut sweep = TwoSweep::new(target.clone(), NodeId(target.id));
         // Child refs are wire data, so a cycle back to the parent is reachable.
         sweep.seen.insert(origin);
@@ -1564,6 +1573,7 @@ impl DeleteProof {
             carried: false,
             probe: None,
             overflowed,
+            walk: doomed.then(|| DoomedWalk::new(origin, NodeId(target.id), target.kind)),
         }
     }
 
@@ -1603,6 +1613,8 @@ struct DeletePolicy<'p> {
     whole: bool,
     /// The nodes the proof may read.
     bound: usize,
+    /// A doomed walk is not complete, so the second sweep waits for it.
+    walking: bool,
 }
 
 impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
@@ -1612,6 +1624,9 @@ impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
     /// no bound (blueprint/engine.md "Delete branch"). They end the share of
     /// every other proof of the tick.
     fn take_read(&mut self, confirming: bool) -> bool {
+        if confirming && self.walking {
+            return false;
+        }
         if self.whole || (confirming && self.carried) {
             self.tick_left.set(0);
             return true;
@@ -1621,7 +1636,7 @@ impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
 
     /// A first sweep that one tick reads whole is a snapshot of the subtree.
     fn settles_unconfirmed(&self, _: &TwoSweep<ChildRef>) -> bool {
-        !self.carried
+        !self.carried && !self.walking
     }
 
     fn visit(
@@ -2570,6 +2585,39 @@ struct Doomed {
     node: NodeId,
     name: IpnsName,
     versions: Vec<ContentVersion>,
+}
+
+/// A doomed walk that can stop between two reads and continue on a later
+/// tick ([`Drain::step_doomed`]).
+struct DoomedWalk {
+    /// Each node still to read. The last is read next, and leaves only once
+    /// it is read.
+    pending: Vec<(NodeId, NodeKind)>,
+    seen: BTreeSet<[u8; 16]>,
+    doomed: Vec<Doomed>,
+}
+
+impl DoomedWalk {
+    fn new(parent: NodeId, target: NodeId, kind: NodeKind) -> Self {
+        Self {
+            pending: vec![(target, kind)],
+            seen: BTreeSet::from([parent.0]),
+            doomed: Vec::new(),
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+/// Where one step left a [`DoomedWalk`].
+enum DoomedStep {
+    Complete,
+    /// The tick's share gave no more reads.
+    Paused,
+    /// The walk passed its node bound.
+    Stopped(Overflow),
 }
 
 /// What a record read is anchored to: the scope epoch the reader is at, and the
@@ -5258,17 +5306,21 @@ where
         // the origin link resolved onto: a node joins the scope of the parent
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
-        if !scope.is_grafted() {
-            self.prove_delete_plane(scope, pass, &plane, origin, &child, applied.op_id)
-                .await?;
-        }
+        let soft = to_bin && names_this_scope(&plane.end, &child);
+        let walked = match scope.is_grafted() {
+            true => Vec::new(),
+            false => {
+                self.prove_delete_plane(scope, pass, &plane, origin, &child, applied.op_id, !soft)
+                    .await?
+            }
+        };
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
         // republish every parent, which is where the op completes.
         let doomed = if scope.is_grafted() {
             None
-        } else if to_bin && names_this_scope(&plane.end, &child) {
+        } else if soft {
             let unlinked = UnlinkedChild {
                 scope_id: plane.end.root.0,
                 // The highest-ranked link still standing: the folder a reader
@@ -5296,17 +5348,7 @@ where
             .await?;
             None
         } else {
-            Some(
-                self.enumerate_doomed(
-                    &plane,
-                    pass.anchor_for(&plane)?,
-                    origin,
-                    target,
-                    child.kind,
-                    Boundary::None,
-                )
-                .await?,
-            )
+            Some(walked)
         };
         // Before the publish that completes the op: a crash in between leaves a
         // live scope with no entry, which its next confirmed read saves again.
@@ -5378,6 +5420,13 @@ where
     /// except past [`MAX_DELETE_PROOF_NODES`], where each tick reads the whole
     /// subtree. Until the [`DeleteProof`] completes, the delete holds the
     /// queue head uncharged.
+    ///
+    /// With `doomed`, the proof also walks what a hard delete detaches, under
+    /// the same tick share, and answers it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one delete's proof and its doomed walk"
+    )]
     async fn prove_delete_plane(
         &self,
         scope: &DrainScope<'_>,
@@ -5386,16 +5435,21 @@ where
         origin: NodeId,
         target: &ChildRef,
         op_id: OpId,
-    ) -> Result<(), Halt> {
+        doomed: bool,
+    ) -> Result<Vec<Doomed>, Halt> {
         let bin_target = NodeId(target.id);
-        let new_proof = |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed);
-        let hold = |proof: DeleteProof| {
+        let new_proof =
+            |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed, doomed);
+        let keep = |proof: DeleteProof| {
             let kept = match proof.overflowed {
                 true => new_proof(true),
                 false => proof,
             };
             self.cells.delete_proofs.borrow_mut().insert(op_id, kept);
-            Err(Halt::DeletePlaneUnavailable)
+        };
+        let hold = |proof: DeleteProof| {
+            keep(proof);
+            Halt::DeletePlaneUnavailable
         };
         let read_node = async |child: &ChildRef| {
             if scope.known_scope_roots.contains(&NodeId(child.id)) {
@@ -5415,23 +5469,26 @@ where
             .delete_proofs
             .borrow_mut()
             .remove(&op_id)
-            .filter(|proof| proof.proves(origin, plane.end.root, target))
+            .filter(|proof| {
+                proof.proves(origin, plane.end.root, target) && proof.walk.is_some() == doomed
+            })
             .unwrap_or_else(|| new_proof(false));
         // An outage on one node costs one read on each tick, not the second
         // sweep up to that node.
         if let Some(index) = proof.probe {
             if !take_tick_read(&self.delete_proof_reads) {
-                return hold(proof);
+                return Err(hold(proof));
             }
             let mark = proof.sweep.read[index].1;
             match read_node(&proof.sweep.read[index].0).await {
                 Ok((read, _)) if read == mark => proof.probe = None,
                 Ok(_) | Err(ReadFault::Untrusted) => proof = new_proof(false),
-                Err(ReadFault::Unanswered) => return hold(proof),
+                Err(ReadFault::Unanswered) => return Err(hold(proof)),
                 Err(ReadFault::Fatal(halt)) => return Err(halt),
             }
         }
         loop {
+            let walking = proof.walk.as_ref().is_some_and(|walk| !walk.complete());
             let mut policy = DeletePolicy {
                 base: self.cells.base,
                 known_scope_roots: scope.known_scope_roots,
@@ -5440,6 +5497,7 @@ where
                 carried: proof.carried,
                 whole: proof.overflowed,
                 bound: self.delete_proof_nodes,
+                walking,
             };
             let swept = proof
                 .sweep
@@ -5455,20 +5513,54 @@ where
                     return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
                 }
                 Swept::Complete if proof.skipped_a_folder(self.cells.base) => {
-                    return hold(new_proof(proof.overflowed));
+                    return Err(hold(new_proof(proof.overflowed)));
                 }
-                Swept::Complete => return Ok(()),
+                Swept::Complete => {
+                    return Ok(proof.walk.map(|walk| walk.doomed).unwrap_or_default());
+                }
+                Swept::Paused if walking && proof.sweep.pending.is_empty() => {
+                    let unbounded = proof.overflowed;
+                    let stepped = match proof.walk.as_mut() {
+                        Some(walk) => {
+                            self.step_doomed(
+                                plane,
+                                pass.anchor_for(plane)?,
+                                walk,
+                                Boundary::None,
+                                (!unbounded).then_some(&self.delete_proof_reads),
+                                (!unbounded).then_some(self.delete_proof_nodes),
+                            )
+                            .await
+                        }
+                        None => Ok(DoomedStep::Complete),
+                    };
+                    match stepped {
+                        Ok(DoomedStep::Complete) => {}
+                        // The first sweep is no longer a snapshot of this
+                        // tick, so the unlink waits for a second sweep.
+                        Ok(DoomedStep::Paused) => {
+                            proof.carried = true;
+                            return Err(hold(proof));
+                        }
+                        Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
+                        Err(halt) => {
+                            proof.carried = true;
+                            keep(proof);
+                            return Err(halt);
+                        }
+                    }
+                }
                 Swept::Moved | Swept::Fault(ReadFault::Untrusted) => {
                     proof = new_proof(proof.overflowed);
                 }
                 Swept::Fault(ReadFault::Unanswered) if proof.sweep.pending.is_empty() => {
                     proof.probe = Some(proof.sweep.confirmed);
                     proof.sweep.confirmed = 0;
-                    return hold(proof);
+                    return Err(hold(proof));
                 }
                 Swept::Paused | Swept::Fault(ReadFault::Unanswered) => {
                     proof.carried = !proof.sweep.read.is_empty();
-                    return hold(proof);
+                    return Err(hold(proof));
                 }
                 Swept::Fault(ReadFault::Fatal(halt)) => return Err(halt),
                 Swept::Stopped(Overflow) => proof = new_proof(true),
@@ -6049,27 +6141,44 @@ where
         kind: NodeKind,
         boundary: Boundary<'_>,
     ) -> Result<Vec<Doomed>, Halt> {
-        let mut doomed = Vec::new();
-        let mut seen = BTreeSet::from([parent.0]);
-        let mut pending = vec![(target, kind)];
-        while let Some((node, kind)) = pending.pop() {
+        let mut walk = DoomedWalk::new(parent, target, kind);
+        self.step_doomed(plane, anchor, &mut walk, boundary, None, None)
+            .await?;
+        Ok(walk.doomed)
+    }
+
+    /// Step `walk` ([`Self::enumerate_doomed`]), one read from `reads` per
+    /// node, until `bound` nodes. A node that faults stays next to read.
+    async fn step_doomed(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        walk: &mut DoomedWalk,
+        boundary: Boundary<'_>,
+        reads: Option<&Cell<usize>>,
+        bound: Option<usize>,
+    ) -> Result<DoomedStep, Halt> {
+        while let Some(&(node, kind)) = walk.pending.last() {
             // Child refs are wire data, so a diamond or a cycle among them is
             // reachable: a node already walked is never walked again, which is
             // also what terminates the walk.
-            if seen.contains(&node.0) {
+            if walk.seen.contains(&node.0) {
+                walk.pending.pop();
                 continue;
             }
-            seen.insert(node.0);
+            if reads.is_some_and(|reads| !take_tick_read(reads)) {
+                return Ok(DoomedStep::Paused);
+            }
+            let mut children = Vec::new();
             let (name, versions) = match self
                 .load_child_node(plane, anchor, node, ResolveMode::CacheFirst)
                 .await
             {
                 Ok(loaded) => {
                     let versions = match loaded.body {
-                        ReadBody::Folder { children, .. } => {
-                            pending.extend(
-                                children
-                                    .iter()
+                        ReadBody::Folder { children: refs, .. } => {
+                            children.extend(
+                                refs.iter()
                                     .filter(|child| boundary.admits(&plane.end, child))
                                     .map(|child| (NodeId(child.id), child.kind)),
                             );
@@ -6094,13 +6203,19 @@ where
                 }
                 Err(_) => (plane.end.write_name(&node.0), Vec::new()),
             };
-            doomed.push(Doomed {
+            walk.pending.pop();
+            walk.seen.insert(node.0);
+            walk.pending.extend(children);
+            walk.doomed.push(Doomed {
                 node,
                 name,
                 versions,
             });
+            if bound.is_some_and(|bound| walk.seen.len() + walk.pending.len() > bound) {
+                return Ok(DoomedStep::Stopped(Overflow));
+            }
         }
-        Ok(doomed)
+        Ok(DoomedStep::Complete)
     }
 
     /// Add one soft-deleted node to the owner's bin index, reporting the
@@ -14872,7 +14987,9 @@ mod tests {
             HARNESS_ROOT,
             target,
             op_id,
+            false,
         ))
+        .map(drop)
     }
 
     /// One tick's delete proof of [`WALK_FOLDER`] under `reads`, with the reads
@@ -14950,6 +15067,39 @@ mod tests {
         let (proved, left) = prove_delete_tick(&harness, MAX_DELETE_PROOF_READS);
         assert_eq!(proved, Ok(()));
         assert_eq!(MAX_DELETE_PROOF_READS - left, PROOF_CHAIN.len());
+    }
+
+    /// A doomed walk past the node bound reads the whole subtree in one tick,
+    /// and the session carries no state for it.
+    #[test]
+    fn a_doomed_walk_past_its_node_bound_reads_the_subtree_whole_in_one_tick() {
+        const FILES: [NodeId; 2] = [NodeId([0x74; 16]), NodeId([0x75; 16])];
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let files = FILES.map(|file| projected_file_ref(&harness, file));
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, files.to_vec());
+        // The proof skips the files, so only the walk passes the bound.
+        let drain = harness
+            .drain()
+            .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
+        let scope = harness.scope();
+        let walked = block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            HARNESS_ROOT,
+            &harness_folder_ref(WALK_FOLDER),
+            OpId(7),
+            true,
+        ))
+        .expect("the subtree is proved and walked in one tick");
+        let walked: BTreeSet<NodeId> = walked.iter().map(|doomed| doomed.node).collect();
+        assert_eq!(walked, PROOF_CHAIN.into_iter().chain(FILES).collect());
+        assert_eq!(
+            drain.delete_proof_reads.get(),
+            0,
+            "the whole read ends the share"
+        );
+        assert!(harness.state.delete_proofs.borrow().is_empty());
     }
 
     /// A folder that moves between the two sweeps starts the proof again.
@@ -15254,7 +15404,7 @@ mod tests {
     #[test]
     fn a_delete_proof_proves_only_its_own_target() {
         let target = harness_folder_ref(WALK_FOLDER);
-        let proof = DeleteProof::new(HARNESS_ROOT, HARNESS_ROOT, &target, false);
+        let proof = DeleteProof::new(HARNESS_ROOT, HARNESS_ROOT, &target, false, false);
         assert!(proof.proves(HARNESS_ROOT, HARNESS_ROOT, &target));
         assert!(!proof.proves(PROOF_CHAIN[1], HARNESS_ROOT, &target));
         assert!(!proof.proves(HARNESS_ROOT, PROOF_CHAIN[1], &target));
