@@ -55,6 +55,16 @@ pub(crate) fn sequence_refusal(
     }
 }
 
+/// Whether a root with `envelope` and `section` is the child `expected_child`
+/// names: that id, with an ascent link. `None` binds nothing.
+fn binds_child(
+    expected_child: Option<[u8; 16]>,
+    envelope: &Envelope,
+    section: &GrantSection,
+) -> bool {
+    expected_child.is_none_or(|id| envelope.id == id && section.ascent_link.is_some())
+}
+
 /// One scope root as the adoption gate authenticated it, plus the seeds the
 /// owner recovered from its own blobs. Terminal owner of those seeds: they
 /// zeroize when the value is dropped.
@@ -86,7 +96,7 @@ impl GatedScopeRoot {
 
     /// A copy bound to `expected_child`, when the caller expects one.
     pub(super) fn names_child(&self, expected_child: Option<[u8; 16]>) -> bool {
-        expected_child.is_none_or(|id| self.envelope.id == id && self.section.ascent_link.is_some())
+        binds_child(expected_child, &self.envelope, &self.section)
     }
 
     pub(super) fn recovered(name: &IpnsName, root: RecoveredScopeRoot) -> Self {
@@ -294,13 +304,13 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
     record_bytes: &[u8],
     expected_child: Option<[u8; 16]>,
 ) -> Result<RootPass, RootGateVerdict> {
-    let bound = |envelope: &Envelope, section: &GrantSection| {
-        expected_child
-            .is_none_or(|expected| envelope.id == expected && section.ascent_link.is_some())
-    };
     match adopter.gate_and_recover(name, record_bytes).await {
         Ok((candidate, pending, seeds)) => {
-            if !bound(&candidate.envelope, &candidate.grant_section) {
+            if !binds_child(
+                expected_child,
+                &candidate.envelope,
+                &candidate.grant_section,
+            ) {
                 return Err(RootGateVerdict::Rejected);
             }
             Ok(RootPass::Pending(Box::new((
@@ -339,7 +349,7 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
         Err(GateError::Rejected(rejection)) => {
             let (root, record) =
                 reread_at_floor(adopter, name, record_bytes, &rejection.reason).await?;
-            if !bound(&root.envelope, &root.section) {
+            if !root.names_child(expected_child) {
                 return Err(RootGateVerdict::Rejected);
             }
             Ok(RootPass::AtFloor(Box::new((root, record))))
