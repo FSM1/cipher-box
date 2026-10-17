@@ -11,7 +11,7 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::content::CONTENT_CID_LEN;
-use cipherbox_core::seal::{OwnerLocalKind, Version};
+use cipherbox_core::seal::OwnerLocalKind;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
@@ -20,8 +20,8 @@ use crate::name::MAX_NODE_NAME_BYTES;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{PUBLISHED_OP_MARK_PREFIX, owner_scoped_key, published_op_mark};
-use crate::sync::duration_millis;
-use crate::sync::op::{Op, OpKind};
+use crate::sync::kept_judge::keeps;
+use crate::sync::op::Op;
 use crate::sync::owed_rotation::DROP_BOUND;
 
 /// The staging-key prefix of one identity's kept-op notes
@@ -488,115 +488,6 @@ pub(crate) async fn store_kept_notes<St: StagingStore>(
     staging.put_staged_bytes(&key, &blob).await
 }
 
-/// Whether an op of `kind` stays queued after its publish. The live tree
-/// shows whether a create, a delete or a content edit landed. A rename, a move
-/// and a version restore stay only with the result their note records
-/// ([`needs_result`]), and a move only inside one scope. A version delete and a
-/// prune leave at publish (ADR 0069 D2).
-pub(crate) fn keeps(kind: &OpKind) -> bool {
-    matches!(
-        kind,
-        OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
-    ) || needs_result(kind)
-}
-
-/// Whether a kept op of `kind` needs the result in its note: the live node
-/// alone cannot show whether a later writer overtook it. One with no result
-/// leaves at publish.
-pub(crate) fn needs_result(kind: &OpKind) -> bool {
-    matches!(
-        kind,
-        OpKind::Rename { .. }
-            | OpKind::Move { .. }
-            | OpKind::Relink { .. }
-            | OpKind::RestoreVersion { .. }
-    )
-}
-
-/// What the live tree shows of a kept op's result after a flip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeptOutcome {
-    /// The live node shows the result: the op leaves with no apply.
-    Landed,
-    /// The live node shows the value before the op: the op applies again.
-    Lost,
-    /// The live node shows another value, from a later writer: the op leaves
-    /// with no apply, so the later write stays.
-    Overtaken,
-}
-
-/// The live value that a result is checked against. No `Debug`: a name is
-/// plaintext.
-#[derive(Clone, Copy)]
-pub(crate) enum LiveValue<'a> {
-    /// The name of the node under the folder its note names.
-    Name(&'a str),
-    /// The folder that holds the node, and its name there.
-    Place(NodeId, &'a str),
-    /// The head content CID of the file.
-    Head(&'a [u8]),
-    /// The node is not where the check reads it.
-    Absent,
-}
-
-/// Compare a kept op's `result` with the `live` node. A later writer who
-/// sets the value from before the op reads as [`KeptOutcome::Lost`].
-pub(crate) fn kept_outcome(result: &KeptResult, live: LiveValue<'_>) -> KeptOutcome {
-    let outcome = |landed: bool, lost: bool| {
-        if landed {
-            KeptOutcome::Landed
-        } else if lost {
-            KeptOutcome::Lost
-        } else {
-            KeptOutcome::Overtaken
-        }
-    };
-    match (result, live) {
-        (KeptResult::Rename { before, after }, LiveValue::Name(name)) => {
-            outcome(name == after.as_str(), name == before.as_str())
-        }
-        (
-            KeptResult::Move {
-                from,
-                from_name,
-                to,
-                to_name,
-            },
-            LiveValue::Place(parent, name),
-        ) => outcome(
-            parent == *to && name == to_name.as_str(),
-            parent == *from && name == from_name.as_str(),
-        ),
-        (KeptResult::RestoreVersion { before, after }, LiveValue::Head(head)) => {
-            outcome(head == after.as_slice(), head == before.as_slice())
-        }
-        _ => KeptOutcome::Overtaken,
-    }
-}
-
-/// The live value a rename or a move under `parent` is checked against:
-/// `place` is the folder that holds the node, and its name there.
-pub(crate) fn live_place<'a>(
-    result: &KeptResult,
-    parent: NodeId,
-    place: Option<&'a (NodeId, Zeroizing<String>)>,
-) -> LiveValue<'a> {
-    match (result, place) {
-        (KeptResult::Rename { .. }, Some((holder, name))) if *holder == parent => {
-            LiveValue::Name(name)
-        }
-        (KeptResult::Move { .. }, Some((holder, name))) => LiveValue::Place(*holder, name),
-        _ => LiveValue::Absent,
-    }
-}
-
-/// The live head of a file's version list, newest first.
-pub(crate) fn live_head(versions: &[Version]) -> LiveValue<'_> {
-    versions
-        .first()
-        .map_or(LiveValue::Absent, |head| LiveValue::Head(&head.content_cid))
-}
-
 /// Whether `staging_key` holds an identity's published-op mark or kept-op notes.
 pub(crate) fn is_kept_op_key(staging_key: &[u8]) -> bool {
     staging_key.starts_with(PUBLISHED_OP_MARK_PREFIX)
@@ -662,112 +553,15 @@ pub(crate) async fn retain_pending<St: StagingStore, T>(
     Ok(())
 }
 
-/// Where a kept op's write scope stands for the pass that reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeptPlace {
-    /// The pass writes the op's scope, rooted at `root`, whose write-epoch
-    /// floor is `live_write_epoch`. `anchor_read_live` says the base read the
-    /// folder the op writes under at its name of that epoch: only such a read
-    /// can show the op from the live root.
-    Writes {
-        root: NodeId,
-        live_write_epoch: u64,
-        anchor_read_live: bool,
-    },
-    /// The op's scope, rooted at `root`, is a proved root that this device
-    /// holds no write seed for: a revoke or a downgrade took it. The op does
-    /// not apply again: the pass takes it out before the rebase. One that the
-    /// moved tree decides leaves, and the valve charges any other on the
-    /// keyless charge until it dead-letters (ADR 0069 D3).
-    Keyless { root: NodeId },
-    /// This pass cannot check the op at `root`: the boundary walk did not
-    /// prove it, a gate-refused one included, or another pass writes it.
-    /// `live_write_epoch` is its durable write-epoch floor. Only the root the
-    /// op published under, at no higher floor than its note's, is no flip and
-    /// runs the bound; a flip waits with no bound for a pass that can check it
-    /// (ADR 0069 D5).
-    Unchecked { root: NodeId, live_write_epoch: u64 },
-    /// As [`Self::Unchecked`], at a granted root that no one granting identity
-    /// names, so no floor can show it is no flip. It counts as a flip
-    /// ([`shows_a_flip`]) and waits with no bound.
-    Unnamespaced,
-    /// Another pass, or none this tick, answers for the op's scope.
-    Elsewhere,
-}
-
-impl KeptPlace {
-    /// The scope root this place names, if any.
-    pub(crate) fn root(self) -> Option<NodeId> {
-        match self {
-            Self::Writes { root, .. } | Self::Keyless { root } | Self::Unchecked { root, .. } => {
-                Some(root)
-            }
-            Self::Unnamespaced | Self::Elsewhere => None,
-        }
-    }
-}
-
-/// What a pass does with one kept op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeptVerdict {
-    /// It waits in the queue, out of this pass.
-    Stay,
-    /// It joins this pass, and the rebase onto the live tree decides: a landed
-    /// op drops, a lost one applies again (ADR 0069 D3, D6). See
-    /// [`KeptPlace::Keyless`] for an op under a keyless scope.
-    Recheck,
-    /// It waited out [`KEPT_OP_BOUND`] at its write epoch, and leaves.
-    Expired,
-}
-
-/// Whether `place` shows a flip of the scope the op published under: a new
-/// write epoch, another scope root, or a scope this device no longer writes
-/// or cannot check.
-pub(crate) fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
-    match place {
-        KeptPlace::Keyless { .. } | KeptPlace::Unnamespaced => true,
-        KeptPlace::Writes {
-            root,
-            live_write_epoch,
-            ..
-        } => live_write_epoch > note.write_epoch || note.scope.is_some_and(|scope| scope != root),
-        KeptPlace::Unchecked {
-            root,
-            live_write_epoch,
-        } => note.scope != Some(root) || live_write_epoch > note.write_epoch,
-        KeptPlace::Elsewhere => false,
-    }
-}
-
-/// The verdict on one kept op at `now`. A flip ([`shows_a_flip`]) waits for
-/// the read of the folder at its new name and does not expire.
-pub(crate) fn kept_verdict(note: &KeptNote, place: KeptPlace, now: UnixMillis) -> KeptVerdict {
-    let flip = shows_a_flip(note, place);
-    match place {
-        KeptPlace::Keyless { .. } => return KeptVerdict::Recheck,
-        KeptPlace::Writes {
-            anchor_read_live: true,
-            ..
-        } if flip => return KeptVerdict::Recheck,
-        _ if flip => return KeptVerdict::Stay,
-        _ => {}
-    }
-    if now.0.saturating_sub(note.published_at.0) >= duration_millis(KEPT_OP_BOUND) {
-        KeptVerdict::Expired
-    } else {
-        KeptVerdict::Stay
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::sync::provision::GENESIS_EPOCH;
+    use crate::sync::kept_judge::{KeptPlace, KeptVerdict, kept_verdict};
 
-    const PUBLISHED: UnixMillis = UnixMillis(1_000);
-    const SCOPE: NodeId = NodeId([5; 16]);
+    pub(crate) const PUBLISHED: UnixMillis = UnixMillis(1_000);
+    pub(crate) const SCOPE: NodeId = NodeId([5; 16]);
 
-    fn note(write_epoch: u64) -> KeptNote {
+    pub(crate) fn note(write_epoch: u64) -> KeptNote {
         KeptNote {
             scope: Some(SCOPE),
             write_epoch,
@@ -777,156 +571,16 @@ mod tests {
         }
     }
 
-    fn at(after_publish: Duration) -> UnixMillis {
+    pub(crate) fn at(after_publish: Duration) -> UnixMillis {
         PUBLISHED.saturating_add(after_publish)
     }
 
-    fn here(live_write_epoch: u64, anchor_read_live: bool) -> KeptPlace {
+    pub(crate) fn here(live_write_epoch: u64, anchor_read_live: bool) -> KeptPlace {
         KeptPlace::Writes {
             root: SCOPE,
             live_write_epoch,
             anchor_read_live,
         }
-    }
-
-    const JUST_BEFORE: Duration = KEPT_OP_BOUND.saturating_sub(Duration::from_millis(1));
-
-    #[test]
-    fn an_op_waits_at_its_write_epoch_until_the_bound_and_then_leaves() {
-        assert_eq!(
-            kept_verdict(&note(2), here(2, true), at(JUST_BEFORE)),
-            KeptVerdict::Stay
-        );
-        assert_eq!(
-            kept_verdict(&note(2), here(2, true), at(KEPT_OP_BOUND)),
-            KeptVerdict::Expired
-        );
-    }
-
-    #[test]
-    fn a_new_write_epoch_sends_the_op_to_the_rebase_before_the_bound() {
-        assert_eq!(
-            kept_verdict(&note(2), here(3, true), at(Duration::ZERO)),
-            KeptVerdict::Recheck
-        );
-        assert_eq!(
-            kept_verdict(&note(2), here(3, true), at(KEPT_OP_BOUND)),
-            KeptVerdict::Recheck,
-            "a flip seen after the bound still applies the op again"
-        );
-    }
-
-    #[test]
-    fn a_new_scope_root_at_the_same_epoch_is_a_flip() {
-        let new_scope = KeptPlace::Writes {
-            root: NodeId([6; 16]),
-            live_write_epoch: 2,
-            anchor_read_live: true,
-        };
-        assert_eq!(
-            kept_verdict(&note(2), new_scope, at(Duration::ZERO)),
-            KeptVerdict::Recheck
-        );
-    }
-
-    #[test]
-    fn a_flip_waits_for_a_read_of_the_folder_at_its_new_name_and_does_not_expire() {
-        assert_eq!(
-            kept_verdict(&note(2), here(3, false), at(Duration::ZERO)),
-            KeptVerdict::Stay,
-            "a read from before the flip still shows the lost write"
-        );
-        assert_eq!(
-            kept_verdict(&note(2), here(3, false), at(KEPT_OP_BOUND * 2)),
-            KeptVerdict::Stay,
-            "a device offline past the bound keeps the write for its first live read"
-        );
-    }
-
-    #[test]
-    fn a_scope_the_device_can_no_longer_write_sends_the_op_to_the_pass() {
-        let keyless = KeptPlace::Keyless { root: SCOPE };
-        assert_eq!(
-            kept_verdict(&note(2), keyless, at(Duration::ZERO)),
-            KeptVerdict::Recheck
-        );
-        assert_eq!(
-            kept_verdict(&note(2), keyless, at(KEPT_OP_BOUND)),
-            KeptVerdict::Recheck,
-            "the pass, not the bound, decides"
-        );
-    }
-
-    #[test]
-    fn an_unchecked_root_at_the_notes_epoch_waits_out_the_bound() {
-        let unproved = KeptPlace::Unchecked {
-            root: SCOPE,
-            live_write_epoch: 2,
-        };
-        assert_eq!(
-            kept_verdict(&note(2), unproved, at(JUST_BEFORE)),
-            KeptVerdict::Stay
-        );
-        assert_eq!(
-            kept_verdict(&note(2), unproved, at(KEPT_OP_BOUND)),
-            KeptVerdict::Expired
-        );
-    }
-
-    #[test]
-    fn an_unchecked_root_past_a_cut_keeps_the_op_past_the_bound() {
-        let cut = KeptPlace::Unchecked {
-            root: SCOPE,
-            live_write_epoch: 3,
-        };
-        let other_root = KeptPlace::Unchecked {
-            root: NodeId([6; 16]),
-            live_write_epoch: 2,
-        };
-        for place in [cut, other_root] {
-            assert_eq!(
-                kept_verdict(&note(2), place, at(KEPT_OP_BOUND * 2)),
-                KeptVerdict::Stay,
-                "{place:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn another_pass_leaves_the_op_alone_until_the_bound() {
-        assert_eq!(
-            kept_verdict(&note(2), KeptPlace::Elsewhere, at(JUST_BEFORE)),
-            KeptVerdict::Stay
-        );
-        assert_eq!(
-            kept_verdict(&note(2), KeptPlace::Elsewhere, at(KEPT_OP_BOUND)),
-            KeptVerdict::Expired
-        );
-    }
-
-    #[test]
-    fn an_op_with_no_note_gets_one_check_at_the_first_live_read_of_its_folder() {
-        let mut notes = KeptNotes::default();
-        let first = notes.note_at(OpId(3), PUBLISHED);
-        assert!(notes.is_dirty(), "the first sight is recorded");
-        assert_eq!(
-            kept_verdict(&first, here(GENESIS_EPOCH, true), PUBLISHED),
-            KeptVerdict::Recheck
-        );
-        assert_eq!(
-            kept_verdict(&first, here(GENESIS_EPOCH, false), at(JUST_BEFORE)),
-            KeptVerdict::Stay
-        );
-        assert_eq!(
-            kept_verdict(&first, KeptPlace::Elsewhere, at(KEPT_OP_BOUND)),
-            KeptVerdict::Expired,
-            "the bound runs from the first sight"
-        );
-        assert_eq!(
-            notes.note_at(OpId(3), at(KEPT_OP_BOUND)),
-            first,
-            "a later sight keeps the first"
-        );
     }
 
     #[test]
@@ -1303,75 +957,5 @@ mod tests {
         assert_eq!(notes.encode(), Err(KeptNoteError::NameTooLong));
         notes.notes.insert(OpId(1), long_cid);
         assert_eq!(notes.encode(), Err(KeptNoteError::CidTooLong));
-    }
-
-    fn text(value: &str) -> Zeroizing<String> {
-        Zeroizing::new(value.to_owned())
-    }
-
-    #[test]
-    fn a_kept_result_reads_landed_lost_or_overtaken_against_the_live_node() {
-        const FROM: NodeId = NodeId([1; 16]);
-        const TO: NodeId = NodeId([2; 16]);
-        const OTHER: NodeId = NodeId([3; 16]);
-        let rename = KeptResult::Rename {
-            before: text("a"),
-            after: text("b"),
-        };
-        let moved = KeptResult::Move {
-            from: FROM,
-            from_name: text("a"),
-            to: TO,
-            to_name: text("b"),
-        };
-        // A move that keeps its name reads by its parent.
-        let relink = KeptResult::Move {
-            from: FROM,
-            from_name: text("a"),
-            to: TO,
-            to_name: text("a"),
-        };
-        let restore = KeptResult::RestoreVersion {
-            before: vec![1; 4],
-            after: vec![2; 4],
-        };
-        use KeptOutcome::{Landed, Lost, Overtaken};
-        let cases: [(&KeptResult, LiveValue<'_>, KeptOutcome); 16] = [
-            (&rename, LiveValue::Name("b"), Landed),
-            (&rename, LiveValue::Name("a"), Lost),
-            (&rename, LiveValue::Name("c"), Overtaken),
-            (&rename, LiveValue::Absent, Overtaken),
-            (&moved, LiveValue::Place(TO, "b"), Landed),
-            (&moved, LiveValue::Place(FROM, "a"), Lost),
-            (&moved, LiveValue::Place(TO, "a"), Overtaken),
-            (&moved, LiveValue::Place(FROM, "b"), Overtaken),
-            (&moved, LiveValue::Place(OTHER, "b"), Overtaken),
-            (&moved, LiveValue::Absent, Overtaken),
-            (&relink, LiveValue::Place(TO, "a"), Landed),
-            (&relink, LiveValue::Place(FROM, "a"), Lost),
-            (&restore, LiveValue::Head(&[2; 4]), Landed),
-            (&restore, LiveValue::Head(&[1; 4]), Lost),
-            (&restore, LiveValue::Head(&[3; 4]), Overtaken),
-            (&restore, LiveValue::Name("b"), Overtaken),
-        ];
-        for (index, (result, live, outcome)) in cases.into_iter().enumerate() {
-            assert_eq!(kept_outcome(result, live), outcome, "case {index}");
-        }
-    }
-
-    #[test]
-    fn only_a_rename_a_move_and_a_version_restore_need_a_result() {
-        let restore = OpKind::RestoreVersion {
-            content_cid: vec![1; 4],
-        };
-        let rename = OpKind::Rename {
-            new_name: "b".to_owned(),
-        };
-        let delete_version = OpKind::DeleteVersion {
-            content_cid: vec![1; 4],
-        };
-        assert!(keeps(&restore) && needs_result(&restore));
-        assert!(keeps(&rename) && needs_result(&rename));
-        assert!(!keeps(&delete_version) && !needs_result(&delete_version));
     }
 }
