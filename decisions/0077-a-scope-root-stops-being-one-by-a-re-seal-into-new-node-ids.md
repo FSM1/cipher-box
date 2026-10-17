@@ -110,10 +110,8 @@ lands at a name of an old write scope seed. After the relink, the lazy wave and 
 - `blueprint/testing.md`: crash and replay at each stop point; for the D3 kind, the previous-release
   read, the cross-kind KAT pair, and a release-active encode and decode refusal of a duplicate id
   in the map; a mid-pass read-epoch rise and write-epoch rise.
-
-## Residuals
-
-- **R1.** The cut's name wave walks the source subtree, then the re-seal walks it again. Accept the
-  double walk? Recommended: yes, a dissolve is rare, and one walk puts the re-seal in the cut sweep.
-- **R2.** After retirement the old root lapses at its EOL, and a later grantee read sees "unknown or
-  stale", not "this share ended". Recommended: keep the pointer name registered one EOL term more.
+- `blueprint/engine.md` "Rotation primitives": the cut's name wave and the re-seal each walk the
+  source subtree. This double walk is accepted: a dissolve is rare, and one walk puts the re-seal
+  in the cut sweep.
+- `blueprint/api.md` "Pin/name registry": the scope pointer name stays registered for one more EOL
+  term after the retirement, so a grantee still reads "this share ended", and then it retires.
