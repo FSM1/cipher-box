@@ -125,7 +125,7 @@ export async function readOrigin(
  */
 export function legWindow(jobs: readonly Job[]): { startS: number; endS: number } {
   const ran = jobs.filter(
-    (job) =>
+    (job): job is Job & { started_at: string; completed_at: string } =>
       LEG_JOB.test(job.name) &&
       job.conclusion !== 'skipped' &&
       job.started_at !== null &&
@@ -134,7 +134,7 @@ export function legWindow(jobs: readonly Job[]): { startS: number; endS: number 
   if (ran.length === 0) throw new Error('no soak leg ran');
   const failed = ran.filter((job) => job.conclusion !== 'success');
   const legs = failed.length > 0 ? failed : ran;
-  const seconds = (iso: string | null): number => Date.parse(iso!) / 1000;
+  const seconds = (iso: string): number => Date.parse(iso) / 1000;
   const startS = Math.min(...legs.map((job) => seconds(job.started_at)));
   const endS = Math.max(...legs.map((job) => seconds(job.completed_at)));
   if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
