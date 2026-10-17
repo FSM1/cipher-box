@@ -7171,6 +7171,16 @@ fn a_delete_holds_while_one_endpoint_withholds_a_descendant() {
     assert_a_withheld_descendant_holds_the_delete(true);
 }
 
+/// Tick until the owner device's queue drains, at most `ticks` times.
+fn tick_until_drained(fx: &mut GrantScenario, ticks: usize) {
+    for _ in 0..ticks {
+        if queued_ops(&fx.owner_device) == 0 {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+}
+
 /// `count` folders created under `parent` and drained to the record plane.
 fn create_published_folders(fx: &mut GrantScenario, parent: NodeId, count: usize) -> Vec<NodeId> {
     serve_http(&fx.owner_device, &fx.blocks, 16 * count);
@@ -7182,12 +7192,7 @@ fn create_published_folders(fx: &mut GrantScenario, parent: NodeId, count: usize
         }))
         .expect("a metadata create stages");
     }
-    for _ in 0..64 {
-        if queued_ops(&fx.owner_device) == 0 {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_drained(fx, 64);
     assert_eq!(queued_ops(&fx.owner_device), 0, "every create publishes");
     let children: Vec<NodeId> = block_on(fx.engine.view())
         .unwrap()
@@ -7251,12 +7256,7 @@ fn a_delete_proof_of_a_large_subtree_reads_part_of_it_on_each_tick() {
         first_tick < below.len() * fx.world.record_store.endpoints().len(),
         "the first tick does not read the whole subtree: {first_tick}"
     );
-    for _ in 0..8 {
-        if queued_ops(&fx.owner_device) == 0 {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_drained(&mut fx, 8);
     assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
     assert!(
         block_on(fx.engine.status())
@@ -7311,6 +7311,42 @@ fn a_held_delete_proof_does_not_read_its_proved_nodes_again() {
     assert_eq!(published_bin_entries(&fx)[0].node_id, outer.0);
 }
 
+/// A peer owner device grants Read on `node` to the recipient.
+fn peer_grants_read(engine: &mut Engine<FakeSeamTypes>, node: NodeId) {
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+}
+
+/// The delete `op_id` of `outer` dead-lettered with nothing published, and
+/// the grant on `granted` stands.
+fn assert_the_grant_refused_the_delete(
+    fx: &mut GrantScenario,
+    op_id: cipherbox_engine::seams::OpId,
+    outer: NodeId,
+    granted: NodeId,
+    parent_sequence: u64,
+    grant_sequence: u64,
+) {
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&events), 0);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
+    assert!(published_bin_entries(fx).is_empty());
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(granted)),
+        grant_sequence,
+        "the grant stands"
+    );
+}
+
 /// A grant lands on a folder that the first sweep of a held proof already
 /// read. The second sweep reads the folder again before any publish, so the
 /// delete is refused.
@@ -7339,15 +7375,7 @@ fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
         delete_plane_hold(op_id, outer),
         "the proof still holds the delete"
     );
-    assert_eq!(
-        block_on(engine.command(Command::Grant {
-            node: granted,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done)
-    );
+    peer_grants_read(&mut engine, granted);
     let grant_sequence = sequence_at(&fx.world, &write_name(granted));
     events_so_far(&mut fx._events);
     let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
@@ -7355,16 +7383,13 @@ fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
 
-    assert_eq!(queued_ops(&fx.owner_device), 0);
-    let events = events_so_far(&mut fx._events);
-    assert_eq!(abuse_events_in(&events), 0);
-    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
-    assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
-    assert!(published_bin_entries(&fx).is_empty());
-    assert_eq!(
-        sequence_at(&fx.world, &write_name(granted)),
+    assert_the_grant_refused_the_delete(
+        &mut fx,
+        op_id,
+        outer,
+        granted,
+        parent_sequence,
         grant_sequence,
-        "the grant stands"
     );
     let view = block_on(fx.engine.view()).unwrap();
     assert!(view.children(ROOT).iter().any(|child| child.id == outer));
@@ -7425,15 +7450,7 @@ fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
 
     // The index omits the new root, so only its own record shows the grant.
     let unindexed = published_value(&fx.world, &write_name(ROOT));
-    assert_eq!(
-        block_on(engine.command(Command::Grant {
-            node: granted,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done)
-    );
+    peer_grants_read(&mut engine, granted);
     publish_value_at(&fx.world, ROOT, &unindexed);
     let grant_sequence = sequence_at(&fx.world, &write_name(granted));
     events_so_far(&mut fx._events);
@@ -7443,16 +7460,13 @@ fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
 
-    assert_eq!(queued_ops(&fx.owner_device), 0);
-    let events = events_so_far(&mut fx._events);
-    assert_eq!(abuse_events_in(&events), 0);
-    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
-    assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
-    assert!(published_bin_entries(&fx).is_empty());
-    assert_eq!(
-        sequence_at(&fx.world, &write_name(granted)),
+    assert_the_grant_refused_the_delete(
+        &mut fx,
+        op_id,
+        outer,
+        granted,
+        parent_sequence,
         grant_sequence,
-        "the grant stands"
     );
 }
 
@@ -7509,12 +7523,7 @@ fn assert_a_large_subtree_outage_holds_and_recovers(second_sweep: bool) {
     );
 
     fx.world.record_store.heal_get_for(failing.as_str());
-    for _ in 0..4 {
-        if queued_ops(&fx.owner_device) == 0 {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_drained(&mut fx, 4);
     assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
     assert_eq!(block_on(fx.engine.status()).unwrap().queue_hold, None);
     assert!(

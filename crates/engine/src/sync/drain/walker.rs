@@ -40,8 +40,11 @@ pub(super) enum ReadFault<F> {
     Fatal(F),
 }
 
+/// The node bound a walk passed.
+pub(super) struct Overflow;
+
 /// Where one step left a walk.
-pub(super) enum Swept<S, F> {
+pub(super) enum Swept<F> {
     /// Every node read, and read again to the same record unless the policy
     /// settles on the first sweep.
     Complete,
@@ -50,15 +53,14 @@ pub(super) enum Swept<S, F> {
     /// A node read to another record on the second sweep.
     Moved,
     Fault(ReadFault<F>),
-    /// The policy's visit ended the walk.
-    Stopped(S),
+    /// The policy's visit passed its node bound.
+    Stopped(Overflow),
 }
 
 /// What one walk does that another does not.
 pub(super) trait SweepPolicy<K> {
     /// What a read gives the visit.
     type Answer;
-    type Stop;
 
     /// Take one read from the walk's budget for the first sweep, or for the
     /// second when `confirming`. `false` when none is left.
@@ -75,7 +77,7 @@ pub(super) trait SweepPolicy<K> {
         sweep: &mut TwoSweep<K>,
         key: &K,
         answer: Self::Answer,
-    ) -> Result<(), Self::Stop>;
+    ) -> Result<(), Overflow>;
 }
 
 impl<K: Clone> TwoSweep<K> {
@@ -116,19 +118,16 @@ impl<K: Clone> TwoSweep<K> {
         &mut self,
         policy: &mut P,
         read: impl AsyncFn(&P, &K) -> Result<(RecordMark, P::Answer), ReadFault<F>>,
-    ) -> Swept<P::Stop, F> {
+    ) -> Swept<F> {
         loop {
-            if self.pending.is_empty()
-                && (policy.settles_unconfirmed(self) || self.confirmed == self.read.len())
-            {
+            if self.complete() || (self.pending.is_empty() && policy.settles_unconfirmed(self)) {
                 return Swept::Complete;
             }
             let confirming = self.pending.is_empty();
             if !policy.take_read(confirming) {
                 return Swept::Paused;
             }
-            let key = self.next_read().clone();
-            let (mark, answer) = match read(policy, &key).await {
+            let (mark, answer) = match read(policy, self.next_read()).await {
                 Ok(read) => read,
                 Err(fault) => return Swept::Fault(fault),
             };
@@ -140,10 +139,13 @@ impl<K: Clone> TwoSweep<K> {
                 self.confirmed += 1;
                 continue;
             }
-            self.pending.pop();
+            let key = self
+                .pending
+                .pop()
+                .expect("a first-sweep read has a pending node");
             self.read.push((key.clone(), mark));
-            if let Err(stop) = policy.visit(self, &key, answer) {
-                return Swept::Stopped(stop);
+            if let Err(overflow) = policy.visit(self, &key, answer) {
+                return Swept::Stopped(overflow);
             }
         }
     }

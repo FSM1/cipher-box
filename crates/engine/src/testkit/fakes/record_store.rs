@@ -512,19 +512,17 @@ impl InMemoryRecordStore {
     /// spends one answer of a [`fail_get_for_after`](Self::fail_get_for_after)
     /// count, so call it once for each GET.
     fn get_failing_key(&self, routing_key: &str) -> bool {
-        let spent = self
+        let exhausted = self
             .get_failing_after
             .lock()
             .expect("lock")
             .get_mut(routing_key)
-            .is_some_and(|answered| match answered.checked_sub(1) {
-                Some(left) => {
-                    *answered = left;
-                    false
-                }
-                None => true,
+            .is_some_and(|answered| {
+                let refused = *answered == 0;
+                *answered = answered.saturating_sub(1);
+                refused
             });
-        spent
+        exhausted
             || self
                 .get_failing_keys
                 .lock()
