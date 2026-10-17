@@ -255,8 +255,7 @@ pub(crate) fn lists_version(versions: &[Version], content: &StagedContent) -> bo
 
 /// The live checks of one pass. An earlier op of this device that the rebase
 /// applies again, a create the base lacks or a lost write, sets the value
-/// that the next op on its node is compared with. The place check uses
-/// `created` and `places`; the head check uses `heads`.
+/// that the next op on its node is compared with.
 #[derive(Default)]
 pub(crate) struct LiveChecks {
     created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)>,

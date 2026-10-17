@@ -13269,7 +13269,8 @@ mod tests {
     /// rebase dead letter does. The same op with no note dead-letters.
     #[test]
     fn a_kept_op_that_halts_for_good_leaves_with_no_dead_letter() {
-        for kept in [true, false] {
+        let gone = Halt::Permanent(DeadLetterReason::TargetGone);
+        for (kept, halt) in [(true, gone), (false, gone), (true, Halt::Unclassified)] {
             let harness = drain_harness(Some(harness_root_envelope()));
             let op = Op::rename(KEPT_NODE, "after", 1, UnixMillis(0));
             let op_id = harness.queue_an_op(&op);
@@ -13298,11 +13299,20 @@ mod tests {
                 &scope,
                 op_id,
                 &op,
-                Halt::Permanent(DeadLetterReason::TargetGone),
+                halt,
                 &mut Attempts::default(),
                 &mut report,
             ));
 
+            if halt == Halt::Unclassified {
+                assert_eq!(
+                    harness.queued_op_ids(),
+                    vec![op_id],
+                    "a transient halt keeps it"
+                );
+                assert!(report.dropped.is_empty());
+                continue;
+            }
             assert!(harness.queued_op_ids().is_empty(), "kept {kept}: it left");
             if kept {
                 assert!(report.dead_letters.is_empty(), "no notice");
