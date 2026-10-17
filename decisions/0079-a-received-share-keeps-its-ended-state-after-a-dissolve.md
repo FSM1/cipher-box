@@ -82,16 +82,9 @@ do not clear it.
   nothing; a forged blob and a failed open do not clear it; an opened re-grant clears it; no
   withheld-update escalation after the pointer retires; custody keys stay; both keys survive each
   writer; the reader decodes the bookmark list of the release before it.
-
-## Residuals
-
-- **R1 covers less than the ruling of 2026-10-17.** The owner accepted this limit on 2026-10-18
-  (option (a)). The mark works only for a share that this device opened at least once under the
-  release that writes `grantCut`, before the owner cut it. A share cut before that open shows
-  "ended" during the term, then "unresolvable", as before this ADR, with maybe one false
-  escalation. This includes a device on an older release at the cut, a device offline across the
-  update, a device that cannot open the grant at that refresh, and a device offline for the whole
-  term. No device gets a false mark.
-- **The strip residual stays.** After a cut and a re-grant at the same cut epoch, a committed
-  writer that serves the cut set again keeps the mark until this device opens the grant. A writer
-  can already withhold a blob today.
+- Accepted residual, the R1 scope: the owner ruled option (a) on 2026-10-18, a narrowing of the R1
+  ruling of 2026-10-17. The mark works only for a share that this device opened at least once under
+  the release that writes `grantCut`, before the owner cut it. A share cut before that open shows
+  "ended" during the term, then "unresolvable", as before this ADR. No device gets a false mark.
+- Accepted residual, the strip residual: after a cut and a re-grant at the same cut epoch, a
+  committed writer that serves the cut set again keeps the mark until this device opens the grant.

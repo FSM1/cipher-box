@@ -2,12 +2,7 @@
 
 - **Status:** Accepted on 2026-10-17
 - **Date:** 2026-10-17
-- **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298),
-  [#2241](https://github.com/FSM1/cipher-box/issues/2241),
-  [ADR 0012](./0012-the-drain-carries-the-write-wave-forward.md),
-  [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
-  [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md),
-  [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
+- **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298), [#2241](https://github.com/FSM1/cipher-box/issues/2241), [ADR 0012](./0012-the-drain-carries-the-write-wave-forward.md), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md), [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md), [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
 - **Implemented by:** not landed
 - **Amends:** ADR 0012 D2 (the count of sanctioned readers below the read-epoch floor)
 
@@ -110,18 +105,13 @@ carry a rise.
   served parent passes every relink sequence that its entry records.
 - `blueprint/api.md` "Pin/name registry": after the gated parent root shows the index removal, the
   dissolve retires every name of the old subtree except the D1 final records.
-- Accepted residuals: the uploads of a write grantee stay in the new folder. Content keys are
-  re-wrapped and content bytes are not encrypted again, so a cut grantee keeps each version it
-  opened. The publish of N new names and the retire of N old names show the dissolve and its size
-  to the server, as a bin re-key does (`blueprint/core.md` "Bin index"). The server also links old
-  and new file records through unchanged content CIDs. The journal's explicit id map stays local.
-- `blueprint/desktop.md` "Conflicts, dead letters, and rotation": a delete of a shared folder is a
-  dissolve, then a delete; the tray reports a refused dissolve.
-- `blueprint/testing.md`: crash and replay at each stop point; for the D3 kind, the previous-release
-  read, the cross-kind KAT pair, and a release-active encode and decode refusal of a duplicate id
-  in the map; a mid-pass read-epoch rise and write-epoch rise.
+- Accepted residuals: the uploads of a write grantee stay in the new folder. Content keys are re-wrapped and content bytes are not encrypted again, so a cut grantee keeps each version it opened. The publish of N new names and the retire of N old names show the dissolve and its size to the server, as a bin re-key does (`blueprint/core.md` "Bin index"). The server also links old and new file records through unchanged content CIDs. The journal's explicit id map stays local.
+- `blueprint/desktop.md` "Conflicts, dead letters, and rotation": a delete of a shared folder is a dissolve, then a delete; the tray reports a refused dissolve.
+- `blueprint/testing.md`: crash and replay at each stop point; for the D3 kind, the previous-release read, the cross-kind KAT pair, and a release-active encode and decode refusal of a duplicate id in the map; a mid-pass read-epoch rise and write-epoch rise.
 - `blueprint/engine.md` "Rotation primitives": the cut's name wave and the re-seal each walk the
-  source. The double walk is accepted: a dissolve is rare; one walk puts the re-seal in the cut sweep.
+  source. The double walk is accepted: a dissolve is rare.
+- `blueprint/engine.md` "sweep" and "Adoption gate and floors", and `CONTEXT.md` "Adoption gate":
+  the count of sanctioned lagging readers becomes five; the fifth is the D3 re-seal's read.
 - `blueprint/api.md` "Pin/name registry" and `blueprint/engine.md` "Revocation is discovered, not
   delivered": the D1 final records stay for one more EOL term, under owner-signed EOLs that cover
   it, so a grantee shows "this share ended" as after a revoke. At term end, the engine retires them.
