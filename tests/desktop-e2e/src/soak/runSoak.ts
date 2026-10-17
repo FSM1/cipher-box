@@ -41,7 +41,7 @@ import { startInstance, type Instance } from '../instance';
 import { PollTimeout, poll } from '../poll';
 import { PRODUCTION_PROFILE, type Deadlines } from '../profile';
 import { isMounted } from '../scenario';
-import { requireFile, serves } from '../stack';
+import { probeLogin, requireFile } from '../stack';
 import {
   legDeadlines,
   legOf,
@@ -184,8 +184,8 @@ async function runLeg(context: LegContext): Promise<void> {
         if (!(name in kept)) delete process.env[name];
       }
       await poll(
-        () => serves(stack.apiUrl),
-        (up) => up,
+        () => probeLogin(stack.apiUrl),
+        (probe) => probe.up,
         {
           what: 'the API to serve a login',
           timeoutMs: context.deadlines.apiReadyMs,

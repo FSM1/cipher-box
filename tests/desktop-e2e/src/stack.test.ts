@@ -4,9 +4,9 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { poll } from './poll';
+import { poll, PollTimeout } from './poll';
 import type { Deadlines } from './profile';
-import { Stack, serves } from './stack';
+import { Stack, probeLogin, serves } from './stack';
 
 /** Small budgets: these tests prove the refusal path, not a real API start. */
 const BUDGET: Deadlines = {
@@ -154,5 +154,43 @@ describe('the readiness gate', () => {
     const url = await serving({ '/health': 503, '/auth/challenge': 400 });
 
     expect(await serves(url)).toBe(false);
+  });
+
+  it('names the status of a health probe that failed', async () => {
+    const url = await serving({ '/health': 522, '/auth/challenge': 400 });
+
+    const probe = await probeLogin(url);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(/^\/health answered 522\b/);
+  });
+
+  it('names both statuses when the login route fails', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 522 });
+
+    const probe = await probeLogin(url);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(/^\/health answered 200\b.*; \/auth\/challenge answered 522\b/);
+  });
+
+  it('names the error of a probe that threw', async () => {
+    const probe = await probeLogin(SILENT_URL);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(/^\/health threw TypeError: /);
+  });
+
+  it('puts the last reason in the timeout of the soak wait', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 522 });
+
+    const timeout = await poll(
+      () => probeLogin(url),
+      (probe) => probe.up,
+      { what: 'the API to serve a login', timeoutMs: 200, intervalMs: 25 }
+    ).catch((error: unknown) => error);
+
+    expect(timeout).toBeInstanceOf(PollTimeout);
+    expect((timeout as PollTimeout).message).toContain('/auth/challenge answered 522');
   });
 });
