@@ -82,6 +82,7 @@ describe('Stack.start', () => {
 
     expect(refusal).toBeInstanceOf(Error);
     expect((refusal as Error).message).toContain('the API to serve a login');
+    expect((refusal as Error).message).toContain('/health threw');
   });
 
   it('leaves no API process behind when that start is refused', async () => {
