@@ -112,7 +112,7 @@ use crate::rotation::{
 use crate::scope_seeds::seed_names;
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
-    SeamError, SharerScopedFloorStore, SnapshotCache, UnixMillis,
+    SharerScopedFloorStore, SnapshotCache, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
@@ -2180,7 +2180,7 @@ where
         let (sequence, block) =
             fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
                 .await
-                .map_err(resolve_verdict)?;
+                .map_err(|error| ResolveFailure::from(cache_gate_verdict(error)))?;
         Ok(RecordHead {
             name,
             record_bytes,
@@ -3455,16 +3455,8 @@ impl SweptScopeState {
     }
 }
 
-/// Carry a gate error onto rule 6's axis: a rejection is a fail-closed trust
-/// violation, a seam failure is availability.
-fn resolve_verdict(error: GateError) -> ResolveFailure {
-    match error {
-        GateError::Seam(_) => ResolveFailure::Unavailable,
-        GateError::Rejected(_) => ResolveFailure::Rejected,
-    }
-}
-
-/// [`resolve_verdict`] for a sequence check on a fan-out read ([`sequence_refusal`]).
+/// The root read's verdict on a gate error ([`cache_gate_verdict`]), for a
+/// sequence check on a fan-out read ([`sequence_refusal`]).
 fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
     match &error {
         GateError::Rejected(rejection)
@@ -3473,7 +3465,7 @@ fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
         {
             ResolveFailure::Unavailable
         }
-        _ => resolve_verdict(error),
+        _ => cache_gate_verdict(error).into(),
     }
 }
 
@@ -4696,16 +4688,8 @@ fn rewrite_child_names(
     Ok(())
 }
 
-/// Carry a gate verdict into the wave on rule 6's axis: a rejection is a trust
-/// violation no retry clears, a seam failure is availability.
-fn wave_verdict(error: GateError) -> WritePublishError {
-    match error {
-        GateError::Rejected(_) => WritePublishError::Rejected,
-        GateError::Seam(_) => WritePublishError::NotLanded,
-    }
-}
-
-/// The same axis for a read the wave shares with the read-plane rotation edges.
+/// Carry a read the wave shares with the read-plane rotation edges into the
+/// wave on rule 6's axis.
 ///
 /// [`ResolveFailure::ConflictingChildLabel`] is retryable to the cascade and the
 /// sweep because the write-rotation re-point wave repairs both parent indexes.
@@ -4926,7 +4910,7 @@ where
                     outcome.pass.commit(self.floors),
                 )
                 .await
-                .map_err(|e| wave_verdict(GateError::Seam(e)))?;
+                .map_err(|_| WritePublishError::NotLanded)?;
             }
             // A head block that does not match its CID is what one bad source
             // serves, not the record's own bytes.
@@ -4965,8 +4949,8 @@ where
                         .await;
                 }
             },
-            Err(GateError::Seam(error)) => {
-                return Err(self.seam_refusal(&adopter, error));
+            Err(GateError::Seam(_)) => {
+                return Err(self.seam_refusal(&adopter));
             }
         }
         match adopter.open_carried_at_floor(name, record_bytes).await {
@@ -4975,14 +4959,14 @@ where
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
             }
-            Err(GateError::Seam(error)) => Err(self.seam_refusal(&adopter, error)),
+            Err(GateError::Seam(_)) => Err(self.seam_refusal(&adopter)),
         }
     }
 
     /// A seam failure of an interior adopt. Before the head block assembled it
     /// is a block no endpoint served. After, at an epoch above the gated
     /// root's, it is a record no held seed opens.
-    fn seam_refusal(&self, adopter: &ChildAdopter<'_, H, F>, error: SeamError) -> WaveRefusal {
+    fn seam_refusal(&self, adopter: &ChildAdopter<'_, H, F>) -> WaveRefusal {
         match adopter.assembled_epoch() {
             None => WaveRefusal::dropping(WritePublishError::NotLanded, DropCause::NoHeadBlock),
             Some(epoch)
@@ -4993,7 +4977,7 @@ where
             {
                 WaveRefusal::dropping(WritePublishError::NotLanded, DropCause::EpochAboveRoot)
             }
-            Some(_) => wave_verdict(GateError::Seam(error)).into(),
+            Some(_) => WritePublishError::NotLanded.into(),
         }
     }
 
@@ -6474,7 +6458,7 @@ mod tests {
         ScopeRootIdentity, WriteRotateError, cascade_rotate_scope, derive_write_name,
         enumerate_eager_set, reseal_scope_root, rotate_scope, rotate_scope_write, sweep_pass,
     };
-    use crate::seams::{EndpointId, HttpResponse, SeamResult};
+    use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
     use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint, vault_pointer_name};
     use crate::sync::provision::GENESIS_VAULT_POINTER_INDEX;
     use crate::testkit::fakes::{
