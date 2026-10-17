@@ -14,9 +14,9 @@ use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
 use super::fanout::{FanoutRecord, TiedFetch, fanout_get_classified, fanout_get_tied_classified};
+use super::gated_read::{BelowFloor, sequence_refusal};
 use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
-use super::resolve::unavailable_below_floor;
 use super::retire::HeldMarks;
 use super::revival::{
     Admitted, PlaneRead, PlaneRefusal, RecoveryPace, Revival, ReviveError, ReviveRequest,
@@ -442,7 +442,8 @@ where
 fn standing_verdict(error: GateError, endpoint_failed: bool) -> RotationPublishError {
     match error {
         GateError::Rejected(rejection)
-            if !unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+            if sequence_refusal(&rejection.reason, endpoint_failed)
+                != Some(BelowFloor::Unavailable) =>
         {
             RotationPublishError::Rejected
         }

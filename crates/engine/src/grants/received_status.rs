@@ -33,7 +33,7 @@ use crate::gate::{
     adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
-use crate::net::resolve::unavailable_below_floor;
+use crate::net::gated_read::{BelowFloor, sequence_refusal};
 use crate::net::rotation::scope_name;
 use crate::net::signed_data;
 use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
@@ -1268,7 +1268,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         {
             Ok(()) => false,
             Err(GateError::Rejected(rejection))
-                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+                if sequence_refusal(&rejection.reason, endpoint_failed)
+                    == Some(BelowFloor::Unavailable) =>
             {
                 true
             }

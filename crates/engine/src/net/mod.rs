@@ -36,6 +36,7 @@ pub mod author;
 pub(crate) mod cut;
 pub mod eol;
 pub mod fork;
+pub(crate) mod gated_read;
 pub mod liveness;
 pub(crate) mod provision;
 pub mod publish;

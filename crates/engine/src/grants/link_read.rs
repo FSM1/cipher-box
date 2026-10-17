@@ -33,7 +33,7 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, read_cut_epoch_floor, verify_commitment_in_force,
 };
-use crate::net::resolve::unavailable_below_floor;
+use crate::net::gated_read::{BelowFloor, sequence_refusal};
 use crate::net::rotation::OwnerPointerRead;
 use crate::net::{
     PointerConsult, PointerConsultError, assemble_candidate, fanout_get_verify_failed,
@@ -283,7 +283,8 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
     {
         Ok(()) => {}
         Err(GateError::Rejected(rejection))
-            if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+            if sequence_refusal(&rejection.reason, endpoint_failed)
+                == Some(BelowFloor::Unavailable) =>
         {
             return Ok(LinkEntryRead::Unavailable);
         }
