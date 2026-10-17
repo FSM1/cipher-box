@@ -70,7 +70,7 @@ use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, EpochSeed, GrantedPass, ScopeEnd, SealPlane, TickInputs,
     TickScopes, hold_captures, published_op_mark,
 };
-use crate::sync::kept_op::keeps;
+use crate::sync::kept_judge::keeps;
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;

@@ -112,11 +112,13 @@ use crate::sync::doomed::{
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
     record_matches_manifest, seal_reclamation,
 };
-use crate::sync::kept_judge::NoteDraft;
+use crate::sync::kept_judge::{
+    KeptOutcome, KeptPlace, KeptVerdict, LiveValue, NoteDraft, Overtaken, keeps, kept_anchor,
+    kept_folder, kept_outcome, kept_verdict, live_head, live_place, needs_result,
+    overtaken_by_a_later_op, reads_kept_parent, shows_a_flip,
+};
 use crate::sync::kept_op::{
-    KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue, is_kept, keeps,
-    kept_outcome, kept_verdict, live_head, live_place, load_kept_notes, needs_result, shows_a_flip,
-    store_kept_notes,
+    KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -10943,31 +10945,6 @@ fn paint_folder(
     }
 }
 
-/// The node a kept op anchors at: the parent of a create, the destination
-/// of a restore, the folder its note names for a delete, a rename or a move,
-/// and else the node itself.
-fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
-    match (&op.kind, parent) {
-        (OpKind::Create { parent, .. }, _) => *parent,
-        (OpKind::Restore { into, .. }, _) => *into,
-        (
-            OpKind::Delete { .. }
-            | OpKind::Rename { .. }
-            | OpKind::Move { .. }
-            | OpKind::Relink { .. },
-            Some(parent),
-        ) => parent,
-        _ => op.target,
-    }
-}
-
-/// The folder a kept op writes under ([`KeptNote::parent`]), and else its
-/// anchor. It differs from the anchor only for an edit and a version
-/// restore, which anchor at their file.
-fn kept_folder(op: &Op, parent: Option<NodeId>) -> NodeId {
-    parent.unwrap_or_else(|| kept_anchor(op, parent))
-}
-
 /// Whether a file's version list names the version `content` staged
 /// ([`Drain::read_kept_heads`]).
 fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
@@ -10992,58 +10969,6 @@ fn place_in(base: &Snapshot, node: NodeId) -> Option<(NodeId, Zeroizing<String>)
     base.parent_of(node)
         .zip(base.node(node))
         .map(|(holder, meta)| (holder, Zeroizing::new(meta.name().to_owned())))
-}
-
-/// How a later op of this device on the same node decides an earlier op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Overtaken {
-    /// A later delete removes the node.
-    ByDelete,
-    /// A later bin restore cancels this delete.
-    ByRestore,
-}
-
-/// The ops of `queue` that a later op of this device on the same node
-/// decides: a later delete expires every earlier op on its node once a
-/// flip shows, a later bin restore cancels that delete so the earlier
-/// ops stay, and no other later op expires an earlier op (ADR 0069 D6). A
-/// cancelled delete leaves at once; before a flip, a bin restore can still
-/// cancel a delete, so the ops under it wait. A restore that publishes
-/// cancels its delete durably ([`Drain::publish_queue`]).
-fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
-    let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
-    let mut overtaken = BTreeMap::new();
-    for (op_id, op) in queue.iter().rev() {
-        let (deleted, restoring) = later.entry(op.target).or_default();
-        let delete = matches!(op.kind, OpKind::Delete { .. });
-        if *deleted {
-            overtaken.insert(*op_id, Overtaken::ByDelete);
-        } else if delete && *restoring {
-            overtaken.insert(*op_id, Overtaken::ByRestore);
-        }
-        if delete && !*deleted {
-            *deleted = !*restoring;
-            *restoring = false;
-        }
-        if matches!(op.kind, OpKind::Restore { .. }) && !*deleted {
-            *restoring = true;
-        }
-    }
-    overtaken
-}
-
-/// Whether the drain reads the anchor of a kept op itself: the folder its
-/// note names for a delete, a rename or a move, which a flip moved to a new
-/// name ([`Drain::read_kept_parents`], [`Drain::read_kept_places`]).
-fn reads_kept_parent(op: &Op, parent: Option<NodeId>) -> bool {
-    parent.is_some()
-        && matches!(
-            op.kind,
-            OpKind::Delete { .. }
-                | OpKind::Rename { .. }
-                | OpKind::Move { .. }
-                | OpKind::Relink { .. }
-        )
 }
 
 /// The queue replayed onto `base`.
