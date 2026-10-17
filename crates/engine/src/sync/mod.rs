@@ -22,6 +22,7 @@ pub(crate) mod crossing;
 pub mod dead_letter_name;
 pub(crate) mod doomed;
 pub(crate) mod drain;
+pub(crate) mod kept_judge;
 pub mod kept_op;
 pub mod model;
 pub mod op;

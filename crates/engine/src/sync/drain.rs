@@ -112,10 +112,11 @@ use crate::sync::doomed::{
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
     record_matches_manifest, seal_reclamation,
 };
+use crate::sync::kept_judge::NoteDraft;
 use crate::sync::kept_op::{
-    KeptNote, KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue,
-    is_kept, keeps, kept_outcome, kept_verdict, live_head, live_place, load_kept_notes,
-    needs_result, shows_a_flip, store_kept_notes,
+    KeptNotes, KeptOps, KeptOutcome, KeptPlace, KeptResult, KeptVerdict, LiveValue, is_kept, keeps,
+    kept_outcome, kept_verdict, live_head, live_place, load_kept_notes, needs_result, shows_a_flip,
+    store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -870,6 +871,11 @@ enum Departure<'o> {
         blocks: DeadLetterBlocks,
     },
 }
+
+/// Proof that the note step of a publish ran, and whether it stored a note
+/// ([`Drain::keep_published`]).
+#[must_use]
+struct Noted(bool);
 
 /// What a dead letter does with its staged blocks once it left the queue.
 enum DeadLetterBlocks {
@@ -2243,16 +2249,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     delete_proof_nodes: usize,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
-    /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
-    keeps_op: Cell<bool>,
-    /// The folder that op writes under, from the base before its publish, for
-    /// its kept-op note.
-    kept_parent: Cell<Option<NodeId>>,
-    /// The result that op made, for the note of a kind that needs one
-    /// ([`needs_result`]).
-    kept_result: RefCell<Option<KeptResult>>,
+    /// The kept-op note of the op this pass publishes now.
+    note_draft: RefCell<NoteDraft>,
     /// Whether that op's note or the published-op mark landed, so the op stays
-    /// queued as a kept op.
+    /// queued as a kept op ([`NoteDraft::stays`]).
     kept_now: Cell<bool>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
@@ -2285,9 +2285,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             sealer_reads: MAX_SEALER_READS,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
             mirror: RefCell::default(),
-            keeps_op: Cell::new(false),
-            kept_parent: Cell::new(None),
-            kept_result: RefCell::new(None),
+            note_draft: RefCell::default(),
             kept_now: Cell::new(false),
         }
     }
@@ -3990,37 +3988,30 @@ where
     /// Note the scope root and write epoch of `end` and the time for an op of
     /// a kept kind whose last record just confirmed, so it stays queued as a kept op
     /// (ADR 0069 D2, D4). Written before the published-op mark rises: the note
-    /// alone makes the op kept. Best-effort, as [`Self::mark_published`] is: an
-    /// op with no note gets one check.
-    async fn keep_published(&self, scope: &DrainScope<'_>, end: &ScopeEnd<'_>, op_id: OpId) {
-        if !self.keeps_op.get() {
-            return;
+    /// alone makes the op kept, and [`Self::mark_published`] takes the
+    /// [`Noted`] this returns. Best-effort, as the mark is: an op with no note
+    /// gets one check.
+    async fn keep_published(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        op_id: OpId,
+    ) -> Noted {
+        if !self.note_draft.borrow().keeps() {
+            return Noted(false);
         }
         let (Ok(write_epoch), Ok(mut notes)) =
             (self.write_epoch_of(end).await, self.kept_notes(scope).await)
         else {
-            return;
+            return Noted(false);
         };
-        let noted = notes.insert(
-            op_id,
-            KeptNote {
-                scope: Some(end.root),
-                write_epoch,
-                published_at: self.seams.scheduler.now(),
-                parent: self.kept_parent.get(),
-                result: self.kept_result.take(),
-            },
-        );
-        if noted.is_ok() && self.store_kept_notes(scope, &notes).await.is_ok() {
-            self.kept_now.set(true);
-        }
-    }
-
-    /// Record the result of the op this pass publishes now, which makes a kind
-    /// that needs one a kept op ([`needs_result`]).
-    fn keep_result(&self, result: KeptResult) {
-        self.kept_result.replace(Some(result));
-        self.keeps_op.set(true);
+        let note =
+            self.note_draft
+                .borrow_mut()
+                .note(end.root, write_epoch, self.seams.scheduler.now());
+        Noted(
+            notes.insert(op_id, note).is_ok() && self.store_kept_notes(scope, &notes).await.is_ok(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -5054,16 +5045,13 @@ where
         rebased: &Snapshot,
     ) -> Result<(), Halt> {
         self.mirror.take();
-        // A kind that needs a result stays kept only once its publish records
-        // one ([`Self::keep_result`]).
-        self.keeps_op
-            .set(keeps(&applied.op.kind) && !needs_result(&applied.op.kind));
-        self.kept_result.replace(None);
-        self.kept_parent.set(match &applied.op.kind {
+        let parent = match &applied.op.kind {
             OpKind::Create { parent, .. } => Some(*parent),
             _ => self.cells.base.borrow().parent_of(applied.op.target),
-        });
-        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, self.kept_parent.get())
+        };
+        self.note_draft
+            .replace(NoteDraft::begin(&applied.op.kind, parent));
+        if let (OpKind::Delete { .. }, Some(parent)) = (&applied.op.kind, parent)
             && let Some(chain) = chain_to(&self.cells.base.borrow(), parent)
         {
             self.cells
@@ -7678,15 +7666,17 @@ where
                     .as_ref()
                     .map_or_else(|| moved.name.clone(), |name| name.to_string()),
             );
-            self.keep_result(match applied.op.kind {
-                OpKind::Rename { .. } => KeptResult::Rename { before, after },
-                _ => KeptResult::Move {
-                    from: source,
-                    from_name: before,
-                    to: dest,
-                    to_name: after,
-                },
-            });
+            self.note_draft
+                .borrow_mut()
+                .with_result(match applied.op.kind {
+                    OpKind::Rename { .. } => KeptResult::Rename { before, after },
+                    _ => KeptResult::Move {
+                        from: source,
+                        from_name: before,
+                        to: dest,
+                        to_name: after,
+                    },
+                });
         }
         if let Some(new_name) = new_name {
             moved.rename(new_name.to_string());
@@ -8535,10 +8525,12 @@ where
         {
             return Ok(());
         }
-        self.keep_result(KeptResult::RestoreVersion {
-            before: versions[0].content_cid.clone(),
-            after: content_cid.to_vec(),
-        });
+        self.note_draft
+            .borrow_mut()
+            .with_result(KeptResult::RestoreVersion {
+                before: versions[0].content_cid.clone(),
+                after: content_cid.to_vec(),
+            });
         // A rotate rather than a remove-and-insert, so no version's content key
         // is moved out of the list it is owned by.
         versions[..=at].rotate_right(1);
@@ -9881,8 +9873,8 @@ where
                         data: signed_data(name, &record_bytes).unwrap_or_default(),
                     });
             }
-            self.keep_published(scope, &plane.end, op_id).await;
-            self.mark_published(scope, op_id).await;
+            let noted = self.keep_published(scope, &plane.end, op_id).await;
+            self.mark_published(scope, op_id, noted).await;
         }
         // The record is live from here: everything below is a local step.
         let Ok(Ok(observed)) = self
@@ -10539,14 +10531,14 @@ where
     /// already live by the time this runs, so failing the op over the mark would
     /// *cause* the replay the mark exists to prevent. The dequeue that follows
     /// is the primary guard; the mark is what survives losing it.
-    async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId) {
+    async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId, Noted(noted): Noted) {
         let raised = self
             .raise_op_mark(
                 &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, scope.enc_secret),
                 op_id.0,
             )
             .await;
-        if raised.is_ok() && self.keeps_op.get() {
+        if self.note_draft.borrow().stays(noted, raised.is_ok()) {
             self.kept_now.set(true);
         }
     }
@@ -11197,6 +11189,7 @@ mod tests {
     use crate::record_plane::{LapsedHead, Unopened};
     use crate::seams::SeamError;
     use crate::settings::{PlacementRefusal, SettingsRefusal};
+    use crate::sync::kept_op::KeptNote;
     use crate::sync::model::NodeMeta;
 
     const SOURCE_ROOT: NodeId = NodeId([1; 16]);
