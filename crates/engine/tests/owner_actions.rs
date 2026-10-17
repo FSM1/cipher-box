@@ -7470,6 +7470,106 @@ fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
     );
 }
 
+/// The first sweep of a large subtree skips a file this device projected. A
+/// peer grants it, the index omits it, and a ref in another folder relabels it
+/// as a folder, all while a failed node holds the delete. The proof starts
+/// again at completion and reads the node, so the grant refuses the delete.
+#[test]
+fn a_skipped_file_a_second_ref_relabels_as_a_granted_folder_refuses_the_delete() {
+    let (mut fx, outer) = GrantScenario::nested();
+    let inner = fx.folder;
+    let side = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "side");
+    create_large_subtree(&mut fx, side);
+    let live = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "live");
+    let folder_record = published_value(&fx.world, &write_name(inner));
+    let versions = a_published_version_list(&mut fx);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    plant_file_body(&fx, inner, versions);
+    focus_each(&mut fx, &[outer, inner]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+    label_child(&fx, outer, inner, CoreNodeKind::Folder);
+    publish_value_at(&fx.world, inner, &folder_record);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    focus_each(&mut fx, &[outer]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let inner_before = reads_of(&fx, &[inner]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The second sweep fails at a node that the first tick read.
+    let failing = write_name(side);
+    fx.world.record_store.fail_get_for(failing.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer)
+    );
+    assert_eq!(
+        reads_of(&fx, &[inner]),
+        inner_before,
+        "the proof skips the file"
+    );
+
+    let outer_sequence = sequence_at(&fx.world, &write_name(outer));
+    let unindexed = published_value(&fx.world, &write_name(ROOT));
+    peer_grants_read(&mut engine, inner);
+    publish_value_at(&fx.world, ROOT, &unindexed);
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(outer)),
+        outer_sequence,
+        "the grant leaves the folder the proof read as it was"
+    );
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(inner, "relabelled", &write_name(inner));
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        viewed(&fx, live, inner).0,
+        NodeKind::Folder,
+        "the base relabels"
+    );
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer)
+    );
+
+    let grant_sequence = sequence_at(&fx.world, &write_name(inner));
+    events_so_far(&mut fx._events);
+    let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
+    fx.world.record_store.heal_get_for(failing.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_the_grant_refused_the_delete(
+        &mut fx,
+        op_id,
+        outer,
+        inner,
+        parent_sequence,
+        grant_sequence,
+    );
+}
+
 /// A node past the first tick of a large subtree does not answer, from its
 /// first read or from its second-sweep read. Each later tick of the outage
 /// reads only that node, and the delete completes when it answers.
