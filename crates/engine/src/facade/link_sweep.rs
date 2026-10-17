@@ -94,11 +94,13 @@ where
 {
     /// Walk the vault from `root_name` and cut expired links until
     /// [`MAX_SWEEP_CUTS`] cuts land. `None` while a pass or a cut holds
-    /// [`Running`].
+    /// [`Running`]. `reported` holds the scope roots whose refusal the
+    /// boundary walk already sent as abuse.
     pub(crate) async fn sweep_links(
         &self,
         root_name: &IpnsName,
         pointers: &PointerIndex,
+        reported: &BTreeSet<NodeId>,
     ) -> Option<LinkSweepReport> {
         let mut report = LinkSweepReport::default();
         let mut held = match self.hold_record(OnRunning::Refuse).await {
@@ -115,7 +117,15 @@ where
             .saturating_sub(self.profile.link_sweep_grace);
         let pending = held.pending_links();
         let due = self
-            .walk(root_name, now, &pending, &mut held, pointers, &mut report)
+            .walk(
+                root_name,
+                now,
+                &pending,
+                &mut held,
+                pointers,
+                reported,
+                &mut report,
+            )
             .await;
         report.more = cut_deepest_first(&due, async |target| {
             match self.cut_expired(target, now, &pending).await {
@@ -162,7 +172,9 @@ where
     /// visited only once it passed the gate: an index entry that names a scope
     /// under the wrong parent fails there, and the parent that really holds it
     /// still reaches it. A scope root that no parent resolves is left, with its
-    /// subtree, for the next sweep.
+    /// subtree, for the next sweep. A refusal of a scope root in `reported` is
+    /// not reported again, so one refused record sends one abuse event.
+    #[allow(clippy::too_many_arguments)]
     async fn walk(
         &self,
         root_name: &IpnsName,
@@ -170,6 +182,7 @@ where
         pending: &[[u8; IDENTITY_PUBLIC_LEN]],
         held: &mut HeldRecord<'_>,
         pointers: &PointerIndex,
+        reported: &BTreeSet<NodeId>,
         report: &mut LinkSweepReport,
     ) -> Vec<OwnerScope> {
         let mut visited = BTreeSet::new();
@@ -198,6 +211,7 @@ where
                     .await
                 {
                     Ok(current) => current,
+                    Err(ResolveFailure::Rejected) if reported.contains(&NodeId(id)) => continue,
                     Err(e) => {
                         report.fail(EngineError::from_resolve_failure(e, "link-sweep-scope"));
                         continue;

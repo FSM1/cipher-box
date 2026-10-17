@@ -1622,12 +1622,17 @@ where
             });
         }
         // After the conversion above, so a claim acked this
-        // pass converts before its link can be cut.
-        if pace_due(
-            pass.now,
-            self.link_swept.get(),
-            seams.profile.link_sweep_cadence,
-        ) && let Some(swept) = conversion.sweep_links(&root_name, &pointers).await
+        // pass converts before its link can be cut. A refused vault root
+        // already sent its abuse event, and the sweep reaches nothing below it.
+        if pass.root_reconciled
+            && pace_due(
+                pass.now,
+                self.link_swept.get(),
+                seams.profile.link_sweep_cadence,
+            )
+            && let Some(swept) = conversion
+                .sweep_links(&root_name, &pointers, &sites.refused_roots)
+                .await
         {
             // A capped sweep continues on the next tick.
             if !swept.more {

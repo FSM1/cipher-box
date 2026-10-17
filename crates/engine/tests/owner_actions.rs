@@ -8566,6 +8566,30 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     );
 }
 
+/// A descendant scope root that the boundary walk refused sends one abuse
+/// event on that pass, also when the link sweep is due.
+#[test]
+fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    publish_value_at(
+        &fx.world,
+        fx.folder,
+        &published_value(&fx.world, &write_name(ROOT)),
+    );
+    let _ = events_so_far(&mut events);
+    fx.world
+        .scheduler
+        .advance(fresh.profile().link_sweep_cadence);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    let abuse = abuse_descriptions(&mut events);
+    assert_eq!(abuse.len(), 1, "{abuse:#?}");
+}
+
 /// The crossing a command journals is a plan, not the authority. A session that
 /// has run no pass names no boundary below the render root, so the overlay
 /// places a queued create under a granted scope root and the move out of it

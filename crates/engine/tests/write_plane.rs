@@ -17337,6 +17337,86 @@ fn a_root_replayed_at_every_endpoint_waits_for_the_walk_to_refuse_it() {
     assert_the_row_is_still_listed(&fx);
 }
 
+/// The abuse events of one walk over a root replayed at every endpoint, and
+/// the GETs of the vault root name that the walk sends.
+fn abuse_on_one_walk(sweep_due: bool) -> (Vec<String>, usize) {
+    let mut fx = root_replayed_below_the_floor(Replay::AtEveryEndpoint);
+    if sweep_due {
+        fx.world
+            .scheduler
+            .advance(SyncTimingProfile::CI.link_sweep_cadence);
+    }
+    let root_name = write_name(ROOT);
+    let before = fx.world.record_store.get_count(root_name.as_str());
+    let refreshed =
+        command_while_ticking(&mut fx.engine_b, Command::ManualRefresh, &mut fx.tasks_b);
+    assert!(
+        matches!(refreshed, Err(EngineError::TrustViolation { .. })),
+        "{refreshed:?}"
+    );
+    let abuse = events_so_far(&mut fx.events_b)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect();
+    (
+        abuse,
+        fx.world.record_store.get_count(root_name.as_str()) - before,
+    )
+}
+
+/// One replayed root sends one abuse event, also on a pass where the link
+/// sweep is due: the sweep does not read the refused root again.
+#[test]
+fn a_root_replayed_at_every_endpoint_sends_one_abuse_event_when_the_sweep_is_due() {
+    let (idle, idle_reads) = abuse_on_one_walk(false);
+    let (swept, swept_reads) = abuse_on_one_walk(true);
+    assert_eq!(idle.len(), 1, "{idle:#?}");
+    assert!(idle[0].contains("[sequence-not-newer]"));
+    assert_eq!(swept, idle);
+    assert_eq!(swept_reads, idle_reads, "the sweep did not read the root");
+}
+
+/// A pass that reads the root it holds still runs a due link sweep, and the
+/// sweep waits out its cadence after that.
+#[test]
+fn a_pass_over_the_held_root_sweeps_once_per_cadence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick(&world, &engine, &mut tasks);
+    let root_name = write_name(ROOT);
+    let root_gets = |tasks: &mut Vec<BoxedTask>| {
+        let before = world.record_store.get_count(root_name.as_str());
+        tick(&world, &engine, tasks);
+        world.record_store.get_count(root_name.as_str()) - before
+    };
+
+    for _ in 0..3 {
+        root_gets(&mut tasks);
+    }
+    // One poll a second and one sweep every three: the sweep's fan-out at the
+    // root name shows on every third pass.
+    let polls: Vec<usize> = (0..6).map(|_| root_gets(&mut tasks)).collect();
+    let unswept = *polls.iter().min().unwrap();
+    let swept = unswept + world.record_store.endpoints().len();
+    assert_eq!(
+        polls.iter().filter(|gets| **gets == swept).count(),
+        2,
+        "{polls:?}"
+    );
+    assert_eq!(
+        polls.iter().filter(|gets| **gets == unswept).count(),
+        4,
+        "{polls:?}"
+    );
+    assert!(accused_nobody(&mut events));
+}
+
 /// ADR 0071 D1: an endpoint failed, so the walk reads the replay as
 /// unavailable, and the navigation reads the root once the endpoint heals.
 #[test]
