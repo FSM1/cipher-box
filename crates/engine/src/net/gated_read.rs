@@ -8,12 +8,13 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use zeroize::Zeroizing;
 
 use super::adopter::{RecoveredScopeRoot, RecoveredSeeds, RootAdopter};
+use super::fanout::{TiedFetch, fanout_get_tied_classified};
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::publish::{Observed, PublishError};
 use crate::gate::{Candidate, GateError, PendingAdoption, RejectionReason};
 use crate::rotation::{ResolveFailure, SweepResolveFailure};
-use crate::seams::{FloorStore, Http, SnapshotCache};
+use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 
 /// What a record strictly below its sequence floor reads as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +119,7 @@ pub(super) enum RootGateVerdict {
     /// The record's own body fills the re-seal reservation, so no re-seal of it
     /// is authorable (`content::limits::resealable_root_rest_bytes`). Only the
     /// owner's rotation tells this apart from a plain rejection, and only to
-    /// step over the record ([`OwnerRotationNet::last_known_good_root`]); every
+    /// step over the record ([`OwnerRotationNet::last_known_good_root`](super::rotation::OwnerRotationNet::last_known_good_root)); every
     /// other reader folds it back into one.
     NotResealable,
     /// Every block source answered that it holds no head block for the CID
@@ -133,6 +134,9 @@ pub(super) enum RootGateVerdict {
     /// lagging endpoint serves. A rejection, unless the fan-out that served it
     /// met a failed endpoint ([`Self::after_fanout`]).
     BelowFloor,
+    /// No endpoint served a record, and the endpoints agree the name holds
+    /// none ([`TiedFetch::absent`]).
+    Absent,
 }
 
 impl RootGateVerdict {
@@ -154,7 +158,7 @@ impl RootGateVerdict {
 impl From<RootGateVerdict> for ResolveFailure {
     fn from(verdict: RootGateVerdict) -> Self {
         match verdict {
-            RootGateVerdict::Unavailable => Self::Unavailable,
+            RootGateVerdict::Unavailable | RootGateVerdict::Absent => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
@@ -169,7 +173,7 @@ impl From<RootGateVerdict> for ResolveFailure {
 impl From<RootGateVerdict> for SweepResolveFailure {
     fn from(verdict: RootGateVerdict) -> Self {
         match verdict {
-            RootGateVerdict::Unavailable => Self::Unavailable,
+            RootGateVerdict::Unavailable | RootGateVerdict::Absent => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
@@ -358,7 +362,7 @@ pub(super) async fn gated_root<H: Http, F: FloorStore>(
 
 /// [`gate_root_pass`], committed after `record_bytes` is left as last-known-good
 /// ([`keep_then_commit`]).
-pub(super) async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
+async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     adopter: &RootAdopter<'_, H, F>,
     snapshot_cache: &S,
     name: &IpnsName,
@@ -376,7 +380,7 @@ pub(super) async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
 /// [`gated_root_cached`] for a read that can meet a same-sequence fork (ADR
 /// 0066 D1): a tie of `pick` that gates at the floor the pass left, or another
 /// record the cache held at its sequence.
-pub(super) async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
+async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
     adopter: &RootAdopter<'_, H, F>,
     snapshot_cache: &S,
     name: &IpnsName,
@@ -403,6 +407,134 @@ pub(super) async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
         cached_fork(name, cached.as_deref(), record_bytes, pick),
     );
     Ok((root, fork))
+}
+
+/// One scope root read: the fan-out, the root gate ladder over the record it
+/// picks, and the fold of [`RootGateVerdict::after_fanout`]. The bytes it
+/// gates are left as last-known-good ([`keep_then_commit`]).
+pub(super) struct RootRead<'a, H, F, S> {
+    adopter: &'a RootAdopter<'a, H, F>,
+    snapshot_cache: &'a S,
+    /// The child binding of [`gate_root_pass`].
+    expected_child: Option<[u8; 16]>,
+}
+
+/// A root read the gate refused, with the verdict already folded.
+pub(super) struct RootRefusal {
+    pub(super) verdict: RootGateVerdict,
+    /// The sequence and bytes of the refused record; `None` when no endpoint
+    /// served one.
+    pub(super) served: Option<(u64, Vec<u8>)>,
+}
+
+/// A root read that can meet a same-sequence fork (ADR 0066 D1), passed.
+pub(super) struct RootReadPass {
+    pub(super) root: GatedScopeRoot,
+    pub(super) fork: Option<Fork>,
+    /// The signed `data` of the record the gate passed.
+    pub(super) data: Vec<u8>,
+    pub(super) bytes: Vec<u8>,
+}
+
+impl<'a, H: Http, F: FloorStore, S: SnapshotCache> RootRead<'a, H, F, S> {
+    pub(super) fn new(
+        adopter: &'a RootAdopter<'a, H, F>,
+        snapshot_cache: &'a S,
+        expected_child: Option<[u8; 16]>,
+    ) -> Self {
+        Self {
+            adopter,
+            snapshot_cache,
+            expected_child,
+        }
+    }
+
+    /// The root at `name`, read over `transport`.
+    pub(super) async fn read<T: RecordTransport>(
+        &self,
+        transport: &T,
+        name: &IpnsName,
+    ) -> Result<GatedScopeRoot, RootRefusal> {
+        let (pick, bytes, _, endpoint_failed) = picked(transport, name).await?;
+        self.gate_served(name, &bytes, endpoint_failed)
+            .await
+            .map_err(|verdict| RootRefusal {
+                verdict,
+                served: Some((pick.sequence, bytes)),
+            })
+    }
+
+    /// [`Self::read`], and the fork the pick or the cache shows.
+    pub(super) async fn read_forked<T: RecordTransport>(
+        &self,
+        transport: &T,
+        name: &IpnsName,
+    ) -> Result<RootReadPass, RootRefusal> {
+        let (pick, bytes, tied, endpoint_failed) = picked(transport, name).await?;
+        match gated_root_forked(
+            self.adopter,
+            self.snapshot_cache,
+            name,
+            &pick,
+            &bytes,
+            &tied,
+            self.expected_child,
+        )
+        .await
+        {
+            Ok((root, fork)) => Ok(RootReadPass {
+                root,
+                fork,
+                data: pick.data,
+                bytes,
+            }),
+            Err(verdict) => Err(RootRefusal {
+                verdict: verdict.after_fanout(endpoint_failed),
+                served: Some((pick.sequence, bytes)),
+            }),
+        }
+    }
+
+    /// Gate `bytes`, which a fan-out served at `name`, and fold the verdict
+    /// by whether that fan-out met a failed endpoint.
+    pub(super) async fn gate_served(
+        &self,
+        name: &IpnsName,
+        bytes: &[u8],
+        endpoint_failed: bool,
+    ) -> Result<GatedScopeRoot, RootGateVerdict> {
+        gated_root_cached(
+            self.adopter,
+            self.snapshot_cache,
+            name,
+            bytes,
+            self.expected_child,
+        )
+        .await
+        .map_err(|verdict| verdict.after_fanout(endpoint_failed))
+    }
+}
+
+/// The record the fan-out at `name` picks, its ties, and whether an endpoint
+/// failed.
+async fn picked<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> Result<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>, bool), RootRefusal> {
+    let TiedFetch {
+        pick,
+        absent,
+        endpoint_failed,
+    } = fanout_get_tied_classified(transport, name).await;
+    let (pick, bytes, tied) = pick.ok_or(RootRefusal {
+        verdict: if absent {
+            RootGateVerdict::Absent
+        } else {
+            RootGateVerdict::Unavailable
+        },
+        served: None,
+    })?;
+    Ok((pick, bytes, tied, endpoint_failed))
 }
 
 #[cfg(test)]
