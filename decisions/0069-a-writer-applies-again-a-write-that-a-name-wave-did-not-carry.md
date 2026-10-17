@@ -27,8 +27,8 @@ read an old name again.** The gated reads of "rotateScopeWrite" stay as they are
 party that knows what it wrote, and the new write seed is the proof that it can still write. The
 wave gets no re-read, no re-walk and no new bound, so a revokee gets no new way to hold the cut.
 
-**D2 — A published op stays in the durable op queue until it is visible from the live root of its
-write scope.** The live root is the scope root that the scope pointer names, at the current write
+**D2 — A published op stays in the durable op queue. It leaves only at `Drain::depart`, on a verdict
+of the kept-op judge or of a kept-op read of the drain.** The live root is the scope root that the scope pointer names, at the current write
 epoch. The confirm of the last record of the op's plan (`Drain::mark_published`) does not remove the
 op. The op leaves the queue only at the one queue exit of the drain (`Drain::depart`), on a verdict of the kept-op judge (`sync::kept_judge`) or of a
 kept-op read of the drain: the rebase dead letter through `KeptOps::holds`, the keyless drop through

@@ -114,7 +114,7 @@ use crate::sync::doomed::{
 };
 use crate::sync::kept_judge::{
     KeptJudge, KeptPlace, LiveChecks, LiveReads, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
-    kept_anchor, live_reads, needs_result, on_halt, reads_kept_parent, scan_reads,
+    live_anchor, live_reads, needs_result, on_halt, scan_reads,
 };
 use crate::sync::kept_op::{
     KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
@@ -3821,7 +3821,7 @@ where
     }
 
     /// Where the write scope of a kept op stands for this pass: the nearest
-    /// known scope root above the node the op writes under ([`kept_anchor`]),
+    /// known scope root above the node the op writes under ([`live_anchor`]),
     /// when the boundary walk proved it. An unproved root reports its durable
     /// write-epoch floor ([`KeptPlace::Unchecked`]). `parent` is the folder
     /// the op's note names.
@@ -3832,7 +3832,7 @@ where
         parent: Option<NodeId>,
         noted_root: Option<NodeId>,
     ) -> Result<KeptPlace, Halt> {
-        let anchor = kept_anchor(op, parent);
+        let (anchor, reads_parent) = live_anchor(op, parent);
         let (nearest, anchor_name) = {
             let base = self.cells.base.borrow();
             let Some(meta) = base.node(anchor) else {
@@ -3874,7 +3874,7 @@ where
         // repaints its own scope root from the live root before the rebase,
         // and reads the parent of a kept delete ([`Self::read_kept_parents`]).
         let anchor_read_live = anchor == scope.source.root
-            || reads_kept_parent(op, parent)
+            || reads_parent
             || anchor_name.as_deref() == Some(end.write_name(&anchor.0).as_str().as_bytes());
         Ok(KeptPlace::Writes {
             root,

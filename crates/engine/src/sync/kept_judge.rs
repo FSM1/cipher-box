@@ -72,7 +72,7 @@ impl NoteDraft {
         noted || (marked && self.keeps)
     }
 
-    /// Record whether the note landed and the mark rose ([`Self::kept`]).
+    /// Mark the op kept when [`Self::stays`] holds.
     pub(crate) fn settle(&mut self, noted: bool, marked: bool) {
         if self.stays(noted, marked) {
             self.kept = true;
@@ -613,10 +613,16 @@ pub(crate) fn kept_verdict(note: &KeptNote, place: KeptPlace, now: UnixMillis) -
     }
 }
 
+/// The anchor of a kept op ([`kept_anchor`]), and whether the drain reads
+/// that anchor itself ([`reads_kept_parent`]).
+pub(crate) fn live_anchor(op: &Op, parent: Option<NodeId>) -> (NodeId, bool) {
+    (kept_anchor(op, parent), reads_kept_parent(op, parent))
+}
+
 /// The node a kept op anchors at: the parent of a create, the destination
 /// of a restore, the folder its note names for a delete, a rename or a move,
 /// and else the node itself.
-pub(crate) fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
+fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
     match (&op.kind, parent) {
         (OpKind::Create { parent, .. }, _) => *parent,
         (OpKind::Restore { into, .. }, _) => *into,
@@ -679,7 +685,7 @@ fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
 /// Whether the drain reads the anchor of a kept op itself: the folder its
 /// note names for a delete, a rename or a move, which a flip moved to a new
 /// name (`Drain::read_kept_parents`, `Drain::read_kept_places`).
-pub(crate) fn reads_kept_parent(op: &Op, parent: Option<NodeId>) -> bool {
+fn reads_kept_parent(op: &Op, parent: Option<NodeId>) -> bool {
     parent.is_some()
         && matches!(
             op.kind,
@@ -987,6 +993,14 @@ mod tests {
             target_sequence: 1,
             to_bin: false,
         })
+    }
+
+    #[test]
+    fn the_live_anchor_is_the_noted_folder_only_for_an_op_that_moves_a_link() {
+        assert_eq!(live_anchor(&create(), None), (PARENT, false));
+        assert_eq!(live_anchor(&delete(), Some(DEST)), (DEST, true));
+        assert_eq!(live_anchor(&delete(), None), (TARGET, false));
+        assert_eq!(live_anchor(&edit(b"c"), Some(DEST)), (TARGET, false));
     }
 
     fn base_with(nodes: &[NodeId]) -> Snapshot {
