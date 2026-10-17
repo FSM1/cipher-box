@@ -873,6 +873,17 @@ enum Departure<'o> {
     },
 }
 
+impl<'o> Departure<'o> {
+    /// A dead letter that drops the version no preserved entry holds.
+    fn unpreserved(op: &'o Op, reason: DeadLetterReason, preserved: Preservation) -> Self {
+        Self::DeadLetter {
+            op,
+            reason: preserved.observed(reason),
+            blocks: DeadLetterBlocks::Unpreserved(preserved),
+        }
+    }
+}
+
 /// Proof that the note step of a publish ran, and whether it stored a note
 /// ([`Drain::keep_published`]).
 #[must_use]
@@ -3293,18 +3304,20 @@ where
             let preserved = self
                 .preserve_dead_letter(scope, *op_id, op, *reason)
                 .await?;
-            // The abandonment retired what the op registered.
             let blocks = if preserved == Preservation::Refused {
                 DeadLetterBlocks::Release
             } else {
                 DeadLetterBlocks::Keep
             };
-            let departure = Departure::DeadLetter {
+            self.abandon(
+                scope,
+                *op_id,
                 op,
-                reason: preserved.observed(*reason),
+                preserved.observed(*reason),
                 blocks,
-            };
-            self.abandon(scope, *op_id, op, departure, report).await?;
+                report,
+            )
+            .await?;
         }
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
@@ -3518,11 +3531,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() {
-                    let departure = Departure::DeadLetter {
-                        op,
-                        reason: preserved.observed(reason),
-                        blocks: DeadLetterBlocks::Unpreserved(preserved),
-                    };
+                    let departure = Departure::unpreserved(op, reason, preserved);
                     let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
@@ -3546,11 +3555,7 @@ where
                     return;
                 };
                 if self.retire_unreferenced_name(scope, op).await.is_ok() {
-                    let departure = Departure::DeadLetter {
-                        op,
-                        reason: preserved.observed(reason),
-                        blocks: DeadLetterBlocks::Unpreserved(preserved),
-                    };
+                    let departure = Departure::unpreserved(op, reason, preserved);
                     let _ = self.depart(scope, op_id, departure, report).await;
                 }
             }
@@ -3731,7 +3736,7 @@ where
                         kept.push(op_id);
                         continue;
                     }
-                    ScanFate::Gone => {
+                    ScanFate::TargetGone => {
                         let left = self
                             .abandon_keeping_its_name(
                                 scope,
@@ -10171,33 +10176,25 @@ where
         let Ok(preserved) = self.preserve_dead_letter(scope, op_id, op, reason).await else {
             return false;
         };
-        self.depart(
-            scope,
-            op_id,
-            Departure::DeadLetter {
-                op,
-                reason: preserved.observed(reason),
-                blocks: DeadLetterBlocks::Unpreserved(preserved),
-            },
-            report,
-        )
-        .await
-        .is_ok()
+        let departure = Departure::unpreserved(op, reason, preserved);
+        self.depart(scope, op_id, departure, report).await.is_ok()
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
-    /// the queue.
+    /// the queue as a dead letter.
     async fn abandon(
         &self,
         scope: &DrainScope<'_>,
         op_id: OpId,
         op: &Op,
-        departure: Departure<'_>,
+        reason: DeadLetterReason,
+        blocks: DeadLetterBlocks,
         report: &mut DrainReport,
     ) -> Result<(), Halt> {
         retire(&self.seams.api, &self.registered_by(scope, op).await)
             .await
             .map_err(|_| Halt::UploadAttempt)?;
+        let departure = Departure::DeadLetter { op, reason, blocks };
         self.depart(scope, op_id, departure, report).await
     }
 
@@ -10211,12 +10208,9 @@ where
         reason: DeadLetterReason,
         report: &mut DrainReport,
     ) {
-        let departure = Departure::DeadLetter {
-            op,
-            reason,
-            blocks: DeadLetterBlocks::Release,
-        };
-        let _ = self.abandon(scope, op_id, op, departure, report).await;
+        let _ = self
+            .abandon(scope, op_id, op, reason, DeadLetterBlocks::Release, report)
+            .await;
     }
 
     /// Retire only the name half of [`Self::registered_by`], for an abandonment
@@ -13265,6 +13259,59 @@ mod tests {
             attempts,
             op_id,
             still_queued: harness.queued_op_ids(),
+        }
+    }
+
+    /// A kept op that a pass halts for good leaves with no notice, as its
+    /// rebase dead letter does. The same op with no note dead-letters.
+    #[test]
+    fn a_kept_op_that_halts_for_good_leaves_with_no_dead_letter() {
+        for kept in [true, false] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let op = Op::rename(KEPT_NODE, "after", 1, UnixMillis(0));
+            let op_id = harness.queue_an_op(&op);
+            let drain = harness.drain();
+            let scope = harness.scope();
+            if kept {
+                let mut notes = KeptNotes::default();
+                notes
+                    .insert(
+                        op_id,
+                        KeptNote {
+                            scope: Some(HARNESS_ROOT),
+                            write_epoch: 2,
+                            published_at: harness.seams.scheduler.now(),
+                            parent: Some(KEPT_FOLDER),
+                            result: Some(KeptResult::Rename {
+                                before: Zeroizing::new("before".to_owned()),
+                                after: Zeroizing::new("after".to_owned()),
+                            }),
+                        },
+                    )
+                    .expect("the note is in bounds");
+                block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
+            }
+            let mut report = DrainReport::default();
+
+            block_on(drain.apply_valve(
+                &scope,
+                op_id,
+                &op,
+                Halt::Permanent(DeadLetterReason::TargetGone),
+                &mut Attempts::default(),
+                &mut report,
+            ));
+
+            assert!(harness.queued_op_ids().is_empty(), "kept {kept}: it left");
+            if kept {
+                assert!(report.dead_letters.is_empty(), "no notice");
+                assert_eq!(report.dropped, vec![op_id]);
+            } else {
+                assert_eq!(
+                    report.dead_letters,
+                    vec![(op_id, KEPT_NODE, DeadLetterReason::TargetGone)]
+                );
+            }
         }
     }
 

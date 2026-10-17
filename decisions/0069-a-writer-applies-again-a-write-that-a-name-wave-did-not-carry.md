@@ -30,12 +30,14 @@ wave gets no re-read, no re-walk and no new bound, so a revokee gets no new way 
 **D2 — A published op stays in the durable op queue until it is visible from the live root of its
 write scope.** The live root is the scope root that the scope pointer names, at the current write
 epoch. The confirm of the last record of the op's plan (`Drain::mark_published`) does not remove the
-op. The op leaves the queue only on a verdict of the kept-op judge (`sync::kept_judge`), which the
-drain applies at its one queue exit (`Drain::depart`), and only when a pass shows its effect from the
-live root. Until then its staged blocks stay pinned, and the pending-op overlay shows the op as the state
-law of "Sync core" states. Thus the write of an honest writer is not lost, at any time before or
-after the flip. Amended on 2026-10-03: D7 replaces the overlay clause. Amended on 2026-10-03: only a
-create, a delete and a content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
+op. The op leaves the queue only when a pass shows its effect from the live root, at the one queue
+exit of the drain (`Drain::depart`), on a verdict of the kept-op judge (`sync::kept_judge`) or of a
+kept-op read of the drain: the rebase dead letter through `KeptOps::holds`, the keyless drop through
+`Drain::moved_tree_decides`, or the bin restore that cancels a kept delete. Until then its staged
+blocks stay pinned, and the pending-op overlay shows the op as the state law of "Sync core" states.
+Thus the write of an honest writer is not lost, at any time before or after the flip. Amended on
+2026-10-03: D7 replaces the overlay clause. Amended on 2026-10-03: only a create, a delete and a
+content edit (`Create`, `Delete`, `UpdateContent`) stay in the queue. Every
 other kind leaves the queue at its publish, as before this ADR: the live tree cannot show if a later
 writer overtook it, so a second apply could undo the later write (FSM1/cipher-box#2285).
 Amended on 2026-10-06 (owner ruling on FSM1/cipher-box#2285, option B): a rename, a move inside one

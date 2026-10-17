@@ -116,7 +116,7 @@ pub(crate) enum ScanFate {
     /// It leaves the queue, once the cut it owes is durable.
     Expire,
     /// It dead-letters as `TargetGone` (ADR 0069 D5), and stays when that fails.
-    Gone,
+    TargetGone,
 }
 
 impl<'a> KeptJudge<'a> {
@@ -158,7 +158,7 @@ impl<'a> KeptJudge<'a> {
                 unlinked: (!anchored && proved).then_some([folder, anchor]),
             };
         }
-        match note.parent.filter(|_| reads_kept_parent(op, note.parent)) {
+        match parent_read(op, note.parent) {
             Some(folder) => ScanReads::Gone { root, folder },
             None => ScanReads::None,
         }
@@ -196,7 +196,7 @@ impl<'a> KeptJudge<'a> {
             // a read of this session saw unlinked at its live parent name,
             // under a proved root.
             KeptVerdict::Stay if facts.unanchored && !deferred && shows_a_flip(note, place) => {
-                ScanFate::Gone
+                ScanFate::TargetGone
             }
             KeptVerdict::Stay => ScanFate::Stay,
             KeptVerdict::Recheck => ScanFate::Recheck,
@@ -680,13 +680,6 @@ mod tests {
     const SCOPE: NodeId = NodeId([5; 16]);
     const PARENT: NodeId = NodeId([6; 16]);
 
-    fn rename() -> KeptResult {
-        KeptResult::Rename {
-            before: Zeroizing::new("a".into()),
-            after: Zeroizing::new("b".into()),
-        }
-    }
-
     #[test]
     fn a_kind_that_needs_a_result_keeps_only_with_one() {
         let kind = OpKind::Rename {
@@ -695,12 +688,12 @@ mod tests {
         let mut draft = NoteDraft::begin(&kind, Some(PARENT));
         assert!(!draft.keeps());
         assert!(!draft.stays(false, true));
-        draft.with_result(rename());
+        draft.with_result(rename_result());
         assert!(draft.keeps());
         assert!(draft.stays(false, true));
         let note = draft.note(SCOPE, 3, UnixMillis(7));
         assert_eq!(note.parent, Some(PARENT));
-        assert_eq!(note.result, Some(rename()));
+        assert_eq!(note.result, Some(rename_result()));
         assert_eq!(draft.note(SCOPE, 3, UnixMillis(7)).result, None);
     }
 
@@ -1036,11 +1029,11 @@ mod tests {
         let edit_id = OpId(1);
         let restored_id = OpId(3);
         let alone = OpId(9);
-        let edit = create();
+        let created = create();
         // A later delete overtakes the edit, and a later restore cancels the
         // delete at `restored_id`.
         let queue = [
-            (edit_id, edit.clone()),
+            (edit_id, created.clone()),
             (OpId(2), delete()),
             (restored_id, delete()),
             (
@@ -1072,33 +1065,43 @@ mod tests {
         let deferred = [SCOPE];
         let expire = ScanFate::Expire;
         let stay = ScanFate::Stay;
-        assert_eq!(fate(&[], alone, &edit, still, gone, JUST_BEFORE), expire);
+        assert_eq!(fate(&[], alone, &created, still, gone, JUST_BEFORE), expire);
         assert_eq!(
             fate(&[], restored_id, &delete(), still, none, JUST_BEFORE),
             expire
         );
-        assert_eq!(fate(&[], edit_id, &edit, flip, none, JUST_BEFORE), expire);
-        assert_eq!(fate(&[], edit_id, &edit, still, none, JUST_BEFORE), stay);
+        assert_eq!(
+            fate(&[], edit_id, &created, flip, none, JUST_BEFORE),
+            expire
+        );
+        assert_eq!(fate(&[], edit_id, &created, still, none, JUST_BEFORE), stay);
         assert_eq!(fate(&[], alone, &rename, still, none, JUST_BEFORE), expire);
-        assert_eq!(fate(&[], alone, &edit, still, none, KEPT_OP_BOUND), expire);
         assert_eq!(
-            fate(&deferred, alone, &edit, still, none, KEPT_OP_BOUND),
+            fate(&[], alone, &created, still, none, KEPT_OP_BOUND),
+            expire
+        );
+        assert_eq!(
+            fate(&deferred, alone, &created, still, none, KEPT_OP_BOUND),
             stay
         );
         assert_eq!(
-            fate(&[], alone, &edit, flip, unanchored, JUST_BEFORE),
-            ScanFate::Gone
+            fate(&[], alone, &created, flip, unanchored, JUST_BEFORE),
+            ScanFate::TargetGone
         );
         assert_eq!(
-            fate(&deferred, alone, &edit, flip, unanchored, JUST_BEFORE),
+            fate(&deferred, alone, &created, flip, unanchored, JUST_BEFORE),
             stay
         );
         assert_eq!(
-            fate(&[], alone, &edit, still, unanchored, JUST_BEFORE),
+            fate(&[], alone, &created, still, unanchored, JUST_BEFORE),
             stay
         );
         assert_eq!(
-            fate(&[], alone, &edit, here(3, true), none, JUST_BEFORE),
+            fate(&[], alone, &created, here(3, true), none, JUST_BEFORE),
+            ScanFate::Recheck
+        );
+        assert_eq!(
+            fate(&[], alone, &created, here(3, true), unanchored, JUST_BEFORE),
             ScanFate::Recheck
         );
     }
