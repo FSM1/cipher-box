@@ -539,7 +539,13 @@ async fn picked<T: RecordTransport>(
 
 #[cfg(test)]
 mod tests {
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
     use super::*;
+    use crate::seams::EndpointId;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::InMemoryRecordStore;
 
     #[test]
     fn a_sequence_below_the_floor_is_unavailable_only_while_an_endpoint_fails() {
@@ -572,5 +578,63 @@ mod tests {
         let reason = RejectionReason::EpochBelowFloor { floor: 5, epoch: 4 };
         assert_eq!(sequence_refusal(&reason, true), None);
         assert_eq!(sequence_refusal(&reason, false), None);
+    }
+
+    /// Only a below-floor pick and an absent head block read as unavailable
+    /// while an endpoint fails; every other verdict passes the fold as it is.
+    #[test]
+    fn the_fold_makes_only_the_endpoint_causes_unavailable_while_an_endpoint_fails() {
+        for verdict in [
+            RootGateVerdict::Rejected,
+            RootGateVerdict::OwnerSeedRefused,
+            RootGateVerdict::Unavailable,
+            RootGateVerdict::Superseded,
+            RootGateVerdict::NotResealable,
+            RootGateVerdict::HeadBlockAbsent,
+            RootGateVerdict::HeadBlockRefused,
+            RootGateVerdict::BelowFloor,
+            RootGateVerdict::Absent,
+        ] {
+            let folded = match verdict {
+                RootGateVerdict::BelowFloor | RootGateVerdict::HeadBlockAbsent => {
+                    RootGateVerdict::Unavailable
+                }
+                other => other,
+            };
+            assert_eq!(verdict.after_fanout(true), folded, "{verdict:?}, failed");
+            assert_eq!(
+                verdict.after_fanout(false),
+                verdict,
+                "{verdict:?}, answered"
+            );
+        }
+    }
+
+    /// A name with no record is absent only when every endpoint answers so.
+    #[test]
+    fn a_name_with_no_record_is_absent_only_when_every_endpoint_answers() {
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = vec![EndpointId::new("a"), EndpointId::new("b")];
+        let store = InMemoryRecordStore::new(endpoints.clone());
+        let unserved = |store: &InMemoryRecordStore| match block_on(picked(store, &name)) {
+            Err(RootRefusal {
+                verdict,
+                served: None,
+            }) => verdict,
+            _ => panic!("no record is served"),
+        };
+
+        assert_eq!(unserved(&store), RootGateVerdict::Absent);
+        store.fail_endpoint(&endpoints[0]);
+        assert_eq!(unserved(&store), RootGateVerdict::Unavailable);
+
+        let record =
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, "2099-01-01T00:00:00Z").marshal();
+        store.seed_record(&endpoints[1], name.as_str(), record.clone());
+        let Ok((pick, bytes, _, endpoint_failed)) = block_on(picked(&store, &name)) else {
+            panic!("the record is served");
+        };
+        assert_eq!((pick.sequence, bytes, endpoint_failed), (4, record, true));
     }
 }
