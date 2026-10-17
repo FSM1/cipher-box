@@ -70,8 +70,8 @@ export class Stack {
 
     try {
       await poll(
-        () => serves(this.options.apiUrl),
-        (up) => up,
+        () => probeLogin(this.options.apiUrl),
+        (probe) => probe.up,
         {
           what: `the API to serve a login at ${this.options.apiUrl}; its log is ${logPath}`,
           timeoutMs: this.options.deadlines.apiReadyMs,
@@ -158,33 +158,40 @@ export async function probeLogin(apiUrl: string): Promise<LoginProbe> {
   };
 }
 
-export async function serves(apiUrl: string): Promise<boolean> {
-  return (await probeLogin(apiUrl)).up;
-}
-
-/** The response, or the error of a fetch that threw, as text. */
+/** The response, or why there is none, as text. */
 async function read(
   baseUrl: string,
   path: string,
   init: RequestInit = {}
 ): Promise<Response | string> {
   try {
-    return await fetch(new URL(path, baseUrl), {
+    const url = new URL(path, baseUrl);
+    // Node's fetch refuses userinfo with an error that quotes the whole URL.
+    if (url.username || url.password) return 'was not sent: the API URL carries credentials';
+    return await fetch(url, {
       ...init,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
   } catch (error) {
-    if (!(error instanceof Error)) return String(error);
-    // Node's fetch throws a bare "fetch failed"; the cause names the network fault.
-    const cause = error.cause instanceof Error ? ` (${error.cause.message})` : '';
-    return `${error.name}: ${error.message}${cause}`;
+    return `threw ${faultText(error)}`;
   }
+}
+
+export function faultText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  // Node's fetch throws a bare "fetch failed"; the cause names the network fault.
+  // A refusal from each address of a host gives an empty message; its code names the fault.
+  const cause =
+    error.cause instanceof Error
+      ? ` (${error.cause.message || (error.cause as NodeJS.ErrnoException).code || error.cause.name})`
+      : '';
+  return `${error.name}: ${error.message}${cause}`;
 }
 
 /** A status and its text, never a body: a body can hold a token. */
 function seen(path: string, response: Response | string): string {
   return typeof response === 'string'
-    ? `${path} threw ${response}`
+    ? `${path} ${response}`
     : `${path} answered ${response.status} ${response.statusText}`.trimEnd();
 }
 
