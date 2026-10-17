@@ -67,6 +67,9 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose GET is refused at every endpoint, so one node of a
     /// tree can be unresolvable while the rest of it reads normally.
     get_failing_keys: Arc<Mutex<HashSet<String>>>,
+    /// Routing keys whose GET is refused once a count of GETs answer
+    /// ([`fail_get_for_after`](InMemoryRecordStore::fail_get_for_after)).
+    get_failing_after: Arc<Mutex<HashMap<String, usize>>>,
     /// (endpoint, routing key) pairs whose GET is refused at that endpoint only.
     get_failing_at: Arc<Mutex<HashSet<(EndpointId, String)>>>,
     /// GETs served per routing key, so a test can count what a pass spends on
@@ -118,6 +121,7 @@ impl InMemoryRecordStore {
             put_answers: Arc::default(),
             get_answers: Arc::default(),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
+            get_failing_after: Arc::default(),
             get_failing_at: Arc::default(),
             gets: Arc::new(Mutex::new(HashMap::new())),
             puts: Arc::new(Mutex::new(HashMap::new())),
@@ -378,6 +382,16 @@ impl InMemoryRecordStore {
             .insert(routing_key.to_owned());
     }
 
+    /// Refuse every GET under `routing_key` once `answered` more GETs under it
+    /// answer, until [`heal_get_for`](Self::heal_get_for) clears it: a node
+    /// that stops answering between two reads of one pass.
+    pub fn fail_get_for_after(&self, routing_key: &str, answered: usize) {
+        self.get_failing_after
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), answered);
+    }
+
     /// Refuse every GET under `routing_key` at `endpoint` alone, while other
     /// endpoints and other names answer normally.
     pub fn fail_get_at_for(&self, endpoint: &EndpointId, routing_key: &str) {
@@ -390,6 +404,10 @@ impl InMemoryRecordStore {
     /// Restore `routing_key`'s GET path at every endpoint.
     pub fn heal_get_for(&self, routing_key: &str) {
         self.get_failing_keys
+            .lock()
+            .expect("lock")
+            .remove(routing_key);
+        self.get_failing_after
             .lock()
             .expect("lock")
             .remove(routing_key);
@@ -490,12 +508,26 @@ impl InMemoryRecordStore {
         self.stalling_keys.lock().expect("lock").get(routing_key) == Some(&0)
     }
 
-    /// Whether `routing_key`'s GET is currently injected to fail everywhere.
+    /// Whether `routing_key`'s GET is injected to fail everywhere. Each call
+    /// spends one answer of a [`fail_get_for_after`](Self::fail_get_for_after)
+    /// count, so call it once for each GET.
     fn get_failing_key(&self, routing_key: &str) -> bool {
-        self.get_failing_keys
+        let exhausted = self
+            .get_failing_after
             .lock()
             .expect("lock")
-            .contains(routing_key)
+            .get_mut(routing_key)
+            .is_some_and(|answered| {
+                let refused = *answered == 0;
+                *answered = answered.saturating_sub(1);
+                refused
+            });
+        exhausted
+            || self
+                .get_failing_keys
+                .lock()
+                .expect("lock")
+                .contains(routing_key)
     }
 
     fn get_failing_at(&self, endpoint: &EndpointId, routing_key: &str) -> bool {

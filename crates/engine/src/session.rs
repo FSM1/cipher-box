@@ -54,7 +54,9 @@ use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{BookkeepingCursors, CaptureProofs, DrainCells, QueueHold, RetireDescent};
+use crate::sync::drain::{
+    BookkeepingCursors, CaptureProofs, DeleteProof, DrainCells, QueueHold, RetireDescent,
+};
 use crate::sync::model::Snapshot;
 use crate::sync::owed_rotation::OwedCell;
 use crate::sync::project::UnlinkedChild;
@@ -556,6 +558,8 @@ pub(crate) struct SessionState {
     pub(crate) fork_sightings: Rc<ForkSightings>,
     /// [`DrainCells::kept_chains`](crate::sync::drain::DrainCells::kept_chains).
     pub(crate) kept_chains: Rc<RefCell<BTreeMap<crate::seams::OpId, Vec<NodeId>>>>,
+    /// [`DrainCells::delete_proofs`](crate::sync::drain::DrainCells::delete_proofs).
+    pub(crate) delete_proofs: Rc<RefCell<BTreeMap<crate::seams::OpId, DeleteProof>>>,
     /// The names this session reported restored from the server copy.
     pub(crate) restored_copies: Rc<RestoredCopies>,
 }
@@ -813,6 +817,7 @@ impl SessionState {
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
             kept_chains: Rc::default(),
+            delete_proofs: Rc::default(),
             restored_copies: Rc::new(RestoredCopies::default()),
         }
     }
@@ -844,6 +849,7 @@ impl SessionState {
             grafted_claims: &self.grafted_claims,
             bookmarked_scope_roots: &self.bookmarked_scope_roots,
             kept_chains: &self.kept_chains,
+            delete_proofs: &self.delete_proofs,
         }
     }
 }
