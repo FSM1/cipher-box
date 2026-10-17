@@ -199,8 +199,10 @@ the account secrets:
 | `STAGING_GRAFANA_READ_TOKEN` | a Grafana Cloud access-policy token, `metrics:read` scope only |
 
 The soak sends the read token with HTTP basic authentication to the Grafana
-Cloud Mimir query endpoint, to read the republisher counters. The token cannot
-write metrics, and it cannot read logs or traces. 1Password is its source of
+Cloud Mimir query endpoint, to read the republisher counters. The report job of
+a failed night uses the same token to read whether the origin stopped or
+restarted in the run (`soak/origin.ts`). The token cannot write metrics, and it
+cannot read logs or traces. 1Password is its source of
 truth too (ADR 0053 D2).
 
 ### The 1Password rule
