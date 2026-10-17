@@ -7502,15 +7502,22 @@ fn assert_a_large_subtree_outage_holds_and_recovers(second_sweep: bool) {
     );
 
     let mut outage = Vec::new();
+    let mut failed = Vec::new();
     for _ in 0..4 {
-        let before = reads_of(&fx, &subtree);
+        let (before, failed_before) = (reads_of(&fx, &subtree), reads_of(&fx, &[inner]));
         tick(&fx.world, &fx.engine, &mut fx._tasks);
         outage.push(reads_of(&fx, &subtree) - before);
+        failed.push(reads_of(&fx, &[inner]) - failed_before);
         assert_eq!(
             block_on(fx.engine.status()).unwrap().queue_hold,
             delete_plane_hold(op_id, outer)
         );
     }
+    // The first sweep reads the failing node, and the second sweep reads it
+    // again before it fails.
+    let reaching = if second_sweep { 2 } else { 1 };
+    assert_eq!(failed[0], reaching * one_read, "{failed:?}");
+    assert_eq!(failed[1..], [one_read; 3], "{failed:?}");
     // The second sweep reads with no bound up to the failing node.
     assert!(
         second_sweep || outage[0] <= 128 * one_read,

@@ -1039,8 +1039,9 @@ const MAX_RETIRE_DESCENT_NODES: usize = 65_536;
 /// resolve and a head block fetch, so the bound is the capture walk's.
 const MAX_DELETE_PROOF_READS: usize = MAX_CAPTURE_WALK_READS;
 
-/// The nodes one delete proof may read. A proof past it reads its subtree
-/// whole on each tick and carries nothing ([`DeleteProof::overflowed`]).
+/// The nodes one delete proof may hold in `seen`: the origin, each node read,
+/// and each node queued. A proof past it reads its subtree whole on each tick
+/// and keeps only its overflow mark ([`DeleteProof::overflowed`]).
 const MAX_DELETE_PROOF_NODES: usize = MAX_CAPTURE_WALK_NODES;
 
 /// The nodes one capture walk may hold. A walk past this bound cannot prove
@@ -5443,9 +5444,10 @@ where
     /// proves its plane. A scope root below the target is refused like the
     /// target itself: the bin and the doomed walk would strand its scope.
     ///
-    /// The first sweep reads at most [`MAX_DELETE_PROOF_READS`] on each tick.
-    /// Until the [`DeleteProof`] completes, the delete holds the queue head
-    /// uncharged.
+    /// The first sweep reads at most [`MAX_DELETE_PROOF_READS`] on each tick,
+    /// except past [`MAX_DELETE_PROOF_NODES`], where each tick reads the whole
+    /// subtree. Until the [`DeleteProof`] completes, the delete holds the
+    /// queue head uncharged.
     async fn prove_delete_plane(
         &self,
         scope: &DrainScope<'_>,
@@ -8964,7 +8966,9 @@ where
             *descent = RetireDescent::new(end.root);
         }
         if let Some(refused) = descent.refused {
-            take_descent_read(&mut left, &self.descent_reads);
+            let true = take_descent_read(&mut left, &self.descent_reads) else {
+                return;
+            };
             let anchor = descent.anchor.as_ref().map(WalkAnchor::anchor);
             match self.walk_read(scope, end, anchor, refused, false).await {
                 Ok(_) => *descent = RetireDescent::new(end.root),
@@ -15281,11 +15285,15 @@ mod tests {
             Err(Halt::DeletePlaneUnavailable),
             "the publish tick starts the proof again"
         );
-        let mut ticks = 0;
-        while prove_delete_tick(&harness, 3).0 == Err(Halt::DeletePlaneUnavailable) {
-            ticks += 1;
-            assert!(ticks < 4, "the new proof completes");
+        let mut ticks = Vec::new();
+        while ticks.len() < 4 {
+            let (proved, _) = prove_delete_tick(&harness, 3);
+            ticks.push(proved);
+            if ticks.last() != Some(&Err(Halt::DeletePlaneUnavailable)) {
+                break;
+            }
         }
+        assert_eq!(ticks.last(), Some(&Ok(())), "the new proof completes");
         assert!(reads_of(&harness, FILE) > 0, "the new proof reads the node");
     }
 
