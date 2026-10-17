@@ -113,8 +113,8 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_judge::{
-    KeptJudge, KeptOutcome, KeptPlace, LiveValue, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
-    kept_anchor, kept_outcome, live_head, live_place, needs_result, reads_kept_parent,
+    KeptJudge, KeptPlace, LiveChecks, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
+    kept_anchor, needs_result, on_halt, parent_read, place_reads, reads_head, reads_kept_parent,
 };
 use crate::sync::kept_op::{
     KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
@@ -3437,8 +3437,7 @@ where
             self.release_hold();
         }
         // A kept op leaves with no notice, as its rebase dead letter does.
-        if matches!(halt, Halt::Permanent(_))
-            && keeps(&op.kind)
+        if on_halt(matches!(halt, Halt::Permanent(_)), op)
             && self
                 .kept_ops(scope)
                 .await
@@ -4073,10 +4072,8 @@ where
     }
 
     /// Read at its live name the folder that each kept delete under a flip
-    /// unlinked its node from (ADR 0069 D6). The read repaints the base, so
-    /// the rebase applies the delete again when the node is alive, and drops
-    /// it when the node is gone. Return the deletes whose folder its old
-    /// parent no longer names: the node went with it.
+    /// unlinked its node from ([`parent_read`]). Return the deletes whose
+    /// folder its old parent no longer names.
     async fn read_kept_parents(
         &self,
         scope: &DrainScope<'_>,
@@ -4087,21 +4084,20 @@ where
         let mut gone = BTreeSet::new();
         for (op_id, op) in queued {
             // Only a noted op names a parent, and a note makes the op kept.
-            let parent = kept.parent(*op_id);
-            if !matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+            let Some(folder) = parent_read(op, kept.parent(*op_id)) else {
                 continue;
-            }
+            };
             let at = |halt| HeadHalt {
                 halt,
                 at: Some(*op_id),
             };
             let place = self
-                .kept_place(scope, op, parent, kept.scope(*op_id))
+                .kept_place(scope, op, Some(folder), kept.scope(*op_id))
                 .await
                 .map_err(at)?;
-            if let (KeptPlace::Writes { .. }, Some(parent)) = (place, parent)
+            if matches!(place, KeptPlace::Writes { .. })
                 && !self
-                    .read_live_folder(scope, pass, parent)
+                    .read_live_folder(scope, pass, folder)
                     .await
                     .map_err(at)?
             {
@@ -4112,12 +4108,8 @@ where
     }
 
     /// Read at their live names the folders that each kept rename or move
-    /// under a flip names, and compare the node there with the result of the
-    /// op ([`kept_outcome`]). A landed op leaves as satisfied, and an
-    /// overtaken one leaves so the later write stays. A lost op joins the
-    /// rebase and applies again. An earlier op of this device that the rebase
-    /// applies again, a create the base lacks or a lost rename or move, sets
-    /// the place that the next op on its node is compared with.
+    /// under a flip names ([`place_reads`]), and check the node there
+    /// ([`LiveChecks::place_check`]). Return the ops that leave.
     async fn read_kept_places(
         &self,
         scope: &DrainScope<'_>,
@@ -4126,38 +4118,27 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut leaving = BTreeMap::new();
-        let mut created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
-        let mut replayed: BTreeMap<NodeId, (NodeId, Zeroizing<String>)> = BTreeMap::new();
+        let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
-            if let OpKind::Create { parent, name, .. } = &op.kind {
-                created.insert(op.target, (*parent, Zeroizing::new(name.clone())));
-            }
+            checks.queued(op);
             let parent = kept.parent(*op_id);
             let Some(result) = kept.result(*op_id) else {
                 continue;
             };
-            if matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+            let Some((parent, folders)) = place_reads(op, parent, result) else {
                 continue;
-            }
+            };
             let at = |halt| HeadHalt {
                 halt,
                 at: Some(*op_id),
             };
-            let (KeptPlace::Writes { .. }, Some(parent)) = (
-                self.kept_place(scope, op, parent, kept.scope(*op_id))
+            if !matches!(
+                self.kept_place(scope, op, Some(parent), kept.scope(*op_id))
                     .await
                     .map_err(at)?,
-                parent,
-            ) else {
+                KeptPlace::Writes { .. }
+            ) {
                 continue;
-            };
-            // The source first: the read of the destination then unlinks a
-            // node that the source still holds.
-            let mut folders = vec![parent];
-            if let KeptResult::Move { to, .. } = result
-                && *to != parent
-            {
-                folders.push(*to);
             }
             for folder in folders {
                 if self.cells.base.borrow().contains(folder) {
@@ -4166,26 +4147,9 @@ where
                         .map_err(at)?;
                 }
             }
-            let place = replayed
-                .get(&op.target)
-                .cloned()
-                .or_else(|| place_in(&self.cells.base.borrow(), op.target))
-                .or_else(|| created.get(&op.target).cloned());
-            match kept_outcome(result, live_place(result, parent, place.as_ref())) {
-                KeptOutcome::Landed => {
-                    leaving.insert(*op_id, DropReason::AlreadySatisfied);
-                }
-                KeptOutcome::Overtaken => {
-                    leaving.insert(*op_id, DropReason::TargetAdvanced);
-                }
-                KeptOutcome::Lost => {
-                    let after = match result {
-                        KeptResult::Rename { after, .. } => (parent, after.clone()),
-                        KeptResult::Move { to, to_name, .. } => (*to, to_name.clone()),
-                        KeptResult::RestoreVersion { .. } => continue,
-                    };
-                    replayed.insert(op.target, after);
-                }
+            let base_place = || place_in(&self.cells.base.borrow(), op.target);
+            if let Some(reason) = checks.place_check(op, parent, result, base_place) {
+                leaving.insert(*op_id, reason);
             }
         }
         Ok(leaving)
@@ -4216,11 +4180,9 @@ where
         Ok(true)
     }
 
-    /// Read the live record of each file that a kept content edit checks, and
-    /// return the edits whose version the history names. A folder read at the
-    /// live name carries a file's name, not its head, so the base can still
-    /// hold the head from before the flip. A later edit or restore moves the
-    /// head, so only the history shows that this edit landed.
+    /// Read the live record of each file that a kept content edit or version
+    /// restore checks ([`LiveChecks::head_check`]), and return the ops that
+    /// leave.
     async fn read_kept_heads(
         &self,
         scope: &DrainScope<'_>,
@@ -4229,19 +4191,10 @@ where
         kept: &KeptOps,
     ) -> Result<BTreeMap<OpId, DropReason>, HeadHalt> {
         let mut landed = BTreeMap::new();
-        // The head that an edit or a restore of this device, which the rebase
-        // applies again, sets for the next op on its file.
-        let mut replayed: BTreeMap<NodeId, Vec<u8>> = BTreeMap::new();
+        let mut checks = LiveChecks::default();
         for (op_id, op) in queued {
-            let restored = match op.kind {
-                OpKind::UpdateContent { .. } => None,
-                OpKind::RestoreVersion { .. } => match kept.result(*op_id) {
-                    Some(result) => Some(result),
-                    None => continue,
-                },
-                _ => continue,
-            };
-            if !kept.holds(*op_id, op) {
+            let result = kept.result(*op_id);
+            if !reads_head(op, result) || !kept.holds(*op_id, op) {
                 continue;
             }
             let at = |halt| HeadHalt {
@@ -4269,30 +4222,8 @@ where
             let ReadBody::File { versions, .. } = &loaded.body else {
                 return Err(at(Halt::Unclassified));
             };
-            if let Some(result) = restored {
-                let live = match replayed.get(&op.target) {
-                    Some(head) => LiveValue::Head(head),
-                    None => live_head(versions),
-                };
-                match kept_outcome(result, live) {
-                    KeptOutcome::Landed => {
-                        landed.insert(*op_id, DropReason::AlreadySatisfied);
-                    }
-                    KeptOutcome::Overtaken => {
-                        landed.insert(*op_id, DropReason::TargetAdvanced);
-                    }
-                    KeptOutcome::Lost => {
-                        if let KeptResult::RestoreVersion { after, .. } = result {
-                            replayed.insert(op.target, after.clone());
-                        }
-                    }
-                }
-            } else if let Some(content) = op.staged_content() {
-                if lists_version(versions, content) {
-                    landed.insert(*op_id, DropReason::AlreadySatisfied);
-                } else {
-                    replayed.insert(op.target, content.root_cid.clone());
-                }
+            if let Some(reason) = checks.head_check(op, result, versions) {
+                landed.insert(*op_id, reason);
             }
             if let Some(head) = versions.first() {
                 project_child_version(
@@ -10908,14 +10839,6 @@ fn paint_folder(
             project_folder(base, folder, children, sequence, modified_at);
         }
     }
-}
-
-/// Whether a file's version list names the version `content` staged
-/// ([`Drain::read_kept_heads`]).
-fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
-    versions
-        .iter()
-        .any(|version| version.content_cid == content.root_cid)
 }
 
 /// The folders from the root down to `folder`, root first, or `None` when

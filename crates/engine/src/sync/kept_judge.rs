@@ -12,7 +12,8 @@ use crate::seams::{OpId, UnixMillis};
 use crate::sync::duration_millis;
 use crate::sync::kept_op::{KEPT_OP_BOUND, KeptNote, KeptResult};
 use crate::sync::model::Snapshot;
-use crate::sync::op::{Op, OpKind};
+use crate::sync::op::{Op, OpKind, StagedContent};
+use crate::sync::rebase::DropReason;
 
 /// The note of the op a pass publishes now, which its publish fills in.
 #[derive(Default)]
@@ -200,6 +201,147 @@ impl<'a> KeptJudge<'a> {
             KeptVerdict::Stay => ScanFate::Stay,
             KeptVerdict::Recheck => ScanFate::Recheck,
         }
+    }
+}
+
+/// Whether a halt can make `op` leave the queue with no notice, as its rebase
+/// dead letter does: a permanent halt of a kind that keeps. The drain then
+/// reads whether the op is kept ([`crate::sync::kept_op::KeptOps::holds`]).
+pub(crate) fn on_halt(permanent: bool, op: &Op) -> bool {
+    permanent && keeps(&op.kind)
+}
+
+/// The folder whose live name a kept delete reads, from the `parent` its
+/// note names (ADR 0069 D6). The read repaints the base, so the rebase
+/// applies the delete again when the node is alive and drops it when the
+/// node is gone. A folder its old parent no longer names took the node with
+/// it.
+pub(crate) fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
+    parent.filter(|_| matches!(op.kind, OpKind::Delete { .. }) && reads_kept_parent(op, parent))
+}
+
+/// The folders whose live names a kept rename or move under `parent` reads,
+/// the source first: the read of the destination then unlinks a node that
+/// the source still holds. `None` for any other op.
+pub(crate) fn place_reads(
+    op: &Op,
+    parent: Option<NodeId>,
+    result: &KeptResult,
+) -> Option<(NodeId, Vec<NodeId>)> {
+    if matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
+        return None;
+    }
+    let parent = parent?;
+    let mut folders = vec![parent];
+    if let KeptResult::Move { to, .. } = result
+        && *to != parent
+    {
+        folders.push(*to);
+    }
+    Some((parent, folders))
+}
+
+/// Whether a live head check reads `op`: a content edit, and a version
+/// restore with a `result`.
+pub(crate) fn reads_head(op: &Op, result: Option<&KeptResult>) -> bool {
+    match op.kind {
+        OpKind::UpdateContent { .. } => true,
+        OpKind::RestoreVersion { .. } => result.is_some(),
+        _ => false,
+    }
+}
+
+/// Whether a file's version list names the version `content` staged.
+pub(crate) fn lists_version(versions: &[Version], content: &StagedContent) -> bool {
+    versions
+        .iter()
+        .any(|version| version.content_cid == content.root_cid)
+}
+
+/// The live checks of one pass. An earlier op of this device that the rebase
+/// applies again, a create the base lacks or a lost write, sets the value
+/// that the next op on its node is compared with.
+#[derive(Default)]
+pub(crate) struct LiveChecks {
+    created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)>,
+    places: BTreeMap<NodeId, (NodeId, Zeroizing<String>)>,
+    heads: BTreeMap<NodeId, Vec<u8>>,
+}
+
+impl LiveChecks {
+    /// Note a queued op, in queue order.
+    pub(crate) fn queued(&mut self, op: &Op) {
+        if let OpKind::Create { parent, name, .. } = &op.kind {
+            self.created
+                .insert(op.target, (*parent, Zeroizing::new(name.clone())));
+        }
+    }
+
+    /// Compare a kept rename or move under `parent` with the place of its
+    /// node: `base_place` reads it from the base after the reads of
+    /// [`place_reads`]. A landed op leaves as satisfied, and an overtaken one
+    /// leaves so the later write stays. A lost op joins the rebase and
+    /// applies again.
+    pub(crate) fn place_check(
+        &mut self,
+        op: &Op,
+        parent: NodeId,
+        result: &KeptResult,
+        base_place: impl FnOnce() -> Option<(NodeId, Zeroizing<String>)>,
+    ) -> Option<DropReason> {
+        let place = self
+            .places
+            .get(&op.target)
+            .cloned()
+            .or_else(base_place)
+            .or_else(|| self.created.get(&op.target).cloned());
+        match kept_outcome(result, live_place(result, parent, place.as_ref())) {
+            KeptOutcome::Landed => Some(DropReason::AlreadySatisfied),
+            KeptOutcome::Overtaken => Some(DropReason::TargetAdvanced),
+            KeptOutcome::Lost => {
+                let after = match result {
+                    KeptResult::Rename { after, .. } => (parent, after.clone()),
+                    KeptResult::Move { to, to_name, .. } => (*to, to_name.clone()),
+                    KeptResult::RestoreVersion { .. } => return None,
+                };
+                self.places.insert(op.target, after);
+                None
+            }
+        }
+    }
+
+    /// Compare a kept content edit or version restore with the `versions`
+    /// of its file's live record. A folder read at the live name carries a
+    /// file's name, not its head, so the base can still hold the head from
+    /// before the flip. A later edit or restore moves the head, so only the
+    /// history shows that an edit landed.
+    pub(crate) fn head_check(
+        &mut self,
+        op: &Op,
+        result: Option<&KeptResult>,
+        versions: &[Version],
+    ) -> Option<DropReason> {
+        if let (OpKind::RestoreVersion { .. }, Some(result)) = (&op.kind, result) {
+            let live = match self.heads.get(&op.target) {
+                Some(head) => LiveValue::Head(head),
+                None => live_head(versions),
+            };
+            match kept_outcome(result, live) {
+                KeptOutcome::Landed => return Some(DropReason::AlreadySatisfied),
+                KeptOutcome::Overtaken => return Some(DropReason::TargetAdvanced),
+                KeptOutcome::Lost => {
+                    if let KeptResult::RestoreVersion { after, .. } = result {
+                        self.heads.insert(op.target, after.clone());
+                    }
+                }
+            }
+        } else if let Some(content) = op.staged_content() {
+            if lists_version(versions, content) {
+                return Some(DropReason::AlreadySatisfied);
+            }
+            self.heads.insert(op.target, content.root_cid.clone());
+        }
+        None
     }
 }
 
@@ -958,6 +1100,175 @@ mod tests {
         assert_eq!(
             fate(&[], alone, &edit, here(3, true), none, JUST_BEFORE),
             ScanFate::Recheck
+        );
+    }
+
+    const TO: NodeId = NodeId([7; 16]);
+
+    fn edit(root_cid: &[u8]) -> Op {
+        op(OpKind::UpdateContent {
+            content: crate::sync::op::StagedContent {
+                root_cid: root_cid.to_vec(),
+                plaintext_size: 1,
+                sealed_content_key: b"sealed-key-blob".to_vec(),
+                scope: SCOPE,
+                epoch: 3,
+            },
+            base_version_cid: None,
+        })
+    }
+
+    fn version(content_cid: &[u8]) -> Version {
+        Version::new(content_cid.to_vec(), [1; 32], 1, 1)
+    }
+
+    fn moved(to: NodeId) -> KeptResult {
+        KeptResult::Move {
+            from: PARENT,
+            from_name: Zeroizing::new("a".into()),
+            to,
+            to_name: Zeroizing::new("b".into()),
+        }
+    }
+
+    #[test]
+    fn only_a_permanent_halt_of_a_kind_that_keeps_reads_the_kept_ops() {
+        assert!(on_halt(true, &create()));
+        assert!(!on_halt(false, &create()));
+        let prune = op(OpKind::DeleteVersion {
+            content_cid: vec![1; 4],
+        });
+        assert!(!on_halt(true, &prune));
+    }
+
+    /// ADR 0069 D6: a kept delete reads the folder its note names, a kept
+    /// rename or move reads its source and then its destination, and a kept
+    /// edit or version restore reads its file.
+    #[test]
+    fn each_kept_kind_reads_its_own_live_folders() {
+        let rename = op(OpKind::Rename {
+            new_name: "b".into(),
+        });
+        let relocation = op(OpKind::Move {
+            from_parent: PARENT,
+            new_parent: TO,
+            new_name: "b".into(),
+            replacing: None,
+            crossing: crate::sync::op::ScopeCrossing::Intra,
+        });
+        assert_eq!(parent_read(&delete(), Some(PARENT)), Some(PARENT));
+        assert_eq!(parent_read(&delete(), None), None);
+        assert_eq!(parent_read(&rename, Some(PARENT)), None);
+        assert_eq!(parent_read(&create(), Some(PARENT)), None);
+
+        assert_eq!(
+            place_reads(&rename, Some(PARENT), &rename_result()),
+            Some((PARENT, vec![PARENT]))
+        );
+        assert_eq!(
+            place_reads(&relocation, Some(PARENT), &moved(TO)),
+            Some((PARENT, vec![PARENT, TO]))
+        );
+        assert_eq!(
+            place_reads(&relocation, Some(PARENT), &moved(PARENT)),
+            Some((PARENT, vec![PARENT]))
+        );
+        assert_eq!(place_reads(&rename, None, &rename_result()), None);
+        assert_eq!(place_reads(&delete(), Some(PARENT), &rename_result()), None);
+
+        let restore = op(OpKind::RestoreVersion {
+            content_cid: vec![2; 4],
+        });
+        let restored = KeptResult::RestoreVersion {
+            before: vec![1; 4],
+            after: vec![2; 4],
+        };
+        assert!(reads_head(&edit(&[1; 4]), None));
+        assert!(reads_head(&restore, Some(&restored)));
+        assert!(!reads_head(&restore, None));
+        assert!(!reads_head(&create(), Some(&restored)));
+    }
+
+    fn rename_result() -> KeptResult {
+        KeptResult::Rename {
+            before: Zeroizing::new("a".into()),
+            after: Zeroizing::new("b".into()),
+        }
+    }
+
+    fn at_place(name: &str) -> Option<(NodeId, Zeroizing<String>)> {
+        Some((PARENT, Zeroizing::new(name.into())))
+    }
+
+    /// A lost rename applies again, so the next op on its node is checked
+    /// against its result, not the base. A create the base lacks places its
+    /// node.
+    #[test]
+    fn a_place_check_reads_the_replayed_place_before_the_base() {
+        let rename = op(OpKind::Rename {
+            new_name: "b".into(),
+        });
+        let mut checks = LiveChecks::default();
+        assert_eq!(
+            checks.place_check(&rename, PARENT, &rename_result(), || at_place("b")),
+            Some(DropReason::AlreadySatisfied)
+        );
+        assert_eq!(
+            checks.place_check(&rename, PARENT, &rename_result(), || at_place("c")),
+            Some(DropReason::TargetAdvanced)
+        );
+        assert_eq!(
+            checks.place_check(&rename, PARENT, &rename_result(), || at_place("a")),
+            None
+        );
+        let later = KeptResult::Rename {
+            before: Zeroizing::new("x".into()),
+            after: Zeroizing::new("b".into()),
+        };
+        assert_eq!(
+            checks.place_check(&rename, PARENT, &later, || at_place("a")),
+            Some(DropReason::AlreadySatisfied),
+            "the lost rename's result, not the base"
+        );
+
+        let mut created = LiveChecks::default();
+        created.queued(&op(OpKind::Create {
+            parent: PARENT,
+            name: "b".into(),
+            node: crate::sync::op::NewNode::Folder,
+        }));
+        assert_eq!(
+            created.place_check(&rename, PARENT, &rename_result(), || None),
+            Some(DropReason::AlreadySatisfied)
+        );
+    }
+
+    /// A lost edit applies again, so a later version restore on its file is
+    /// checked against the edit's head, not the history.
+    #[test]
+    fn a_head_check_reads_the_replayed_head_before_the_history() {
+        let history = [version(&[9; 4])];
+        let mut checks = LiveChecks::default();
+        assert_eq!(
+            checks.head_check(&edit(&[9; 4]), None, &history),
+            Some(DropReason::AlreadySatisfied)
+        );
+        assert_eq!(checks.head_check(&edit(&[1; 4]), None, &history), None);
+        let restore = op(OpKind::RestoreVersion {
+            content_cid: vec![2; 4],
+        });
+        let onto_the_edit = KeptResult::RestoreVersion {
+            before: vec![9; 4],
+            after: vec![1; 4],
+        };
+        assert_eq!(
+            checks.head_check(&restore, Some(&onto_the_edit), &history),
+            Some(DropReason::AlreadySatisfied),
+            "the lost edit's head, not the history"
+        );
+        assert_eq!(
+            LiveChecks::default().head_check(&restore, Some(&onto_the_edit), &history),
+            None
         );
     }
 }

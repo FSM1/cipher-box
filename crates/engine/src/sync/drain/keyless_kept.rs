@@ -9,7 +9,7 @@ use std::collections::btree_map::Entry;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
-use super::{Drain, DrainScope, chain_to, lists_version, place_in};
+use super::{Drain, DrainScope, chain_to, place_in};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::grants::grafted::FloorNamespace;
 use crate::grants::link_read::held_scope_pointer;
@@ -21,7 +21,9 @@ use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SharerScopedFloorStore,
     SnapshotCache, StagingStore,
 };
-use crate::sync::kept_judge::{KeptOutcome, delete_decided, kept_outcome, live_head, live_place};
+use crate::sync::kept_judge::{
+    KeptOutcome, delete_decided, kept_outcome, lists_version, live_head, live_place,
+};
 use crate::sync::kept_op::{KeptOps, KeptResult};
 use crate::sync::op::{Op, OpKind};
 use crate::sync::refresh::RefreshVerdict;
