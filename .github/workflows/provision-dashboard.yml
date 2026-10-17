@@ -1,4 +1,4 @@
-# Pushes the staging Grafana dashboard.
+# Pushes the staging Grafana dashboard and the alert rules in docker/grafana/alerts.
 name: Provision Grafana Dashboard
 
 on:
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-          sparse-checkout: docker/grafana/dashboards
+          sparse-checkout: docker/grafana
 
       # The login GET wakes a sleeping instance (docker/MONITORING.md).
       - name: Wait for Grafana Cloud readiness
@@ -133,3 +133,31 @@ jobs:
 
           echo "Dashboard provisioned successfully (HTTP $HTTP_CODE)"
           jq -r '.url // "unknown"' /tmp/grafana-response.json
+
+      # The upsert in the script matches a rule by title, group and folder, so a
+      # re-run updates each rule. A key with no alerting-provisioning right skips
+      # this step with a notice; the dashboard push above needs no such right.
+      - name: Provision the alert rules
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          GRAFANA_DS_UID: ${{ vars.GRAFANA_DS_METRICS_UID }}
+        run: |
+          set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
+          : "${GRAFANA_DS_UID:?GRAFANA_DS_METRICS_UID is required}"
+          GRAFANA_URL="${GRAFANA_URL%/}"
+          AUTH_HEADER=$(mktemp "${RUNNER_TEMP}/grafana-auth.XXXXXX")
+          trap 'rm -f "$AUTH_HEADER"' EXIT
+          printf 'Authorization: Bearer %s\n' "$GRAFANA_API_KEY" > "$AUTH_HEADER"
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w "%{http_code}" \
+            -H @"$AUTH_HEADER" "${GRAFANA_URL}/api/v1/provisioning/alert-rules") || HTTP_CODE=000
+          if [[ "$HTTP_CODE" =~ ^(401|403)$ ]]; then
+            echo "::notice::Alert rules not provisioned: GRAFANA_API_KEY got HTTP $HTTP_CODE from the alerting provisioning API. Give its service account the Alerting rules read and write permissions (or the Editor role), and folder create."
+            exit 0
+          elif [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::The alerting provisioning API returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          bash docker/grafana/scripts/provision-alerts.sh
