@@ -96,7 +96,8 @@ use crate::net::fanout::{
     AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified,
     fanout_get_tied_classified, fanout_get_verify, fanout_get_verify_failed, signed_data,
 };
-use crate::net::resolve::{Adopter, unavailable_below_floor};
+use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
@@ -1008,7 +1009,11 @@ impl RootGateVerdict {
     /// no block source holds: the failed endpoint can hold a newer record.
     fn after_fanout(self, endpoint_failed: bool) -> Self {
         match self {
-            Self::BelowFloor | Self::HeadBlockAbsent if endpoint_failed => Self::Unavailable,
+            Self::BelowFloor => match BelowFloor::after_fanout(endpoint_failed) {
+                BelowFloor::Unavailable => Self::Unavailable,
+                BelowFloor::Rollback => Self::BelowFloor,
+            },
+            Self::HeadBlockAbsent if endpoint_failed => Self::Unavailable,
             verdict => verdict,
         }
     }
@@ -3755,11 +3760,12 @@ fn resolve_verdict(error: GateError) -> ResolveFailure {
     }
 }
 
-/// [`resolve_verdict`] for a sequence check on a fan-out read ([`unavailable_below_floor`]).
+/// [`resolve_verdict`] for a sequence check on a fan-out read ([`sequence_refusal`]).
 fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
     match &error {
         GateError::Rejected(rejection)
-            if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+            if sequence_refusal(&rejection.reason, endpoint_failed)
+                == Some(BelowFloor::Unavailable) =>
         {
             ResolveFailure::Unavailable
         }
@@ -5247,17 +5253,17 @@ where
                 // the bound.
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {}
                 // ADR 0071 D1: as for an endpoint that serves nothing.
-                RejectionReason::SequenceNotNewer { .. } if endpoint_failed => {
-                    return Err(WaveRefusal::dropping(
-                        WritePublishError::NotLanded,
-                        DropCause::EndpointUnavailable,
-                    ));
-                }
-                RejectionReason::SequenceNotNewer { .. } => {
-                    return Err(WaveRefusal::dropping(
-                        WritePublishError::Rejected,
-                        DropCause::BelowSequenceFloor,
-                    ));
+                ref reason @ RejectionReason::SequenceNotNewer { .. } => {
+                    return Err(match sequence_refusal(reason, endpoint_failed) {
+                        Some(BelowFloor::Unavailable) => WaveRefusal::dropping(
+                            WritePublishError::NotLanded,
+                            DropCause::EndpointUnavailable,
+                        ),
+                        Some(BelowFloor::Rollback) | None => WaveRefusal::dropping(
+                            WritePublishError::Rejected,
+                            DropCause::BelowSequenceFloor,
+                        ),
+                    });
                 }
                 _ => {
                     return self
