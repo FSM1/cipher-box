@@ -83,13 +83,18 @@ function sampleValue(sample: unknown): number {
   return value;
 }
 
-/** One instant query. A refusal names the query and the HTTP status, never the URL or the token. */
+/**
+ * One instant query, at `timeS` or now. A refusal names the query and the HTTP
+ * status, never the URL or the token.
+ */
 export async function query(
   access: GrafanaAccess,
   promql: string,
-  timeoutMs: number
+  timeoutMs: number,
+  timeS?: number
 ): Promise<number[]> {
-  const url = `${access.base}/api/v1/query?query=${encodeURIComponent(promql)}`;
+  const at = timeS === undefined ? '' : `&time=${timeS}`;
+  const url = `${access.base}/api/v1/query?query=${encodeURIComponent(promql)}${at}`;
   let response: Response;
   try {
     response = await fetch(url, {

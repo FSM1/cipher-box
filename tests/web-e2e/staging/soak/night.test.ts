@@ -196,6 +196,17 @@ describe('a night', () => {
     expect(renderNight(night, RUN)).not.toContain('Suite:');
   });
 
+  it('carries the origin line in the summary and the issue when the report has it', () => {
+    const night = classifyNight(
+      results({ ...everyLeg('success'), 'web-vault': 'failure' }),
+      everyLeg(lines(failed))
+    );
+    const origin = 'Origin boot history: not read (the run start time is not set)';
+    expect(renderNight(night, RUN, '', origin)).toContain(origin);
+    expect(issueBody(night, RUN, '', origin)).toContain(origin);
+    expect(issueBody(night, RUN)).not.toContain('Origin');
+  });
+
   it('fails when the input check failed, and skips when it was cancelled', () => {
     const none = everyLeg<LegResults>({ kind: 'missing' });
     const refused = classifyNight(results(everyLeg('skipped'), 'failure'), none);
