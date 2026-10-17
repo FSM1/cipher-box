@@ -1,6 +1,6 @@
 # ADR 0077: A scope root stops being one by a re-seal into new node ids
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-17
 - **Date:** 2026-10-17
 - **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298),
   [#2241](https://github.com/FSM1/cipher-box/issues/2241),
