@@ -123,9 +123,13 @@ fi
 
 AUTH_REFUSED=77
 
+auth_refused() {
+  [[ "$1" == "401" || "$1" == "403" ]]
+}
+
 # Exits for a failed setup call: AUTH_REFUSED for a 401 or 403, else 1.
 fail_setup() {
-  [[ "$1" == "401" || "$1" == "403" ]] && exit "$AUTH_REFUSED"
+  auth_refused "$1" && exit "$AUTH_REFUSED"
   exit 1
 }
 
@@ -289,7 +293,7 @@ for rule_file in "${JSON_FILES[@]}"; do
         echo "  FAILED (HTTP $HTTP_CODE)"
         echo "  Response: $BODY"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+        if auth_refused "$HTTP_CODE"; then
           AUTH_FAIL_COUNT=$((AUTH_FAIL_COUNT + 1))
         fi
       fi
