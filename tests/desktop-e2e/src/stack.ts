@@ -70,8 +70,8 @@ export class Stack {
 
     try {
       await poll(
-        () => serves(this.options.apiUrl),
-        (up) => up,
+        () => probeLogin(this.options.apiUrl),
+        (probe) => probe.up,
         {
           what: `the API to serve a login at ${this.options.apiUrl}; its log is ${logPath}`,
           timeoutMs: this.options.deadlines.apiReadyMs,
@@ -116,6 +116,7 @@ export class Stack {
 const PROBE_TIMEOUT_MS = 2_000;
 /** The API's liveness route. It is static and answers nothing else. */
 const HEALTH = '/health';
+const LOGIN = '/auth/challenge';
 
 /**
  * Liveness: a process holds the port and serves `path` there.
@@ -124,14 +125,14 @@ const HEALTH = '/health';
  * stranger holds reads the same way whichever server was meant to hold it.
  */
 export async function answers(baseUrl: string, path: string): Promise<boolean> {
-  try {
-    const response = await fetch(new URL(path, baseUrl), {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  const response = await read(baseUrl, path);
+  return typeof response !== 'string' && response.ok;
+}
+
+/** A readiness read and what it saw, so a wait that runs out names the cause. */
+export interface LoginProbe {
+  up: boolean;
+  reason: string;
 }
 
 /**
@@ -142,19 +143,56 @@ export async function answers(baseUrl: string, path: string): Promise<boolean> {
  * route it needs. The empty body draws a validation refusal, which leaves no
  * state behind.
  */
-export async function serves(apiUrl: string): Promise<boolean> {
-  if (!(await answers(apiUrl, HEALTH))) return false;
+export async function probeLogin(apiUrl: string): Promise<LoginProbe> {
+  const health = await read(apiUrl, HEALTH);
+  const healthSeen = seen(HEALTH, health);
+  if (typeof health === 'string' || !health.ok) return { up: false, reason: healthSeen };
+  const login = await read(apiUrl, LOGIN, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  return {
+    up: typeof login !== 'string' && login.status !== 404 && login.status < 500,
+    reason: `${healthSeen}; ${seen(LOGIN, login)}`,
+  };
+}
+
+/** The response, or why there is none, as text. */
+async function read(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response | string> {
   try {
-    const response = await fetch(new URL('/auth/challenge', apiUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
+    const url = new URL(path, baseUrl);
+    // Node's fetch refuses userinfo with an error that quotes the whole URL.
+    if (url.username || url.password) return 'was not sent: the API URL carries credentials';
+    return await fetch(url, {
+      ...init,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return response.status !== 404 && response.status < 500;
-  } catch {
-    return false;
+  } catch (error) {
+    return `threw ${faultText(error)}`;
   }
+}
+
+export function faultText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  // Node's fetch throws a bare "fetch failed"; the cause names the network fault.
+  // A refusal from each address of a host gives an empty message; its code names the fault.
+  const cause =
+    error.cause instanceof Error
+      ? ` (${error.cause.message || (error.cause as NodeJS.ErrnoException).code || error.cause.name})`
+      : '';
+  return `${error.name}: ${error.message}${cause}`;
+}
+
+/** A status and its text, never a body: a body can hold a token. */
+function seen(path: string, response: Response | string): string {
+  return typeof response === 'string'
+    ? `${path} ${response}`
+    : `${path} answered ${response.status} ${response.statusText}`.trimEnd();
 }
 
 export async function requireFile(path: string, complaint: string): Promise<void> {

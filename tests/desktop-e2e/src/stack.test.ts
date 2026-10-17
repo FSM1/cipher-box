@@ -4,9 +4,9 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { poll } from './poll';
+import { poll, PollTimeout } from './poll';
 import type { Deadlines } from './profile';
-import { Stack, serves } from './stack';
+import { Stack, faultText, probeLogin } from './stack';
 
 /** Small budgets: these tests prove the refusal path, not a real API start. */
 const BUDGET: Deadlines = {
@@ -82,6 +82,7 @@ describe('Stack.start', () => {
 
     expect(refusal).toBeInstanceOf(Error);
     expect((refusal as Error).message).toContain('the API to serve a login');
+    expect((refusal as Error).message).toContain('/health threw');
   });
 
   it('leaves no API process behind when that start is refused', async () => {
@@ -128,31 +129,102 @@ describe('the readiness gate', () => {
     return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   }
 
+  /** A port that held a server a moment ago, so a connect to it is refused. */
+  async function closedPort(): Promise<string> {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return `http://127.0.0.1:${port}`;
+  }
+
   it('refuses a port nothing holds', async () => {
-    expect(await serves(SILENT_URL)).toBe(false);
+    expect((await probeLogin(SILENT_URL)).up).toBe(false);
   });
 
   it('refuses an API that answers its health probe and maps no login route', async () => {
     const url = await serving({ '/health': 200 });
 
-    expect(await serves(url)).toBe(false);
+    expect((await probeLogin(url)).up).toBe(false);
   });
 
   it('accepts an API whose login route refuses the probe body', async () => {
     const url = await serving({ '/health': 200, '/auth/challenge': 400 });
 
-    expect(await serves(url)).toBe(true);
+    expect((await probeLogin(url)).up).toBe(true);
   });
 
   it('refuses an API whose login route is mapped and still failing', async () => {
     const url = await serving({ '/health': 200, '/auth/challenge': 503 });
 
-    expect(await serves(url)).toBe(false);
+    expect((await probeLogin(url)).up).toBe(false);
   });
 
   it('refuses an API whose health probe fails, however it maps the login route', async () => {
     const url = await serving({ '/health': 503, '/auth/challenge': 400 });
 
-    expect(await serves(url)).toBe(false);
+    expect((await probeLogin(url)).up).toBe(false);
+  });
+
+  it('names the status of a health probe that failed', async () => {
+    const url = await serving({ '/health': 522, '/auth/challenge': 400 });
+
+    const probe = await probeLogin(url);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(/^\/health answered 522\b/);
+  });
+
+  it('names both statuses when the login route fails', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 522 });
+
+    const probe = await probeLogin(url);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(/^\/health answered 200\b.*; \/auth\/challenge answered 522\b/);
+  });
+
+  it('names the network fault of a probe that threw', async () => {
+    const url = await closedPort();
+
+    const probe = await probeLogin(url);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toMatch(
+      /^\/health threw TypeError: fetch failed \(connect ECONNREFUSED .+\)$/
+    );
+  });
+
+  it('names the code of a cause whose message is empty', () => {
+    const error = new TypeError('the fetch stopped', {
+      cause: Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' }),
+    });
+
+    expect(faultText(error)).toBe('TypeError: the fetch stopped (ECONNREFUSED)');
+  });
+
+  it('keeps the credentials of the API URL out of the reason', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 400 });
+    const withCredentials = url.replace('http://', 'http://probe-user:probe-secret@');
+
+    const probe = await probeLogin(withCredentials);
+
+    expect(probe.up).toBe(false);
+    expect(probe.reason).toBe('/health was not sent: the API URL carries credentials');
+    expect(probe.reason).not.toContain('probe-user');
+    expect(probe.reason).not.toContain('probe-secret');
+  });
+
+  it('a poll over probeLogin names the last reason in its timeout', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 522 });
+
+    const timeout = await poll(
+      () => probeLogin(url),
+      (probe) => probe.up,
+      { what: 'the API to serve a login', timeoutMs: 200, intervalMs: 25 }
+    ).catch((error: unknown) => error);
+
+    expect(timeout).toBeInstanceOf(PollTimeout);
+    expect((timeout as PollTimeout).message).toContain('/auth/challenge answered 522');
   });
 });
