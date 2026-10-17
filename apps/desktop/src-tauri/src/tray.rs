@@ -45,6 +45,9 @@ fn warning_label(kind: &str) -> &'static str {
         "withheldUpdateEscalation" => "A shared folder is being kept from its latest update",
         "renewalFailed" => "CipherBox could not renew a record, so it may expire",
         "scopeExitCutOwed" => "CipherBox could not rotate a shared folder a move left",
+        "scopeRootStranded" => {
+            "Another writer removed a folder that holds a shared folder. Restore that folder from the bin."
+        }
         _ => "CipherBox raised a condition it could not name",
     }
 }
@@ -310,6 +313,18 @@ mod tests {
             Lines::of(&alerted).status,
             warning_label("attributableAbuse")
         );
+    }
+
+    /// A stranded shared folder says what to do, never the fallback.
+    #[test]
+    fn a_stranded_shared_folder_names_the_restore() {
+        let stranded = VaultWarning {
+            kind: "scopeRootStranded",
+            detail: Some("plain".to_owned()),
+        };
+        let lines = Lines::of(&live(Staleness::Fresh, vec![stranded], 0));
+        assert_eq!(lines.status, warning_label("scopeRootStranded"));
+        assert!(lines.status.contains("Restore that folder from the bin."));
     }
 
     #[test]

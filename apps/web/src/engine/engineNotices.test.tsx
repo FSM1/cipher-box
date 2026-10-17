@@ -121,6 +121,88 @@ describe('engine warnings', () => {
     expect(notice.textContent).toContain('share the folder with them again');
   });
 
+  it('renders a stranded shared folder as a warning that names the folder to restore', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'scopeRootStranded',
+        scopeRoot: new Uint8Array(16).fill(4),
+        binnedFolder: new Uint8Array(16).fill(5),
+        folderName: 'plain',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('restore "plain" from the bin');
+  });
+
+  it('names an unnamed binned folder as a folder', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'scopeRootStranded',
+        scopeRoot: new Uint8Array(16).fill(4),
+        binnedFolder: new Uint8Array(16).fill(5),
+        folderName: '',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('removed a folder that holds a shared folder');
+    expect(notice.textContent).not.toContain('""');
+  });
+
+  it('gives one notice for a binned folder that holds many shared folders', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot: new Uint8Array(16).fill(1),
+        detail: 'gate-rejected',
+        retryable: false,
+        class: 'trust',
+      });
+      for (let root = 10; root < 15; root += 1) {
+        engine.emit({
+          kind: 'scopeRootStranded',
+          scopeRoot: new Uint8Array(16).fill(root),
+          binnedFolder: new Uint8Array(16).fill(5),
+          folderName: 'plain',
+        });
+      }
+    });
+
+    const notices = await screen.findAllByTestId('notification-notice');
+    expect(notices).toHaveLength(2);
+    expect(notices.some((notice) => notice.textContent?.includes('failed verification'))).toBe(
+      true
+    );
+
+    // Stranded folders past the bound evict each other, never the trust stop.
+    await act(async () => {
+      for (let folder = 20; folder < 26; folder += 1) {
+        engine.emit({
+          kind: 'scopeRootStranded',
+          scopeRoot: new Uint8Array(16).fill(folder),
+          binnedFolder: new Uint8Array(16).fill(folder),
+          folderName: `binned ${folder}`,
+        });
+      }
+    });
+
+    const bounded = await screen.findAllByTestId('notification-notice');
+    expect(bounded).toHaveLength(5);
+    expect(bounded.some((notice) => notice.textContent?.includes('failed verification'))).toBe(
+      true
+    );
+  });
+
   it('renders a vault restored from the server copy as one notice for the vault', async () => {
     const engine = fakeEngine();
     draw(engine.client);

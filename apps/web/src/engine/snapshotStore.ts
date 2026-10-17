@@ -128,6 +128,12 @@ function nodeDropped(folder: string, cause: DropCause): string {
   return `an item left ${place} when its write access changed, because ${DROP_REASONS[cause]} - it and all its contents are no longer in the folder`;
 }
 
+/** Owner capture binned a folder that holds a shared folder; a restore of the binned folder reaches it again. */
+const scopeRootStrandedText = (folderName: string): string =>
+  folderName === ''
+    ? 'another writer removed a folder that holds a shared folder - restore that folder from the bin'
+    : `another writer removed the folder "${folderName}", which holds a shared folder - restore "${folderName}" from the bin`;
+
 const IDLE: SnapshotState = { view: null, error: null };
 
 /** A store-shaped no-op for consumers mounted before the engine client exists. */
@@ -329,6 +335,11 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       notificationStore.warnMinor(
         `dropped:${toHex(event.scopeRoot)}:${toHex(event.nodeId)}`,
         nodeDropped(folder, event.cause)
+      );
+    } else if (event.kind === 'scopeRootStranded') {
+      notificationStore.warnMinor(
+        `stranded:${toHex(event.binnedFolder)}`,
+        scopeRootStrandedText(event.folderName)
       );
     }
   });
