@@ -17,7 +17,7 @@
 //!   ancestor node seed [`EnvelopeAuthoring`] does not carry, so it is enforced
 //!   where that seed lives, in `rotation/reseal.rs`;
 //! - an interior scope root carrying no ascent link returns `Err`, off the
-//!   presence check `net/rotation.rs::gate_root_pass` makes on arrival. The
+//!   presence check `net/gated_read.rs::gate_root_pass` makes on arrival. The
 //!   duty comes from the caller's own ancestor material, never from the bytes
 //!   being checked;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
@@ -74,7 +74,7 @@ pub enum AuthorError {
     SectionSignatureInvalid,
     /// An interior scope root's carried grant section holds no ascent link —
     /// the binding that proves the record is the descendant its parent names,
-    /// and which `net/rotation.rs::gate_root_pass` requires of every record
+    /// and which `net/gated_read.rs::gate_root_pass` requires of every record
     /// it gates as a child scope root.
     MissingAscentLink,
     /// Core refused to seal or encode the authored body (a body decode would

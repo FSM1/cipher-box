@@ -70,6 +70,7 @@ use crate::net::author::{
     AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
+use crate::net::gated_read::{BelowFloor, sequence_refusal};
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict, PutMark,
@@ -78,7 +79,6 @@ use crate::net::record_publish::{
     HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
     publish_record_placed,
 };
-use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
     Acknowledged, AcknowledgedSlot, HeldMarks, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
     StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
@@ -5575,7 +5575,8 @@ where
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
-                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+                if sequence_refusal(&rejection.reason, endpoint_failed)
+                    == Some(BelowFloor::Unavailable) =>
             {
                 Halt::DeletePlaneUnavailable
             }
@@ -9734,7 +9735,7 @@ where
             // The duty is read off the material this end publishes under, never
             // off the section being carried: an end with an ascent authority is
             // an interior scope root, whose record the child gate refuses
-            // without its link (`net/rotation.rs::gate_root_pass`).
+            // without its link (`net/gated_read.rs::gate_root_pass`).
             let owes_ascent_link = plane.end.ascent_node_seed.is_some();
             author_scope_root_envelope(authoring, name, scope.owner_identity, owes_ascent_link)
         } else {
