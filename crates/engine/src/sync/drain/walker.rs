@@ -60,8 +60,9 @@ pub(super) trait SweepPolicy<K> {
     type Answer;
     type Stop;
 
-    /// Take one read from the walk's budget. `false` when none is left.
-    fn take_read(&mut self) -> bool;
+    /// Take one read from the walk's budget for the first sweep, or for the
+    /// second when `confirming`. `false` when none is left.
+    fn take_read(&mut self, confirming: bool) -> bool;
 
     /// Whether the first sweep alone settles the walk.
     fn settles_unconfirmed(&self, _sweep: &TwoSweep<K>) -> bool {
@@ -114,7 +115,7 @@ impl<K: Clone> TwoSweep<K> {
     pub(super) async fn step<P: SweepPolicy<K>, F>(
         &mut self,
         policy: &mut P,
-        read: impl AsyncFn(&P, &K, bool) -> Result<(RecordMark, P::Answer), ReadFault<F>>,
+        read: impl AsyncFn(&P, &K) -> Result<(RecordMark, P::Answer), ReadFault<F>>,
     ) -> Swept<P::Stop, F> {
         loop {
             if self.pending.is_empty()
@@ -122,12 +123,12 @@ impl<K: Clone> TwoSweep<K> {
             {
                 return Swept::Complete;
             }
-            if !policy.take_read() {
+            let confirming = self.pending.is_empty();
+            if !policy.take_read(confirming) {
                 return Swept::Paused;
             }
-            let confirming = self.pending.is_empty();
             let key = self.next_read().clone();
-            let (mark, answer) = match read(policy, &key, confirming).await {
+            let (mark, answer) = match read(policy, &key).await {
                 Ok(read) => read,
                 Err(fault) => return Swept::Fault(fault),
             };

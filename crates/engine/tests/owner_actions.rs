@@ -7317,32 +7317,31 @@ fn a_held_delete_proof_does_not_read_its_proved_nodes_again() {
 #[test]
 fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
     let (mut fx, outer) = GrantScenario::nested();
-    let inner = fx.folder;
     let side = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "side");
-    create_large_subtree(&mut fx, side);
+    let below = create_large_subtree(&mut fx, side);
+    let (holder, granted) = (below[0], below[2]);
     let peer = fx.world.device(b"peer owner device");
     let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
     import_recipient(&mut engine);
-    navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
     let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
         .expect("the delete queues")
         .op_id()
         .unwrap();
-    let before = reads_of(&fx, &[inner]);
-    for _ in 0..8 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-        if reads_of(&fx, &[inner]) > before {
-            break;
-        }
-    }
+    let before = reads_of(&fx, &[granted]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        reads_of(&fx, &[granted]) > before,
+        "the proof read the folder"
+    );
     assert_eq!(
         block_on(fx.engine.status()).unwrap().queue_hold,
         delete_plane_hold(op_id, outer),
-        "the proof read the folder and still holds the delete"
+        "the proof still holds the delete"
     );
     assert_eq!(
         block_on(engine.command(Command::Grant {
-            node: inner,
+            node: granted,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
             grantee_name: None,
@@ -7361,7 +7360,152 @@ fn a_grant_on_a_node_the_proof_read_on_an_earlier_tick_refuses_the_delete() {
     assert!(dead_lettered_as_scope_root(&events, op_id, outer));
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert!(published_bin_entries(&fx).is_empty());
-    assert_nested_scope_intact(&fx, outer);
+    let view = block_on(fx.engine.view()).unwrap();
+    assert!(view.children(ROOT).iter().any(|child| child.id == outer));
+}
+
+/// The second sweep of a large subtree reads a node, and then a later node
+/// does not answer, so the delete holds. A grant lands on the node the second
+/// sweep read, and the index omits it. The tick that publishes reads every
+/// node again, so the grant refuses the delete.
+#[test]
+fn a_grant_on_a_node_a_held_second_sweep_read_refuses_the_delete() {
+    let (mut fx, outer) = GrantScenario::nested();
+    let inner = fx.folder;
+    let side = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "side");
+    let below = create_large_subtree(&mut fx, side);
+    let (holder, granted) = (below[0], below[2]);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let (before, inner_before) = (reads_of(&fx, &[granted]), reads_of(&fx, &[inner]));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let one_read = fx.world.record_store.endpoints().len();
+    assert_eq!(
+        (
+            reads_of(&fx, &[granted]) - before,
+            reads_of(&fx, &[inner]) - inner_before
+        ),
+        (one_read, 0),
+        "the first tick reads the granted node and not the failing one"
+    );
+
+    // The failing node answers its first read and not its second.
+    let failing = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(failing.as_str(), one_read);
+    let read_before = reads_of(&fx, &[granted]);
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        if reads_of(&fx, &[inner]) - inner_before >= 2 * one_read {
+            break;
+        }
+    }
+    assert!(
+        reads_of(&fx, &[granted]) > read_before,
+        "the second sweep reads the granted node before the failing one"
+    );
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer),
+        "the failing node holds the delete"
+    );
+
+    // The index omits the new root, so only its own record shows the grant.
+    let unindexed = published_value(&fx.world, &write_name(ROOT));
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: granted,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    publish_value_at(&fx.world, ROOT, &unindexed);
+    events_so_far(&mut fx._events);
+    let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
+    fx.world.record_store.heal_get_for(failing.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&events), 0);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
+    assert!(published_bin_entries(&fx).is_empty());
+}
+
+/// A node past the first tick of a large subtree does not answer. Each tick
+/// of the outage reads only that node, and the delete completes when it
+/// answers.
+#[test]
+fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
+    let (mut fx, outer) = GrantScenario::nested();
+    let inner = fx.folder;
+    let side = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "side");
+    let below = create_large_subtree(&mut fx, side);
+    let failing = write_name(inner);
+    fx.world.record_store.fail_get_for(failing.as_str());
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let mut subtree = below.clone();
+    subtree.extend([outer, inner, side]);
+    let one_read = fx.world.record_store.endpoints().len();
+    let before = reads_of(&fx, &[inner]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        reads_of(&fx, &[inner]),
+        before,
+        "the first tick does not reach the failing node"
+    );
+
+    let mut outage = Vec::new();
+    for _ in 0..4 {
+        let before = reads_of(&fx, &subtree);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        outage.push(reads_of(&fx, &subtree) - before);
+        assert_eq!(
+            block_on(fx.engine.status()).unwrap().queue_hold,
+            delete_plane_hold(op_id, outer)
+        );
+    }
+    assert!(
+        outage[0] <= 128 * one_read,
+        "the tick that reaches the failing node stays under the bound: {outage:?}"
+    );
+    assert_eq!(
+        outage[1..],
+        [one_read; 3],
+        "each later tick reads the failing node alone"
+    );
+
+    fx.world.record_store.heal_get_for(failing.as_str());
+    for _ in 0..4 {
+        if queued_ops(&fx.owner_device) == 0 {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    assert_eq!(block_on(fx.engine.status()).unwrap().queue_hold, None);
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert_eq!(published_bin_entries(&fx)[0].node_id, outer.0);
 }
 
 /// A descendant ref that no proof will ever answer charges the delete, which

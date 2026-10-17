@@ -855,12 +855,14 @@ delete does (ADR 0043).
   the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
   target and reason sent to the host. Before any other queued delete
   publishes, the drain must prove the target's plane from its current record,
-  and then the plane of each node below it, under the same rules. The proof
-  reads a bounded number of records on each tick, and the session keeps it in
-  memory by op. A proof that spans ticks reads each node again before the
-  first publish: a node with another record starts the proof again, and a
-  grant section or a known scope root refuses the delete. Only a file
-  whose own body this device has read skips the proof, as a ref kind is
+  and then the plane of each node below it, under the same rules. The session
+  keeps the proof in memory by op. A tick that does not publish reads at most
+  the tick bound. When the proof spans ticks, the publish tick reads the whole
+  subtree again with no bound: a node with another record starts the proof
+  again, and a grant section or a known scope root refuses the delete. A read
+  of that sweep that does not answer holds the delete, and the next tick
+  reads that node first and alone. A proof past the node bound of the other
+  walks holds the delete and reads no more. Only a file whose own body this device has read skips the proof, as a ref kind is
   authored by any writer of the scope. A node every endpoint calls vacant, or
   one at a name the scope's write seed does not derive, has no proof to wait
   for: the delete is charged, and it dead-letters having published nothing.
