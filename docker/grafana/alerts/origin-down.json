@@ -1,0 +1,55 @@
+[
+  {
+    "title": "Staging Origin Down",
+    "ruleGroup": "CipherBox Infrastructure",
+    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
+    "noDataState": "Alerting",
+    "execErrState": "Error",
+    "for": "2m",
+    "condition": "B",
+    "annotations": {
+      "summary": "The staging API is down or the origin sends no metrics",
+      "description": "Grafana Cloud holds no up{job=\"api\"} sample for 5 minutes, or the sample is 0. Alloy runs on the staging VPS, so the VPS, its network, Alloy or the API container stopped. Grafana Cloud is outside the VPS, so this rule fires while the VPS is off. Check the VPS state in the Hostinger panel, then journalctl --list-boots on the VPS."
+    },
+    "labels": {
+      "severity": "critical",
+      "service": "cipherbox",
+      "operation": "origin"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
+        "model": {
+          "expr": "min(up{job=\"api\"}) or vector(0)",
+          "instant": true,
+          "range": false,
+          "intervalMs": 30000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [
+            {
+              "evaluator": { "type": "lt", "params": [1] },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "type": "last" }
+            }
+          ],
+          "refId": "B"
+        }
+      }
+    ]
+  }
+]

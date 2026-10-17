@@ -144,7 +144,7 @@ The staging VPS has 2 vCPU and the Grafana Cloud tier is small. Do not widen the
 
 ## Alert Rules
 
-`docker/grafana/alerts/*.json` holds the rule definitions. `docker/grafana/scripts/provision-alerts.sh` posts them to the Grafana provisioning API. Each file holds either one rule object or an array of rule objects.
+`docker/grafana/alerts/*.json` holds the rule definitions. `docker/grafana/scripts/provision-alerts.sh` posts them to the Grafana provisioning API. Each file holds either one rule object or an array of rule objects. Each staging deploy runs the script in `.github/workflows/provision-dashboard.yml`, after the dashboard push, with `ALERT_FILES=origin-down.json`. The other rule files do not set `"instant": true`. The live rules are not yet read. That step needs `GRAFANA_API_KEY` to have the alert rule writer role and folder create. Without them, the script exits 77 and the step skips with a notice. Any other failure fails the step.
 
 The script replaces two literal placeholders in every file. Keep both spellings exact:
 
@@ -165,6 +165,7 @@ docker/grafana/scripts/provision-alerts.sh "$GRAFANA_URL" "$GRAFANA_API_KEY" "$G
 | -------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------- |
 | `api-endpoint-latency.json`      | 4     | p95 and p99 of `http_request_duration_seconds_bucket` on `/auth/login`, `/auth/refresh`, and `/auth/gateway/verify` |
 | `test-login-rate.json`           | 1     | `auth_attempts_total{route="/auth/test-login", outcome="success"}` above 100 per hour                               |
+| `origin-down.json`               | 1     | `up{job="api"}` absent for 5 minutes or 0, then 2 minutes pending: the VPS, its network, Alloy or the API stopped   |
 | `gateway-verify-failures.json`   | 1     | refused share of `gateway_verify_total` above 25% for 10 minutes                                                    |
 | `accelerator-upstream-down.json` | 1     | `up{job="kubo"}` or `up{job="someguy"}` at 0 for 5 minutes                                                          |
 
@@ -172,7 +173,9 @@ The last two rules answer one obligation. Caddy denies a request on any non-204 
 
 The refused-share rule guards its ratio twice. `clamp_min` holds the denominator away from zero. A floor of 20 verify calls in the window stops a fire on a handful of samples.
 
-`accelerator-upstream-down.json` sets `noDataState` to `NoData` and `execErrState` to `Error`. The other rules set both to `OK`. A silent upstream must not read as healthy when the scrape itself stops.
+`accelerator-upstream-down.json` sets `noDataState` to `NoData` and `execErrState` to `Error`. A silent upstream must not read as healthy when the scrape itself stops.
+
+`origin-down.json` sets `noDataState` to `Alerting` and `execErrState` to `Error`. Its query `min(up{job="api"}) or vector(0)` gives 0 when the series is absent and when the API is down, so a stopped VPS and a stopped API container both fire the rule. Grafana Cloud is outside the VPS, so the rule fires while the VPS is off. The rule goes to the default notification policy and its contact point. The other rules set both states to `OK`.
 
 ### Retired rules
 
