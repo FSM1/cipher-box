@@ -766,8 +766,8 @@ impl RotationAncestry {
 /// the walk allows it ([`ScopeWalk::write_plane`]).
 ///
 /// A descendant's record is bound to its parent by an ascent link the gate
-/// verifies ([`gate_root_pass`](super::gated_read::gate_root_pass)) — a `directChildScopeIndex` entry, or one
-/// reparented into a grant's subtree. A vault root carries no ascent link, so
+/// verifies (`gated_read::gate_root_pass`) — a `directChildScopeIndex` entry,
+/// or one reparented into a grant's subtree. A vault root carries no ascent link, so
 /// requiring one there would refuse every honest record.
 #[derive(Clone, Copy)]
 enum RootAnchor {
@@ -778,8 +778,8 @@ enum RootAnchor {
 }
 
 impl RootAnchor {
-    /// The child binding [`gate_root_pass`](super::gated_read::gate_root_pass) checks for a root read under this
-    /// anchor as `scope_id`.
+    /// The child binding `gated_read::gate_root_pass` checks for a root read
+    /// under this anchor as `scope_id`.
     fn expected_child(self, scope_id: [u8; 16]) -> Option<[u8; 16]> {
         match self {
             Self::Descendant => Some(scope_id),
@@ -1712,9 +1712,10 @@ where
     ///
     /// A grant cut promotes an interior folder into a scope root of its own, and
     /// the child gate refuses such a record on every read path. This walk is the
-    /// one descent that opens it: [`Self::descend`] runs [`gate_root_pass`](super::gated_read::gate_root_pass),
-    /// whose ascent-link requirement is release-active, so a root planted at a
-    /// derived name by a committed writer is refused.
+    /// one descent that opens it: [`Self::descend`] runs
+    /// `gated_read::gate_root_pass`, whose ascent-link requirement is
+    /// release-active, so a root planted at a derived name by a committed
+    /// writer is refused.
     ///
     /// `root_record_bytes` are the vault root's own record, which the caller
     /// already holds. `Err` where the vault root itself did not gate: a caller
@@ -3067,22 +3068,14 @@ where
     /// The freshest verified record at this scope root's name, gated under this
     /// device's own grant blob with the contact-anchored owner as the stage-2
     /// anchor. Idempotent: a record at this name's own sequence floor recovers
-    /// through [`reread_at_floor`](super::gated_read::reread_at_floor), so a pass that aborted before publishing can
-    /// read again.
+    /// through `gated_read::reread_at_floor`, so a pass that aborted before
+    /// publishing can read again.
     async fn gated_root(
         &self,
         granted: &GrantedScopeRoot,
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
         let floors = self.granted_floors(granted);
-        let adopter = RootAdopter::for_grantee(
-            self.gateway,
-            self.http,
-            &floors,
-            self.keys.enc_secret,
-            self.keys.owner_enc_pub,
-            self.keys.owner_identity,
-            granted.scope_id,
-        );
+        let adopter = self.root_adopter(&floors, granted);
         RootRead::new(&adopter, self.snapshot_cache, None)
             .read(self.transport, &granted.ipns_name)
             .await
@@ -3090,6 +3083,23 @@ where
                 Some(_) => refusal.verdict,
                 None => RootGateVerdict::Unavailable,
             })
+    }
+
+    /// The adopter this device gates `granted`'s root under, over `floors`.
+    fn root_adopter<'s>(
+        &'s self,
+        floors: &'s SharerScopedFloorStore<'s, F>,
+        granted: &GrantedScopeRoot,
+    ) -> RootAdopter<'s, H, SharerScopedFloorStore<'s, F>> {
+        RootAdopter::for_grantee(
+            self.gateway,
+            self.http,
+            floors,
+            self.keys.enc_secret,
+            self.keys.owner_enc_pub,
+            self.keys.owner_identity,
+            granted.scope_id,
+        )
     }
 
     /// Gate the scope root and assemble everything its flat cut re-seals, parking
@@ -3434,7 +3444,7 @@ where
     }
 
     /// Prove a walked child really is a descendant scope root **of this scope**
-    /// ([`gate_root_pass`](super::gated_read::gate_root_pass)), and report the name it gated current at.
+    /// (`gated_read::gate_root_pass`), and report the name it gated current at.
     ///
     /// The read body is authored by any committed writer, so the `ChildRef` that
     /// led here proves nothing at all.
@@ -5054,8 +5064,8 @@ where
     /// the grantee this rotation is cutting — so an entry naming an ordinary
     /// in-scope node would carve that node out of the wave and leave it live at
     /// a name the revokee's retired write scope seed still derives.
-    /// [`gate_root_pass`](super::gated_read::gate_root_pass) is the proof, over the seed the root's own owner
-    /// blob yielded.
+    /// `gated_read::gate_root_pass` is the proof, over the seed the root's own
+    /// owner blob yielded.
     async fn record_scope_boundary(
         &self,
         index: &[ChildScopeRef],
@@ -6751,6 +6761,28 @@ mod tests {
 
         fn net_rooted(&self, ancestry: RotationAncestry) -> Net<'_, T> {
             self.net_rooted_with_floors(ancestry, &self.floors)
+        }
+
+        /// The record the first endpoint serves at `name`, gated by `net`'s
+        /// vault-anchored root read as a fan-out that met a failed endpoint or
+        /// not.
+        fn gate_served(
+            &self,
+            net: &Net<'_, T>,
+            scope_id: [u8; 16],
+            name: &IpnsName,
+            endpoint_failed: bool,
+        ) -> Result<GatedScopeRoot, RootGateVerdict> {
+            let adopter = net.root_adopter(scope_id);
+            let bytes = self
+                .store
+                .record_at(&self.store.endpoints()[0], name.as_str())
+                .expect("an endpoint serves the root");
+            block_on(RootRead::new(&adopter, &self.cache, None).gate_served(
+                name,
+                &bytes,
+                endpoint_failed,
+            ))
         }
 
         /// [`Harness::net_rooted`] over an arbitrary floor store.
@@ -8972,9 +9004,14 @@ mod tests {
         let mut net = harness.net(&[]);
         net.http = &not_found;
 
-        let read = block_on(net.gated_root(SCOPE, &root.name)).map(|_| ());
+        let read = |failed| {
+            harness
+                .gate_served(&net, SCOPE, &root.name, failed)
+                .map(|_| ())
+        };
 
-        assert_eq!(read, Err(RootGateVerdict::HeadBlockAbsent));
+        assert_eq!(read(false), Err(RootGateVerdict::HeadBlockAbsent));
+        assert_eq!(read(true), Err(RootGateVerdict::Unavailable));
     }
 
     /// A floor store that answers every epoch-floor read with an HTTP 404.
@@ -9088,7 +9125,9 @@ mod tests {
 
         block_on(harness.net(&[]).publish_scope_root(&cut)).expect("the cut lands");
 
-        let regated = block_on(harness.net(&[]).gated_root(SCOPE, &root.name)).map(|_| ());
+        let regated = harness
+            .gate_served(&harness.net(&[]), SCOPE, &root.name, false)
+            .map(|_| ());
         assert_eq!(regated, Ok(()), "the cut we signed passes our own gate");
     }
 
@@ -10214,7 +10253,9 @@ mod tests {
         let net = harness.net(core::slice::from_ref(&child_ref));
 
         assert!(
-            block_on(net.gated_root(CHILD_SCOPE, &child.name)).is_ok(),
+            harness
+                .gate_served(&net, CHILD_SCOPE, &child.name, false)
+                .is_ok(),
             "the record itself is gate-passing",
         );
         assert_eq!(
@@ -10745,6 +10786,31 @@ mod tests {
         fn cut(&self) -> Result<RotationOutcome, RotateError> {
             block_on(self.net().rotate_on_scope_exit(NodeId(GRANTEE_SCOPE)))
         }
+
+        /// The root record the first endpoint serves, gated by this device's
+        /// root read as a fan-out that met a failed endpoint or not.
+        fn gate_served(&self, endpoint_failed: bool) -> Result<(), RootGateVerdict> {
+            let net = self.net();
+            let granted = &self.granted[0];
+            let floors = net.granted_floors(granted);
+            let adopter = net.root_adopter(&floors, granted);
+            let bytes = self
+                .harness
+                .store
+                .record_at(
+                    &self.harness.store.endpoints()[0],
+                    granted.ipns_name.as_str(),
+                )
+                .expect("an endpoint serves the root");
+            block_on(
+                RootRead::new(&adopter, &self.harness.cache, None).gate_served(
+                    &granted.ipns_name,
+                    &bytes,
+                    endpoint_failed,
+                ),
+            )
+            .map(|_| ())
+        }
     }
 
     /// Republish `root`'s record carrying `section` instead of its own, at the
@@ -10910,7 +10976,7 @@ mod tests {
             "the record standing at the name is the cut"
         );
         assert_eq!(
-            block_on(world.net().gated_root(&world.granted[0])).map(|_| ()),
+            world.gate_served(false),
             Ok(()),
             "the cut this grantee signed passes its own gate on read-back",
         );
@@ -11030,7 +11096,8 @@ mod tests {
         // publishing must be able to read the unchanged record again — otherwise
         // its own sequence floor locks the cut out for good (`reread_at_floor`).
         let world = plain_world(Permission::Write);
-        block_on(world.net().gated_root(&world.granted[0]))
+        world
+            .gate_served(false)
             .expect("the first read adopts and raises the floor");
 
         assert!(
@@ -11047,7 +11114,7 @@ mod tests {
         let key = refused.root.name.as_str().as_bytes();
         refused.harness.cache.fail_puts();
         assert_eq!(
-            block_on(refused.net().gated_root(&refused.granted[0])).map(|_| ()),
+            refused.gate_served(false),
             Err(RootGateVerdict::Unavailable),
         );
         assert_eq!(
@@ -11057,7 +11124,7 @@ mod tests {
         );
 
         let world = plain_world(Permission::Write);
-        block_on(world.net().gated_root(&world.granted[0])).expect("the read adopts");
+        world.gate_served(false).expect("the read adopts");
         assert_eq!(sequence_floor_of(&world.harness, key), Some(1));
         assert_eq!(
             world.harness.cache.peek(key),
@@ -11105,7 +11172,7 @@ mod tests {
         );
 
         assert_eq!(
-            block_on(world.net().gated_root(&world.granted[0])).map(|_| ()),
+            world.gate_served(false),
             Err(RootGateVerdict::Rejected),
             "the gated read refuses it, so no reader trusts the grant either",
         );
@@ -18153,10 +18220,9 @@ mod tests {
                 ContactLabel::of(&grantee_label_seed(), &world.harness.identity.to_sec1()),
             );
             raise_past(&floors, &world.root.name);
-            let read = || block_on(world.net().gated_root(&world.granted[0])).map(|_| ());
 
             assert_eq!(
-                failed_then_healed(&world.harness, read),
+                (world.gate_served(true), world.gate_served(false)),
                 (
                     Err(RootGateVerdict::Unavailable),
                     Err(RootGateVerdict::BelowFloor)
@@ -18272,6 +18338,7 @@ mod tests {
                     during,
                     Err(NodeStop::Refused {
                         reason: ResolveFailure::Unavailable,
+                        cause: DropCause::EndpointUnavailable,
                         ..
                     })
                 ),
@@ -18279,6 +18346,42 @@ mod tests {
             );
             harness.store.heal_endpoint(a);
             assert_eq!(read(), Ok(vec![LEAF]));
+        }
+
+        /// ADR 0071 D4: every endpoint answered with the interior node's record
+        /// below its floor, so the wave refuses it as a rollback.
+        #[test]
+        fn the_write_cut_interior_read_every_endpoint_answers_is_a_rollback() {
+            let harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            block_on(
+                harness
+                    .floors
+                    .raise_sequence_floor(staged.mid_name.as_str().as_bytes(), 2),
+            )
+            .expect("the floor raises");
+            let owner = owner_identity();
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+
+            let read = block_on(net.resolve_node(&MID, None)).map(|node| node.child_node_ids);
+
+            assert!(
+                matches!(
+                    read,
+                    Err(NodeStop::Refused {
+                        reason: ResolveFailure::Rejected,
+                        cause: DropCause::BelowSequenceFloor,
+                        ..
+                    })
+                ),
+                "{read:?}"
+            );
         }
     }
 }

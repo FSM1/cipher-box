@@ -119,7 +119,7 @@ pub(super) enum RootGateVerdict {
     /// The record's own body fills the re-seal reservation, so no re-seal of it
     /// is authorable (`content::limits::resealable_root_rest_bytes`). Only the
     /// owner's rotation tells this apart from a plain rejection, and only to
-    /// step over the record ([`OwnerRotationNet::last_known_good_root`](super::rotation::OwnerRotationNet::last_known_good_root)); every
+    /// step over the record (`OwnerRotationNet::last_known_good_root`); every
     /// other reader folds it back into one.
     NotResealable,
     /// Every block source answered that it holds no head block for the CID
@@ -411,7 +411,7 @@ async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
 
 /// One scope root read: the fan-out, the root gate ladder over the record it
 /// picks, and the fold of [`RootGateVerdict::after_fanout`]. The bytes it
-/// gates are left as last-known-good ([`keep_then_commit`]).
+/// gates are left as last-known-good.
 pub(super) struct RootRead<'a, H, F, S> {
     adopter: &'a RootAdopter<'a, H, F>,
     snapshot_cache: &'a S,
@@ -584,23 +584,18 @@ mod tests {
     /// while an endpoint fails; every other verdict passes the fold as it is.
     #[test]
     fn the_fold_makes_only_the_endpoint_causes_unavailable_while_an_endpoint_fails() {
-        for verdict in [
-            RootGateVerdict::Rejected,
-            RootGateVerdict::OwnerSeedRefused,
-            RootGateVerdict::Unavailable,
-            RootGateVerdict::Superseded,
-            RootGateVerdict::NotResealable,
-            RootGateVerdict::HeadBlockAbsent,
-            RootGateVerdict::HeadBlockRefused,
-            RootGateVerdict::BelowFloor,
-            RootGateVerdict::Absent,
+        use RootGateVerdict::*;
+        for (verdict, folded) in [
+            (Rejected, Rejected),
+            (OwnerSeedRefused, OwnerSeedRefused),
+            (Unavailable, Unavailable),
+            (Superseded, Superseded),
+            (NotResealable, NotResealable),
+            (HeadBlockAbsent, Unavailable),
+            (HeadBlockRefused, HeadBlockRefused),
+            (BelowFloor, Unavailable),
+            (Absent, Absent),
         ] {
-            let folded = match verdict {
-                RootGateVerdict::BelowFloor | RootGateVerdict::HeadBlockAbsent => {
-                    RootGateVerdict::Unavailable
-                }
-                other => other,
-            };
             assert_eq!(verdict.after_fanout(true), folded, "{verdict:?}, failed");
             assert_eq!(
                 verdict.after_fanout(false),
