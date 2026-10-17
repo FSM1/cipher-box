@@ -130,40 +130,6 @@ impl<'a> KeptJudge<'a> {
         }
     }
 
-    /// The reads a kept op at `place` needs before [`Self::scan`]. Only an op
-    /// whose place this pass cannot check, under the root its note names,
-    /// reads more. The floor of that root decides whether the bound runs. A
-    /// delete whose anchor `base` lacks under a proved root leaves at the
-    /// bound, and at once when a read of this session at the live parent name
-    /// saw the folder its note names unlinked: the node went with it (ADR 0069
-    /// D6). A base after a cold start lacks deep folders, so absence alone
-    /// shows nothing.
-    pub(crate) fn scan_reads(
-        op: &Op,
-        note: &KeptNote,
-        place: KeptPlace,
-        base: &Snapshot,
-        proved_roots: &[NodeId],
-    ) -> ScanReads {
-        let (KeptPlace::Elsewhere, Some(root)) = (place, note.scope) else {
-            return ScanReads::None;
-        };
-        let anchor = kept_anchor(op, note.parent);
-        let anchored = base.contains(anchor);
-        let proved = proved_roots.contains(&root);
-        if !matches!(op.kind, OpKind::Delete { .. }) || anchored || !proved {
-            let folder = kept_folder(op, note.parent);
-            return ScanReads::Unchecked {
-                root,
-                unlinked: (!anchored && proved).then_some([folder, anchor]),
-            };
-        }
-        match parent_read(op, note.parent) {
-            Some(folder) => ScanReads::Gone { root, folder },
-            None => ScanReads::None,
-        }
-    }
-
     /// The fate of the kept op `op_id` at `place`, with what its reads showed.
     pub(crate) fn scan(
         &self,
@@ -205,40 +171,69 @@ impl<'a> KeptJudge<'a> {
 }
 
 /// Whether a halt can make `op` leave the queue with no notice, as its rebase
-/// dead letter does: a permanent halt of a kind that keeps. The drain then
-/// reads whether the op is kept ([`crate::sync::kept_op::KeptOps::holds`]).
+/// dead letter does: a permanent halt of a kind that keeps.
 pub(crate) fn on_halt(permanent: bool, op: &Op) -> bool {
     permanent && keeps(&op.kind)
 }
 
-/// The folder whose live name a kept delete reads, from the `parent` its
-/// note names (ADR 0069 D6). The read repaints the base, so the rebase
-/// applies the delete again when the node is alive and drops it when the
-/// node is gone. A folder its old parent no longer names took the node with
-/// it.
-pub(crate) fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
-    parent.filter(|_| matches!(op.kind, OpKind::Delete { .. }) && reads_kept_parent(op, parent))
+/// The reads a kept op at `place` needs before [`KeptJudge::scan`]. Only an
+/// op whose place this pass cannot check, under the root its note names,
+/// reads more. The floor of that root decides whether the bound runs. A
+/// delete whose anchor `base` lacks under a proved root leaves at the
+/// bound, and at once when a read of this session at the live parent name
+/// saw the folder its note names unlinked: the node went with it (ADR 0069
+/// D6). A base after a cold start lacks deep folders, so absence alone
+/// shows nothing.
+pub(crate) fn scan_reads(
+    op: &Op,
+    note: &KeptNote,
+    place: KeptPlace,
+    base: &Snapshot,
+    proved_roots: &[NodeId],
+) -> ScanReads {
+    let (KeptPlace::Elsewhere, Some(root)) = (place, note.scope) else {
+        return ScanReads::None;
+    };
+    let anchor = kept_anchor(op, note.parent);
+    let anchored = base.contains(anchor);
+    let proved = proved_roots.contains(&root);
+    if !matches!(op.kind, OpKind::Delete { .. }) || anchored || !proved {
+        let folder = kept_folder(op, note.parent);
+        return ScanReads::Unchecked {
+            root,
+            unlinked: (!anchored && proved).then_some([folder, anchor]),
+        };
+    }
+    match parent_read(op, note.parent) {
+        Some(folder) => ScanReads::Gone { root, folder },
+        None => ScanReads::None,
+    }
 }
 
-/// The folders whose live names a kept rename or move under `parent` reads,
-/// the source first: the read of the destination then unlinks a node that
-/// the source still holds. `None` for any other op.
+/// The folder whose live name a kept delete reads: the `parent` its note
+/// names (ADR 0069 D6).
+pub(crate) fn parent_read(op: &Op, parent: Option<NodeId>) -> Option<NodeId> {
+    parent.filter(|_| matches!(op.kind, OpKind::Delete { .. }))
+}
+
+/// The folders whose live names a kept rename or move under `parent` reads:
+/// the source, and the destination of a move to another folder. The source
+/// reads first: the read of the destination then unlinks a node that the
+/// source still holds. `None` for any other op.
 pub(crate) fn place_reads(
     op: &Op,
     parent: Option<NodeId>,
     result: &KeptResult,
-) -> Option<(NodeId, Vec<NodeId>)> {
+) -> Option<(NodeId, Option<NodeId>)> {
     if matches!(op.kind, OpKind::Delete { .. }) || !reads_kept_parent(op, parent) {
         return None;
     }
     let parent = parent?;
-    let mut folders = vec![parent];
-    if let KeptResult::Move { to, .. } = result
-        && *to != parent
-    {
-        folders.push(*to);
-    }
-    Some((parent, folders))
+    let to = match result {
+        KeptResult::Move { to, .. } if *to != parent => Some(*to),
+        _ => None,
+    };
+    Some((parent, to))
 }
 
 /// Whether a live head check reads `op`: a content edit, and a version
@@ -260,7 +255,8 @@ pub(crate) fn lists_version(versions: &[Version], content: &StagedContent) -> bo
 
 /// The live checks of one pass. An earlier op of this device that the rebase
 /// applies again, a create the base lacks or a lost write, sets the value
-/// that the next op on its node is compared with.
+/// that the next op on its node is compared with. The place check uses
+/// `created` and `places`; the head check uses `heads`.
 #[derive(Default)]
 pub(crate) struct LiveChecks {
     created: BTreeMap<NodeId, (NodeId, Zeroizing<String>)>,
@@ -289,13 +285,16 @@ impl LiveChecks {
         result: &KeptResult,
         base_place: impl FnOnce() -> Option<(NodeId, Zeroizing<String>)>,
     ) -> Option<DropReason> {
-        let place = self
-            .places
-            .get(&op.target)
-            .cloned()
-            .or_else(base_place)
-            .or_else(|| self.created.get(&op.target).cloned());
-        match kept_outcome(result, live_place(result, parent, place.as_ref())) {
+        let base;
+        let place = match self.places.get(&op.target) {
+            Some(place) => Some(place),
+            None => {
+                base = base_place();
+                base.as_ref().or_else(|| self.created.get(&op.target))
+            }
+        };
+        let outcome = kept_outcome(result, live_place(result, parent, place));
+        match outcome {
             KeptOutcome::Landed => Some(DropReason::AlreadySatisfied),
             KeptOutcome::Overtaken => Some(DropReason::TargetAdvanced),
             KeptOutcome::Lost => {
@@ -489,7 +488,7 @@ pub(crate) enum KeptPlace {
 
 impl KeptPlace {
     /// The scope root this place names, if any.
-    pub(crate) fn root(self) -> Option<NodeId> {
+    fn root(self) -> Option<NodeId> {
         match self {
             Self::Writes { root, .. } | Self::Keyless { root } | Self::Unchecked { root, .. } => {
                 Some(root)
@@ -515,7 +514,7 @@ pub(crate) enum KeptVerdict {
 /// Whether `place` shows a flip of the scope the op published under: a new
 /// write epoch, another scope root, or a scope this device no longer writes
 /// or cannot check.
-pub(crate) fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
+fn shows_a_flip(note: &KeptNote, place: KeptPlace) -> bool {
     match place {
         KeptPlace::Keyless { .. } | KeptPlace::Unnamespaced => true,
         KeptPlace::Writes {
@@ -572,13 +571,13 @@ pub(crate) fn kept_anchor(op: &Op, parent: Option<NodeId>) -> NodeId {
 /// The folder a kept op writes under ([`KeptNote::parent`]), and else its
 /// anchor. It differs from the anchor only for an edit and a version
 /// restore, which anchor at their file.
-pub(crate) fn kept_folder(op: &Op, parent: Option<NodeId>) -> NodeId {
+fn kept_folder(op: &Op, parent: Option<NodeId>) -> NodeId {
     parent.unwrap_or_else(|| kept_anchor(op, parent))
 }
 
 /// How a later op of this device on the same node decides an earlier op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Overtaken {
+enum Overtaken {
     /// A later delete removes the node.
     ByDelete,
     /// A later bin restore cancels this delete.
@@ -592,7 +591,7 @@ pub(crate) enum Overtaken {
 /// cancelled delete leaves at once; before a flip, a bin restore can still
 /// cancel a delete, so the ops under it wait. A restore that publishes
 /// cancels its delete durably (`Drain::publish_queue`).
-pub(crate) fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
+fn overtaken_by_a_later_op(queue: &[(OpId, Op)]) -> BTreeMap<OpId, Overtaken> {
     let mut later: BTreeMap<NodeId, (bool, bool)> = BTreeMap::new();
     let mut overtaken = BTreeMap::new();
     for (op_id, op) in queue.iter().rev() {
@@ -651,33 +650,9 @@ mod tests {
 
     use super::*;
     use crate::sync::kept_op::KeptNotes;
+    use crate::sync::kept_op::tests::{PUBLISHED, SCOPE, at, here, note};
     use crate::sync::provision::GENESIS_EPOCH;
 
-    const PUBLISHED: UnixMillis = UnixMillis(1_000);
-
-    fn note(write_epoch: u64) -> KeptNote {
-        KeptNote {
-            scope: Some(SCOPE),
-            write_epoch,
-            published_at: PUBLISHED,
-            parent: None,
-            result: None,
-        }
-    }
-
-    fn at(after_publish: Duration) -> UnixMillis {
-        PUBLISHED.saturating_add(after_publish)
-    }
-
-    fn here(live_write_epoch: u64, anchor_read_live: bool) -> KeptPlace {
-        KeptPlace::Writes {
-            root: SCOPE,
-            live_write_epoch,
-            anchor_read_live,
-        }
-    }
-
-    const SCOPE: NodeId = NodeId([5; 16]);
     const PARENT: NodeId = NodeId([6; 16]);
 
     #[test]
@@ -978,7 +953,7 @@ mod tests {
         };
         let proved = [SCOPE];
         let reads = |op: Op, note: &KeptNote, place, held: &[NodeId], proved: &[NodeId]| {
-            KeptJudge::scan_reads(&op, note, place, &base_with(held), proved)
+            scan_reads(&op, note, place, &base_with(held), proved)
         };
         let unchecked = |unlinked| ScanReads::Unchecked {
             root: SCOPE,
@@ -1106,7 +1081,7 @@ mod tests {
         );
     }
 
-    const TO: NodeId = NodeId([7; 16]);
+    const DEST: NodeId = NodeId([7; 16]);
 
     fn edit(root_cid: &[u8]) -> Op {
         op(OpKind::UpdateContent {
@@ -1128,9 +1103,9 @@ mod tests {
     fn moved(to: NodeId) -> KeptResult {
         KeptResult::Move {
             from: PARENT,
-            from_name: Zeroizing::new("a".into()),
+            from_name: text("a"),
             to,
-            to_name: Zeroizing::new("b".into()),
+            to_name: text("b"),
         }
     }
 
@@ -1154,7 +1129,7 @@ mod tests {
         });
         let relocation = op(OpKind::Move {
             from_parent: PARENT,
-            new_parent: TO,
+            new_parent: DEST,
             new_name: "b".into(),
             replacing: None,
             crossing: crate::sync::op::ScopeCrossing::Intra,
@@ -1166,15 +1141,15 @@ mod tests {
 
         assert_eq!(
             place_reads(&rename, Some(PARENT), &rename_result()),
-            Some((PARENT, vec![PARENT]))
+            Some((PARENT, None))
         );
         assert_eq!(
-            place_reads(&relocation, Some(PARENT), &moved(TO)),
-            Some((PARENT, vec![PARENT, TO]))
+            place_reads(&relocation, Some(PARENT), &moved(DEST)),
+            Some((PARENT, Some(DEST)))
         );
         assert_eq!(
             place_reads(&relocation, Some(PARENT), &moved(PARENT)),
-            Some((PARENT, vec![PARENT]))
+            Some((PARENT, None))
         );
         assert_eq!(place_reads(&rename, None, &rename_result()), None);
         assert_eq!(place_reads(&delete(), Some(PARENT), &rename_result()), None);
@@ -1194,13 +1169,13 @@ mod tests {
 
     fn rename_result() -> KeptResult {
         KeptResult::Rename {
-            before: Zeroizing::new("a".into()),
-            after: Zeroizing::new("b".into()),
+            before: text("a"),
+            after: text("b"),
         }
     }
 
     fn at_place(name: &str) -> Option<(NodeId, Zeroizing<String>)> {
-        Some((PARENT, Zeroizing::new(name.into())))
+        Some((PARENT, text(name)))
     }
 
     /// A lost rename applies again, so the next op on its node is checked
@@ -1225,8 +1200,8 @@ mod tests {
             None
         );
         let later = KeptResult::Rename {
-            before: Zeroizing::new("x".into()),
-            after: Zeroizing::new("b".into()),
+            before: text("x"),
+            after: text("b"),
         };
         assert_eq!(
             checks.place_check(&rename, PARENT, &later, || at_place("a")),

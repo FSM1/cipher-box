@@ -115,6 +115,7 @@ use crate::sync::doomed::{
 use crate::sync::kept_judge::{
     KeptJudge, KeptPlace, LiveChecks, NoteDraft, ScanFacts, ScanFate, ScanReads, keeps,
     kept_anchor, needs_result, on_halt, parent_read, place_reads, reads_head, reads_kept_parent,
+    scan_reads,
 };
 use crate::sync::kept_op::{
     KeptNotes, KeptOps, KeptResult, is_kept, load_kept_notes, store_kept_notes,
@@ -3363,7 +3364,7 @@ where
             }
             self.release_hold_of(applied.op_id);
             // A published bin restore cancels its nearest earlier delete, also
-            // one that became kept in this pass ([`overtaken_by_a_later_op`]).
+            // one that became kept in this pass (`kept_judge::overtaken_by_a_later_op`).
             // The delete leaves first: a restore left queued leaves at its
             // replay, and a kept delete left alone would bin the node again.
             if matches!(applied.op.kind, OpKind::Restore { .. })
@@ -3698,7 +3699,7 @@ where
                 let fate = if keeps(&op.kind) {
                     let note = notes.note_at(op_id, now);
                     let mut place = self.kept_place(scope, &op, note.parent, note.scope).await?;
-                    let reads = KeptJudge::scan_reads(
+                    let reads = scan_reads(
                         &op,
                         &note,
                         place,
@@ -4077,8 +4078,10 @@ where
     }
 
     /// Read at its live name the folder that each kept delete under a flip
-    /// unlinked its node from ([`parent_read`]). Return the deletes whose
-    /// folder its old parent no longer names.
+    /// unlinked its node from ([`parent_read`]). The read repaints the base, so
+    /// the rebase applies the delete again when the node is alive, and drops
+    /// it when the node is gone. Return the deletes whose folder its old
+    /// parent no longer names: the node went with it.
     async fn read_kept_parents(
         &self,
         scope: &DrainScope<'_>,
@@ -4130,7 +4133,7 @@ where
             let Some(result) = kept.result(*op_id) else {
                 continue;
             };
-            let Some((parent, folders)) = place_reads(op, parent, result) else {
+            let Some((parent, to)) = place_reads(op, parent, result) else {
                 continue;
             };
             let at = |halt| HeadHalt {
@@ -4145,7 +4148,7 @@ where
             ) {
                 continue;
             }
-            for folder in folders {
+            for folder in core::iter::once(parent).chain(to) {
                 if self.cells.base.borrow().contains(folder) {
                     self.read_live_folder(scope, pass, folder)
                         .await
@@ -13278,14 +13281,12 @@ mod tests {
                     .insert(
                         op_id,
                         KeptNote {
-                            scope: Some(HARNESS_ROOT),
-                            write_epoch: 2,
                             published_at: harness.seams.scheduler.now(),
-                            parent: Some(KEPT_FOLDER),
                             result: Some(KeptResult::Rename {
                                 before: Zeroizing::new("before".to_owned()),
                                 after: Zeroizing::new("after".to_owned()),
                             }),
+                            ..cut_note()
                         },
                     )
                     .expect("the note is in bounds");

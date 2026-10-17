@@ -554,14 +554,14 @@ pub(crate) async fn retain_pending<St: StagingStore, T>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::sync::kept_judge::{KeptPlace, KeptVerdict, kept_verdict};
 
-    const PUBLISHED: UnixMillis = UnixMillis(1_000);
-    const SCOPE: NodeId = NodeId([5; 16]);
+    pub(crate) const PUBLISHED: UnixMillis = UnixMillis(1_000);
+    pub(crate) const SCOPE: NodeId = NodeId([5; 16]);
 
-    fn note(write_epoch: u64) -> KeptNote {
+    pub(crate) fn note(write_epoch: u64) -> KeptNote {
         KeptNote {
             scope: Some(SCOPE),
             write_epoch,
@@ -571,11 +571,11 @@ mod tests {
         }
     }
 
-    fn at(after_publish: Duration) -> UnixMillis {
+    pub(crate) fn at(after_publish: Duration) -> UnixMillis {
         PUBLISHED.saturating_add(after_publish)
     }
 
-    fn here(live_write_epoch: u64, anchor_read_live: bool) -> KeptPlace {
+    pub(crate) fn here(live_write_epoch: u64, anchor_read_live: bool) -> KeptPlace {
         KeptPlace::Writes {
             root: SCOPE,
             live_write_epoch,
