@@ -7782,8 +7782,9 @@ fn hard_delete_two_ticks(
     (op_id, reads_each_since(fx, subtree, &before))
 }
 
-/// Each node of the subtree below `inner` that the two ticks read `reads`
-/// times, with the folder that names it.
+/// Each node of the subtree of [`large_delete_scenario`] below its two
+/// folders that the two ticks read `reads` times, with the folder that names
+/// it.
 fn read_this_often(subtree: &[NodeId], read: &[usize], reads: usize) -> Vec<(NodeId, NodeId)> {
     // `create_large_subtree`: two folders, then 70 below each.
     (4..subtree.len())
@@ -7844,6 +7845,7 @@ fn assert_a_grant_during_the_walk_refuses_the_hard_delete(walked: bool) {
     assert_eq!(queued_ops(&fx.owner_device), 0);
     let events = events_so_far(&mut fx._events);
     assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert_eq!(
         sequence_at(&fx.world, &write_name(granted)),
@@ -7861,6 +7863,32 @@ fn a_grant_on_a_folder_the_walk_reads_next_refuses_the_hard_delete() {
 #[test]
 fn a_grant_on_a_folder_the_walk_read_refuses_the_hard_delete() {
     assert_a_grant_during_the_walk_refuses_the_hard_delete(true);
+}
+
+/// A walk read that the gate refuses for another reason than a grant is
+/// reported, and drops the walk: the next tick proves the subtree again from
+/// the target.
+#[test]
+fn a_hard_delete_walk_read_that_the_gate_refuses_starts_the_proof_again() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let (_, read) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let (refused, _) = read_this_often(&subtree, &read, 1)[0];
+    // Another node's record at this name fails the child gate's bindings.
+    let other = published_value(&fx.world, &write_name(subtree[1]));
+    publish_value_at(&fx.world, refused, &other);
+    events_so_far(&mut fx._events);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        abuse_events_in(&events_so_far(&mut fx._events)) > 0,
+        "the refusal is reported"
+    );
+
+    let before = reads_of(&fx, &[outer]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        reads_of(&fx, &[outer]) > before,
+        "a new proof reads the target again"
+    );
 }
 
 /// A walk read that does not answer holds the delete. The later ticks read

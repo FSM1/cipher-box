@@ -2618,6 +2618,9 @@ enum DoomedStep {
     Paused,
     /// The walk passed its node bound.
     Stopped(Overflow),
+    /// A folder carries a grant section, which only a fresh delete proof
+    /// can authenticate.
+    Granted,
 }
 
 /// What a record read is anchored to: the scope epoch the reader is at, and the
@@ -5521,6 +5524,7 @@ where
                         return hold(proof);
                     }
                     Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
+                    Ok(DoomedStep::Granted) => proof = new_proof(proof.overflowed),
                     // Only a seam fault may answer on a later tick. A refused
                     // read drops the proof, so a new one reads the subtree
                     // from the target.
@@ -6164,7 +6168,7 @@ where
             }
             let mut children = Vec::new();
             let (name, versions) = match self
-                .load_child_node(plane, anchor, node, ResolveMode::CacheFirst)
+                .load_child_node_unreported(plane, anchor, node, ResolveMode::CacheFirst)
                 .await
             {
                 Ok(loaded) => {
@@ -6189,12 +6193,24 @@ where
                     };
                     (loaded.name, versions)
                 }
+                // A grant can land between two ticks of a carried walk, and
+                // the child gate refuses it as a shape, not as abuse.
+                Err(ChildFault::Refused(rejection))
+                    if budget.is_some() && rejection.stage == GateStage::GrantSection =>
+                {
+                    return Ok(DoomedStep::Granted);
+                }
                 // An unreadable node's sealed body cannot confirm its ref
                 // kind, so only a confirmed file licenses the best-effort arm.
-                Err(halt) if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) => {
-                    return Err(halt);
+                Err(fault)
+                    if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) =>
+                {
+                    return Err(self.report_fault(&plane.end.write_name(&node.0), fault));
                 }
-                Err(_) => (plane.end.write_name(&node.0), Vec::new()),
+                Err(fault) => {
+                    self.report_fault(&plane.end.write_name(&node.0), fault);
+                    (plane.end.write_name(&node.0), Vec::new())
+                }
             };
             walk.pending.pop();
             walk.seen.insert(node.0);
