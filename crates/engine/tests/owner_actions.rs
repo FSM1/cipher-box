@@ -26296,8 +26296,8 @@ fn a_dissolve_cut_that_stops_is_finished_through_the_owed_entry() {
 
 /// ADR 0077 Consequences, a concurrent grant wins: a row that appears after
 /// the dissolve cut the scope stops the dissolve before any copy, and its
-/// entry goes. The new row stays, and so does a link grant made after the
-/// cut.
+/// entry goes. The new row stays, and so does a link contact recorded after
+/// the cut.
 #[test]
 fn a_row_after_the_dissolve_cut_stops_the_dissolve() {
     let mut fx = GrantScenario::new();
@@ -26319,7 +26319,7 @@ fn a_row_after_the_dissolve_cut_stops_the_dissolve() {
 
     assert_eq!(fx.dissolve(), Ok(None), "the dissolve stops");
 
-    assert!(book_holds(&fx, &identity), "the later link grant stays");
+    assert!(book_holds(&fx, &identity), "the later link contact stays");
 
     assert_eq!(fx.dissolve_header(), None, "and its entry goes");
     assert_eq!(
@@ -26676,6 +26676,48 @@ fn book_holds(fx: &GrantScenario, identity_pk: &[u8]) -> bool {
         .any(|contact| contact.identity_public_key == identity_pk)
 }
 
+/// A stop at a nested scope drops the whole entry, so the link grants of an
+/// outer scope whose cut landed, and whose forget failed, go first.
+#[test]
+fn a_nested_stop_forgets_the_link_grant_of_a_landed_outer_cut() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let identity = plant_link_contact(&fx);
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(14));
+    let book_key = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy)
+        .staging_key()
+        .to_vec();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&book_key);
+    assert!(fx.dissolve().is_err(), "the forget at the folder fails");
+    let header = fx.standing_dissolve();
+    assert!(header.scopes[1].final_landed, "the nested scope is done");
+    assert!(!header.scopes[0].final_landed);
+    assert!(fx.folder_section().commitment.entries.is_empty());
+    assert!(book_holds(&fx, &identity));
+    fx.owner_device.staging_store.inner().heal_staged_writes();
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert_eq!(
+        fx.dissolve(),
+        Ok(None),
+        "the dissolve stops at the nested scope"
+    );
+
+    assert!(!book_holds(&fx, &identity), "the folder's link grant goes");
+}
+
 /// A contact book fault after a cut above the baseline still lets the raise
 /// commit, so the next drive reads the scope at its baseline, forgets the
 /// link grant, and moves past the cut.
@@ -26740,7 +26782,7 @@ fn a_journal_fault_on_the_raise_comes_after_the_link_grant_forget() {
 
 /// An unproved cut above the baseline forgets no link grant. When the owed
 /// re-drive lands it later, the drive that stops the dissolve forgets the
-/// grant before it drops the entry.
+/// grant before it drops the entry, and a forget that fails keeps the entry.
 #[test]
 fn a_stop_after_a_landed_cut_forgets_the_link_grant_before_the_entry_goes() {
     let mut fx = GrantScenario::new();
@@ -26755,6 +26797,22 @@ fn a_stop_after_a_landed_cut_forgets_the_link_grant_before_the_entry_goes() {
         "an unproved cut forgets nothing"
     );
     fx.world.record_store.heal_put_for(pointer.as_str());
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(14));
+    let book_key = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy)
+        .staging_key()
+        .to_vec();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&book_key);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        fx.dissolve_header().is_some(),
+        "a failed forget keeps the entry"
+    );
+    assert!(book_holds(&fx, &identity));
+    fx.owner_device.staging_store.inner().heal_staged_writes();
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 

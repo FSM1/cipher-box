@@ -155,6 +155,7 @@ where
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
             ScopeCut::Concurrent => {
+                self.forget_landed(sites, &header).await?;
                 journal
                     .drop_entry(&hold, &header)
                     .await
@@ -244,19 +245,18 @@ where
         let rows = !current.commitment.entries.is_empty();
         let base = header.scopes[at].clone();
         let epoch = current.commitment.cut_epoch;
-        let landed = base.cut_time != 0 && epoch >= base.cut_epoch && !rows;
         // A nested root that another device moved out of the subtree is no
         // longer the dissolve's to cut.
         if at != 0 {
             let parent = NodeId(sites.enclosing(scope).await?.scope.scope_id);
             if header.scopes.iter().all(|cut| cut.scope_id != parent) {
-                return self.concurrent(scope, landed).await;
+                return Ok(ScopeCut::Concurrent);
             }
         }
         // After the baseline, a row at or above it, or a cut above it, is
         // work the dissolve did not do: a concurrent grant wins.
         if base.cut_time != 0 && (epoch > base.cut_epoch || rows && epoch >= base.cut_epoch) {
-            return self.concurrent(scope, landed).await;
+            return Ok(ScopeCut::Concurrent);
         }
         if base.final_landed {
             return Ok(ScopeCut::Done);
@@ -384,14 +384,26 @@ where
         Ok(ScopeCut::Done)
     }
 
-    /// The answer for a scope that work the dissolve did not do reached. When
-    /// a cut at or above the baseline left no row, the link grants go first;
-    /// a forget that fails keeps the entry, so a later drive forgets again.
-    async fn concurrent(&self, scope: NodeId, landed: bool) -> Result<ScopeCut, EngineError> {
-        if landed {
-            self.forget_link_grants(scope).await?;
+    /// Before a stop drops the entry, forget the link grants of each scope
+    /// that a cut at or above its baseline left with no row. A read or a
+    /// forget that fails keeps the entry, so a later drive forgets again.
+    async fn forget_landed(
+        &self,
+        sites: &impl ConversionSites,
+        header: &DissolveHeader,
+    ) -> Result<(), EngineError> {
+        for cut in header.scopes.iter().filter(|cut| cut.cut_time != 0) {
+            let OwedScope { current, .. } = self
+                .owed_scope(sites, cut.scope_id, "dissolve-stop", true)
+                .await
+                .map_err(EngineError::from_owed_stop)?;
+            if current.commitment.entries.is_empty()
+                && current.commitment.cut_epoch >= cut.cut_epoch
+            {
+                self.forget_link_grants(cut.scope_id).await?;
+            }
         }
-        Ok(ScopeCut::Concurrent)
+        Ok(())
     }
 
     /// Drop the grant at `scope` from each contact a link sourced: the scope
