@@ -171,7 +171,7 @@ fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
     let envelope = |caller| ResealEnvelope {
         caller,
         source_root: root,
-        payload: b"rows".to_vec(),
+        payload: b"rows".to_vec().into(),
     };
     let body = encode_reseal_envelope(&envelope(1), root).expect("an envelope encodes");
     assert_eq!(decode_reseal_envelope(&body, root), Ok(envelope(1)));
@@ -184,12 +184,12 @@ fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
         Err(ResealEnvelopeError::RootMismatch)
     );
     let at_cap = ResealEnvelope {
-        payload: vec![0; MAX_RESEAL_PAYLOAD],
+        payload: vec![0; MAX_RESEAL_PAYLOAD].into(),
         ..envelope(1)
     };
     assert!(encode_reseal_envelope(&at_cap, root).is_ok());
     let over_cap = ResealEnvelope {
-        payload: vec![0; MAX_RESEAL_PAYLOAD + 1],
+        payload: vec![0; MAX_RESEAL_PAYLOAD + 1].into(),
         ..envelope(1)
     };
     assert_eq!(
@@ -416,11 +416,12 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             DissolveCodecError::MapAtHold,
         ),
         (
-            edit(DissolveStep::Cut, &|h| {
-                h.scopes[1].cut_epoch = 7;
-                h.scopes[1].final_landed = true;
-            }),
+            edit(DissolveStep::Cut, &|h| h.scopes[1].final_landed = true),
             DissolveCodecError::LandedBeforeCut,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| h.scopes[1].cut_epoch = 7),
+            DissolveCodecError::CutEpochBeforeCutTime,
         ),
     ];
     for (header, refusal) in cases {
@@ -620,10 +621,26 @@ fn dissolve_commit(
     let cell = DissolveCell::default();
     let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
-    if held.map_pages != 0 {
-        block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
+    let first = DissolveHeader {
+        prior_bindings: held.prior_bindings.clone(),
+        ..DissolveHeader::at_cut(
+            held.new_root,
+            held.relink_parent,
+            held.binding,
+            held.scopes
+                .iter()
+                .map(|scope| DissolvedScope::uncut(scope.scope_id))
+                .collect(),
+        )
+    };
+    block_on(journal.commit(&hold, None, &first)).expect("the first header lands");
+    if *held != first {
+        if held.map_pages != 0 {
+            block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE)))
+                .expect("a page writes");
+        }
+        block_on(journal.commit(&hold, Some(&first), held)).expect("the held header lands");
     }
-    block_on(journal.commit(&hold, None, held)).expect("the held header lands");
     for page in pages {
         block_on(journal.put_map_page(&hold, page)).expect("a page writes");
     }
@@ -716,8 +733,8 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
             "dissolve-journal-sticky-mark-cleared",
         ),
         (
-            edit(&|h| h.scopes[0].cut_epoch = 8),
-            "dissolve-journal-cut-time-set-once",
+            edit(&|h| h.scopes[0].cut_epoch = 6),
+            "dissolve-journal-cut-epoch-fell",
         ),
         (
             edit(&|h| {
@@ -805,8 +822,10 @@ fn the_dissolve_journal_writer_refuses_a_page_of_the_live_map() {
     let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
     let seal = dissolve_header_at(DissolveStep::Seal);
+    let cut = dissolve_header_at(DissolveStep::Cut);
+    block_on(journal.commit(&hold, None, &cut)).expect("the first header lands");
     block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
-    block_on(journal.commit(&hold, None, &seal)).expect("the header lands");
+    block_on(journal.commit(&hold, Some(&cut), &seal)).expect("the header lands");
 
     let changed = dissolve_map(&[(0x51, 0x61, None), (0x53, 0x73, Some(0))]);
     assert_eq!(

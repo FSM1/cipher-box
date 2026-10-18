@@ -29,14 +29,24 @@ const ENVELOPE_HEAD_LEN: usize = 2 + 16;
 
 /// One journal value: the caller that owns its payload, and the source root
 /// of the re-seal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResealEnvelope {
     /// The caller that owns the payload. Zero names no caller.
     pub caller: u8,
     /// The root of the source subtree.
     pub source_root: NodeId,
-    /// The caller's own bytes.
-    pub payload: Vec<u8>,
+    /// The caller's own bytes, opened from a sealed value.
+    pub payload: Zeroizing<Vec<u8>>,
+}
+
+impl core::fmt::Debug for ResealEnvelope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ResealEnvelope")
+            .field("caller", &self.caller)
+            .field("source_root", &self.source_root)
+            .field("payload_len", &self.payload.len())
+            .finish()
+    }
 }
 
 /// Why an envelope does not encode or decode.
@@ -126,7 +136,7 @@ pub fn decode_reseal_envelope(
     Ok(ResealEnvelope {
         caller,
         source_root: NodeId(*root),
-        payload: payload.to_vec(),
+        payload: Zeroizing::new(payload.to_vec()),
     })
 }
 
@@ -309,7 +319,7 @@ mod tests {
         ResealEnvelope {
             caller,
             source_root: ROOT,
-            payload: b"rows".to_vec(),
+            payload: b"rows".to_vec().into(),
         }
     }
 
@@ -317,6 +327,20 @@ mod tests {
         encode_reseal_envelope(&envelope(caller), ROOT)
             .expect("encodes")
             .to_vec()
+    }
+
+    /// The debug form names the payload length only, never a payload byte.
+    #[test]
+    fn the_debug_form_of_an_envelope_prints_no_payload_byte() {
+        let shown = format!(
+            "{:?}",
+            ResealEnvelope {
+                payload: vec![0xa7; 8].into(),
+                ..envelope(1)
+            }
+        );
+        assert!(shown.contains("payload_len: 8"), "{shown}");
+        assert!(!shown.contains("167"), "a payload byte in {shown}");
     }
 
     #[test]
@@ -384,7 +408,7 @@ mod tests {
             Ok(ResealEnvelope {
                 caller: 1,
                 source_root: NodeId([0xe5; 16]),
-                payload: b"caller payload".to_vec(),
+                payload: b"caller payload".to_vec().into(),
             })
         );
     }
@@ -448,7 +472,7 @@ mod tests {
         run(async |journal| {
             journal.put(b"", &envelope(1)).await.unwrap();
             let second = ResealEnvelope {
-                payload: b"second rows".to_vec(),
+                payload: b"second rows".to_vec().into(),
                 ..envelope(1)
             };
             journal.put(b"", &second).await.unwrap();
@@ -520,7 +544,7 @@ mod tests {
         let alices = ResealJournal::new(&store, BookkeepingSeal::new(&alice, &entropy));
         let bobs = ResealJournal::new(&store, BookkeepingSeal::new(&bob, &entropy));
         let bobs_entry = ResealEnvelope {
-            payload: b"bob rows".to_vec(),
+            payload: b"bob rows".to_vec().into(),
             ..envelope(1)
         };
         let other_root = NodeId([0x53; 16]);
