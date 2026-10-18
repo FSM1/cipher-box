@@ -199,9 +199,10 @@ scenario fails the meta-test):
   (ADR 0069, `crates/engine/tests/owner_actions.rs`); a kept delete whose
   folder the live root dropped leaves at the read, one whose folder a read
   of this session at the live parent name saw unlinked leaves at once and
-  one that only a read at an old parent name saw unlinked stays, one whose folder a proved base lacks
+  one that only a read at an old parent name saw unlinked stays
+  (`crates/engine/src/sync/drain.rs`), one whose folder a proved base lacks
   waits and leaves at the bound, and one whose note names no folder leaves
-  at the bound (`crates/engine/src/sync/drain.rs`); after a restart, a kept
+  at the bound (`crates/engine/src/sync/kept_judge.rs`); after a restart, a kept
   delete in /A/B/X does not leave before the bound with no read of B, and
   leaves at once after a pass that reads B, and one whose B a peer unlinked
   only in the old tree in the wave window stays and applies again in the new
@@ -220,7 +221,7 @@ scenario fails the meta-test):
   again, and a move out of its scope leaves at publish, a create and a rename, a create and an edit, two edits, or a version restore and an edit, of one node apply again, a create, a delete and a bin restore leave the file live, a bin restore cancels a delete that became kept in the same pass, also across a restart and across a stop between the two queue removals, a rename then a delete applies only the delete, a delete then a bin restore leaves the file live, a later rename back to the name before a chain applies the whole chain again, and a kept restore does not apply over a head published after its check (ADR 0069 D2, D6,
   `owner_actions.rs`); the result check reads landed, lost or overtaken, and
   a kept rename with no result in its note leaves with no apply
-  (`kept_judge.rs`, `drain.rs`); the kept op of a downgraded write
+  (`kept_judge.rs`); the kept op of a downgraded write
   grantee dead-letters on its device with a notice, a kept delete included,
   also a late write that the wave did not carry; the kept write of a
   surviving write grantee that an owner write cut did not carry waits past the
