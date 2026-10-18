@@ -415,6 +415,20 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             }),
             DissolveCodecError::MapAtHold,
         ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes[1].cut_epoch = 7;
+                h.scopes[1].final_landed = true;
+            }),
+            DissolveCodecError::LandedBeforeCut,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes[1].cut_time = 1_500;
+                h.scopes[1].final_landed = true;
+            }),
+            DissolveCodecError::LandedBeforeCut,
+        ),
     ];
     for (header, refusal) in cases {
         assert_eq!(
@@ -480,12 +494,7 @@ fn the_dissolve_journal_writer_refuses_a_header_its_reader_refuses() {
     let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
     let secret = kdf::enc_subkey(&SECRET);
     let cell = DissolveCell::default();
-    let journal = DissolveJournal::new(
-        &store,
-        BookkeepingSeal::new(&secret, &entropy),
-        [3; 32],
-        &cell,
-    );
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
     let mut cut = dissolve_header_at(DissolveStep::Cut);
     cut.scopes[0].cut_time = 1_500;
@@ -581,6 +590,237 @@ fn the_dissolve_journal_writer_refuses_a_header_its_reader_refuses() {
         block_on(journal.header(root)).expect("the header reads"),
         HeaderSlot::Own(relink),
         "no refused header landed"
+    );
+}
+
+/// A map page of the entry at `0x51` from `(old, new, parent)` rows.
+fn dissolve_map(rows: &[(u8, u8, Option<u32>)]) -> MapPage {
+    MapPage {
+        generation: 0,
+        page: 0,
+        rows: rows
+            .iter()
+            .map(|&(old, new, parent)| MapRow {
+                old: NodeId([old; 16]),
+                new: NodeId([new; 16]),
+                parent,
+                old_name: b"k51old".to_vec(),
+            })
+            .collect(),
+    }
+}
+
+const DISSOLVE_TREE: &[(u8, u8, Option<u32>)] = &[(0x51, 0x61, None), (0x53, 0x63, Some(0))];
+
+/// One store writer over a fresh store: `held` lands over its map
+/// [`DISSOLVE_TREE`], `pages` are written, and `new` commits. A refusal gives
+/// its check, after it proves that `held` still stands.
+fn dissolve_commit(
+    held: &DissolveHeader,
+    pages: &[MapPage],
+    new: &DissolveHeader,
+) -> Result<(), String> {
+    let root = NodeId([0x51; 16]);
+    let store = InMemoryStagingStore::default();
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
+    let secret = kdf::enc_subkey(&SECRET);
+    let cell = DissolveCell::default();
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
+    let hold = cell.hold(root).expect("one driver");
+    if held.map_pages != 0 {
+        block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
+    }
+    block_on(journal.commit(&hold, None, held)).expect("the held header lands");
+    for page in pages {
+        block_on(journal.put_map_page(&hold, page)).expect("a page writes");
+    }
+    block_on(journal.commit(&hold, Some(held), new)).map_err(|refused| {
+        assert_eq!(
+            block_on(journal.header(root)).expect("the header reads"),
+            HeaderSlot::Own(held.clone()),
+            "{}: no refused header landed",
+            refused.check()
+        );
+        refused.check().to_owned()
+    })
+}
+
+/// The journal writer refuses each map that is not one rooted tree of
+/// distinct ids with the stated row count: the reader refuses each.
+#[test]
+fn the_dissolve_journal_writer_refuses_each_map_its_reader_refuses() {
+    let cut = dissolve_header_at(DissolveStep::Cut);
+    let seal = DissolveHeader {
+        scopes: cut.scopes.clone(),
+        ..dissolve_header_at(DissolveStep::Seal)
+    };
+    let map_shape = DissolveCodecError::MapShape.check();
+    for (rows, check) in [
+        (&[(0x59, 0x61, None), (0x53, 0x63, Some(0))][..], map_shape),
+        (&[(0x51, 0x69, None), (0x53, 0x63, Some(0))][..], map_shape),
+        (&[(0x51, 0x61, None), (0x53, 0x63, None)][..], map_shape),
+        (&[(0x51, 0x61, None), (0x53, 0x63, Some(1))][..], map_shape),
+        (&[(0x51, 0x61, None), (0x51, 0x63, Some(0))][..], map_shape),
+        (&[(0x51, 0x61, None), (0x53, 0x61, Some(0))][..], map_shape),
+        (
+            &[(0x51, 0x61, None)][..],
+            DissolveCodecError::RowCount.check(),
+        ),
+    ] {
+        assert_eq!(
+            dissolve_commit(&cut, &[dissolve_map(rows)], &seal),
+            Err(check.to_owned())
+        );
+    }
+}
+
+/// The journal writer refuses each header that changes what the held one
+/// records, and each manifest over its cap that the reader refuses.
+#[test]
+fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
+    let mut held = dissolve_header_at(DissolveStep::Relink);
+    held.scopes[0].cut_epoch = 7;
+    held.scopes[0].cut_time = 1_500;
+    held.scopes[0].final_landed = true;
+    held.prior_bindings.push(PriorBinding {
+        read_scope: NodeId([0x30; 16]),
+        read_root: NodeId([0x31; 16]),
+        read_epoch: 5,
+        restart_floor: 4,
+        write_scope: NodeId([0x32; 16]),
+        write_epoch: 6,
+    });
+    let edit = |change: &dyn Fn(&mut DissolveHeader)| {
+        let mut header = held.clone();
+        change(&mut header);
+        header
+    };
+    let rebound = |change: &dyn Fn(&mut DissolveHeader)| {
+        edit(&|h| {
+            h.binding.read_scope = NodeId([0x40; 16]);
+            change(h);
+        })
+    };
+    let former = PriorBinding {
+        read_scope: held.binding.read_scope,
+        read_root: NodeId([0x41; 16]),
+        read_epoch: held.binding.read_epoch,
+        restart_floor: held.binding.restart_floor,
+        write_scope: held.binding.write_scope,
+        write_epoch: held.binding.write_epoch,
+    };
+    for (new, check) in [
+        (
+            edit(&|h| h.copy_started = false),
+            "dissolve-journal-sticky-mark-cleared",
+        ),
+        (
+            edit(&|h| h.relink_names.clear()),
+            "dissolve-journal-sticky-mark-cleared",
+        ),
+        (
+            edit(&|h| h.scopes[0].final_landed = false),
+            "dissolve-journal-sticky-mark-cleared",
+        ),
+        (
+            edit(&|h| {
+                h.scopes.pop();
+            }),
+            "dissolve-journal-scopes-not-append-only",
+        ),
+        (
+            edit(&|h| h.prior_bindings.clear()),
+            "dissolve-journal-prior-bindings-not-append-only",
+        ),
+        (
+            edit(&|h| h.new_root = NodeId([0x69; 16])),
+            "dissolve-journal-entry-identity-changed",
+        ),
+        (
+            edit(&|h| h.relink_parent = NodeId([0x29; 16])),
+            "dissolve-journal-entry-identity-changed",
+        ),
+        (
+            rebound(&|_| {}),
+            "dissolve-journal-rebind-without-prior-binding",
+        ),
+        (
+            edit(&|h| h.binding.write_scope = NodeId([0x42; 16])),
+            "dissolve-journal-rebind-without-prior-binding",
+        ),
+        (
+            rebound(&|h| {
+                h.prior_bindings.push(PriorBinding {
+                    read_epoch: 9,
+                    ..former
+                });
+            }),
+            "dissolve-journal-rebind-without-prior-binding",
+        ),
+        (
+            edit(&|h| h.prior_bindings.push(former)),
+            "dissolve-journal-rebind-without-prior-binding",
+        ),
+        (
+            edit(&|h| h.binding.restart_floor -= 1),
+            "dissolve-journal-restart-floor-lowered",
+        ),
+        (
+            edit(&|h| {
+                h.scopes[0].manifest.as_mut().expect("a manifest").head_cid =
+                    vec![0xcb; usize::from(u8::MAX) + 1];
+            }),
+            DissolveCodecError::OverCap.check(),
+        ),
+        (
+            edit(&|h| {
+                h.scopes[0]
+                    .manifest
+                    .as_mut()
+                    .expect("a manifest")
+                    .final_root_name = vec![b'k'; MAX_JOURNAL_NAME + 1];
+            }),
+            DissolveCodecError::OverCap.check(),
+        ),
+    ] {
+        assert_eq!(dissolve_commit(&held, &[], &new), Err(check.to_owned()));
+    }
+    let rebind = rebound(&|h| {
+        h.binding.restart_floor = 0;
+        h.prior_bindings.push(former);
+    });
+    assert_eq!(
+        dissolve_commit(&held, &[], &rebind),
+        Ok(()),
+        "a rebind that appends the former binding takes a new floor"
+    );
+}
+
+/// The journal writer refuses to rewrite a page of the live map, so a stop
+/// before the next header commits reads the map the header counts.
+#[test]
+fn the_dissolve_journal_writer_refuses_a_page_of_the_live_map() {
+    let root = NodeId([0x51; 16]);
+    let store = InMemoryStagingStore::default();
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
+    let secret = kdf::enc_subkey(&SECRET);
+    let cell = DissolveCell::default();
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
+    let hold = cell.hold(root).expect("one driver");
+    let seal = dissolve_header_at(DissolveStep::Seal);
+    block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
+    block_on(journal.commit(&hold, None, &seal)).expect("the header lands");
+
+    let changed = dissolve_map(&[(0x51, 0x61, None), (0x53, 0x73, Some(0))]);
+    assert_eq!(
+        block_on(journal.put_map_page(&hold, &changed))
+            .expect_err("a live page stays")
+            .check(),
+        "dissolve-journal-live-map-page"
+    );
+    assert_eq!(
+        block_on(journal.map(root, &seal)).expect("the map reads"),
+        vec![dissolve_map(DISSOLVE_TREE)]
     );
 }
 

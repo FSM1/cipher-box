@@ -3,9 +3,7 @@
 //!
 //! Each value is a common envelope: a format byte, a caller byte, the source
 //! root id, and a payload that the caller owns. This module reads and checks
-//! the envelope only. It keeps every entry as it finds it: an entry of any
-//! caller, and a value that does not open, blocks an overlap with its source
-//! root, and no write replaces a value that does not open.
+//! the envelope only, and keeps every entry as it finds it.
 
 use std::collections::BTreeSet;
 
@@ -71,16 +69,18 @@ impl ResealEnvelopeError {
 
 /// The check that encode and decode share (AGENTS.md rule 8).
 fn check_reseal_envelope(
-    envelope: &ResealEnvelope,
+    caller: u8,
+    source_root: NodeId,
+    payload: &[u8],
     key_root: NodeId,
 ) -> Result<(), ResealEnvelopeError> {
-    if envelope.caller == 0 {
+    if caller == 0 {
         return Err(ResealEnvelopeError::NoCaller);
     }
-    if envelope.source_root != key_root {
+    if source_root != key_root {
         return Err(ResealEnvelopeError::RootMismatch);
     }
-    if envelope.payload.len() > MAX_RESEAL_PAYLOAD {
+    if payload.len() > MAX_RESEAL_PAYLOAD {
         return Err(ResealEnvelopeError::PayloadTooLarge);
     }
     Ok(())
@@ -92,7 +92,12 @@ pub fn encode_reseal_envelope(
     envelope: &ResealEnvelope,
     key_root: NodeId,
 ) -> Result<Zeroizing<Vec<u8>>, ResealEnvelopeError> {
-    check_reseal_envelope(envelope, key_root)?;
+    check_reseal_envelope(
+        envelope.caller,
+        envelope.source_root,
+        &envelope.payload,
+        key_root,
+    )?;
     let mut body = Zeroizing::new(Vec::with_capacity(
         ENVELOPE_HEAD_LEN + envelope.payload.len(),
     ));
@@ -117,13 +122,12 @@ pub fn decode_reseal_envelope(
     let (root, payload) = rest
         .split_first_chunk::<16>()
         .ok_or(ResealEnvelopeError::Truncated)?;
-    let envelope = ResealEnvelope {
+    check_reseal_envelope(caller, NodeId(*root), payload, key_root)?;
+    Ok(ResealEnvelope {
         caller,
         source_root: NodeId(*root),
         payload: payload.to_vec(),
-    };
-    check_reseal_envelope(&envelope, key_root)?;
-    Ok(envelope)
+    })
 }
 
 /// What one journal key holds.
@@ -176,18 +180,13 @@ pub struct ResealJournal<'a, S> {
 }
 
 impl<'a, S: StagingStore> ResealJournal<'a, S> {
-    /// The journal of the owner `owner_tag` names.
-    pub fn new(store: &'a S, seal: BookkeepingSeal<'a>, owner_tag: [u8; 32]) -> Self {
+    /// The journal of the owner that `seal` seals to.
+    pub fn new(store: &'a S, seal: BookkeepingSeal<'a>) -> Self {
         Self {
             store,
+            owner_tag: seal.owner_tag(),
             seal,
-            owner_tag,
         }
-    }
-
-    /// The staging store the journal reads and writes.
-    pub fn store(&self) -> &'a S {
-        self.store
     }
 
     /// The key of `part` of the entry at `source_root`.
@@ -230,28 +229,65 @@ impl<'a, S: StagingStore> ResealJournal<'a, S> {
         Ok(journaled)
     }
 
+    /// The part of each key under the entry of `source_root`.
+    pub async fn parts(&self, source_root: NodeId) -> SeamResult<Vec<Vec<u8>>> {
+        let entry = self.key(source_root, &[]);
+        Ok(self
+            .store
+            .staged_keys()
+            .await?
+            .into_iter()
+            .filter_map(|key| key.strip_prefix(entry.as_slice()).map(<[u8]>::to_vec))
+            .collect())
+    }
+
+    /// Refuse a value at `part` that does not read, or that another caller
+    /// wrote.
+    async fn check_owner(
+        &self,
+        source_root: NodeId,
+        part: &[u8],
+        caller: u8,
+    ) -> Result<(), JournalError> {
+        match self
+            .read(source_root, part)
+            .await
+            .map_err(JournalError::Store)?
+        {
+            JournalSlot::Unreadable => Err(JournalError::Unreadable),
+            JournalSlot::Kept(held) if held.caller != caller => Err(JournalError::OtherCaller),
+            JournalSlot::Absent | JournalSlot::Kept(_) => Ok(()),
+        }
+    }
+
     /// Write `envelope` at `part` of its source root. Refused over a value that
     /// does not read, and over an entry of another caller.
     pub async fn put(&self, part: &[u8], envelope: &ResealEnvelope) -> Result<(), JournalError> {
         let body = encode_reseal_envelope(envelope, envelope.source_root)
             .map_err(JournalError::Envelope)?;
-        match self
-            .read(envelope.source_root, part)
-            .await
-            .map_err(JournalError::Store)?
-        {
-            JournalSlot::Unreadable => return Err(JournalError::Unreadable),
-            JournalSlot::Kept(held) if held.caller != envelope.caller => {
-                return Err(JournalError::OtherCaller);
-            }
-            JournalSlot::Absent | JournalSlot::Kept(_) => {}
-        }
+        self.check_owner(envelope.source_root, part, envelope.caller)
+            .await?;
         let blob = self
             .seal
             .seal(OwnerLocalKind::SubtreeReseal, &body)
             .map_err(JournalError::Store)?;
         self.store
             .put_staged_bytes(&self.key(envelope.source_root, part), &blob)
+            .await
+            .map_err(JournalError::Store)
+    }
+
+    /// Remove the value of `caller` at `part` of `source_root`. Refused over a
+    /// value that does not read, and over an entry of another caller.
+    pub async fn remove(
+        &self,
+        source_root: NodeId,
+        part: &[u8],
+        caller: u8,
+    ) -> Result<(), JournalError> {
+        self.check_owner(source_root, part, caller).await?;
+        self.store
+            .remove_staged_bytes(&self.key(source_root, part))
             .await
             .map_err(JournalError::Store)
     }
@@ -357,7 +393,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         let entropy = RefCell::new(SeededEntropy::new(5));
         let secret = X25519Secret::from_scalar([9; 32]);
-        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), [3; 32]);
+        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy));
         block_on(test(&journal));
     }
 
@@ -377,57 +413,33 @@ mod tests {
         });
     }
 
-    /// A value that does not open is never absent: it blocks its root, and a
+    /// A value that does not open, and a sealed value whose envelope this
+    /// build does not read, are never absent: each blocks its root, and a
     /// write leaves its bytes as they are.
     #[test]
-    fn a_value_that_does_not_open_blocks_and_is_never_replaced() {
+    fn an_unreadable_value_blocks_and_is_never_replaced() {
         run(async |journal| {
-            let key = journal.key(ROOT, b"");
-            journal
-                .store
-                .put_staged_bytes(&key, b"not a sealed value")
-                .await
-                .unwrap();
-
-            assert_eq!(
-                journal.read(ROOT, b"").await.unwrap(),
-                JournalSlot::Unreadable
-            );
-            assert!(journal.journaled().await.unwrap().blocks(ROOT));
-            assert!(matches!(
-                journal.put(b"", &envelope(1)).await,
-                Err(JournalError::Unreadable)
-            ));
-            assert_eq!(
-                journal.store.staged_bytes(&key).await.unwrap().as_deref(),
-                Some(&b"not a sealed value"[..])
-            );
-        });
-    }
-
-    /// A sealed value whose envelope this build does not read blocks the same
-    /// way.
-    #[test]
-    fn a_sealed_value_of_another_format_blocks_and_is_never_replaced() {
-        run(async |journal| {
-            let mut body = encoded(1);
-            body[0] = 2;
-            let blob = journal
+            let mut other_format = encoded(1);
+            other_format[0] = 2;
+            let sealed = journal
                 .seal
-                .seal(OwnerLocalKind::SubtreeReseal, &body)
+                .seal(OwnerLocalKind::SubtreeReseal, &other_format)
                 .unwrap();
-            let key = journal.key(ROOT, b"");
-            journal.store.put_staged_bytes(&key, &blob).await.unwrap();
+            for blob in [b"not a sealed value".to_vec(), sealed] {
+                let key = journal.key(ROOT, b"");
+                journal.store.put_staged_bytes(&key, &blob).await.unwrap();
 
-            assert_eq!(
-                journal.read(ROOT, b"").await.unwrap(),
-                JournalSlot::Unreadable
-            );
-            assert!(matches!(
-                journal.put(b"", &envelope(1)).await,
-                Err(JournalError::Unreadable)
-            ));
-            assert_eq!(journal.store.staged_bytes(&key).await.unwrap(), Some(blob));
+                assert_eq!(
+                    journal.read(ROOT, b"").await.unwrap(),
+                    JournalSlot::Unreadable
+                );
+                assert!(journal.journaled().await.unwrap().blocks(ROOT));
+                assert!(matches!(
+                    journal.put(b"", &envelope(1)).await,
+                    Err(JournalError::Unreadable)
+                ));
+                assert_eq!(journal.store.staged_bytes(&key).await.unwrap(), Some(blob));
+            }
         });
     }
 
@@ -449,6 +461,36 @@ mod tests {
     }
 
     #[test]
+    fn a_caller_removes_only_its_own_readable_value() {
+        run(async |journal| {
+            journal.put(b"a", &envelope(1)).await.unwrap();
+            journal.put(b"b", &envelope(2)).await.unwrap();
+            let unreadable = journal.key(ROOT, b"c");
+            journal
+                .store
+                .put_staged_bytes(&unreadable, b"not a sealed value")
+                .await
+                .unwrap();
+            let mut parts = journal.parts(ROOT).await.unwrap();
+            parts.sort();
+            assert_eq!(parts, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+
+            assert!(matches!(
+                journal.remove(ROOT, b"b", 1).await,
+                Err(JournalError::OtherCaller)
+            ));
+            assert!(matches!(
+                journal.remove(ROOT, b"c", 1).await,
+                Err(JournalError::Unreadable)
+            ));
+            journal.remove(ROOT, b"a", 1).await.unwrap();
+            let mut parts = journal.parts(ROOT).await.unwrap();
+            parts.sort();
+            assert_eq!(parts, [b"b".to_vec(), b"c".to_vec()]);
+        });
+    }
+
+    #[test]
     fn an_entry_of_another_caller_is_kept_and_never_replaced() {
         run(async |journal| {
             journal.put(b"", &envelope(2)).await.unwrap();
@@ -464,10 +506,61 @@ mod tests {
         });
     }
 
+    /// Two identities on one store keep their entries for one root apart:
+    /// each key carries the owner tag of the seal, so each owner reads its
+    /// own entry and counts only its own roots.
+    #[test]
+    fn two_identities_keep_their_entries_for_one_root_apart() {
+        let store = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(6));
+        let (alice, bob) = (
+            X25519Secret::from_scalar([9; 32]),
+            X25519Secret::from_scalar([10; 32]),
+        );
+        let alices = ResealJournal::new(&store, BookkeepingSeal::new(&alice, &entropy));
+        let bobs = ResealJournal::new(&store, BookkeepingSeal::new(&bob, &entropy));
+        let bobs_entry = ResealEnvelope {
+            payload: b"bob rows".to_vec(),
+            ..envelope(1)
+        };
+        let other_root = NodeId([0x53; 16]);
+        block_on(async {
+            alices.put(b"", &envelope(1)).await.unwrap();
+            bobs.put(b"", &bobs_entry).await.unwrap();
+            bobs.put(
+                b"",
+                &ResealEnvelope {
+                    source_root: other_root,
+                    ..envelope(1)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_ne!(alices.key(ROOT, b""), bobs.key(ROOT, b""));
+            assert_eq!(
+                alices.read(ROOT, b"").await.unwrap(),
+                JournalSlot::Kept(envelope(1))
+            );
+            assert_eq!(
+                bobs.read(ROOT, b"").await.unwrap(),
+                JournalSlot::Kept(bobs_entry)
+            );
+            assert_eq!(
+                alices.journaled().await.unwrap().roots,
+                BTreeSet::from([ROOT])
+            );
+            assert_eq!(
+                bobs.journaled().await.unwrap().roots,
+                BTreeSet::from([ROOT, other_root])
+            );
+        });
+    }
+
     #[test]
     fn a_key_that_names_no_root_blocks_every_root() {
         run(async |journal| {
-            let short = [RESEAL_JOURNAL_PREFIX, &[3; 32], &[0x51; 4]].concat();
+            let short = [RESEAL_JOURNAL_PREFIX, &journal.owner_tag, &[0x51; 4]].concat();
             journal.store.put_staged_bytes(&short, b"x").await.unwrap();
             let other_owner = [RESEAL_JOURNAL_PREFIX, &[4; 32], &[0x52; 16]].concat();
             journal

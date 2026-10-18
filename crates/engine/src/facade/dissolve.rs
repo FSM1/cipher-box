@@ -21,7 +21,6 @@ use crate::sync::dissolve_journal::{DissolveBinding, DissolvedScope, MAX_DISSOLV
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
 };
-use crate::sync::owner_tag;
 
 /// What one scope's cut reached in one drive.
 enum ScopeCut {
@@ -68,7 +67,6 @@ where
         DissolveJournal::new(
             self.staging,
             self.seal(),
-            owner_tag(self.enc_secret),
             self.owed.dissolve(),
         )
     }

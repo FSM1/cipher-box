@@ -568,13 +568,14 @@ pub(crate) async fn repost_held_claims<M, St, E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_core::codec::{Value, decode, encode};
+    use cipherbox_core::codec::Value;
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{OwnerLocalKind, open_owner_local, seal_owner_local};
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+    use crate::grants::accept::tests::with_field;
     use crate::grants::accept::{
         CLAIM_KEY_LEN, CLAIM_MAX_POSTS, CLAIM_REPOST_FIRST_WAIT, CLAIM_REPOST_MAX_WAIT, HeldClaim,
         ReceivedSharesList,
@@ -728,24 +729,11 @@ mod tests {
             .expect("stored");
         let body =
             open_owner_local(&holder.enc, OwnerLocalKind::ReceivedShares, &blob).expect("opens");
-        let mut tree = decode(&body).expect("det-CBOR");
-        let mut map = tree.as_map().expect("a map").clone();
-        let mut entry = map
-            .get("shares")
-            .expect("shares")
-            .as_array()
-            .expect("an array")[0]
-            .as_map()
-            .expect("a map")
-            .clone();
-        entry.insert("ended", Value::Bool(true));
-        map.insert("shares", Value::Array(vec![Value::Map(entry)]));
-        tree = Value::Map(map);
         let malformed = seal_owner_local(
             &holder.enc,
             OwnerLocalKind::ReceivedShares,
             &[0x44; 32],
-            &encode(&tree).expect("encodes"),
+            &with_field(&body, "ended", Value::Bool(true), Value::Bool(true)),
         )
         .expect("seals");
         block_on(

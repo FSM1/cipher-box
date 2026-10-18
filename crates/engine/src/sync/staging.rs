@@ -1695,7 +1695,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         let entropy = RefCell::new(crate::testkit::SeededEntropy::new(4));
         let secret = X25519Secret::from_scalar([9; 32]);
-        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), [3; 32]);
+        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy));
         block_on(async {
             for caller in [1u8, 2] {
                 journal
@@ -1715,16 +1715,12 @@ mod tests {
                 .await
                 .unwrap();
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
-            let before: Vec<(Vec<u8>, Option<Vec<u8>>)> = {
-                let mut keys = store.staged_keys().await.unwrap();
-                keys.retain(|key| key.starts_with(RESEAL_JOURNAL_PREFIX));
-                let mut pairs = Vec::new();
-                for key in keys {
-                    let value = store.staged_bytes(&key).await.unwrap();
-                    pairs.push((key, value));
-                }
-                pairs
+            let journal_values = || {
+                let mut staged = store.contents().1;
+                staged.retain(|key, _| key.starts_with(RESEAL_JOURNAL_PREFIX));
+                staged
             };
+            let before = journal_values();
             assert_eq!(before.len(), 3);
 
             reconcile_staging(
@@ -1740,9 +1736,7 @@ mod tests {
                 None,
                 "the sweep ran"
             );
-            for (key, value) in before {
-                assert_eq!(store.staged_bytes(&key).await.unwrap(), value);
-            }
+            assert_eq!(journal_values(), before);
         });
     }
 
@@ -3261,6 +3255,7 @@ mod tests {
                 DeadLetterReason::NewerRelease,
                 DeadLetterReason::TargetIsScopeRoot,
             ];
+            assert_eq!(previous.len(), 21);
             for ((n, reason), (entry, notice)) in
                 (1..=21u8).zip(previous).zip(kept.iter().zip(&noted))
             {
