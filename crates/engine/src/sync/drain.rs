@@ -107,6 +107,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::crossing::{Authority, authoritative, enclosing_scope_root, landed_cut, owed_cut};
+use crate::sync::dissolve_journal::DissolveCell;
 use crate::sync::doomed::{
     MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS,
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
@@ -141,8 +142,11 @@ use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_m
 
 use crate::sync::tick::{ResolveMode, scope_root_of};
 
+mod dissolve;
 mod keyless_kept;
 mod walker;
+
+pub(crate) use dissolve::DissolveWalk;
 
 use walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 
@@ -2185,6 +2189,11 @@ pub(crate) struct DrainCells<'a> {
     /// it. Only a gate read that reads a plain record or refuses the record
     /// removes it. In memory only.
     pub(crate) unproved_grants: &'a RefCell<BTreeSet<NodeId>>,
+    /// The session's dissolve drivers and journal listing.
+    pub(crate) dissolve: &'a DissolveCell,
+    /// The map walks of dissolve entries that a tick left unfinished, by
+    /// source root. In memory only.
+    pub(crate) dissolve_walks: &'a RefCell<BTreeMap<NodeId, DissolveWalk>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2987,6 +2996,7 @@ where
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
+        self.drive_dissolve_maps(&passes).await;
         // The retire ledger is the identity's and reads under the vault root's
         // material, so only a tick that holds that root settles.
         if vault_held && let Some(vault) = passes.first() {

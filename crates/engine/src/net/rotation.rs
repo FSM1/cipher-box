@@ -2041,7 +2041,7 @@ fn owed_children(
 /// epoch the seed's own recovery already bound, and the write epoch a re-seal of
 /// this root must republish at. A scope with no durable write-epoch floor has
 /// nothing to open the body under — availability, not a trust verdict.
-async fn write_plane_of<F: FloorStore>(
+pub(crate) async fn write_plane_of<F: FloorStore>(
     floors: &F,
     envelope: &Envelope,
     section: &GrantSection,

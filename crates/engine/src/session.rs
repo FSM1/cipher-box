@@ -55,7 +55,8 @@ use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
-    BookkeepingCursors, CaptureProofs, DeleteProof, DrainCells, QueueHold, RetireDescent,
+    BookkeepingCursors, CaptureProofs, DeleteProof, DissolveWalk, DrainCells, QueueHold,
+    RetireDescent,
 };
 use crate::sync::model::Snapshot;
 use crate::sync::owed_rotation::OwedCell;
@@ -562,6 +563,8 @@ pub(crate) struct SessionState {
     pub(crate) delete_proofs: Rc<RefCell<BTreeMap<crate::seams::OpId, DeleteProof>>>,
     /// [`DrainCells::unproved_grants`](crate::sync::drain::DrainCells::unproved_grants).
     pub(crate) unproved_grants: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// [`DrainCells::dissolve_walks`](crate::sync::drain::DrainCells::dissolve_walks).
+    pub(crate) dissolve_walks: Rc<RefCell<BTreeMap<NodeId, DissolveWalk>>>,
     /// The names this session reported restored from the server copy.
     pub(crate) restored_copies: Rc<RestoredCopies>,
 }
@@ -821,6 +824,7 @@ impl SessionState {
             kept_chains: Rc::default(),
             delete_proofs: Rc::default(),
             unproved_grants: Rc::default(),
+            dissolve_walks: Rc::default(),
             restored_copies: Rc::new(RestoredCopies::default()),
         }
     }
@@ -854,6 +858,8 @@ impl SessionState {
             kept_chains: &self.kept_chains,
             delete_proofs: &self.delete_proofs,
             unproved_grants: &self.unproved_grants,
+            dissolve: self.owed_rotation.dissolve(),
+            dissolve_walks: &self.dissolve_walks,
         }
     }
 }

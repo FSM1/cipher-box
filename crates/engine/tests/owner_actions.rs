@@ -31,7 +31,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::ct_eq;
-use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
+use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 
 use zeroize::Zeroizing;
 
@@ -59,12 +59,13 @@ use cipherbox_engine::rotation::{
 };
 use cipherbox_engine::seams::{
     BoxedTask, ContactLabel, DebtOrigin, EndpointId, FloorStore, Mailbox, OwedRetire,
-    RecordTransport, RetireLedger, Scheduler, SharerScopedFloorStore, SnapshotCache, StagingStore,
-    UnixMillis,
+    QueueGenerationStore, RecordTransport, RetireLedger, Scheduler, SharerScopedFloorStore,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::dissolve_journal::{
     DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
+    MapRow,
 };
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
@@ -28417,4 +28418,252 @@ fn a_lapsed_scope_pointer_lets_the_dissolve_move_past_its_cut() {
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
 
     assert_eq!(fx.world.record_store.put_count(pointer.as_str()), puts);
+}
+
+// ---------------------------------------------------------------------------
+// Dissolve: the map walk (ADR 0077 D3)
+// ---------------------------------------------------------------------------
+
+/// Run `read` over the owner's dissolve journal.
+fn with_dissolve_journal<R>(
+    fx: &GrantScenario,
+    read: impl AsyncFnOnce(&DissolveJournal<'_, QueueGenerationStore<InMemoryStagingStore>>) -> R,
+) -> R {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(5));
+    let cell = DissolveCell::default();
+    let journal = DissolveJournal::new(
+        &fx.owner_device.staging_store,
+        BookkeepingSeal::new(&enc, &entropy),
+        &cell,
+    );
+    block_on(read(&journal))
+}
+
+/// The rows of the live map of `header`, the entry at the folder.
+fn dissolve_rows(fx: &GrantScenario, header: &DissolveHeader) -> Vec<MapRow> {
+    with_dissolve_journal(fx, async |journal| journal.map(fx.folder, header).await)
+        .expect("the live map reads")
+        .into_iter()
+        .flat_map(|page| page.rows)
+        .collect()
+}
+
+/// The journal parts of the entry at the folder.
+fn dissolve_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
+    let prefix = [
+        RESEAL_JOURNAL_PREFIX,
+        owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+        fx.folder.0.as_slice(),
+    ]
+    .concat();
+    block_on(fx.owner_device.staging_store.staged_keys())
+        .expect("the store lists")
+        .into_iter()
+        .filter_map(|key| key.strip_prefix(prefix.as_slice()).map(<[u8]>::to_vec))
+        .collect()
+}
+
+/// The part of map page `page` of generation `generation`.
+fn map_part(generation: u16, page: u16) -> Vec<u8> {
+    [&[b'm'][..], &generation.to_be_bytes(), &page.to_be_bytes()].concat()
+}
+
+/// The folder with a nested scope root `inner`, a plain folder beside it and
+/// a folder below it, cut by a dissolve. Answers `inner`, the plain folder
+/// and the folder below `inner`.
+fn cut_dissolve_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId, NodeId) {
+    let inner = fx.grant_nested_folder("inner");
+    let plain = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "plain",
+    );
+    let below = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    (inner, plain, below)
+}
+
+/// ADR 0077 D3: the map walk reads the cut subtree, the nested scope root
+/// under its own scope, and gives each node one new id. The root row comes
+/// first and takes the entry's new root id, and each row names the folder
+/// that holds it.
+#[test]
+fn the_dissolve_map_gives_each_node_of_the_cut_subtree_one_new_id() {
+    let mut fx = GrantScenario::new();
+    let (inner, plain, below) = cut_dissolve_subtree(&mut fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert_eq!((header.map_gen, header.map_pages, header.rows), (1, 1, 4));
+    let rows = dissolve_rows(&fx, &header);
+    assert_eq!(
+        (rows[0].old, rows[0].new, rows[0].parent),
+        (fx.folder, header.new_root, None)
+    );
+    let old: BTreeSet<NodeId> = rows.iter().map(|row| row.old).collect();
+    assert_eq!(old, BTreeSet::from([fx.folder, inner, plain, below]));
+    let new: BTreeSet<NodeId> = rows.iter().map(|row| row.new).collect();
+    assert_eq!(new.len(), 4, "one new id for each node");
+    assert!(new.is_disjoint(&old), "no new id is an old id");
+    let at = |node: NodeId| {
+        rows.iter()
+            .position(|row| row.old == node)
+            .map(|at| u32::try_from(at).expect("a short map"))
+    };
+    let row = |node: NodeId| &rows[usize::try_from(at(node).unwrap()).unwrap()];
+    assert_eq!(row(inner).parent, at(fx.folder));
+    assert_eq!(row(plain).parent, at(fx.folder));
+    assert_eq!(row(below).parent, at(inner));
+    assert_eq!(
+        rows[0].old_name,
+        fx.granted_scope_repoint().current_root.as_str().as_bytes(),
+        "the root row names the root that the cut moved to"
+    );
+    assert_eq!(
+        row(inner).old_name,
+        scope_repoint(&fx.world, &inner.0)
+            .current_root
+            .as_str()
+            .as_bytes(),
+        "a nested root row names its own root"
+    );
+    assert_eq!(
+        dissolve_parts(&fx),
+        BTreeSet::from([b"h".to_vec(), map_part(1, 0)])
+    );
+}
+
+/// The staging key of the dissolve header at the folder.
+fn dissolve_header_key(fx: &GrantScenario) -> Vec<u8> {
+    [
+        RESEAL_JOURNAL_PREFIX,
+        owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+        fx.folder.0.as_slice(),
+        b"h",
+    ]
+    .concat()
+}
+
+/// A tick after the map commits mints nothing: the header and the map stay.
+#[test]
+fn a_tick_after_the_dissolve_map_commits_mints_nothing() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = fx.standing_dissolve();
+    let rows = dissolve_rows(&fx, &header);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve(), header);
+    assert_eq!(dissolve_rows(&fx, &header), rows);
+}
+
+/// ADR 0077 D3: the header is the commit point of the map. A stop after the
+/// pages and before the header commit keeps the entry at its map step, and
+/// the next tick maps again into one live generation.
+#[test]
+fn a_map_whose_header_commit_stops_maps_again_into_one_generation() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    let staging = fx.owner_device.staging_store.inner();
+    staging.fail_staged_writes_at(&dissolve_header_key(&fx));
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let stopped = fx.standing_dissolve();
+    assert_eq!(stopped.step, DissolveStep::Map, "the header did not commit");
+    assert_eq!(stopped.map_pages, 0);
+    assert!(
+        dissolve_parts(&fx).contains(&map_part(1, 0)),
+        "the page landed before the stop"
+    );
+
+    staging.heal_staged_writes();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert_eq!((header.map_gen, header.map_pages, header.rows), (1, 1, 4));
+    assert_eq!(dissolve_rows(&fx, &header).len(), 4);
+    assert_eq!(
+        dissolve_parts(&fx),
+        BTreeSet::from([b"h".to_vec(), map_part(1, 0)])
+    );
+}
+
+/// The map reads a subtree that no queued op still writes: an op under the
+/// subtree that cannot publish holds the map step until it drains.
+#[test]
+fn the_dissolve_map_waits_for_a_queued_op_under_the_subtree() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    let endpoints = fx.world.record_store.endpoints();
+    for endpoint in &endpoints {
+        fx.world.record_store.fail_put_endpoint(endpoint);
+    }
+    block_on(fx.engine.command(Command::Create {
+        parent: plain,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the map waits"
+    );
+
+    for endpoint in &endpoints {
+        fx.world.record_store.heal_put_endpoint(endpoint);
+    }
+    tick_until_drained(&mut fx, 8);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert_eq!(header.rows, 5, "the late folder is a row");
+}
+
+/// ADR 0077 D3 (F2): a folder of the subtree that becomes a scope root
+/// before the copy starts stops the dissolve, and its entry goes.
+#[test]
+fn a_folder_shared_inside_the_subtree_before_the_copy_stops_the_dissolve() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: plain,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
+    assert!(dissolve_parts(&fx).is_empty(), "and its entry goes");
+}
+
+/// ADR 0077 D3: a grant on a cut scope root before the copy starts is work
+/// that the dissolve did not do, so the dissolve stops and its entry goes.
+#[test]
+fn a_grant_on_a_cut_scope_before_the_copy_stops_the_dissolve() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
 }

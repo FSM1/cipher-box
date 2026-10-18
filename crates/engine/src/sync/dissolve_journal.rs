@@ -1152,6 +1152,38 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         Ok(pages)
     }
 
+    /// Remove each map page at the root of `hold` that `held`, the header in
+    /// the store, does not count: a page of another generation, or past its
+    /// page count.
+    pub async fn drop_uncounted_pages(
+        &self,
+        hold: &DissolveHold<'_>,
+        held: &DissolveHeader,
+    ) -> Result<(), DissolveWriteError> {
+        let root = hold.root;
+        let _writer = self.cell.writer.lock().await;
+        if self.standing(root).await?.as_ref() != Some(held) {
+            return Err(DissolveWriteError::Stale);
+        }
+        let parts = self
+            .journal
+            .parts(root)
+            .await
+            .map_err(DissolveWriteError::Store)?;
+        for part in parts {
+            let Some(rest) = part.strip_prefix(&[MAP_PART]) else {
+                continue;
+            };
+            let key = <[u8; 4]>::try_from(rest).map_err(|_| DissolveWriteError::Blocked)?;
+            let generation = u16::from_be_bytes([key[0], key[1]]);
+            let page = u16::from_be_bytes([key[2], key[3]]);
+            if generation != held.map_gen || page >= held.map_pages {
+                self.journal.remove(root, &part, DISSOLVE_CALLER).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Append the name log page `page` at the root of `hold`. A page is never
     /// rewritten, and a root with no dissolve header takes no page.
     pub async fn append_name_log(
@@ -1876,6 +1908,70 @@ mod tests {
                 vec![remap.clone()],
                 "a stop after the commit reads generation 1"
             );
+        });
+    }
+
+    /// After a header commit, the drop removes each page that the header does
+    /// not count, and keeps the live map, the header and the name log. A
+    /// header other than the one in the store drops nothing.
+    #[test]
+    fn the_uncounted_pages_go_after_a_header_commit() {
+        run(async |journal, cell| {
+            let hold = cell.hold(ROOT).unwrap();
+            let seal = at(DissolveStep::Seal);
+            let cut = begin(journal, &hold).await;
+            journal.put_map_page(&hold, &tree()).await.unwrap();
+            journal.commit(&hold, Some(&cut), &seal).await.unwrap();
+            let remap = MapPage {
+                generation: 1,
+                ..tree()
+            };
+            let past_the_count = MapPage {
+                generation: 1,
+                page: 1,
+                ..tree()
+            };
+            journal.put_map_page(&hold, &remap).await.unwrap();
+            journal.put_map_page(&hold, &past_the_count).await.unwrap();
+            let log = NameLogPage {
+                index: 0,
+                entries: vec![LoggedName {
+                    id: NEW_ROOT,
+                    name: b"k51copy".to_vec(),
+                }],
+            };
+            journal.append_name_log(&hold, &log).await.unwrap();
+            let remapped = DissolveHeader {
+                map_gen: 1,
+                ..seal.clone()
+            };
+            assert!(matches!(
+                journal.drop_uncounted_pages(&hold, &remapped).await,
+                Err(DissolveWriteError::Stale)
+            ));
+            journal.commit(&hold, Some(&seal), &remapped).await.unwrap();
+
+            journal
+                .drop_uncounted_pages(&hold, &remapped)
+                .await
+                .unwrap();
+
+            let parts: BTreeSet<Vec<u8>> = journal
+                .journal
+                .parts(ROOT)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+            assert_eq!(
+                parts,
+                BTreeSet::from([
+                    HEADER_PART.to_vec(),
+                    DissolveJournal::<InMemoryStagingStore>::map_part(1, 0),
+                    DissolveJournal::<InMemoryStagingStore>::log_part(0),
+                ])
+            );
+            assert_eq!(journal.map(ROOT, &remapped).await.unwrap(), vec![remap]);
         });
     }
 
