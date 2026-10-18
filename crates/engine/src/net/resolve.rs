@@ -785,6 +785,8 @@ mod tests {
         EqualSequence,
         /// At the floor, and the floor re-check refuses the record.
         RefusedAtFloor,
+        /// One sequence below the floor.
+        BelowFloor,
     }
 
     struct StubAdopter {
@@ -898,6 +900,13 @@ mod tests {
                         },
                     }))
                 }
+                Verdict::BelowFloor => Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: sequence + 1,
+                        sequence,
+                    },
+                })),
             }
         }
 
@@ -1179,6 +1188,55 @@ mod tests {
             }
         );
         assert!(!gated.withheld);
+    }
+
+    /// A pick below the floor is withheld while an endpoint fails (ADR 0071
+    /// D1), and is a trust violation when every endpoint answers (ADR 0071 D4).
+    #[test]
+    fn a_record_below_the_floor_is_withheld_only_while_an_endpoint_fails() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let served = record_of(&signer, b"/ipfs/served", 3);
+        for failed in [true, false] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
+            let endpoints = device.record_store.endpoints();
+            for endpoint in &endpoints {
+                device
+                    .record_store
+                    .seed_record(endpoint, name.as_str(), served.clone());
+            }
+            if failed {
+                device.record_store.fail_endpoint(&endpoints[0]);
+            }
+
+            let gated = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &StubAdopter::new(Verdict::BelowFloor),
+                &name,
+                ResolveMode::NoCache,
+            ))
+            .expect("the resolve settles");
+            if failed {
+                assert_eq!(gated.resolved.outcome, ResolveOutcome::NoUpdate);
+            } else {
+                assert!(
+                    matches!(
+                        gated.resolved.outcome,
+                        ResolveOutcome::TrustViolation(GateRejection {
+                            reason: RejectionReason::SequenceNotNewer {
+                                floor: 4,
+                                sequence: 3
+                            },
+                            ..
+                        })
+                    ),
+                    "every endpoint answers"
+                );
+            }
+            assert_eq!(gated.withheld, failed, "endpoint failed {failed}");
+        }
     }
 
     /// A forced refresh renders nothing from the cache, but the copy the
