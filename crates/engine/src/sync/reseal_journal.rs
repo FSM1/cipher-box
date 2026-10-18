@@ -185,6 +185,11 @@ impl<'a, S: StagingStore> ResealJournal<'a, S> {
         }
     }
 
+    /// The staging store the journal reads and writes.
+    pub fn store(&self) -> &'a S {
+        self.store
+    }
+
     /// The key of `part` of the entry at `source_root`.
     pub fn key(&self, source_root: NodeId, part: &[u8]) -> Vec<u8> {
         [RESEAL_JOURNAL_PREFIX, &self.owner_tag, &source_root.0, part].concat()

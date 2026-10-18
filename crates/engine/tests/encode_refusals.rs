@@ -41,6 +41,13 @@ use cipherbox_engine::seams::{
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::dead_letter_name::{decode_dead_letter_name, encode_dead_letter_name};
+use cipherbox_engine::sync::dissolve_journal::{
+    DissolveBinding, DissolveCell, DissolveCodecError, DissolveHeader, DissolveJournal,
+    DissolveStep, DissolvedScope, HeaderSlot, LoggedName, MAX_DISSOLVED_SCOPES, MAX_JOURNAL_NAME,
+    MAX_PAGE_ENTRIES, MAX_PRIOR_BINDINGS, MAX_RELINK_NAMES, Manifest, MapPage, MapRow, NameLogPage,
+    PriorBinding, decode_dissolve_header, encode_dissolve_header, encode_map_page,
+    encode_name_log_page,
+};
 use cipherbox_engine::sync::kept_op::{KeptNote, KeptNoteError, KeptNotes, KeptResult};
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -188,6 +195,392 @@ fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
     assert_eq!(
         encode_reseal_envelope(&over_cap, root).map(|_| ()),
         Err(ResealEnvelopeError::PayloadTooLarge)
+    );
+}
+
+/// A valid dissolve header at `step` over the source root `0x51` and one
+/// nested root: a map from the seal to the retire, and the manifests and the
+/// relink marks from the relink on.
+fn dissolve_header_at(step: DissolveStep) -> DissolveHeader {
+    let mut header = DissolveHeader::at_cut(
+        NodeId([0x61; 16]),
+        NodeId([0x20; 16]),
+        DissolveBinding {
+            read_scope: NodeId([0x10; 16]),
+            read_epoch: 3,
+            restart_floor: 2,
+            base_cut: 1,
+            write_scope: NodeId([0x10; 16]),
+            write_epoch: 4,
+        },
+        vec![
+            DissolvedScope::uncut(NodeId([0x51; 16])),
+            DissolvedScope::uncut(NodeId([0x52; 16])),
+        ],
+    );
+    header.step = step;
+    if (DissolveStep::Seal..=DissolveStep::Retire).contains(&step) {
+        header.copy_started = true;
+        header.map_pages = 1;
+        header.rows = 2;
+    }
+    if step >= DissolveStep::Relink {
+        for scope in &mut header.scopes {
+            scope.manifest = Some(Manifest {
+                hold_until: 9_000,
+                pointer_name: b"k51pointer".to_vec(),
+                final_root_name: b"k51root".to_vec(),
+                head_cid: b"bafyhead".to_vec(),
+                retired: false,
+            });
+        }
+        header.copy_started = true;
+        header.relink_sent = true;
+        header.relink_names = vec![b"k51parent".to_vec()];
+    }
+    header
+}
+
+/// The dissolve journal decoder refuses each header that breaks an invariant
+/// of its step, so the encode refuses the same header (ADR 0077 D3). A header
+/// at the cut and at the hold holds no map.
+#[test]
+fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
+    let root = NodeId([0x51; 16]);
+    for step in [
+        DissolveStep::Cut,
+        DissolveStep::Map,
+        DissolveStep::Seal,
+        DissolveStep::Relink,
+        DissolveStep::Unindex,
+        DissolveStep::Retire,
+        DissolveStep::Hold,
+    ] {
+        let header = dissolve_header_at(step);
+        let payload = encode_dissolve_header(&header, root).expect("a valid header encodes");
+        assert_eq!(decode_dissolve_header(&payload, root), Ok(header));
+    }
+    let edit = |step, change: &dyn Fn(&mut DissolveHeader)| {
+        let mut header = dissolve_header_at(step);
+        change(&mut header);
+        header
+    };
+    let long_name = vec![b'k'; MAX_JOURNAL_NAME + 1];
+    let cases: Vec<(DissolveHeader, DissolveCodecError)> = vec![
+        (
+            edit(DissolveStep::Cut, &|h| h.scopes.clear()),
+            DissolveCodecError::SourceScopeFirst,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| h.scopes.swap(0, 1)),
+            DissolveCodecError::SourceScopeFirst,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes.push(DissolvedScope::uncut(NodeId([0x52; 16])));
+            }),
+            DissolveCodecError::DuplicateScope,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes = (0..=MAX_DISSOLVED_SCOPES)
+                    .map(|i| {
+                        let mut id = [0x51; 16];
+                        id[0] = u8::try_from(i).expect("a small count");
+                        id[1] = 0x51;
+                        DissolvedScope::uncut(NodeId(if i == 0 { [0x51; 16] } else { id }))
+                    })
+                    .collect();
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| {
+                h.relink_names = vec![b"k51parent".to_vec(); MAX_RELINK_NAMES + 1];
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| {
+                h.relink_names = vec![long_name.clone()]
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| h.relink_names = vec![Vec::new()]),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.prior_bindings = vec![
+                    PriorBinding {
+                        read_scope: NodeId([0x30; 16]),
+                        read_root: NodeId([0x31; 16]),
+                        read_epoch: 5,
+                        restart_floor: 4,
+                        write_scope: NodeId([0x32; 16]),
+                        write_epoch: 6,
+                    };
+                    MAX_PRIOR_BINDINGS + 1
+                ];
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| {
+                h.scopes[0]
+                    .manifest
+                    .as_mut()
+                    .expect("a manifest")
+                    .pointer_name = long_name.clone();
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| {
+                h.scopes[0].manifest.as_mut().expect("a manifest").head_cid = Vec::new();
+            }),
+            DissolveCodecError::OverCap,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.map_pages = 1;
+                h.rows = 2;
+            }),
+            DissolveCodecError::BeforeTheCopy,
+        ),
+        (
+            edit(DissolveStep::Map, &|h| h.relink_sent = true),
+            DissolveCodecError::BeforeTheCopy,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| h.parked = true),
+            DissolveCodecError::BeforeTheCopy,
+        ),
+        (
+            edit(DissolveStep::Map, &|h| {
+                h.relink_names = vec![b"k51parent".to_vec()];
+            }),
+            DissolveCodecError::BeforeTheCopy,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes[1].manifest = dissolve_header_at(DissolveStep::Relink).scopes[1]
+                    .manifest
+                    .clone();
+            }),
+            DissolveCodecError::BeforeTheCopy,
+        ),
+        (
+            edit(DissolveStep::Seal, &|h| {
+                h.map_pages = 0;
+                h.rows = 0;
+            }),
+            DissolveCodecError::RowCount,
+        ),
+        (
+            edit(DissolveStep::Map, &|h| h.rows = 1),
+            DissolveCodecError::RowCount,
+        ),
+        (
+            edit(DissolveStep::Seal, &|h| h.rows = 0),
+            DissolveCodecError::RowCount,
+        ),
+        (
+            edit(DissolveStep::Relink, &|h| h.scopes[1].manifest = None),
+            DissolveCodecError::ManifestMissing,
+        ),
+        (
+            edit(DissolveStep::Unindex, &|h| h.parked = true),
+            DissolveCodecError::ParkedOutsideRelink,
+        ),
+        (
+            edit(DissolveStep::Retire, &|h| {
+                h.scopes[0].manifest.as_mut().expect("a manifest").retired = true;
+            }),
+            DissolveCodecError::RetiredOutsideHold,
+        ),
+        (
+            edit(DissolveStep::Retire, &|h| h.retire_cursor = 2),
+            DissolveCodecError::RetireCursor,
+        ),
+        (
+            edit(DissolveStep::Unindex, &|h| h.retire_cursor = 1),
+            DissolveCodecError::RetireCursor,
+        ),
+        (
+            edit(DissolveStep::Hold, &|h| {
+                h.map_pages = 1;
+                h.rows = 2;
+            }),
+            DissolveCodecError::MapAtHold,
+        ),
+    ];
+    for (header, refusal) in cases {
+        assert_eq!(
+            encode_dissolve_header(&header, root).map(|_| ()),
+            Err(refusal),
+            "{}",
+            refusal.check()
+        );
+    }
+}
+
+/// The page decoders refuse a page over its cap, a name over its cap and a
+/// stated root parent on a row, so the page encoders refuse each.
+#[test]
+fn a_dissolve_page_the_decoder_refuses_is_refused_at_encode() {
+    let row = |parent| MapRow {
+        old: NodeId([0x53; 16]),
+        new: NodeId([0x63; 16]),
+        parent,
+        old_name: b"k51old".to_vec(),
+    };
+    let map = |rows| MapPage {
+        generation: 0,
+        page: 0,
+        rows,
+    };
+    assert!(encode_map_page(&map(vec![row(Some(0))])).is_ok());
+    for page in [
+        map(vec![row(Some(0)); MAX_PAGE_ENTRIES + 1]),
+        map(vec![row(Some(u32::MAX))]),
+        map(vec![MapRow {
+            old_name: vec![b'k'; MAX_JOURNAL_NAME + 1],
+            ..row(Some(0))
+        }]),
+    ] {
+        assert_eq!(
+            encode_map_page(&page).map(|_| ()),
+            Err(DissolveCodecError::OverCap)
+        );
+    }
+    let entry = |name: Vec<u8>| LoggedName {
+        id: NodeId([0x63; 16]),
+        name,
+    };
+    for entries in [
+        vec![entry(b"k51new".to_vec()); MAX_PAGE_ENTRIES + 1],
+        vec![entry(Vec::new())],
+        vec![entry(vec![b'k'; MAX_JOURNAL_NAME + 1])],
+    ] {
+        assert_eq!(
+            encode_name_log_page(&NameLogPage { index: 0, entries }).map(|_| ()),
+            Err(DissolveCodecError::OverCap)
+        );
+    }
+}
+
+/// The journal writer refuses a header whose map is not one rooted tree, a
+/// changed `cut_time`, and a cleared relink mark, before it writes anything.
+#[test]
+fn the_dissolve_journal_writer_refuses_a_header_its_reader_refuses() {
+    let root = NodeId([0x51; 16]);
+    let store = InMemoryStagingStore::default();
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
+    let secret = kdf::enc_subkey(&SECRET);
+    let cell = DissolveCell::default();
+    let journal = DissolveJournal::new(
+        &store,
+        BookkeepingSeal::new(&secret, &entropy),
+        [3; 32],
+        &cell,
+    );
+    let hold = cell.hold(root).expect("one driver");
+    let mut cut = dissolve_header_at(DissolveStep::Cut);
+    cut.scopes[0].cut_time = 1_500;
+    block_on(journal.commit(&hold, None, &cut)).expect("the first header lands");
+
+    let mut retimed = cut.clone();
+    retimed.scopes[0].cut_time = 2_500;
+    assert_eq!(
+        block_on(journal.commit(&hold, Some(&cut), &retimed))
+            .expect_err("a set cut_time stays")
+            .check(),
+        "dissolve-journal-cut-time-set-once"
+    );
+
+    let seal = dissolve_header_at(DissolveStep::Seal);
+    block_on(journal.put_map_page(
+        &hold,
+        &MapPage {
+            generation: 0,
+            page: 0,
+            rows: vec![
+                MapRow {
+                    old: root,
+                    new: seal.new_root,
+                    parent: None,
+                    old_name: b"k51old".to_vec(),
+                },
+                MapRow {
+                    old: NodeId([0x53; 16]),
+                    new: root,
+                    parent: Some(0),
+                    old_name: b"k51old".to_vec(),
+                },
+            ],
+        },
+    ))
+    .expect("a page writes");
+    let seal = DissolveHeader {
+        scopes: cut.scopes.clone(),
+        ..seal
+    };
+    assert_eq!(
+        block_on(journal.commit(&hold, Some(&cut), &seal))
+            .expect_err("a new id that is also an old id")
+            .check(),
+        DissolveCodecError::MapShape.check()
+    );
+
+    let valid_page = MapPage {
+        generation: 0,
+        page: 0,
+        rows: vec![
+            MapRow {
+                old: root,
+                new: seal.new_root,
+                parent: None,
+                old_name: b"k51old".to_vec(),
+            },
+            MapRow {
+                old: NodeId([0x53; 16]),
+                new: NodeId([0x63; 16]),
+                parent: Some(0),
+                old_name: b"k51old".to_vec(),
+            },
+        ],
+    };
+    block_on(journal.put_map_page(&hold, &valid_page)).expect("a page writes");
+    block_on(journal.commit(&hold, Some(&cut), &seal)).expect("a valid map lands");
+    let relink = DissolveHeader {
+        scopes: dissolve_header_at(DissolveStep::Relink)
+            .scopes
+            .into_iter()
+            .zip(&seal.scopes)
+            .map(|(with_manifest, held)| DissolvedScope {
+                manifest: with_manifest.manifest,
+                ..held.clone()
+            })
+            .collect(),
+        ..dissolve_header_at(DissolveStep::Relink)
+    };
+    block_on(journal.commit(&hold, Some(&seal), &relink)).expect("the relink header lands");
+    let unsent = DissolveHeader {
+        relink_sent: false,
+        ..relink.clone()
+    };
+    assert_eq!(
+        block_on(journal.commit(&hold, Some(&relink), &unsent))
+            .expect_err("a relink mark stays")
+            .check(),
+        "dissolve-journal-sticky-mark-cleared"
+    );
+    assert_eq!(
+        block_on(journal.header(root)).expect("the header reads"),
+        HeaderSlot::Own(relink),
+        "no refused header landed"
     );
 }
 
