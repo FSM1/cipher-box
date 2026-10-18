@@ -10,7 +10,7 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_under};
+use super::fanout::{FanoutRecord, VacancyRule, fanout_get_answered, fanout_get_under};
 use super::rotation::OwnerPointerRead;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
@@ -103,6 +103,8 @@ pub(crate) struct ConsultedPointer {
     pub(crate) record_bytes: Vec<u8>,
     /// That record's authenticated inline value — the sealed re-point block.
     pub(crate) value: Vec<u8>,
+    /// An endpoint gave no answer, so it can hold a newer record.
+    pub(crate) endpoint_failed: bool,
 }
 
 impl PointerConsult<'_> {
@@ -116,7 +118,8 @@ impl PointerConsult<'_> {
         scope_id: &[u8; 16],
     ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
-        let (block, record_bytes) = match fanout_get_classified(transport, &pointer).await {
+        let fetch = fanout_get_answered(transport, &pointer).await;
+        let (block, record_bytes) = match fetch.record {
             FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
             FanoutRecord::Absent => return Ok(None),
             FanoutRecord::Unavailable(_) => return Err(PointerConsultError::Unavailable),
@@ -151,6 +154,7 @@ impl PointerConsult<'_> {
             deferred: write_floor < repoint.write_epoch,
             record_bytes,
             value: block,
+            endpoint_failed: fetch.endpoint_failed,
         }))
     }
 }

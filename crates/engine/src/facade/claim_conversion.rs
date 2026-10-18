@@ -505,13 +505,14 @@ where
             cut,
             vault_pointer_signer,
             command,
+            true,
             &reads,
         )
         .await
     }
 
     /// [`Self::rotate_planes`], noting what the cut's root reads met in
-    /// `reads`.
+    /// `reads`. With `sweeps` false, the cut files a sweep that does nothing.
     #[expect(clippy::too_many_arguments, reason = "one cut's full input set")]
     pub(super) async fn rotate_planes_reading(
         &self,
@@ -521,6 +522,7 @@ where
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
         command: bool,
+        sweeps: bool,
         reads: &CutRootReads,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
@@ -551,7 +553,13 @@ where
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
-            sweep: &|scope| (sweep.task)(scope, target.parent_node_seed.clone()),
+            sweep: &|scope| {
+                if sweeps {
+                    (sweep.task)(scope, target.parent_node_seed.clone())
+                } else {
+                    Box::pin(core::future::ready(()))
+                }
+            },
             cut_durable: &*sweep.cut,
             bound,
             root_wait: if command {

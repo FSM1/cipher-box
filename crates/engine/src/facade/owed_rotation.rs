@@ -314,11 +314,11 @@ where
     /// answers what it proved of the cut set ([`OwedCut`]). `write_epoch` is the write epoch of the record the
     /// cut was authorized against.
     ///
-    /// A read-only cut clears its entry here. A cut that moves the write plane
-    /// leaves it for the caller, which clears it after the post-steps. The
-    /// caller holds the scope
-    /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
-    /// across both.
+    /// A read-only cut clears its entry here, and a clear that fails answers
+    /// [`OwedCut::SetLanded`]. A cut that moves the write plane leaves it for
+    /// the caller, which clears it after the post-steps. The caller holds the
+    /// scope ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
+    /// across both. `sweeps` is false for a cut that files no lazy-wave sweep.
     #[expect(clippy::too_many_arguments, reason = "one owed cut's full input set")]
     pub(super) async fn rotate_owed_cut(
         &self,
@@ -329,6 +329,7 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
         write_epoch: u64,
         command: bool,
+        sweeps: bool,
     ) -> Result<OwedCut, EngineError> {
         let write = if cut.planes().write() {
             Some(owed_write_cut(write_epoch)?)
@@ -362,6 +363,7 @@ where
                 cut,
                 vault_pointer_signer,
                 command,
+                sweeps,
                 &reads,
             )
             .await
@@ -434,8 +436,8 @@ where
             .await;
             return Ok(OwedCut::SetLanded);
         }
-        if write.is_none() {
-            let _ = self.owed().clear(node).await;
+        if write.is_none() && self.owed().clear(node).await.is_err() {
+            return Ok(OwedCut::SetLanded);
         }
         Ok(OwedCut::Ran(Box::new(report)))
     }

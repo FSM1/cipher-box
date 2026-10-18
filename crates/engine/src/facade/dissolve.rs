@@ -14,7 +14,8 @@ use super::*;
 use crate::grants::{OwnerAuthority, committed_links};
 use crate::net::cut::{republish_scope_pointer, reseal_root_in_place};
 use crate::rotation::{
-    CascadeError, CommittedSet, NoBound, WriteRotationOutcome, revoke_every_row,
+    CascadeError, CommittedSet, NoBound, WriteRotationOutcome, recut_from_last_copy,
+    revoke_every_row,
 };
 #[cfg(any(test, feature = "test-kit"))]
 use crate::sync::dissolve_journal::{DissolveBinding, DissolvedScope, MAX_DISSOLVED_SCOPES};
@@ -64,15 +65,12 @@ where
 {
     /// This owner's dissolve entries.
     pub(super) fn dissolve_journal(&self) -> DissolveJournal<'_, St> {
-        DissolveJournal::new(
-            self.staging,
-            self.seal(),
-            self.owed.dissolve(),
-        )
+        DissolveJournal::new(self.staging, self.seal(), self.owed.dissolve())
     }
 
     /// Drive the cut step of each dissolve entry this owner holds. A failed
-    /// drive leaves its entry for the next pass.
+    /// drive leaves its entry for the next pass, and a trust violation goes to
+    /// the host.
     pub(crate) async fn redrive_dissolve_cuts(
         &self,
         sites: &impl ConversionSites,
@@ -82,7 +80,13 @@ where
             return;
         };
         for root in roots {
-            let _ = self.drive_dissolve_cut(sites, pointers, root).await;
+            if let Err(EngineError::TrustViolation { message }) =
+                self.drive_dissolve_cut(sites, pointers, root).await
+            {
+                let _ = self.events.unbounded_send(Event::AttributableAbuse {
+                    description: message,
+                });
+            }
         }
     }
 
@@ -126,12 +130,10 @@ where
         let _ = self.settle(record, pointers).await;
         match reached? {
             ScopeCut::Done => {
-                let held = header.clone();
-                header.step = DissolveStep::Map;
-                journal
-                    .commit(&hold, Some(&held), &header)
-                    .await
-                    .map_err(EngineError::from_dissolve_write)?;
+                self.commit_dissolve(&journal, &hold, &mut header, |header| {
+                    header.step = DissolveStep::Map;
+                })
+                .await?;
                 Ok(Some(DissolveStep::Map))
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
@@ -145,8 +147,35 @@ where
         }
     }
 
+    /// Commit `header` with `change` over the header it holds.
+    async fn commit_dissolve(
+        &self,
+        journal: &DissolveJournal<'_, St>,
+        hold: &DissolveHold<'_>,
+        header: &mut DissolveHeader,
+        change: impl FnOnce(&mut DissolveHeader),
+    ) -> Result<(), EngineError> {
+        let held = header.clone();
+        change(header);
+        journal
+            .commit(hold, Some(&held), header)
+            .await
+            .map_err(EngineError::from_dissolve_write)
+    }
+
+    /// Whether an owed rotation entry names `scope`.
+    async fn owes(&self, scope: NodeId) -> Result<bool, EngineError> {
+        Ok(self
+            .owed()
+            .entry(scope)
+            .await
+            .map_err(EngineError::from_seam)?
+            .is_some())
+    }
+
     /// Cut every row of `header.scopes[at]`, or find it cut, then publish its
-    /// pointer, and its root when this drive cut nothing, again.
+    /// final records again: its pointer, and its root when this drive cut
+    /// nothing. A scope whose final records landed publishes nothing.
     async fn cut_scope(
         &self,
         sites: &impl ConversionSites,
@@ -160,109 +189,132 @@ where
         let Some(_owed_hold) = self.owed.hold(scope) else {
             return Ok(ScopeCut::Waiting);
         };
-        if self
-            .owed()
-            .entry(scope)
-            .await
-            .map_err(EngineError::from_seam)?
-            .is_some()
-        {
+        if self.owes(scope).await? {
             return Ok(ScopeCut::Waiting);
-        }
-        // Before the first publish of this scope, so every final record it
-        // signs carries an EOL past `cut_time` plus the EOL window.
-        if header.scopes[at].cut_time == 0 {
-            let held = header.clone();
-            header.scopes[at].cut_time = self.scheduler.now().0;
-            journal
-                .commit(hold, Some(&held), header)
-                .await
-                .map_err(EngineError::from_dissolve_write)?;
         }
         let OwedScope {
             indexed,
             target,
             current,
+            fell_back,
             ..
         } = self
             .owed_scope(sites, scope, "dissolve-cut", true)
             .await
             .map_err(EngineError::from_owed_stop)?;
-        let cut_epoch = header.scopes[at].cut_epoch;
+        // A nested root that another device moved out of the subtree is no
+        // longer the dissolve's to cut.
+        if at != 0 {
+            let parent = NodeId(sites.enclosing(scope).await?.scope.scope_id);
+            if header.scopes.iter().all(|cut| cut.scope_id != parent) {
+                return Ok(ScopeCut::NewRow);
+            }
+        }
         let rows = !current.commitment.entries.is_empty();
-        if rows && cut_epoch != 0 && current.commitment.cut_epoch >= cut_epoch {
+        let base = header.scopes[at].clone();
+        if rows && base.cut_time != 0 && current.commitment.cut_epoch >= base.cut_epoch {
             return Ok(ScopeCut::NewRow);
         }
+        if base.final_landed {
+            return Ok(ScopeCut::Done);
+        }
         let name = parsed_scope_name(&target.scope.ipns_name)?;
-        let (target, landed) = if rows {
-            let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-            let links: Vec<[u8; IDENTITY_PUBLIC_LEN]> = committed_links(
-                &OwnerAuthority {
-                    identity_signer: self.identity,
-                    enc_secret: self.enc_secret,
-                },
-                &bound_scope(&target, &current, &commitment_sig)?,
-            )
-            .map_err(EngineError::from_invite)?
-            .iter()
-            .map(|link| link.ephemeral_identity_pk)
-            .collect();
-            let pending = record.pending_links();
-            if links.iter().any(|link| pending.contains(link)) {
-                return Ok(ScopeCut::Waiting);
-            }
-            let cut = revoke_every_row(&GrantCutPlan::over(&current, &name, self.identity))
-                .map_err(EngineError::from_revoke)?;
-            let report = match self
-                .rotate_owed_cut(
-                    scope,
-                    &target,
-                    &name,
-                    &cut,
-                    None,
-                    current.write_epoch,
-                    sites.command(),
-                )
-                .await?
-            {
-                OwedCut::Ran(report) => *report,
-                OwedCut::SetLanded | OwedCut::Unproved => return Ok(ScopeCut::Waiting),
-            };
-            record.retire_cut(&links);
-            let target = match report.write {
-                Some(write) => {
-                    if let Err(error) = self
-                        .after_dissolve_wave(sites, scope, indexed.as_deref(), &write)
-                        .await
-                    {
-                        let steps = vec![owed_write_cut(current.write_epoch)?];
-                        self.stop_owed(scope, steps, OwedStop::of_post_step(&error))
-                            .await;
-                        return Ok(ScopeCut::Waiting);
-                    }
-                    let _ = self.owed().clear(scope).await;
-                    OwnerScope {
-                        scope: ChildScopeRef::new(
-                            scope.0,
-                            write.new_root_name.as_str().as_bytes().to_vec(),
-                        ),
-                        ..target
-                    }
-                }
-                None => target,
-            };
-            (target, cut.commitment.cut_epoch)
+        let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+        let links: Vec<[u8; IDENTITY_PUBLIC_LEN]> = committed_links(
+            &OwnerAuthority {
+                identity_signer: self.identity,
+                enc_secret: self.enc_secret,
+            },
+            &bound_scope(&target, &current, &commitment_sig)?,
+        )
+        .map_err(EngineError::from_invite)?
+        .iter()
+        .map(|link| link.ephemeral_identity_pk)
+        .collect();
+        let pending = record.pending_links();
+        if links.iter().any(|link| pending.contains(link)) {
+            return Ok(ScopeCut::Waiting);
+        }
+        // A last copy cannot prove that it holds no row, so it is cut too, and
+        // the name wave moves the root off the refused record (ADR 0068 D1,
+        // D3, D5).
+        let plan = GrantCutPlan::over(&current, &name, self.identity);
+        let cut = if rows {
+            Some(revoke_every_row(&plan))
+        } else if fell_back {
+            Some(recut_from_last_copy(&plan, true))
         } else {
-            self.republish_root(sites, &target, &name).await?;
-            (target, current.commitment.cut_epoch)
+            None
+        }
+        .transpose()
+        .map_err(EngineError::from_revoke)?;
+        // Before the first publish of this scope, so every final record it
+        // signs carries an EOL past `cut_time` plus the EOL window. The cut
+        // epoch is the baseline a later row is measured against.
+        if base.cut_time == 0 {
+            let cut_epoch = cut
+                .as_ref()
+                .map_or(current.commitment.cut_epoch, |cut| cut.commitment.cut_epoch);
+            let cut_time = self.scheduler.now().0;
+            self.commit_dissolve(journal, hold, header, |header| {
+                header.scopes[at].cut_epoch = cut_epoch;
+                header.scopes[at].cut_time = cut_time;
+            })
+            .await?;
+        }
+        let target = match cut {
+            Some(cut) => {
+                let report = match self
+                    .rotate_owed_cut(
+                        scope,
+                        &target,
+                        &name,
+                        &cut,
+                        None,
+                        current.write_epoch,
+                        sites.command(),
+                        false,
+                    )
+                    .await?
+                {
+                    OwedCut::Ran(report) => *report,
+                    OwedCut::SetLanded | OwedCut::Unproved => return Ok(ScopeCut::Waiting),
+                };
+                record.retire_cut(&links);
+                match report.write {
+                    Some(write) => {
+                        if let Err(error) = self
+                            .after_dissolve_wave(sites, scope, indexed.as_deref(), &write)
+                            .await
+                        {
+                            let steps = vec![owed_write_cut(current.write_epoch)?];
+                            self.stop_owed(scope, steps, OwedStop::of_post_step(&error))
+                                .await;
+                            return Ok(ScopeCut::Waiting);
+                        }
+                        self.owed()
+                            .clear(scope)
+                            .await
+                            .map_err(EngineError::from_owed_record)?;
+                        OwnerScope {
+                            scope: ChildScopeRef::new(
+                                scope.0,
+                                write.new_root_name.as_str().as_bytes().to_vec(),
+                            ),
+                            ..target
+                        }
+                    }
+                    None => target,
+                }
+            }
+            None => {
+                self.republish_root(sites, &target, &name).await?;
+                target
+            }
         };
-        if cut_epoch == 0 && landed != 0 {
-            let held = header.clone();
-            header.scopes[at].cut_epoch = landed;
-            journal
-                .commit(hold, Some(&held), header)
-                .await
-                .map_err(EngineError::from_dissolve_write)?;
+        self.forget_link_grants(scope).await?;
+        if self.owes(scope).await? {
+            return Ok(ScopeCut::Waiting);
         }
         republish_scope_pointer(
             &self.net(&target, PointerConsultArm::Refused),
@@ -272,7 +324,31 @@ where
         )
         .await
         .map_err(|error| EngineError::from_rotate(RotateError::Publish(error)))?;
+        self.commit_dissolve(journal, hold, header, |header| {
+            header.scopes[at].final_landed = true;
+        })
+        .await?;
         Ok(ScopeCut::Done)
+    }
+
+    /// Drop the grant at `scope` from each contact a link sourced: the scope
+    /// holds no row, so the book returns the room it took.
+    async fn forget_link_grants(&self, scope: NodeId) -> Result<(), EngineError> {
+        let contacts = StagingContactStore::new(self.staging, self.enc_secret, self.entropy);
+        for (contact, source) in contacts
+            .contacts_with_sources()
+            .await
+            .map_err(EngineError::from_contact_store)?
+        {
+            let identity = contact.identity_pk().to_sec1();
+            if let (Some(_), Ok(identity)) = (source, identity.as_slice().try_into()) {
+                contacts
+                    .forget_link_grant(identity, &scope.0)
+                    .await
+                    .map_err(EngineError::from_contact_store)?;
+            }
+        }
+        Ok(())
     }
 
     /// The post-steps of the name wave `write` that a dissolve cut ran at
@@ -351,7 +427,7 @@ where
         let mut at = 0;
         while let Some(scope) = scopes.get(at).map(|scope| scope.scope_id) {
             let OwedScope { current, .. } = self
-                .owed_scope(sites, scope, "dissolve-scopes", false)
+                .owed_scope(sites, scope, "dissolve-scopes", true)
                 .await
                 .map_err(EngineError::from_owed_stop)?;
             for child in &current.direct_child_scope_index {

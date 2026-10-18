@@ -17842,6 +17842,7 @@ mod tests {
                 deferred: false,
                 record_bytes: b"a record read before the flip".to_vec(),
                 value: b"the block read before the flip".to_vec(),
+                endpoint_failed: false,
             },
             &harness.held,
         );

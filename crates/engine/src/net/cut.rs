@@ -23,6 +23,7 @@ use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::{Event, NodeId, saturating_count};
 use crate::gate::floor;
 use crate::net::fork::verified;
+use crate::net::gated_read::{BelowFloor, below_floor};
 use crate::net::liveness::HeldRecords;
 use crate::net::pointer_fetch::{PointerConsult, PointerConsultError};
 use crate::net::publish::Observed;
@@ -577,7 +578,9 @@ where
 
 /// Publish the scope pointer of `scope_id` again at the next sequence, with
 /// the re-point the consult authenticated and a fresh EOL, and hold it for
-/// renewal. An absent pointer has nothing to publish again.
+/// renewal. An absent pointer has nothing to publish again. A record below
+/// this device's own last publish is stale bytes when an endpoint failed, and
+/// a rollback when every endpoint answered (ADR 0071 D4).
 pub(crate) async fn republish_scope_pointer<T, H, C, F, Sch, E, S>(
     net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
     owner_pointer_seed: &[u8; SECRET_LEN],
@@ -591,7 +594,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let consulted = PointerConsult {
+    let Some(consulted) = PointerConsult {
         scope_keys: net.keys.scope_keys,
         owner_identity: net.keys.identity,
         payload_version: net.payload_version,
@@ -602,19 +605,21 @@ where
         PointerConsultError::Rejected => RotationPublishError::Rejected,
         PointerConsultError::Unavailable => RotationPublishError::NotPublished,
     })?
-    .ok_or(RotationPublishError::NotPublished)?;
+    else {
+        return Ok(());
+    };
     let name = scope_pointer_name(owner_pointer_seed, &scope_id);
     let signer = scope_pointer_signer(owner_pointer_seed, &scope_id);
     let sequence = verified(&name, &consulted.record_bytes)
         .ok_or(RotationPublishError::Rejected)?
         .sequence;
-    // A served record below this device's own last publish is stale bytes,
-    // and publishing them again would roll the re-point back.
     let floor = floor::sequence_floor(net.floors, name.as_str().as_bytes())
         .await
         .map_err(|_| RotationPublishError::NotPublished)?;
-    if floor.is_some_and(|floor| floor > sequence) {
-        return Err(RotationPublishError::NotPublished);
+    match floor.and_then(|floor| below_floor(sequence, floor, consulted.endpoint_failed)) {
+        None => {}
+        Some(BelowFloor::Unavailable) => return Err(RotationPublishError::NotPublished),
+        Some(BelowFloor::Rollback) => return Err(RotationPublishError::Rejected),
     }
     let record_bytes = publish_pointer_over(
         PointerPipeline {
