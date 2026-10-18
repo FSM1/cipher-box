@@ -560,6 +560,8 @@ pub(crate) struct SessionState {
     pub(crate) kept_chains: Rc<RefCell<BTreeMap<crate::seams::OpId, Vec<NodeId>>>>,
     /// [`DrainCells::delete_proofs`](crate::sync::drain::DrainCells::delete_proofs).
     pub(crate) delete_proofs: Rc<RefCell<BTreeMap<crate::seams::OpId, DeleteProof>>>,
+    /// [`DrainCells::unproved_grants`](crate::sync::drain::DrainCells::unproved_grants).
+    pub(crate) unproved_grants: Rc<RefCell<BTreeSet<NodeId>>>,
     /// The names this session reported restored from the server copy.
     pub(crate) restored_copies: Rc<RestoredCopies>,
 }
@@ -818,6 +820,7 @@ impl SessionState {
             fork_sightings: Rc::new(ForkSightings::default()),
             kept_chains: Rc::default(),
             delete_proofs: Rc::default(),
+            unproved_grants: Rc::default(),
             restored_copies: Rc::new(RestoredCopies::default()),
         }
     }
@@ -850,6 +853,7 @@ impl SessionState {
             bookmarked_scope_roots: &self.bookmarked_scope_roots,
             kept_chains: &self.kept_chains,
             delete_proofs: &self.delete_proofs,
+            unproved_grants: &self.unproved_grants,
         }
     }
 }

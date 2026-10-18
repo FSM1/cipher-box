@@ -7198,6 +7198,7 @@ fn create_published_folders(fx: &mut GrantScenario, parent: NodeId, count: usize
         .unwrap()
         .children(parent)
         .into_iter()
+        .filter(|child| child.kind == NodeKind::Folder)
         .map(|child| child.id)
         .collect();
     assert_eq!(children.len(), count);
@@ -7650,6 +7651,986 @@ fn a_large_subtree_with_a_failed_node_past_the_first_tick_holds_and_recovers() {
 #[test]
 fn a_large_subtree_whose_second_sweep_read_fails_probes_that_node_alone() {
     assert_a_large_subtree_outage_holds_and_recovers(true);
+}
+
+/// The records one tick reads for delete proofs and doomed walks.
+const DELETE_TICK_READS: usize = 128;
+
+/// A plain folder `outer` over [`create_large_subtree`], with the owner's bin
+/// retention at `retention`, and the nodes of the subtree.
+fn large_delete_scenario(retention: u32) -> (GrantScenario, NodeId, Vec<NodeId>) {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, retention);
+    let inner = fx.folder;
+    let mut subtree = vec![outer, inner];
+    subtree.extend(create_large_subtree(&mut fx, inner));
+    (fx, outer, subtree)
+}
+
+/// The reads of each of `nodes`, in records.
+fn reads_each(fx: &GrantScenario, nodes: &[NodeId]) -> Vec<usize> {
+    let one_read = fx.world.record_store.endpoints().len();
+    nodes
+        .iter()
+        .map(|node| reads_of(fx, &[*node]) / one_read)
+        .collect()
+}
+
+/// The reads of each of `nodes` since `before`, in records.
+fn reads_each_since(fx: &GrantScenario, nodes: &[NodeId], before: &[usize]) -> Vec<usize> {
+    reads_each(fx, nodes)
+        .iter()
+        .zip(before)
+        .map(|(now, then)| now - then)
+        .collect()
+}
+
+/// The ticks of one delete: the subtree reads of each tick, and the reads of
+/// each subtree node in the last tick, in records.
+struct DeleteTicks {
+    per_tick: Vec<usize>,
+    last_each: Vec<usize>,
+}
+
+/// Tick until the queue drains, at most `ticks` times.
+fn reads_per_tick(fx: &mut GrantScenario, subtree: &[NodeId], ticks: usize) -> DeleteTicks {
+    let mut ticked = DeleteTicks {
+        per_tick: Vec::new(),
+        last_each: Vec::new(),
+    };
+    while ticked.per_tick.len() < ticks && queued_ops(&fx.owner_device) > 0 {
+        let before = reads_each(fx, subtree);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        ticked.last_each = reads_each_since(fx, subtree, &before);
+        ticked.per_tick.push(ticked.last_each.iter().sum());
+    }
+    ticked
+}
+
+/// Tick until each of `nodes` retires, at most 32 times, and answer the
+/// nodes that did not.
+fn unretired(fx: &mut GrantScenario, nodes: &[NodeId]) -> Vec<NodeId> {
+    let left = |fx: &GrantScenario| -> Vec<NodeId> {
+        let retired = retired(&fx.owner_device);
+        nodes
+            .iter()
+            .copied()
+            .filter(|node| !retired.contains(&write_name(*node).as_str().to_owned()))
+            .collect()
+    };
+    for _ in 0..32 {
+        if left(fx).is_empty() {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    left(fx)
+}
+
+/// Each tick that does not unlink reads at most the share. The tick that
+/// unlinks reads each node of the subtree fresh. The hard delete completes,
+/// and each node of the subtree retires once its quarantine settles.
+fn assert_a_bounded_hard_delete(fx: &mut GrantScenario, subtree: &[NodeId], ticked: &DeleteTicks) {
+    let per_tick = &ticked.per_tick;
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
+        "the delete completes: {per_tick:?}"
+    );
+    let (last, held) = per_tick.split_last().expect("the delete ticks");
+    assert!(
+        held.iter().all(|reads| *reads <= DELETE_TICK_READS),
+        "a tick that does not unlink reads at most the share: {per_tick:?}"
+    );
+    assert!(
+        *last <= DELETE_TICK_READS + subtree.len(),
+        "the unlink tick reads the share and one fresh sweep: {per_tick:?}"
+    );
+    assert!(
+        ticked.last_each.iter().all(|reads| *reads > 0),
+        "the unlink tick reads each node fresh: {:?}",
+        ticked.last_each
+    );
+    let status = block_on(fx.engine.status()).unwrap();
+    assert!(status.dead_letters.is_empty());
+    assert_eq!(status.queue_hold, None);
+    assert!(published_bin_entries(fx).is_empty());
+    assert_eq!(unretired(fx, subtree), Vec::<NodeId>::new());
+}
+
+/// A hard delete of `outer` queued, then two ticks: the first sweep, and the
+/// first part of the walk.
+fn hard_delete_two_ticks(
+    fx: &mut GrantScenario,
+    outer: NodeId,
+    subtree: &[NodeId],
+) -> (cipherbox_engine::seams::OpId, Vec<usize>) {
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let before = reads_each(fx, subtree);
+    let ticked = reads_per_tick(fx, subtree, 2);
+    assert_eq!(
+        ticked.per_tick, [DELETE_TICK_READS; 2],
+        "the second tick ends in the walk"
+    );
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        delete_plane_hold(op_id, outer),
+        "the walk holds the delete"
+    );
+    (op_id, reads_each_since(fx, subtree, &before))
+}
+
+/// Each node of the subtree of [`large_delete_scenario`] below its two
+/// folders that the two ticks read `reads` times, with the folder that names
+/// it.
+fn read_this_often(subtree: &[NodeId], read: &[usize], reads: usize) -> Vec<(NodeId, NodeId)> {
+    // `create_large_subtree`: two folders, then 70 below each.
+    (4..subtree.len())
+        .filter(|index| read[*index] == reads)
+        .map(|index| (subtree[index], subtree[if index < 74 { 2 } else { 3 }]))
+        .collect()
+}
+
+/// The doomed walk of a hard delete larger than one tick's share spans
+/// ticks, and holds the delete until it completes.
+#[test]
+fn a_hard_delete_of_a_large_subtree_reads_at_most_the_share_on_each_tick() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let ticked = reads_per_tick(&mut fx, &subtree, 8);
+    assert_a_bounded_hard_delete(&mut fx, &subtree, &ticked);
+}
+
+/// A restart drops the carried walk. The new session walks again from the
+/// target, under the same share, and completes the delete.
+#[test]
+fn a_hard_delete_restarted_mid_walk_walks_again_and_completes() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    hard_delete_two_ticks(&mut fx, outer, &subtree);
+    restart_owner(&mut fx);
+    let ticked = reads_per_tick(&mut fx, &subtree, 8);
+    assert!(
+        ticked.per_tick.len() > 1,
+        "the new session reads the subtree again under the share: {:?}",
+        ticked.per_tick
+    );
+    assert_a_bounded_hard_delete(&mut fx, &subtree, &ticked);
+}
+
+/// A peer grants a folder below the target while the walk is paused, and
+/// the index omits it. The delete is refused, and no node retires. With
+/// `walked`, the walk read the folder before the grant, so only the fresh
+/// second sweep reads the grant.
+fn assert_a_grant_during_the_walk_refuses_the_hard_delete(walked: bool) {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    let (op_id, read) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let (granted, holder) = read_this_often(&subtree, &read, 1 + usize::from(walked))[0];
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
+
+    let unindexed = published_value(&fx.world, &write_name(ROOT));
+    peer_grants_read(&mut engine, granted);
+    publish_value_at(&fx.world, ROOT, &unindexed);
+    let grant_sequence = sequence_at(&fx.world, &write_name(granted));
+    events_so_far(&mut fx._events);
+    let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(granted)),
+        grant_sequence,
+        "the grant stands"
+    );
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
+#[test]
+fn a_grant_on_a_folder_the_walk_reads_next_refuses_the_hard_delete() {
+    assert_a_grant_during_the_walk_refuses_the_hard_delete(false);
+}
+
+#[test]
+fn a_grant_on_a_folder_the_walk_read_refuses_the_hard_delete() {
+    assert_a_grant_during_the_walk_refuses_the_hard_delete(true);
+}
+
+/// A walk read that the gate refuses for another reason than a grant is
+/// reported, and drops the walk: the next tick proves the subtree again from
+/// the target.
+#[test]
+fn a_hard_delete_walk_read_that_the_gate_refuses_starts_the_proof_again() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let (_, read) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let (refused, _) = read_this_often(&subtree, &read, 1)[0];
+    // Another node's record at this name fails the child gate's bindings.
+    let other = published_value(&fx.world, &write_name(subtree[1]));
+    publish_value_at(&fx.world, refused, &other);
+    events_so_far(&mut fx._events);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        abuse_events_in(&events_so_far(&mut fx._events)) > 0,
+        "the refusal is reported"
+    );
+
+    let before = reads_of(&fx, &[outer]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        reads_of(&fx, &[outer]) > before,
+        "a new proof reads the target again"
+    );
+}
+
+/// A hard delete scenario as [`large_delete_scenario`] at retention `0`, with
+/// a confirmed file in each of the two folders that `with_file` names. Each
+/// file comes before the folders of its folder. Also the files.
+fn large_hard_delete_with_files(
+    with_file: &[usize],
+) -> (GrantScenario, NodeId, Vec<NodeId>, Vec<NodeId>) {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    let folders = create_published_folders(&mut fx, inner, 2);
+    let mut files = Vec::new();
+    for index in with_file {
+        let folder = folders[*index];
+        write_version(
+            &mut fx,
+            WriteTarget::NewFile {
+                parent: folder,
+                name: "file".into(),
+            },
+            &[4u8; 64],
+        );
+        files.push(
+            block_on(fx.engine.view())
+                .unwrap()
+                .children(folder)
+                .into_iter()
+                .find(|child| child.name == "file")
+                .expect("the file is listed")
+                .id,
+        );
+    }
+    let mut subtree = vec![outer, inner];
+    subtree.extend(folders.iter().copied());
+    for folder in &folders {
+        subtree.extend(create_published_folders(&mut fx, *folder, 70));
+    }
+    serve_http(&fx.owner_device, &fx.blocks, 4000);
+    for (index, file) in with_file.iter().zip(&files) {
+        focus_each(&mut fx, &[folders[*index]]);
+        assert_eq!(
+            viewed(&fx, folders[*index], *file),
+            (NodeKind::File, Some(1))
+        );
+    }
+    (fx, outer, subtree, files)
+}
+
+/// The record of a scope root outside the subtree, which a writer of the
+/// scope can publish at another name.
+fn another_root_record(fx: &mut GrantScenario) -> Vec<u8> {
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    peer_grants_read(&mut fx.engine, other);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    published_value(&fx.world, &write_name(other))
+}
+
+/// The first sweep skips a confirmed file. A peer grants the file, the index
+/// names it, and the walk then reads it with the ref labelled `ref_kind`. The
+/// delete is refused as a scope root, and no abuse is reported.
+fn assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(ref_kind: CoreNodeKind) {
+    let (mut fx, outer, subtree, files) = large_hard_delete_with_files(&[0]);
+    let file = files[0];
+    let holder = subtree[2];
+    if ref_kind == CoreNodeKind::Folder {
+        label_child(&fx, holder, file, CoreNodeKind::Folder);
+    }
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    let file_before = reads_of(&fx, &[file]);
+    let (op_id, _) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    assert_eq!(
+        reads_of(&fx, &[file]),
+        file_before,
+        "the proof skips the file, and the walk did not reach it"
+    );
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
+    peer_grants_read(&mut engine, file);
+    events_so_far(&mut fx._events);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
+#[test]
+fn a_grant_on_a_skipped_file_refuses_the_hard_delete() {
+    assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(CoreNodeKind::File);
+}
+
+#[test]
+fn a_grant_on_a_skipped_file_with_a_folder_ref_refuses_the_hard_delete() {
+    assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(CoreNodeKind::Folder);
+}
+
+/// A version projected before a folder's grant makes the base call the new
+/// root a file, and the index omits the root. Both sweeps skip it, so the
+/// walk is the only reader of the grant. A hard delete of `outer` is
+/// queued. Also the root, the op and the plain folder record of the root.
+fn unindexed_grant_on_a_file_scenario() -> (
+    GrantScenario,
+    NodeId,
+    NodeId,
+    cipherbox_engine::seams::OpId,
+    Vec<u8>,
+) {
+    unindexed_grant_on_a_file_scenario_with(|_| {})
+}
+
+/// [`unindexed_grant_on_a_file_scenario`], with `prepare` run on the nested
+/// scenario first.
+fn unindexed_grant_on_a_file_scenario_with(
+    prepare: impl FnOnce(&mut GrantScenario),
+) -> (
+    GrantScenario,
+    NodeId,
+    NodeId,
+    cipherbox_engine::seams::OpId,
+    Vec<u8>,
+) {
+    let (mut fx, outer) = GrantScenario::nested();
+    prepare(&mut fx);
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    let folder_record = published_value(&fx.world, &write_name(inner));
+    let versions = a_published_version_list(&mut fx);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    plant_file_body(&fx, inner, versions);
+    focus_each(&mut fx, &[outer, inner]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+    label_child(&fx, outer, inner, CoreNodeKind::Folder);
+    publish_value_at(&fx.world, inner, &folder_record);
+    let plain = fx
+        .world
+        .record_store
+        .record_at(
+            &fx.world.record_store.endpoints()[0],
+            write_name(inner).as_str(),
+        )
+        .expect("the folder record is served");
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    focus_each(&mut fx, &[outer]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let unindexed = published_value(&fx.world, &write_name(ROOT));
+    peer_grants_read(&mut engine, inner);
+    publish_value_at(&fx.world, ROOT, &unindexed);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    events_so_far(&mut fx._events);
+    (fx, outer, inner, op_id, plain)
+}
+
+/// The delete `op_id` of `outer` dead-lettered as a scope root, with no
+/// abuse event and no retire.
+fn assert_the_unindexed_grant_refused_the_delete(
+    fx: &mut GrantScenario,
+    op_id: cipherbox_engine::seams::OpId,
+    outer: NodeId,
+) {
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
+/// The delete of `outer` holds: the root still names it, with no abuse event
+/// and no dead letter.
+fn assert_the_delete_of_outer_holds(fx: &mut GrantScenario, outer: NodeId) {
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, ROOT, &read_key_of(ROOT))
+            .contains(&"outer".to_owned()),
+        "the root still names {outer:?}"
+    );
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert_eq!(abuse_events_in(&events_so_far(&mut fx._events)), 0);
+}
+
+#[test]
+fn an_unindexed_grant_on_a_node_the_base_calls_a_file_refuses_the_hard_delete() {
+    let (mut fx, outer, _, op_id, _) = unindexed_grant_on_a_file_scenario();
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and each endpoint then calls the name
+/// vacant. No gate settles the node, so the delete holds with the root still
+/// naming its target, and it is refused when the grant is served again.
+#[test]
+fn an_unindexed_grant_that_reads_vacant_at_the_gate_holds_the_hard_delete() {
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario();
+    let one_read = fx.world.record_store.endpoints().len();
+    fx.world.record_store.serve_gets_for_after(
+        write_name(inner).as_str(),
+        one_read,
+        3 * one_read,
+        None,
+    );
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails. Each later tick
+/// of the outage reads the node through the gate alone and reads no walked
+/// node again. When the gate read answers, the grant refuses the delete.
+#[test]
+fn an_unanswered_gate_read_keeps_the_walk_and_reads_the_gate_alone() {
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario();
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let walked = reads_of(&fx, &[outer]);
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_eq!(
+        reads_of(&fx, &[outer]),
+        walked,
+        "no walked node is read again"
+    );
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails. A peer then links
+/// `outer` from a second folder with a higher-ranked link, so the next tick
+/// proves the delete from another origin. That tick reads the node through the
+/// gate alone, and the delete holds until the grant refuses it.
+#[test]
+fn an_unsettled_grant_holds_the_hard_delete_when_its_origin_changes() {
+    let mut live = None;
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario_with(|fx| {
+        live = Some(create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            "live",
+        ));
+    });
+    let live = live.expect("the second parent is created");
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(outer, "second", &write_name(outer));
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, live, &read_key_of(live))
+            .contains(&"second".to_owned()),
+        "the second parent still names {outer:?}"
+    );
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails. A peer removes
+/// `inner` from `outer` and links `outer` from a second folder with a
+/// higher-ranked link, so a new proof completes with no read of `inner`, but
+/// each parent publish fails and the delete stays queued. When the peer links
+/// `inner` again, the next proof reads it through the gate alone and holds.
+#[test]
+fn an_unsettled_grant_holds_the_hard_delete_after_a_failed_publish() {
+    let mut live = None;
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario_with(|fx| {
+        live = Some(create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            "live",
+        ));
+    });
+    let live = live.expect("the second parent is created");
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    let mut link = None;
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| {
+            let at = children
+                .iter()
+                .position(|child| child.id == inner.0)
+                .expect("outer links inner");
+            link = Some(children.remove(at));
+        },
+    );
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(outer, "second", &write_name(outer));
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    let parents = [write_name(ROOT), write_name(live)];
+    for parent in &parents {
+        fx.world.record_store.fail_put_for(parent.as_str());
+    }
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    let before = reads_of(&fx, &[inner]);
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(reads_of(&fx, &[inner]), before, "no proof reads inner");
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| children.push(link.expect("the link was removed")),
+    );
+    for parent in &parents {
+        fx.world.record_store.heal_put_for(parent.as_str());
+    }
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails until the delete
+/// dead-letters. A new delete of `outer` then reads the node through the gate
+/// alone and holds, until the grant refuses it.
+#[test]
+fn an_unsettled_grant_holds_a_later_hard_delete_of_the_same_folder() {
+    let (mut fx, outer, inner, first, _) = unindexed_grant_on_a_file_scenario();
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    // The unattributed budget spends one charge per draining pass.
+    serve_http(
+        &fx.owner_device,
+        &fx.blocks,
+        16 * cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize,
+    );
+    for _ in 0..2 * cipherbox_engine::sync::UNATTRIBUTED_BUDGET {
+        if queued_ops(&fx.owner_device) == 0 {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .iter()
+            .map(|dead| (dead.op_id, dead.reason))
+            .collect::<Vec<_>>(),
+        vec![(first, DeadLetterReason::AttemptsExhausted)]
+    );
+    events_so_far(&mut fx._events);
+
+    let second = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, ROOT, &read_key_of(ROOT))
+            .contains(&"outer".to_owned()),
+        "the root still names {outer:?}"
+    );
+    assert_eq!(abuse_events_in(&events_so_far(&mut fx._events)), 0);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, second, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
+/// The grant at `inner` refuses a hard delete of `outer`, and then no endpoint
+/// answers for `inner`. A later delete of `outer` at bin `retention` reads
+/// `inner` through the scope root gate on each tick, and holds with the root
+/// still naming `outer`.
+fn assert_a_later_delete_after_a_refused_grant_holds(retention: u32) {
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario();
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+    let one_read = fx.world.record_store.endpoints().len();
+    fx.world
+        .record_store
+        .fail_get_for(write_name(inner).as_str());
+    if retention > 0 {
+        set_retention(&mut fx, retention);
+    }
+
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the scope root gate"
+        );
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, ROOT, &read_key_of(ROOT))
+            .contains(&"outer".to_owned()),
+        "the root still names {outer:?}"
+    );
+    assert_eq!(abuse_events_in(&events_so_far(&mut fx._events)), 0);
+}
+
+#[test]
+fn a_later_hard_delete_after_a_refused_grant_holds() {
+    assert_a_later_delete_after_a_refused_grant_holds(0);
+}
+
+#[test]
+fn a_later_soft_delete_after_a_refused_grant_holds() {
+    assert_a_later_delete_after_a_refused_grant_holds(30);
+}
+
+/// The walk read shows the grant, and the gate read then gets a plain folder
+/// record. The tick ends the walk at the node with two reads of it, and the
+/// next tick reads the node again and the delete completes.
+#[test]
+fn a_grant_gone_at_the_gate_read_holds_the_walk_for_one_tick() {
+    let (mut fx, outer, inner, _, plain) = unindexed_grant_on_a_file_scenario();
+    let one_read = fx.world.record_store.endpoints().len();
+    fx.world.record_store.serve_gets_for_after(
+        write_name(inner).as_str(),
+        one_read,
+        usize::MAX,
+        Some(plain),
+    );
+    let before = reads_of(&fx, &[inner]);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        reads_of(&fx, &[inner]) - before,
+        2 * one_read,
+        "the walk read and the gate read, and no read again in the tick"
+    );
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
+        "the next tick completes the delete"
+    );
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+}
+
+/// The gate read of a grant section takes one read from the tick's share. A
+/// writer of the scope publishes another root's record at two confirmed
+/// files, and each tick that does not unlink reads at most the share.
+#[test]
+fn a_gate_read_takes_a_read_from_the_tick_share() {
+    let (mut fx, outer, subtree, files) = large_hard_delete_with_files(&[0, 1]);
+    let record = another_root_record(&mut fx);
+    for file in &files {
+        publish_value_at(&fx.world, *file, &record);
+    }
+    let mut nodes = subtree.clone();
+    nodes.extend(files.iter().copied());
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    let ticked = reads_per_tick(&mut fx, &nodes, 12);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    let (_, held) = ticked.per_tick.split_last().expect("the delete ticks");
+    assert!(
+        held.iter().all(|reads| *reads <= DELETE_TICK_READS),
+        "a tick that does not unlink reads at most the share: {:?}",
+        ticked.per_tick
+    );
+    assert!(
+        held.contains(&DELETE_TICK_READS),
+        "a tick spends its share: {:?}",
+        ticked.per_tick
+    );
+    assert_eq!(
+        abuse_events_in(&events_so_far(&mut fx._events)),
+        2,
+        "each forged record is reported one time"
+    );
+}
+
+/// A writer of the scope publishes a scope root's record at the name of a
+/// confirmed file below the target. The proof skips the file, so the walk
+/// read reports the refusal one time, and the hard delete completes.
+#[test]
+fn a_grant_section_at_a_confirmed_file_is_reported_and_the_hard_delete_completes() {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    write_version(
+        &mut fx,
+        WriteTarget::NewFile {
+            parent: inner,
+            name: "file".into(),
+        },
+        &[4u8; 64],
+    );
+    let file = block_on(fx.engine.view())
+        .unwrap()
+        .children(inner)
+        .into_iter()
+        .find(|child| child.name == "file")
+        .expect("the file is listed")
+        .id;
+    focus_each(&mut fx, &[inner]);
+    assert_eq!(viewed(&fx, inner, file), (NodeKind::File, Some(1)));
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    peer_grants_read(&mut fx.engine, other);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root_record = published_value(&fx.world, &write_name(other));
+    publish_value_at(&fx.world, file, &root_record);
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    tick_until_drained(&mut fx, 8);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    let status = block_on(fx.engine.status()).unwrap();
+    assert!(status.dead_letters.is_empty());
+    assert_eq!(status.queue_hold, None);
+    assert_eq!(
+        abuse_events_in(&events_so_far(&mut fx._events)),
+        1,
+        "the walk reports the refusal one time"
+    );
+}
+
+/// A walk read that does not answer holds the delete. The later ticks read
+/// no node that the walk already read, and the walk continues at the node
+/// when it answers.
+#[test]
+fn a_hard_delete_walk_read_that_does_not_answer_continues_at_that_node() {
+    let (mut fx, outer, subtree) = large_delete_scenario(0);
+    let (_, read) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let (failing, _) = read_this_often(&subtree, &read, 1)[0];
+    let walked: Vec<NodeId> = read_this_often(&subtree, &read, 2)
+        .into_iter()
+        .map(|(node, _)| node)
+        .collect();
+    let name = write_name(failing);
+    fx.world.record_store.fail_get_for(name.as_str());
+    // A cached copy would answer the walk read.
+    block_on(
+        fx.owner_device
+            .snapshot_cache
+            .remove(name.as_str().as_bytes()),
+    )
+    .expect("the failing node leaves the cache");
+    let (walked_before, failing_before) = (reads_of(&fx, &walked), reads_of(&fx, &[failing]));
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert!(
+        reads_of(&fx, &[failing]) > failing_before,
+        "each tick reads the failing node"
+    );
+    assert_eq!(
+        reads_of(&fx, &walked),
+        walked_before,
+        "the held walk reads no walked node again"
+    );
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    let ticked = reads_per_tick(&mut fx, &subtree, 8);
+    assert_a_bounded_hard_delete(&mut fx, &subtree, &ticked);
+}
+
+/// A peer adds a folder to a folder that the walk read on an earlier tick.
+/// The second sweep reads the change, so the proof and the walk start again,
+/// and the new folder retires with the rest.
+#[test]
+fn a_folder_that_changes_between_walk_ticks_starts_the_walk_again() {
+    let (mut fx, outer, mut subtree) = large_delete_scenario(0);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    serve_http(&peer, &fx.blocks, 64);
+    let (_, read) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    let holder = [subtree[2], subtree[3]]
+        .into_iter()
+        .zip(&read[2..4])
+        .find(|(_, reads)| **reads == 2)
+        .expect("the walk read one of the two folders")
+        .0;
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
+    let late = create_published_folder(&fx.world, &mut engine, &mut tasks, holder, "late");
+    subtree.push(late);
+
+    tick_until_drained(&mut fx, 12);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert_eq!(unretired(&mut fx, &subtree), Vec::<NodeId>::new());
+}
+
+/// The soft branch re-keys the whole subtree in the tick that writes the bin
+/// entry, and unlinks in that tick.
+#[test]
+fn a_soft_delete_of_a_large_subtree_re_keys_it_in_its_entry_tick() {
+    let (mut fx, outer, subtree) = large_delete_scenario(30);
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    let per_tick = reads_per_tick(&mut fx, &subtree, 8).per_tick;
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    assert_eq!(per_tick.len(), 2, "{per_tick:?}");
+    assert!(
+        per_tick[1] > DELETE_TICK_READS + subtree.len(),
+        "the entry tick reads the second sweep and the whole re-key: {per_tick:?}"
+    );
+    assert_eq!(published_bin_entries(&fx)[0].node_id, outer.0);
 }
 
 /// A descendant ref that no proof will ever answer charges the delete, which
