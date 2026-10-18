@@ -269,6 +269,10 @@ mod tests {
         }
     }
 
+    fn warning(kind: &'static str) -> VaultWarning {
+        VaultWarning { kind, detail: None }
+    }
+
     /// A withheld update is a warning, not a rung: a tray that said "Stale"
     /// would tell the member to wait for something that is not coming.
     #[test]
@@ -317,10 +321,6 @@ mod tests {
             Lines::of(&alerted).status,
             warning_label("attributableAbuse")
         );
-    }
-
-    fn warning(kind: &'static str) -> VaultWarning {
-        VaultWarning { kind, detail: None }
     }
 
     /// A minor warning the member cannot dismiss must not hide a later trust

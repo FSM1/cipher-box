@@ -55,7 +55,7 @@ const UNENDED: &str = "the session did not answer; restart CipherBox and sign ou
 /// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
 const MAX_WARNINGS: usize = 8;
 
-/// The kind of the stranded-scope notice, the one minor warning class.
+/// The kind of the stranded-scope notice.
 const SCOPE_ROOT_STRANDED: &str = "scopeRootStranded";
 
 /// Shown when a peer wrote the binned folder with no name.
