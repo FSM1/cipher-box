@@ -646,6 +646,7 @@ mod tests {
 
     use super::*;
     use crate::gate::GateStage;
+    use crate::net::fork::verified;
     use crate::seams::EndpointId;
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryFloorStore, InMemoryRecordStore};
@@ -738,8 +739,6 @@ mod tests {
 
     const FLOOR: u64 = 5;
 
-    /// Two endpoints, a record on the second, and a sequence floor of
-    /// [`FLOOR`] at the name.
     /// The leaf read given as a value, as a fake fan-out serves it: the floor
     /// rule runs on the pick and the endpoint flag alone.
     #[test]
@@ -753,10 +752,7 @@ mod tests {
             let bytes =
                 IpnsRecord::create_v2(&signer, b"/ipfs/leaf", sequence, 1, "2099-01-01T00:00:00Z")
                     .marshal();
-            let pick = IpnsRecord::unmarshal(&bytes)
-                .expect("the record decodes")
-                .verify(&name)
-                .expect("the record verifies");
+            let pick = verified(&name, &bytes).expect("the record verifies");
             let read = LeafRead {
                 pick,
                 bytes,
@@ -778,6 +774,8 @@ mod tests {
         assert!(served(FLOOR, false).is_ok());
     }
 
+    /// Two endpoints, a record on the second, and a sequence floor of
+    /// [`FLOOR`] at the name.
     struct Served {
         name: IpnsName,
         store: InMemoryRecordStore,

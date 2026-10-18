@@ -4807,22 +4807,13 @@ where
         let (sequence, record_bytes, endpoint_failed) =
             match LeafRead::fetch(self.transport, name).await {
                 Ok(read) => (read.pick.sequence, read.bytes, read.endpoint_failed),
-                Err(Unserved { absent: true, .. }) => {
-                    return Err(refused(
-                        ResolveFailure::Unavailable,
-                        Some(DropCause::NoRecord),
-                        true,
-                    ));
-                }
-                Err(Unserved {
-                    absent: false,
-                    answered,
-                }) => {
-                    return Err(refused(
-                        ResolveFailure::Unavailable,
-                        Some(DropCause::EndpointUnavailable),
-                        answered,
-                    ));
+                Err(Unserved { absent, answered }) => {
+                    let cause = if absent {
+                        DropCause::NoRecord
+                    } else {
+                        DropCause::EndpointUnavailable
+                    };
+                    return Err(refused(ResolveFailure::Unavailable, Some(cause), answered));
                 }
             };
         let source = if let Some(resumed_write_epoch) = root {
