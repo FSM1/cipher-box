@@ -143,6 +143,10 @@ where
                 break;
             }
         }
+        let forgot = match reached {
+            Ok(ScopeCut::Concurrent) => self.forget_landed(sites, &header).await,
+            _ => Ok(true),
+        };
         // A failed write leaves the entries for the next hold to retire.
         let _ = self.settle(record, pointers).await;
         match reached? {
@@ -155,7 +159,9 @@ where
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
             ScopeCut::Concurrent => {
-                self.forget_landed(sites, &header).await?;
+                if !forgot? {
+                    return Ok(Some(DissolveStep::Cut));
+                }
                 journal
                     .drop_entry(&hold, &header)
                     .await
@@ -385,25 +391,36 @@ where
     }
 
     /// Before a stop drops the entry, forget the link grants of each scope
-    /// that a cut at or above its baseline left with no row. A read or a
+    /// that a cut at or above its baseline left with no row. Answers `false`
+    /// while a listed scope owes a cut, so that cut lands first. A read or a
     /// forget that fails keeps the entry, so a later drive forgets again.
     async fn forget_landed(
         &self,
         sites: &impl ConversionSites,
         header: &DissolveHeader,
-    ) -> Result<(), EngineError> {
-        for cut in header.scopes.iter().filter(|cut| cut.cut_time != 0) {
-            let OwedScope { current, .. } = self
+    ) -> Result<bool, EngineError> {
+        let cut_scopes = || header.scopes.iter().filter(|cut| cut.cut_time != 0);
+        for cut in cut_scopes() {
+            if self.owes(cut.scope_id).await? {
+                return Ok(false);
+            }
+        }
+        for cut in cut_scopes() {
+            let OwedScope {
+                current, fell_back, ..
+            } = self
                 .owed_scope(sites, cut.scope_id, "dissolve-stop", true)
                 .await
                 .map_err(EngineError::from_owed_stop)?;
-            if current.commitment.entries.is_empty()
+            // A last copy cannot prove that the scope holds no row.
+            if !fell_back
+                && current.commitment.entries.is_empty()
                 && current.commitment.cut_epoch >= cut.cut_epoch
             {
                 self.forget_link_grants(cut.scope_id).await?;
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Drop the grant at `scope` from each contact a link sourced: the scope
