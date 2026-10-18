@@ -5488,7 +5488,7 @@ where
             }
         }
         loop {
-            let walking = proof.walk.as_ref().is_some_and(|walk| !walk.complete());
+            let walk = proof.walk.as_mut().filter(|walk| !walk.complete());
             let mut policy = DeletePolicy {
                 base: self.cells.base,
                 known_scope_roots: scope.known_scope_roots,
@@ -5497,7 +5497,7 @@ where
                 carried: proof.carried,
                 whole: proof.overflowed,
                 bound: self.delete_proof_nodes,
-                walking,
+                walking: walk.is_some(),
             };
             let swept = proof
                 .sweep
@@ -5506,6 +5506,35 @@ where
                     async |_: &DeletePolicy<'_>, child: &ChildRef| read_node(child).await,
                 )
                 .await;
+            if let (Swept::Paused, Some(walk)) = (&swept, walk)
+                && proof.sweep.pending.is_empty()
+            {
+                let budget = (!proof.overflowed)
+                    .then_some((&self.delete_proof_reads, self.delete_proof_nodes));
+                let stepped = self
+                    .step_doomed(plane, pass.anchor_for(plane)?, walk, Boundary::None, budget)
+                    .await;
+                match stepped {
+                    Ok(DoomedStep::Complete) => {}
+                    // The first sweep is no longer a snapshot of this tick, so
+                    // the unlink waits for a second sweep.
+                    Ok(DoomedStep::Paused) => {
+                        proof.carried = true;
+                        return Err(hold(proof));
+                    }
+                    Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
+                    // Only a seam fault may answer on a later tick. A refused
+                    // read drops the proof, so a new one reads the subtree
+                    // from the target.
+                    Err(Halt::Unclassified) => {
+                        proof.carried = true;
+                        keep(proof);
+                        return Err(Halt::Unclassified);
+                    }
+                    Err(halt) => return Err(halt),
+                }
+                continue;
+            }
             match swept {
                 // A node an earlier tick read or skipped can become a known
                 // root since.
@@ -5517,38 +5546,6 @@ where
                 }
                 Swept::Complete => {
                     return Ok(proof.walk.map(|walk| walk.doomed).unwrap_or_default());
-                }
-                Swept::Paused if walking && proof.sweep.pending.is_empty() => {
-                    let unbounded = proof.overflowed;
-                    let stepped = match proof.walk.as_mut() {
-                        Some(walk) => {
-                            self.step_doomed(
-                                plane,
-                                pass.anchor_for(plane)?,
-                                walk,
-                                Boundary::None,
-                                (!unbounded).then_some(&self.delete_proof_reads),
-                                (!unbounded).then_some(self.delete_proof_nodes),
-                            )
-                            .await
-                        }
-                        None => Ok(DoomedStep::Complete),
-                    };
-                    match stepped {
-                        Ok(DoomedStep::Complete) => {}
-                        // The first sweep is no longer a snapshot of this
-                        // tick, so the unlink waits for a second sweep.
-                        Ok(DoomedStep::Paused) => {
-                            proof.carried = true;
-                            return Err(hold(proof));
-                        }
-                        Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
-                        Err(halt) => {
-                            proof.carried = true;
-                            keep(proof);
-                            return Err(halt);
-                        }
-                    }
                 }
                 Swept::Moved | Swept::Fault(ReadFault::Untrusted) => {
                     proof = new_proof(proof.overflowed);
@@ -6142,21 +6139,21 @@ where
         boundary: Boundary<'_>,
     ) -> Result<Vec<Doomed>, Halt> {
         let mut walk = DoomedWalk::new(parent, target, kind);
-        self.step_doomed(plane, anchor, &mut walk, boundary, None, None)
+        self.step_doomed(plane, anchor, &mut walk, boundary, None)
             .await?;
         Ok(walk.doomed)
     }
 
-    /// Step `walk` ([`Self::enumerate_doomed`]), one read from `reads` per
-    /// node, until `bound` nodes. A node that faults stays next to read.
+    /// Step `walk` ([`Self::enumerate_doomed`]) under `budget`: one read from
+    /// its share per node, until its node bound. A node that faults stays
+    /// next to read.
     async fn step_doomed(
         &self,
         plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         walk: &mut DoomedWalk,
         boundary: Boundary<'_>,
-        reads: Option<&Cell<usize>>,
-        bound: Option<usize>,
+        budget: Option<(&Cell<usize>, usize)>,
     ) -> Result<DoomedStep, Halt> {
         while let Some(&(node, kind)) = walk.pending.last() {
             // Child refs are wire data, so a diamond or a cycle among them is
@@ -6166,7 +6163,7 @@ where
                 walk.pending.pop();
                 continue;
             }
-            if reads.is_some_and(|reads| !take_tick_read(reads)) {
+            if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
                 return Ok(DoomedStep::Paused);
             }
             let mut children = Vec::new();
@@ -6211,7 +6208,7 @@ where
                 name,
                 versions,
             });
-            if bound.is_some_and(|bound| walk.seen.len() + walk.pending.len() > bound) {
+            if budget.is_some_and(|(_, bound)| walk.seen.len() + walk.pending.len() > bound) {
                 return Ok(DoomedStep::Stopped(Overflow));
             }
         }
