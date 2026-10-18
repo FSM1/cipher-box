@@ -7891,6 +7891,51 @@ fn a_hard_delete_walk_read_that_the_gate_refuses_starts_the_proof_again() {
     );
 }
 
+/// A writer of the scope publishes a scope root's record at the name of a
+/// confirmed file below the target. The proof skips the file, so the walk
+/// read reports the refusal one time, and the hard delete completes.
+#[test]
+fn a_grant_section_at_a_confirmed_file_is_reported_and_the_hard_delete_completes() {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    write_version(
+        &mut fx,
+        WriteTarget::NewFile {
+            parent: inner,
+            name: "file".into(),
+        },
+        &[4u8; 64],
+    );
+    let file = block_on(fx.engine.view())
+        .unwrap()
+        .children(inner)
+        .into_iter()
+        .find(|child| child.name == "file")
+        .expect("the file is listed")
+        .id;
+    focus_each(&mut fx, &[inner]);
+    assert_eq!(viewed(&fx, inner, file), (NodeKind::File, Some(1)));
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    peer_grants_read(&mut fx.engine, other);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root_record = published_value(&fx.world, &write_name(other));
+    publish_value_at(&fx.world, file, &root_record);
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    tick_until_drained(&mut fx, 8);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    let status = block_on(fx.engine.status()).unwrap();
+    assert!(status.dead_letters.is_empty());
+    assert_eq!(status.queue_hold, None);
+    assert_eq!(
+        abuse_events_in(&events_so_far(&mut fx._events)),
+        1,
+        "the walk reports the refusal one time"
+    );
+}
+
 /// A walk read that does not answer holds the delete. The later ticks read
 /// no node that the walk already read, and the walk continues at the node
 /// when it answers.

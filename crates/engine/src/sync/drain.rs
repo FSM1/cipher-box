@@ -5524,7 +5524,7 @@ where
                         return hold(proof);
                     }
                     Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
-                    Ok(DoomedStep::Granted) => proof = new_proof(proof.overflowed),
+                    Ok(DoomedStep::Granted) => proof = new_proof(false),
                     // Only a seam fault may answer on a later tick. A refused
                     // read drops the proof, so a new one reads the subtree
                     // from the target.
@@ -6167,6 +6167,7 @@ where
                 return Ok(DoomedStep::Paused);
             }
             let mut children = Vec::new();
+            let write_name = plane.end.write_name(&node.0);
             let (name, versions) = match self
                 .load_child_node_unreported(plane, anchor, node, ResolveMode::CacheFirst)
                 .await
@@ -6193,10 +6194,13 @@ where
                     };
                     (loaded.name, versions)
                 }
-                // A grant can land between two ticks of a carried walk, and
-                // the child gate refuses it as a shape, not as abuse.
+                // A grant can land between two ticks of a bounded walk. The
+                // fresh proof gates a node that is not a confirmed file, so
+                // that proof, not this read, decides the grant.
                 Err(ChildFault::Refused(rejection))
-                    if budget.is_some() && rejection.stage == GateStage::GrantSection =>
+                    if budget.is_some()
+                        && rejection.stage == GateStage::GrantSection
+                        && !confirmed_file(self.cells.base, node) =>
                 {
                     return Ok(DoomedStep::Granted);
                 }
@@ -6205,11 +6209,11 @@ where
                 Err(fault)
                     if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) =>
                 {
-                    return Err(self.report_fault(&plane.end.write_name(&node.0), fault));
+                    return Err(self.report_fault(&write_name, fault));
                 }
                 Err(fault) => {
-                    self.report_fault(&plane.end.write_name(&node.0), fault);
-                    (plane.end.write_name(&node.0), Vec::new())
+                    self.report_fault(&write_name, fault);
+                    (write_name, Vec::new())
                 }
             };
             walk.pending.pop();
