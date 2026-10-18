@@ -8378,6 +8378,53 @@ fn an_unsettled_grant_holds_a_later_hard_delete_of_the_same_folder() {
     assert!(retired(&fx.owner_device).is_empty(), "no node retires");
 }
 
+/// The grant at `inner` refuses a hard delete of `outer`, and then no endpoint
+/// answers for `inner`. A later delete of `outer` at bin `retention` reads
+/// `inner` through the scope root gate on each tick, and holds with the root
+/// still naming `outer`.
+fn assert_a_later_delete_after_a_refused_grant_holds(retention: u32) {
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario();
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+    let one_read = fx.world.record_store.endpoints().len();
+    fx.world
+        .record_store
+        .fail_get_for(write_name(inner).as_str());
+    if retention > 0 {
+        set_retention(&mut fx, retention);
+    }
+
+    block_on(fx.engine.command(Command::Delete { node: outer })).expect("the delete queues");
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the scope root gate"
+        );
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, ROOT, &read_key_of(ROOT))
+            .contains(&"outer".to_owned()),
+        "the root still names {outer:?}"
+    );
+    assert_eq!(abuse_events_in(&events_so_far(&mut fx._events)), 0);
+}
+
+#[test]
+fn a_later_hard_delete_after_a_refused_grant_holds() {
+    assert_a_later_delete_after_a_refused_grant_holds(0);
+}
+
+#[test]
+fn a_later_soft_delete_after_a_refused_grant_holds() {
+    assert_a_later_delete_after_a_refused_grant_holds(30);
+}
+
 /// The walk read shows the grant, and the gate read then gets a plain folder
 /// record. The tick ends the walk at the node with two reads of it, and the
 /// next tick reads the node again and the delete completes.

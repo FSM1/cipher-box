@@ -874,19 +874,22 @@ delete does (ADR 0043).
   The child gate refuses each grant section, so a walk read that shows one reads
   the node again through the scope root gate, also at a confirmed file. A grant
   that this gate accepts refuses the delete. A gate read that does not settle
-  the grant holds the delete, and each later read of that node by a delete in
-  this session goes through the scope root gate alone, until that gate settles
-  the node. The soft re-key reads the whole subtree in the tick that writes the
-  bin entry. Only a file whose own body this device has read skips the proof, as
-  a ref kind is authored by any writer of the scope. A node every endpoint calls
-  vacant, or one at a name the scope's write seed does not derive, has no proof
-  to wait for: the delete is charged, and it dead-letters having published
-  nothing. A missing index entry does not prove that the target is a plain
-  folder. A target record with a grant section dead-letters the same way. A
-  plain record that arrives while an endpoint failed is not a proof, because
-  that endpoint can withhold the grant. If the plane is unavailable or the proof
-  is not complete, the delete holds the queue head without a charge, as a
-  reported hold that names the target. The queue stays strict FIFO: the ops
+  the grant holds the delete. A walk read that shows a grant section marks the
+  node for the session. The proof of each later delete in this session reads a
+  marked node through the scope root gate, also a confirmed file, and each later
+  walk read of that node by a hard delete in this session goes through the scope
+  root gate alone, until that gate reads a plain record or refuses the record.
+  The soft re-key reads the whole subtree in the tick that writes the bin entry.
+  Only a file whose own body this device has read, and that is not marked, skips
+  the proof, as a ref kind is authored by any writer of the scope. A node every
+  endpoint calls vacant, or one at a name the scope's write seed does not
+  derive, has no proof to wait for: the delete is charged, and it dead-letters
+  having published nothing. A missing index entry does not prove that the target
+  is a plain folder. A target record with a grant section dead-letters the same
+  way. A plain record that arrives while an endpoint failed is not a proof,
+  because that endpoint can withhold the grant. If the plane is unavailable or
+  the proof is not complete, the delete holds the queue head without a charge,
+  as a reported hold that names the target. The queue stays strict FIFO: the ops
   before the delete publish, and every op after it waits, also an op that does
   not depend on it. The hold clears when a pass proves the plane. A
   dead-lettered delete publishes nothing and raises no trust violation. A record
