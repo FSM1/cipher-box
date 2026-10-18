@@ -383,6 +383,10 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             DissolveCodecError::RowCount,
         ),
         (
+            edit(DissolveStep::Seal, &|h| h.rows = 0),
+            DissolveCodecError::RowCount,
+        ),
+        (
             edit(DissolveStep::Relink, &|h| h.scopes[1].manifest = None),
             DissolveCodecError::ManifestMissing,
         ),

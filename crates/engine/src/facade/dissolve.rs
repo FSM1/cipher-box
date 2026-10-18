@@ -80,10 +80,10 @@ where
         sites: &impl ConversionSites,
         pointers: &PointerIndex,
     ) {
-        let Ok(journaled) = self.dissolve_journal().journaled().await else {
+        let Ok(roots) = self.dissolve_journal().roots().await else {
             return;
         };
-        for root in journaled.roots {
+        for root in roots {
             let _ = self.drive_dissolve_cut(sites, pointers, root).await;
         }
     }

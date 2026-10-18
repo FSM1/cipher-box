@@ -353,7 +353,7 @@ fn check_header(header: &DissolveHeader, source_root: NodeId) -> Result<(), Diss
             }
         }
     }
-    if header.map_pages == 0 && header.rows != 0 {
+    if (header.map_pages == 0) != (header.rows == 0) {
         return Err(E::RowCount);
     }
     let before_copy = matches!(header.step, S::Cut | S::Map);
@@ -839,9 +839,30 @@ impl From<JournalError> for DissolveWriteError {
 pub struct DissolveCell {
     held: RefCell<BTreeSet<NodeId>>,
     writer: futures_util::lock::Mutex<()>,
+    /// The source roots with an entry, `None` until this session lists the
+    /// store. A pass then needs no listing of its own.
+    roots: RefCell<Option<BTreeSet<NodeId>>>,
 }
 
 impl DissolveCell {
+    /// Drop what this session knows of the store, so the next session lists
+    /// it again.
+    pub fn forget(&self) {
+        if let Ok(mut roots) = self.roots.try_borrow_mut() {
+            *roots = None;
+        }
+    }
+
+    fn note(&self, root: NodeId, present: bool) {
+        if let Some(roots) = self.roots.borrow_mut().as_mut() {
+            if present {
+                roots.insert(root);
+            } else {
+                roots.remove(&root);
+            }
+        }
+    }
+
     /// Take the entry at `root` for one driver until the hold drops, or
     /// `None` while another driver holds it.
     pub fn hold(&self, root: NodeId) -> Option<DissolveHold<'_>> {
@@ -895,6 +916,17 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
     /// Every source root that a journal key names.
     pub async fn journaled(&self) -> SeamResult<Journaled> {
         self.journal.journaled().await
+    }
+
+    /// Every source root that a journal key names, listed once in a session
+    /// and then kept up to date by this journal's own writes.
+    pub async fn roots(&self) -> SeamResult<BTreeSet<NodeId>> {
+        if let Some(roots) = self.cell.roots.borrow().as_ref() {
+            return Ok(roots.clone());
+        }
+        let roots = self.journaled().await?.roots;
+        *self.cell.roots.borrow_mut() = Some(roots.clone());
+        Ok(roots)
     }
 
     /// The payload of `part` of the entry at `root`: `None` when absent,
@@ -970,7 +1002,9 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         if standing.as_ref() != held {
             return Err(DissolveWriteError::Stale);
         }
-        self.put(root, HEADER_PART, payload).await
+        self.put(root, HEADER_PART, payload).await?;
+        self.cell.note(root, true);
+        Ok(())
     }
 
     fn map_part(generation: u16, page: u16) -> Vec<u8> {
@@ -1118,7 +1152,9 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         store
             .remove_staged_bytes(&header_key)
             .await
-            .map_err(DissolveWriteError::Store)
+            .map_err(DissolveWriteError::Store)?;
+        self.cell.note(root, false);
+        Ok(())
     }
 }
 

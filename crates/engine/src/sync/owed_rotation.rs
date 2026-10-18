@@ -258,6 +258,7 @@ impl OwedCell {
         if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
             reports.clear();
         }
+        self.dissolve.forget();
     }
 
     /// This session's [`RootReports`].

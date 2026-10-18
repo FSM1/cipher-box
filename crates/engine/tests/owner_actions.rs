@@ -26072,6 +26072,12 @@ fn the_final_records_hold_for_a_term_from_a_cut_time_that_a_retry_keeps() {
     assert_eq!(stopped.step, DissolveStep::Cut);
     assert_eq!(stopped.scopes[0].cut_time, cut_time);
     assert_ne!(stopped.scopes[0].cut_epoch, 0, "the cut landed");
+    // The read cut signed the root at `cut_time`, and its EOL drops the
+    // fraction of that second.
+    let root = fx.granted_scope_repoint().current_root;
+    let window = u64::try_from(EOL_WINDOW.as_millis()).expect("a short window");
+    assert!(holds_for_a_term_from(&fx.world, &root, cut_time));
+    assert!(signed_eol_millis(&fx.world, &root) < cut_time + window);
 
     fx.world
         .scheduler
@@ -26084,7 +26090,6 @@ fn the_final_records_hold_for_a_term_from_a_cut_time_that_a_retry_keeps() {
         header.scopes[0].cut_time, cut_time,
         "the retry keeps cut_time"
     );
-    let root = fx.granted_scope_repoint().current_root;
     assert!(holds_for_a_term_from(&fx.world, &pointer, cut_time));
     assert!(holds_for_a_term_from(&fx.world, &root, cut_time));
 }
