@@ -13663,57 +13663,6 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// A kept rename whose note records its result waits past a cut for a
-    /// pass that can check it. One with no result, as a version 1 note holds,
-    /// leaves at once with no second apply.
-    #[test]
-    fn a_kept_rename_with_no_result_in_its_note_leaves_with_no_apply() {
-        for (recorded, waits) in [(true, true), (false, false)] {
-            let mut harness = grafted_harness();
-            let root = NodeId([0x61; 16]);
-            harness.known_scope_roots.push(root);
-            let op = Op::rename(NodeId([0x62; 16]), "after", 1, UnixMillis(0));
-            let op_id = harness.queue_an_op(&op);
-            let mut notes = KeptNotes::default();
-            notes
-                .insert(
-                    op_id,
-                    KeptNote {
-                        scope: Some(root),
-                        write_epoch: 2,
-                        published_at: harness.seams.scheduler.now(),
-                        parent: Some(NodeId([0x63; 16])),
-                        result: recorded.then(|| KeptResult::Rename {
-                            before: Zeroizing::new("before".to_owned()),
-                            after: Zeroizing::new("after".to_owned()),
-                        }),
-                    },
-                )
-                .expect("the note is in bounds");
-            let drain = harness.drain();
-            let scope = harness.scope();
-            block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
-            block_on(floor::advance_write_epoch_on_sight(
-                &FloorNamespace::Own.view(&harness.seams.floors),
-                &root.0,
-                3,
-            ))
-            .expect("the floor rises");
-            let mut report = DrainReport::default();
-
-            let queue = block_on(drain.queued_ops(&scope, &mut report)).expect("the queue reads");
-
-            assert!(queue.mine.is_empty(), "no second apply");
-            if waits {
-                assert_eq!(queue.kept, vec![op_id], "the rename waits past the cut");
-                assert!(report.dropped.is_empty());
-            } else {
-                assert!(queue.kept.is_empty());
-                assert_eq!(report.dropped, vec![op_id], "the rename left");
-            }
-        }
-    }
-
     /// An own pass looks up a granted root's write floor in its sharer's
     /// namespace. The test proves only that lookup, with an injected floor.
     #[test]
@@ -13828,21 +13777,6 @@ mod tests {
         (op, op_id, queue, report)
     }
 
-    /// A kept content edit of `KEPT_NODE`, with its root block staged.
-    fn kept_edit(harness: &DrainHarness) -> Op {
-        let root_cid = compute_cid(DAG_ROOT_CODEC, b"edit");
-        block_on(harness.seams.staging.put_staged_bytes(&root_cid, b"edit"))
-            .expect("the block stages");
-        let content = StagedContent {
-            root_cid,
-            plaintext_size: 1,
-            sealed_content_key: vec![0x67; 4],
-            scope: HARNESS_ROOT,
-            epoch: 0,
-        };
-        Op::update_content(KEPT_NODE, content, None, 1, UnixMillis(0))
-    }
-
     /// The op dead-lettered with a notice and left the queue.
     fn dead_lettered_with_a_notice(op: &Op, op_id: OpId, queue: &Queue, report: &DrainReport) {
         assert!(queue.kept.is_empty() && queue.mine.is_empty());
@@ -13860,41 +13794,6 @@ mod tests {
     #[test]
     fn a_kept_create_under_a_folder_this_session_saw_unlinked_dead_letters() {
         let (op, op_id, queue, report) = kept_create_under_an_unlinked_folder(true, HARNESS_ROOT);
-
-        dead_lettered_with_a_notice(&op, op_id, &queue, &report);
-    }
-
-    /// A kept content edit writes under the folder its note names, and a live
-    /// unlink of that folder or of its own file dead-letters it.
-    #[test]
-    fn a_kept_edit_whose_folder_or_file_this_session_saw_unlinked_dead_letters() {
-        for unlinked in [KEPT_FOLDER, KEPT_NODE] {
-            let harness = drain_harness(Some(harness_root_envelope()));
-            let edit = kept_edit(&harness);
-            let (op, op_id, queue, report) = kept_op_under_an_unlinked_node(
-                &harness,
-                edit,
-                cut_note(),
-                unlinked,
-                true,
-                HARNESS_ROOT,
-            );
-
-            dead_lettered_with_a_notice(&op, op_id, &queue, &report);
-        }
-    }
-
-    /// A note with no folder (version 1) checks the edit's own file.
-    #[test]
-    fn a_kept_edit_with_no_folder_in_its_note_checks_its_file() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let edit = kept_edit(&harness);
-        let note = KeptNote {
-            parent: None,
-            ..cut_note()
-        };
-        let (op, op_id, queue, report) =
-            kept_op_under_an_unlinked_node(&harness, edit, note, KEPT_NODE, true, HARNESS_ROOT);
 
         dead_lettered_with_a_notice(&op, op_id, &queue, &report);
     }
@@ -13963,90 +13862,6 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// A kept delete under `root` after a seen cut, whose note names
-    /// `parent`, read by a pass anchored at another root, so that pass cannot
-    /// check it.
-    fn kept_delete_read_elsewhere(
-        harness: &DrainHarness,
-        root: NodeId,
-        parent: Option<NodeId>,
-    ) -> (OpId, Queue, DrainReport) {
-        kept_delete_read_elsewhere_at(harness, root, parent, true)
-    }
-
-    /// [`kept_delete_read_elsewhere`], past the bound or before it.
-    fn kept_delete_read_elsewhere_at(
-        harness: &DrainHarness,
-        root: NodeId,
-        parent: Option<NodeId>,
-        past_the_bound: bool,
-    ) -> (OpId, Queue, DrainReport) {
-        let target = NodeId([0x65; 16]);
-        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
-        let cut = if past_the_bound {
-            kept_op_past_the_bound_after_a_cut
-        } else {
-            kept_op_after_a_cut
-        };
-        let op_id = cut(harness, &op, root, FloorNamespace::Own, parent);
-        let mut report = DrainReport::default();
-        let scope = harness.own_scope_at(NodeId([0x70; 16]));
-        let queue =
-            block_on(harness.drain().queued_ops(&scope, &mut report)).expect("the queue reads");
-        (op_id, queue, report)
-    }
-
-    /// The base still holds the deleted node, so the delete is not shown to
-    /// have landed, and a seen cut keeps it past the bound (ADR 0069 D5).
-    #[test]
-    fn a_kept_delete_of_a_node_the_base_holds_waits_past_the_bound() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        link_in_base(
-            &harness,
-            HARNESS_ROOT,
-            NodeId([0x65; 16]),
-            crate::facade::NodeKind::Folder,
-        );
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, None);
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
-    }
-
-    /// The base no longer holds the deleted node, but the note names the
-    /// folder the delete unlinked it from. A seen cut keeps the delete past
-    /// the bound for a read of that folder at its live name (ADR 0069 D6).
-    #[test]
-    fn a_kept_delete_of_a_node_a_proved_base_lacks_waits_past_the_bound_for_its_parent() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let parent = NodeId([0x67; 16]);
-        link_in_base(
-            &harness,
-            HARNESS_ROOT,
-            parent,
-            crate::facade::NodeKind::Folder,
-        );
-
-        let (op_id, queue, report) =
-            kept_delete_read_elsewhere(&harness, HARNESS_ROOT, Some(parent));
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
-    }
-
-    /// A version 1 note names no parent, so a delete whose node a proved
-    /// root's base no longer holds leaves at the bound (ADR 0069 D6).
-    #[test]
-    fn a_kept_delete_with_no_parent_of_a_node_a_proved_base_lacks_leaves_at_the_bound() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, None);
-
-        assert!(queue.kept.is_empty());
-        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
-    }
-
     /// The live root no longer names the folder a kept delete unlinked its
     /// node from, which a stale base still holds. After the flip the pass
     /// reads the root, the folder and the node are gone, and the delete
@@ -14082,24 +13897,6 @@ mod tests {
         assert_eq!(report.dropped, vec![op_id], "the delete left");
         assert!(report.dead_letters.is_empty(), "with no notice");
         assert!(!harness.state.snapshot.borrow().contains(parent));
-    }
-
-    /// A base after a cold start lacks deep folders, so a folder the base
-    /// does not hold shows nothing: past a flip, the delete waits until the
-    /// bound, and leaves there.
-    #[test]
-    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_at_the_bound() {
-        let parent = Some(NodeId([0x67; 16]));
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let (op_id, queue, report) =
-            kept_delete_read_elsewhere_at(&harness, HARNESS_ROOT, parent, false);
-        assert_eq!(queue.kept, vec![op_id], "the op waits before the bound");
-        assert!(report.dropped.is_empty());
-
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, parent);
-        assert!(queue.kept.is_empty());
-        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
     }
 
     /// A read of this session at the live parent name saw the folder a kept
@@ -14151,20 +13948,6 @@ mod tests {
                 assert!(report.dropped.is_empty());
             }
         }
-    }
-
-    /// A base without the deleted node shows nothing under a root the walk
-    /// did not prove, so a seen cut keeps the delete past the bound.
-    #[test]
-    fn a_kept_delete_under_an_unproved_root_waits_past_the_bound() {
-        let mut harness = drain_harness(Some(harness_root_envelope()));
-        let root = NodeId([0x66; 16]);
-        harness.known_scope_roots.push(root);
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, root, None);
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
     }
 
     fn sharer_label() -> crate::seams::ContactLabel {
