@@ -8003,7 +8003,22 @@ fn unindexed_grant_on_a_file_scenario() -> (
     cipherbox_engine::seams::OpId,
     Vec<u8>,
 ) {
+    unindexed_grant_on_a_file_scenario_with(|_| {})
+}
+
+/// [`unindexed_grant_on_a_file_scenario`], with `prepare` run on the nested
+/// scenario first.
+fn unindexed_grant_on_a_file_scenario_with(
+    prepare: impl FnOnce(&mut GrantScenario),
+) -> (
+    GrantScenario,
+    NodeId,
+    NodeId,
+    cipherbox_engine::seams::OpId,
+    Vec<u8>,
+) {
     let (mut fx, outer) = GrantScenario::nested();
+    prepare(&mut fx);
     set_retention(&mut fx, 0);
     let inner = fx.folder;
     let folder_record = published_value(&fx.world, &write_name(inner));
@@ -8134,6 +8149,67 @@ fn an_unanswered_gate_read_keeps_the_walk_and_reads_the_gate_alone() {
         "no walked node is read again"
     );
     assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails. A peer then links
+/// `outer` from a second folder with a higher-ranked link, so the next tick
+/// proves the delete from another origin. That tick reads the node through the
+/// gate alone, and the delete holds until the grant refuses it.
+#[test]
+fn an_unsettled_grant_holds_the_hard_delete_when_its_origin_changes() {
+    let mut live = None;
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario_with(|fx| {
+        live = Some(create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            "live",
+        ));
+    });
+    let live = live.expect("the second parent is created");
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(outer, "second", &write_name(outer));
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, live, &read_key_of(live))
+            .contains(&"second".to_owned()),
+        "the second parent still names {outer:?}"
+    );
 
     fx.world.record_store.heal_get_for(name.as_str());
     for _ in 0..8 {

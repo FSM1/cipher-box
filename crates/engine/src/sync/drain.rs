@@ -1545,7 +1545,7 @@ pub(crate) struct DeleteProof {
     probe: Option<usize>,
     /// The proof passed [`MAX_DELETE_PROOF_NODES`]. Each tick then reads the
     /// whole subtree in one first sweep with no bound, and the session keeps
-    /// only this mark.
+    /// only this mark and `unproved`.
     overflowed: bool,
     /// The doomed walk of a hard delete. It runs between the two sweeps, so
     /// the tick that ends it reads the subtree fresh before the unlink.
@@ -5484,15 +5484,18 @@ where
                     halt => ReadFault::Fatal(halt),
                 })
         };
-        let mut proof = self
-            .cells
-            .delete_proofs
-            .borrow_mut()
-            .remove(&op_id)
-            .filter(|proof| {
-                proof.proves(origin, plane.end.root, target) && proof.walk.is_some() == doomed
-            })
-            .unwrap_or_else(|| new_proof(false, BTreeSet::new()));
+        // A proof for another origin, plane or branch starts again, and keeps
+        // its unproved nodes for the same queued delete.
+        let kept = self.cells.delete_proofs.borrow_mut().remove(&op_id);
+        let mut proof = match kept {
+            Some(proof)
+                if proof.proves(origin, plane.end.root, target)
+                    && proof.walk.is_some() == doomed =>
+            {
+                proof
+            }
+            kept => new_proof(false, kept.map(|proof| proof.unproved).unwrap_or_default()),
+        };
         // An outage on one node costs one read on each tick, not the second
         // sweep up to that node.
         if let Some(index) = proof.probe {
@@ -5541,10 +5544,18 @@ where
                     pass,
                     target: bin_target,
                 };
+                let anchor = match pass.anchor_for(plane) {
+                    Ok(anchor) => anchor,
+                    Err(halt) => {
+                        let unproved = core::mem::take(&mut proof.unproved);
+                        drop_proof(new_proof(proof.overflowed, unproved));
+                        return Err(halt);
+                    }
+                };
                 let stepped = self
                     .step_doomed(
                         plane,
-                        pass.anchor_for(plane)?,
+                        anchor,
                         walk,
                         Boundary::None,
                         budget,
@@ -15000,12 +15011,9 @@ mod tests {
         assert!(harness.state.delete_proofs.borrow().is_empty());
     }
 
-    /// A doomed walk past the node bound reads a grant section at a projected
-    /// file, and the scope root gate read does not answer. The delete holds
-    /// with no abuse event, and the next tick reads that node through the gate
-    /// alone and holds again.
-    #[test]
-    fn a_doomed_walk_past_its_node_bound_holds_on_an_unsettled_grant() {
+    /// A harness past the node bound whose first file serves a valid grant
+    /// section to the walk read, and fails each read after it.
+    fn unsettled_grant_harness() -> (DrainHarness, NodeId, usize) {
         const FILES: [NodeId; 2] = [NodeId([0x74; 16]), NodeId([0x75; 16])];
         let (mut harness, mut blocks) = delete_proof_harness();
         let files = FILES.map(|file| projected_file_ref(&harness, file));
@@ -15032,34 +15040,49 @@ mod tests {
                 .transport
                 .seed_record(endpoint, name.as_str(), record.clone());
         }
-        // The walk read answers, and each read after it fails.
         harness
             .seams
             .transport
             .fail_get_for_after(name.as_str(), endpoints.len());
-        let tick = || {
-            let drain = harness
-                .drain()
-                .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
-            let scope = harness.scope();
-            block_on(drain.prove_delete_plane(
-                &scope,
-                &harness_pass(),
-                &scope.source.at(OWNER_ROOT_EPOCH),
-                HARNESS_ROOT,
-                &harness_folder_ref(WALK_FOLDER),
-                OpId(7),
-                true,
-            ))
-            .map(drop)
-        };
+        (harness, FILES[0], endpoints.len())
+    }
 
-        assert_eq!(tick(), Err(Halt::Unclassified));
-        assert_eq!(reads_of(&harness, FILES[0]), 2 * endpoints.len());
-        assert_eq!(tick(), Err(Halt::Unclassified), "the next tick holds again");
+    /// One delete tick of the unsettled-grant harness from `origin`.
+    fn unsettled_grant_tick(harness: &DrainHarness, origin: NodeId) -> Result<(), Halt> {
+        let drain = harness
+            .drain()
+            .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
+        let scope = harness.scope();
+        block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            origin,
+            &harness_folder_ref(WALK_FOLDER),
+            OpId(7),
+            true,
+        ))
+        .map(drop)
+    }
+
+    /// The scope root gate read of a grant at a file does not answer. Each
+    /// tick from `origins` holds with no abuse event, and each tick after the
+    /// first reads that file through the gate alone.
+    fn assert_the_unsettled_grant_holds(origins: [NodeId; 2]) {
+        let (mut harness, file, endpoints) = unsettled_grant_harness();
         assert_eq!(
-            reads_of(&harness, FILES[0]),
-            3 * endpoints.len(),
+            unsettled_grant_tick(&harness, origins[0]),
+            Err(Halt::Unclassified)
+        );
+        assert_eq!(reads_of(&harness, file), 2 * endpoints);
+        assert_eq!(
+            unsettled_grant_tick(&harness, origins[1]),
+            Err(Halt::Unclassified),
+            "the next tick holds again"
+        );
+        assert_eq!(
+            reads_of(&harness, file),
+            3 * endpoints,
             "the next tick reads the node through the gate alone"
         );
         let reported = drain_events(&mut harness.events)
@@ -15067,6 +15090,19 @@ mod tests {
             .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
             .count();
         assert_eq!(reported, 0);
+    }
+
+    /// Past the node bound, a proof keeps its unproved nodes on each tick.
+    #[test]
+    fn a_doomed_walk_past_its_node_bound_holds_on_an_unsettled_grant() {
+        assert_the_unsettled_grant_holds([HARNESS_ROOT; 2]);
+    }
+
+    /// A proof that starts again for another origin of the same queued delete
+    /// keeps its unproved nodes.
+    #[test]
+    fn a_doomed_walk_from_another_origin_holds_on_an_unsettled_grant() {
+        assert_the_unsettled_grant_holds([HARNESS_ROOT, NodeId([0x99; 16])]);
     }
 
     /// A projected file that becomes a known root after the first sweep
