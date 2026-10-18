@@ -8566,28 +8566,173 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     );
 }
 
-/// A descendant scope root that the boundary walk refused sends one abuse
-/// event on that pass, also when the link sweep is due.
-#[test]
-fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
+/// The fan-out GETs of a scope root's name that one pass sends ahead of its
+/// link sweep, per endpoint.
+const WALK_GETS: usize = 1;
+
+/// The vault root's own record at `node`'s write name, at `sequence`: signed by
+/// the name's key, and refused by every gate because its commitment names
+/// another name.
+fn misplaced_root_record(world: &FakeWorld, node: NodeId, sequence: u64) -> Vec<u8> {
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    IpnsRecord::create_v2(
+        &signer,
+        &published_value(world, &write_name(ROOT)),
+        sequence,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal()
+}
+
+/// A fresh owner session with the link sweep due, over the granted folder and
+/// `extra` more scope roots, before any of its passes.
+struct DueSweep {
+    fx: GrantScenario,
+    scopes: Vec<NodeId>,
+    engine: Engine<FakeSeamTypes>,
+    events: EventStream,
+    tasks: Vec<BoxedTask>,
+}
+
+fn due_sweep(extra: usize) -> DueSweep {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let mut scopes = vec![fx.folder];
+    for i in 0..extra {
+        let folder = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            &format!("linked-{i}"),
+        );
+        assert!(matches!(
+            block_on(fx.engine.command(Command::CreateInviteLink {
+                node: folder,
+                permission: Permission::Read,
+                expires_at: None,
+                owner_name: "owner".to_owned(),
+                admission_cap: None,
+            })),
+            Ok(CommandOutcome::InviteLinkMinted(_))
+        ));
+        scopes.push(folder);
+    }
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-
-    let (fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    publish_value_at(
-        &fx.world,
-        fx.folder,
-        &published_value(&fx.world, &write_name(ROOT)),
-    );
-    let _ = events_so_far(&mut events);
+    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     fx.world
         .scheduler
-        .advance(fresh.profile().link_sweep_cadence);
-    tick(&fx.world, &fresh, &mut tasks);
+        .advance(engine.profile().link_sweep_cadence);
+    DueSweep {
+        fx,
+        scopes,
+        engine,
+        events,
+        tasks,
+    }
+}
 
-    let abuse = abuse_descriptions(&mut events);
+/// Serve `record` at every endpoint for `node`'s write name.
+fn serve_everywhere(world: &FakeWorld, node: NodeId, record: &[u8]) {
+    let name = write_name(node);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.to_vec());
+    }
+}
+
+/// The scope roots that the abuse events of `reader` name.
+fn named_scopes(abuse: &[String], reader: &str) -> Vec<String> {
+    const MARK: &str = "scope root [";
+    abuse
+        .iter()
+        .filter(|description| description.contains(reader))
+        .filter_map(|description| {
+            let start = description.find(MARK)? + MARK.len();
+            description.get(start..start + 32).map(str::to_owned)
+        })
+        .collect()
+}
+
+/// A descendant scope root that the boundary walk refused sends one abuse
+/// event on that pass, also when the link sweep reads the same record again.
+#[test]
+fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let sequence = sequence_at(&due.fx.world, &write_name(folder)) + 1;
+    serve_everywhere(
+        &due.fx.world,
+        folder,
+        &misplaced_root_record(&due.fx.world, folder, sequence),
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
     assert_eq!(abuse.len(), 1, "{abuse:#?}");
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![hex_lower(&folder.0)]
+    );
+}
+
+/// The sweep reads a record other than the one the walk refused, so each
+/// refused record sends its own event.
+#[test]
+fn a_second_refused_record_that_the_sweep_reads_sends_its_own_abuse_event() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    let sequence = sequence_at(&due.fx.world, &name) + 1;
+    serve_everywhere(
+        &due.fx.world,
+        folder,
+        &misplaced_root_record(&due.fx.world, folder, sequence + 1),
+    );
+    let endpoints = due.fx.world.record_store.endpoints().len();
+    due.fx.world.record_store.serve_gets_for_after(
+        name.as_str(),
+        WALK_GETS * endpoints,
+        usize::MAX,
+        Some(misplaced_root_record(&due.fx.world, folder, sequence)),
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 2, "{abuse:#?}");
+    let scope = hex_lower(&folder.0);
+    assert_eq!(named_scopes(&abuse, "boundary walk"), vec![scope.clone()]);
+    assert_eq!(named_scopes(&abuse, "link sweep"), vec![scope]);
+}
+
+/// The walk sends one event for the first of two refused scope roots, and the
+/// sweep sends the event of the other.
+#[test]
+fn each_of_two_refused_scope_roots_sends_one_abuse_event() {
+    let mut due = due_sweep(1);
+    for node in due.scopes.clone() {
+        let sequence = sequence_at(&due.fx.world, &write_name(node)) + 1;
+        serve_everywhere(
+            &due.fx.world,
+            node,
+            &misplaced_root_record(&due.fx.world, node, sequence),
+        );
+    }
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 2, "{abuse:#?}");
+    let mut named = named_scopes(&abuse, "boundary walk");
+    named.extend(named_scopes(&abuse, "link sweep"));
+    named.sort();
+    let mut scopes: Vec<String> = due.scopes.iter().map(|node| hex_lower(&node.0)).collect();
+    scopes.sort();
+    assert_eq!(named, scopes);
 }
 
 /// The crossing a command journals is a plan, not the authority. A session that

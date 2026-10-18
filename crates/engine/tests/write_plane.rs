@@ -17228,6 +17228,8 @@ struct ReplayedRoot {
     events_b: EventStream,
     tasks_b: Vec<BoxedTask>,
     row: NodeId,
+    /// The root's record that device B published, before the replay.
+    current: Vec<u8>,
 }
 
 /// Where the root's previous record is served again.
@@ -17258,6 +17260,7 @@ fn root_replayed_below_the_floor(replay: Replay) -> ReplayedRoot {
         "device B published the root over the record it walked"
     );
     let row = child_id(&engine_b, ROOT, "unwritten.bin");
+    let current = root_record(&world, 0);
     let root_name = write_name(ROOT);
     let endpoints = world.record_store.endpoints();
     match replay {
@@ -17285,6 +17288,7 @@ fn root_replayed_below_the_floor(replay: Replay) -> ReplayedRoot {
         events_b,
         tasks_b,
         row,
+        current,
     }
 }
 
@@ -17379,6 +17383,45 @@ fn a_root_replayed_at_every_endpoint_sends_one_abuse_event_when_the_sweep_is_due
     assert_eq!(swept_reads, idle_reads, "the sweep did not read the root");
 }
 
+/// A sweep that a refused root skipped stays due, so the first pass that
+/// reconciles the root runs it, inside the cadence.
+#[test]
+fn a_sweep_a_refused_root_skipped_runs_on_the_next_reconciled_pass() {
+    let mut fx = root_replayed_below_the_floor(Replay::AtEveryEndpoint);
+    fx.world
+        .scheduler
+        .advance(SyncTimingProfile::CI.link_sweep_cadence);
+    let refreshed =
+        command_while_ticking(&mut fx.engine_b, Command::ManualRefresh, &mut fx.tasks_b);
+    assert!(
+        matches!(refreshed, Err(EngineError::TrustViolation { .. })),
+        "{refreshed:?}"
+    );
+    let root_name = write_name(ROOT);
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), fx.current.clone());
+    }
+    let mut root_gets = || {
+        let before = fx.world.record_store.get_count(root_name.as_str());
+        tick(&fx.world, &fx.engine_b, &mut fx.tasks_b);
+        fx.world.record_store.get_count(root_name.as_str()) - before
+    };
+
+    let healed = root_gets();
+    let after = root_gets();
+    assert!(
+        SyncTimingProfile::CI.poll_cadence * 2 < SyncTimingProfile::CI.link_sweep_cadence,
+        "both passes run inside one cadence"
+    );
+    assert_eq!(
+        healed,
+        after + fx.world.record_store.endpoints().len(),
+        "the healed pass ran the skipped sweep"
+    );
+}
+
 /// A pass that reads the root it holds still runs a due link sweep, and the
 /// sweep waits out its cadence after that.
 #[test]
@@ -17396,12 +17439,16 @@ fn a_pass_over_the_held_root_sweeps_once_per_cadence() {
         world.record_store.get_count(root_name.as_str()) - before
     };
 
-    for _ in 0..3 {
+    // The sweep's fan-out at the root name shows on one pass a cadence.
+    let profile = engine.profile();
+    let per_cadence =
+        (profile.link_sweep_cadence.as_millis() / profile.poll_cadence.as_millis()) as usize;
+    for _ in 0..per_cadence {
         root_gets(&mut tasks);
     }
-    // One poll a second and one sweep every three: the sweep's fan-out at the
-    // root name shows on every third pass.
-    let polls: Vec<usize> = (0..6).map(|_| root_gets(&mut tasks)).collect();
+    let polls: Vec<usize> = (0..2 * per_cadence)
+        .map(|_| root_gets(&mut tasks))
+        .collect();
     let unswept = *polls.iter().min().unwrap();
     let swept = unswept + world.record_store.endpoints().len();
     assert_eq!(
@@ -17411,7 +17458,7 @@ fn a_pass_over_the_held_root_sweeps_once_per_cadence() {
     );
     assert_eq!(
         polls.iter().filter(|gets| **gets == unswept).count(),
-        4,
+        2 * per_cadence - 2,
         "{polls:?}"
     );
     assert!(accused_nobody(&mut events));

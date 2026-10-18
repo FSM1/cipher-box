@@ -115,7 +115,8 @@ use crate::net::revival::{
 };
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
-    GatedRoots, MovedScopeSeed, RootFallback, RootWait, RotationAncestry, SweptScopeState,
+    GatedRoots, MovedScopeSeed, RefusedRoot, RootFallback, RootWait, RotationAncestry,
+    SweptScopeState,
 };
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FanoutRecord, FolderRefresh,
@@ -7252,6 +7253,7 @@ where {
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
+                        refused: RefusedRoot::default(),
                         root_fallback: None,
                     };
                     SweepRun::Swept(
@@ -8440,6 +8442,7 @@ where {
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            refused: RefusedRoot::default(),
             root_fallback: None,
         }
     }

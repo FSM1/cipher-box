@@ -338,6 +338,22 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     pub moved_seed: MovedScopeSeed,
     /// An owner cut's fallback for its scope root ([`RootFallback`]).
     pub(crate) root_fallback: Option<RootFallback<'a>>,
+    /// The served record the last scope-root read refused ([`RefusedRoot`]).
+    pub refused: RefusedRoot,
+}
+
+/// The bytes of the served record that the last scope-root read of a net
+/// refused, so a caller can tell a refusal already reported from a new one.
+#[derive(Default)]
+pub struct RefusedRoot {
+    inner: RefCell<Option<Vec<u8>>>,
+}
+
+impl RefusedRoot {
+    /// The refused record, if the last read refused one.
+    pub(crate) fn take(&self) -> Option<Vec<u8>> {
+        self.inner.borrow_mut().take()
+    }
 }
 
 /// The one scope root this pass gated and has not yet republished.
@@ -1026,6 +1042,9 @@ pub(crate) struct WalkedBoundaries {
     pub(crate) failure: Option<WalkFailure>,
     /// Every scope root the gate refused that a gated parent's index named.
     pub(crate) refused: BTreeSet<NodeId>,
+    /// The bytes of each served record the gate refused, also when the walk
+    /// read on from the cached owner copy.
+    pub(crate) refused_records: BTreeMap<NodeId, Vec<u8>>,
 }
 
 /// A boundary walk's reading of a root gate verdict. A superseded name is this
@@ -1408,12 +1427,14 @@ where
     /// promotion not published yet: availability ([`Self::is_unpromoted_folder`]).
     ///
     /// Answers the anchor of the root it gated beside its index, for an owed
-    /// root one level down.
+    /// root one level down. `refused_record` takes the bytes of a served
+    /// record the gate refused.
     async fn descend(
         &self,
         parent_read_scope_seed: &[u8; SECRET_LEN],
         child: &ChildScopeRef,
         owed_from: Option<([u8; 16], &LaggingAnchor)>,
+        refused_record: &mut Option<Vec<u8>>,
     ) -> Result<(DescendantScopeRoot, Vec<ChildScopeRef>, LaggingAnchor), WalkFailure> {
         let name = scope_name(&child.ipns_name).map_err(|_| WalkFailure::Rejected {
             scope_id: child.scope_id,
@@ -1439,8 +1460,9 @@ where
             Ok(pass) => (pass.root, pass.data, pass.fork, false),
             Err(RootRefusal {
                 verdict: RootGateVerdict::OwnerSeedRefused,
-                ..
+                served,
             }) => {
+                *refused_record = served.map(|(_, bytes)| bytes);
                 let (root, record_data) = adopter
                     .recover_cached_owner_root(&name)
                     .await
@@ -1457,6 +1479,9 @@ where
             }
             Err(RootRefusal { verdict, served }) => {
                 let met = walk_verdict(verdict, child.scope_id);
+                if let WalkFailure::Rejected { .. } = met {
+                    *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
+                }
                 if let (WalkFailure::Rejected { .. }, Some((left, anchor)), Some((_, record_bytes))) =
                     (met, owed_from, served)
                     && self
@@ -1788,6 +1813,7 @@ where
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
         let mut refused = BTreeSet::new();
+        let mut refused_records = BTreeMap::new();
         let root_owed = owed_children(owed, root_scope_id, root_write.as_ref().ok(), &index);
         let root_anchor = LaggingAnchor {
             epoch: gated.envelope.epoch,
@@ -1855,12 +1881,24 @@ where
                         }
                         continue;
                     }
-                    match self
-                        .descend(&parent_read_scope_seed, &child, owed_from)
-                        .await
-                    {
+                    let mut refused_record = None;
+                    let descended = self
+                        .descend(
+                            &parent_read_scope_seed,
+                            &child,
+                            owed_from,
+                            &mut refused_record,
+                        )
+                        .await;
+                    let mut note_refused = || {
+                        if let Some(bytes) = refused_record.take() {
+                            refused_records.insert(NodeId(child.scope_id), bytes);
+                        }
+                    };
+                    match descended {
                         Ok((descendant, grandchildren, descendant_anchor)) => {
                             if descendant.recovered_after_rejection {
+                                note_refused();
                                 // The durable copy proves nothing about the record.
                                 WalkFailure::accumulate(
                                     &mut failure,
@@ -1896,6 +1934,7 @@ where
                         Err(met) => {
                             if matches!(met, WalkFailure::Rejected { .. }) {
                                 refused.insert(NodeId(child.scope_id));
+                                note_refused();
                             }
                             WalkFailure::accumulate(&mut failure, met);
                         }
@@ -1909,6 +1948,7 @@ where
             unproved,
             failure,
             refused,
+            refused_records,
         })
     }
 }
@@ -2151,7 +2191,15 @@ where
             self.snapshot_cache,
             anchor.expected_child(scope_id),
         );
-        match read.read(self.transport, name).await {
+        let read = read.read(self.transport, name).await;
+        if let Err(RootRefusal {
+            served: Some((_, bytes)),
+            ..
+        }) = &read
+        {
+            *self.refused.inner.borrow_mut() = Some(bytes.clone());
+        }
+        match read {
             Ok(root) => Ok(ResealableRoot {
                 root,
                 over_sequence: None,
@@ -6181,6 +6229,7 @@ where
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
+        refused: RefusedRoot::default(),
         root_fallback: None,
     };
     let Ok(root) = net.resolve_vault_root(&vault_root).await else {
@@ -6824,6 +6873,7 @@ mod tests {
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
                 moved_seed: MovedScopeSeed::default(),
+                refused: RefusedRoot::default(),
                 root_fallback: None,
             }
         }
@@ -8889,6 +8939,11 @@ mod tests {
         );
         assert_eq!(restarted.proved.len(), 2);
         assert!(restarted.proved[0].recovered_after_rejection);
+        // The refused live record, which the walk's event names.
+        assert_eq!(
+            restarted.refused_records.get(&NodeId(CHILD_SCOPE)),
+            Some(&record_for(&CHILD_SCOPE, &child.head_cid_str, 2))
+        );
         assert!(restarted.proved[0].write.is_err());
         assert_eq!(restarted.proved[0].adopted.sequence, 1);
         assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);

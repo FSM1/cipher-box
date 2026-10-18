@@ -383,6 +383,9 @@ pub(crate) struct SessionState {
     /// The scope roots the last walk's gate refused under a gated parent
     /// ([`TickSites`](crate::facade::claim_conversion::TickSites)).
     pub(crate) walk_refused_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The scope root and record bytes of each refusal the last boundary walk
+    /// sent as abuse.
+    pub(crate) walk_reported_refusals: Rc<RefCell<crate::facade::link_sweep::ReportedRefusals>>,
     /// Whether a boundary walk has installed its result this session, an empty
     /// boundary set included. Until one has, every folder reads as part of the
     /// vault's own scope, so a navigation runs no read leg and its rows wait
@@ -773,6 +776,7 @@ impl SessionState {
             boundary_walk_rejected: Rc::new(Cell::new(false)),
             scope_roots_walked: Rc::new(Cell::new(false)),
             walk_refused_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            walk_reported_refusals: Rc::new(RefCell::new(BTreeSet::new())),
             boundary_walk_landed: Rc::new(Cell::new(false)),
             boundary_walk_waiters: Rc::new(RefCell::new(Vec::new())),
             locate_miss: Rc::new(Cell::new(None)),

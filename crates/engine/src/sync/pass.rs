@@ -767,6 +767,7 @@ where
         let walk_keys = self.secrets.sweep_keys.borrow().clone();
         let mut descendants = Vec::new();
         let mut complete = false;
+        let mut reported = BTreeSet::new();
         let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
             owner_seed_cache: Some(owner_seed_cache),
             transport: &self.seams.transport,
@@ -800,6 +801,12 @@ where
                 .as_ref()
                 .map(|walked| walked.refused.clone())
                 .unwrap_or_default();
+            // The walk sends one event, for the refusal `failure` names.
+            if let (Some(WalkFailure::Rejected { scope_id }), Ok(walked)) = (failure, &walked)
+                && let Some(record) = walked.refused_records.get(&NodeId(scope_id))
+            {
+                reported.insert((NodeId(scope_id), record.clone()));
+            }
             if let Ok(walked) = walked {
                 note_walked_sequences(
                     &state.root_sequences,
@@ -850,6 +857,7 @@ where
                 Some(WalkFailure::Unavailable) => {}
             }
         }
+        *state.walk_reported_refusals.borrow_mut() = reported;
         (descendants, complete)
     }
 
@@ -1621,9 +1629,11 @@ where
                 description: message,
             });
         }
+        // Cloned out of the cell: a `Ref` cannot be held across the sweep.
+        let reported = state.walk_reported_refusals.borrow().clone();
         // After the conversion above, so a claim acked this
-        // pass converts before its link can be cut. A refused vault root
-        // already sent its abuse event, and the sweep reaches nothing below it.
+        // pass converts before its link can be cut. The sweep reads the vault
+        // root first, so it runs only on a pass that reconciled the root.
         if pass.root_reconciled
             && pace_due(
                 pass.now,
@@ -1631,7 +1641,7 @@ where
                 seams.profile.link_sweep_cadence,
             )
             && let Some(swept) = conversion
-                .sweep_links(&root_name, &pointers, &sites.refused_roots)
+                .sweep_links(&root_name, &pointers, &reported)
                 .await
         {
             // A capped sweep continues on the next tick.
