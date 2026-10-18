@@ -202,6 +202,8 @@ pub struct OwedCell {
     /// The scopes and cut epochs whose dropped rows this session already told
     /// the host of (ADR 0068 D5).
     rows_dropped: RefCell<BTreeSet<(NodeId, u64)>>,
+    /// The dissolve roots whose unreadable header this session told the host of.
+    unreadable_dissolves: RefCell<BTreeSet<NodeId>>,
     /// This session's [`RootReports`].
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
@@ -275,6 +277,12 @@ impl OwedCell {
     /// dropped. Answers whether it is the first time this session.
     pub(crate) fn note_rows_dropped(&self, scope: NodeId, cut_epoch: u64) -> bool {
         self.rows_dropped.borrow_mut().insert((scope, cut_epoch))
+    }
+
+    /// Note that the host hears of the unreadable dissolve header at `root`.
+    /// Answers whether it is the first time this session.
+    pub(crate) fn note_unreadable_dissolve(&self, root: NodeId) -> bool {
+        self.unreadable_dissolves.borrow_mut().insert(root)
     }
 
     fn reset_held(&self, scope: NodeId) {

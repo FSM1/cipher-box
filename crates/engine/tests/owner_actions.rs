@@ -63,7 +63,9 @@ use cipherbox_engine::seams::{
     UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
-use cipherbox_engine::sync::dissolve_journal::{DissolveBinding, DissolveHeader, DissolveStep};
+use cipherbox_engine::sync::dissolve_journal::{
+    DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
+};
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
 use cipherbox_engine::sync::owed_rotation::{
@@ -26550,9 +26552,8 @@ fn a_dissolve_cut_above_its_baseline_raises_the_baseline() {
 }
 
 /// ADR 0077 D1: a raised cut that stops before its cut set lands keeps the
-/// landed baseline, so a grant made at that baseline still stops the
-/// dissolve. When the owed re-drive lands the cut later, the dissolve stops
-/// too, which fails safe.
+/// landed baseline. When the owed re-drive lands the cut later, the dissolve
+/// stops, which fails safe.
 #[test]
 fn a_raised_cut_that_does_not_land_keeps_the_baseline() {
     let mut fx = GrantScenario::new();
@@ -26731,6 +26732,119 @@ fn an_owed_redrive_whose_dissolve_header_does_not_read_files_no_sweep() {
         "nothing published"
     );
     assert!(owed_entry(&fx).is_some(), "the owed entry stays");
+}
+
+/// The roots listing decides the sweep of a cut too. So an owed re-drive whose
+/// first listing of the journal faults stops before it publishes, files no
+/// sweep, and keeps its owed entry.
+#[test]
+fn an_owed_redrive_whose_journal_listing_faults_files_no_sweep() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    keep_owed_entry(&fx);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
+    restart_owner(&mut fx);
+    let _ = fx.world.scheduler.take_spawned_tasks();
+    let root = fx.granted_scope_repoint().current_root;
+    let published = sequence_at(&fx.world, &root);
+    fx.owner_device.staging_store.inner().fail_staged_keys();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_no_sweep_reads(&fx, &root);
+    assert_eq!(
+        sequence_at(&fx.world, &root),
+        published,
+        "nothing published"
+    );
+    assert!(owed_entry(&fx).is_some(), "the owed entry stays");
+}
+
+/// A dissolve header that does not open stops no cut elsewhere: a revoke at
+/// another scope lands with no immediate sweep, the bytes stay, and the host
+/// hears of the header once.
+#[test]
+fn an_unreadable_dissolve_header_lets_a_revoke_elsewhere_land() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let key = [
+        RESEAL_JOURNAL_PREFIX,
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        &[0x77; 16],
+        b"h",
+    ]
+    .concat();
+    let bytes = b"not a journal value".to_vec();
+    block_on(fx.owner_device.staging_store.put_staged_bytes(&key, &bytes))
+        .expect("the value writes");
+    restart_owner(&mut fx);
+    let _ = fx.world.scheduler.take_spawned_tasks();
+    let root = fx.granted_scope_repoint().current_root;
+    let cut_epoch = fx.cut_epoch();
+    let _ = events_so_far(&mut fx._events);
+
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.cut_epoch(), cut_epoch + 1, "the cut lands");
+    assert!(fx.folder_section().commitment.entries.is_empty());
+    assert_no_sweep_reads(&fx, &root);
+    assert_eq!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&key)).expect("the store reads"),
+        Some(bytes),
+        "the bytes stay"
+    );
+    let told = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(event, Event::RotationWorkOwed { scope_root, detail, .. }
+                if *scope_root == NodeId([0x77; 16])
+                    && detail == "dissolve-journal-header-unreadable")
+        })
+        .count();
+    assert_eq!(told, 1, "the host hears of the header once");
+}
+
+/// ADR 0077 D1: a baseline that the scope never reached, when the cut that
+/// set it stopped before its publish, is cut to on the next drive. So the
+/// guard measures a later row against an epoch the scope holds.
+#[test]
+fn a_baseline_the_scope_never_reached_is_cut_to() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let cut_epoch = fx.cut_epoch();
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(12));
+    let cell = DissolveCell::default();
+    let journal = DissolveJournal::new(
+        &fx.owner_device.staging_store,
+        BookkeepingSeal::new(&enc, &entropy),
+        &cell,
+    );
+    let hold = cell.hold(fx.folder).expect("the entry holds");
+    let begun = DissolveHeader::at_cut(
+        NodeId([0x6e; 16]),
+        ROOT,
+        dissolve_binding(),
+        vec![DissolvedScope::uncut(fx.folder)],
+    );
+    block_on(journal.commit(&hold, None, &begun)).expect("the entry begins");
+    let mut planned = begun.clone();
+    planned.scopes[0].cut_time = fx.world.scheduler.now().0;
+    planned.scopes[0].cut_epoch = cut_epoch + 1;
+    block_on(journal.commit(&hold, Some(&begun), &planned)).expect("the baseline lands");
+    drop(hold);
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    assert_eq!(
+        fx.cut_epoch(),
+        cut_epoch + 1,
+        "the scope reached its baseline"
+    );
 }
 
 /// ADR 0063: a read cut whose owed entry does not clear keeps the dissolve

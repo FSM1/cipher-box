@@ -22,6 +22,9 @@ use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
 };
 
+/// The detail of the one host event for a dissolve header that does not open.
+pub(crate) const DISSOLVE_HEADER_UNREADABLE: &str = "dissolve-journal-header-unreadable";
+
 /// What one scope's cut reached in one drive.
 enum ScopeCut {
     /// The scope holds no row, and its final records published again.
@@ -103,7 +106,21 @@ where
         let mut header = match journal.header(root).await.map_err(EngineError::from_seam)? {
             HeaderSlot::Absent => return Ok(None),
             HeaderSlot::Own(header) => header,
-            HeaderSlot::Foreign | HeaderSlot::Unreadable => {
+            HeaderSlot::Foreign => {
+                return Err(EngineError::from_dissolve_write(
+                    DissolveWriteError::Blocked,
+                ));
+            }
+            // The bytes stay, and the entry stays blocked: no pass can remove it.
+            HeaderSlot::Unreadable => {
+                if self.owed.note_unreadable_dissolve(root) {
+                    let _ = self.events.unbounded_send(Event::RotationWorkOwed {
+                        scope_root: root,
+                        detail: DISSOLVE_HEADER_UNREADABLE.to_owned(),
+                        retryable: false,
+                        class: OwedWorkClass::Capability,
+                    });
+                }
                 return Err(EngineError::from_dissolve_write(
                     DissolveWriteError::Blocked,
                 ));
@@ -164,8 +181,9 @@ where
     }
 
     /// Whether a dissolve entry at its cut step lists `scope`. The dissolve
-    /// files no sweep of the scopes it cuts, also on an owed re-drive. A
-    /// journal that does not read proves neither answer.
+    /// files no sweep of the scopes it cuts, also on an owed re-drive. A store
+    /// fault proves neither answer, and a header that does not open may list
+    /// `scope`, so its cut files no sweep and the idle sweep comes later.
     pub(super) async fn dissolving(&self, scope: NodeId) -> SeamResult<bool> {
         let journal = self.dissolve_journal();
         for root in journal.roots().await? {
@@ -178,9 +196,7 @@ where
                     }
                 }
                 HeaderSlot::Absent | HeaderSlot::Foreign => {}
-                HeaderSlot::Unreadable => {
-                    return Err(SeamError::new("dissolve-journal-header-unreadable"));
-                }
+                HeaderSlot::Unreadable => return Ok(true),
             }
         }
         Ok(false)
@@ -264,8 +280,11 @@ where
         // A last copy cannot prove that it holds no row, so it is cut too. The
         // read cascade refuses the refused root, so the name wave moves the
         // root off it first (ADR 0068 D1, D3, D5).
+        // A baseline that the scope never reached is cut to, so the guard
+        // measures a row against an epoch that the scope holds.
+        let short = base.cut_time != 0 && epoch < base.cut_epoch;
         let plan = GrantCutPlan::over(&current, &name, self.identity);
-        let cut = (fell_back || rows)
+        let cut = (fell_back || rows || short)
             .then(|| recut_from_last_copy(&plan, fell_back))
             .transpose()
             .map_err(EngineError::from_revoke)?;
@@ -294,12 +313,16 @@ where
                     )
                     .await?;
                 // A raise waits for its cut set: one that never lands would hide
-                // a grant made at the baseline it replaced.
-                if cut_epoch > header.scopes[at].cut_epoch && owed != OwedCut::Unproved {
-                    self.commit_dissolve(journal, hold, header, |header| {
-                        header.scopes[at].cut_epoch = cut_epoch;
-                    })
-                    .await?;
+                // a grant made at the baseline it replaced. The link grants go
+                // first, so a raise that does not commit leaves none behind.
+                if owed != OwedCut::Unproved {
+                    self.forget_link_grants(scope).await?;
+                    if cut_epoch > header.scopes[at].cut_epoch {
+                        self.commit_dissolve(journal, hold, header, |header| {
+                            header.scopes[at].cut_epoch = cut_epoch;
+                        })
+                        .await?;
+                    }
                 }
                 let Some(report) = owed.into_report() else {
                     return Ok(ScopeCut::Waiting);
@@ -333,10 +356,10 @@ where
             }
             None => {
                 self.republish_root(sites, &target, &name).await?;
+                self.forget_link_grants(scope).await?;
                 target
             }
         };
-        self.forget_link_grants(scope).await?;
         if self.owes(scope).await? {
             return Ok(ScopeCut::Waiting);
         }
