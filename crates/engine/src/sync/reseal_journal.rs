@@ -180,12 +180,12 @@ pub struct ResealJournal<'a, S> {
 }
 
 impl<'a, S: StagingStore> ResealJournal<'a, S> {
-    /// The journal of the owner `owner_tag` names.
-    pub fn new(store: &'a S, seal: BookkeepingSeal<'a>, owner_tag: [u8; 32]) -> Self {
+    /// The journal of the owner that `seal` seals to.
+    pub fn new(store: &'a S, seal: BookkeepingSeal<'a>) -> Self {
         Self {
             store,
+            owner_tag: seal.owner_tag(),
             seal,
-            owner_tag,
         }
     }
 
@@ -356,7 +356,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         let entropy = RefCell::new(SeededEntropy::new(5));
         let secret = X25519Secret::from_scalar([9; 32]);
-        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), [3; 32]);
+        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy));
         block_on(test(&journal));
     }
 
@@ -439,10 +439,61 @@ mod tests {
         });
     }
 
+    /// Two identities on one store keep their entries for one root apart:
+    /// each key carries the owner tag of the seal, so each owner reads its
+    /// own entry and counts only its own roots.
+    #[test]
+    fn two_identities_keep_their_entries_for_one_root_apart() {
+        let store = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(6));
+        let (alice, bob) = (
+            X25519Secret::from_scalar([9; 32]),
+            X25519Secret::from_scalar([10; 32]),
+        );
+        let alices = ResealJournal::new(&store, BookkeepingSeal::new(&alice, &entropy));
+        let bobs = ResealJournal::new(&store, BookkeepingSeal::new(&bob, &entropy));
+        let bobs_entry = ResealEnvelope {
+            payload: b"bob rows".to_vec(),
+            ..envelope(1)
+        };
+        let other_root = NodeId([0x53; 16]);
+        block_on(async {
+            alices.put(b"", &envelope(1)).await.unwrap();
+            bobs.put(b"", &bobs_entry).await.unwrap();
+            bobs.put(
+                b"",
+                &ResealEnvelope {
+                    source_root: other_root,
+                    ..envelope(1)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_ne!(alices.key(ROOT, b""), bobs.key(ROOT, b""));
+            assert_eq!(
+                alices.read(ROOT, b"").await.unwrap(),
+                JournalSlot::Kept(envelope(1))
+            );
+            assert_eq!(
+                bobs.read(ROOT, b"").await.unwrap(),
+                JournalSlot::Kept(bobs_entry)
+            );
+            assert_eq!(
+                alices.journaled().await.unwrap().roots,
+                BTreeSet::from([ROOT])
+            );
+            assert_eq!(
+                bobs.journaled().await.unwrap().roots,
+                BTreeSet::from([ROOT, other_root])
+            );
+        });
+    }
+
     #[test]
     fn a_key_that_names_no_root_blocks_every_root() {
         run(async |journal| {
-            let short = [RESEAL_JOURNAL_PREFIX, &[3; 32], &[0x51; 4]].concat();
+            let short = [RESEAL_JOURNAL_PREFIX, &journal.owner_tag, &[0x51; 4]].concat();
             journal.store.put_staged_bytes(&short, b"x").await.unwrap();
             let other_owner = [RESEAL_JOURNAL_PREFIX, &[4; 32], &[0x52; 16]].concat();
             journal
