@@ -71,6 +71,7 @@ use cipherbox_engine::sync::owed_rotation::{
     ROTATION_WORK_OWED, open_owed_record, owed_rotation_key, seal_owed_record,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
+use cipherbox_engine::sync::reseal_journal::RESEAL_JOURNAL_PREFIX;
 use cipherbox_engine::sync::{
     BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, doomed_journal_key,
     owner_scoped_key, owner_tag, scope_exit_debt_key, seal_owed_cuts,
@@ -26512,8 +26513,8 @@ fn a_dissolve_over_a_last_copy_with_no_row_cuts_it() {
 }
 
 /// ADR 0077 D1: a later drive whose own cut of a last copy rises above the
-/// baseline raises the baseline before it publishes. So when that cut stops
-/// and its owed entry lands it, the next drive does not read it as a new row.
+/// baseline raises the baseline once its cut set lands. So when a post-step
+/// of that cut stops, the next drive does not read the cut as concurrent.
 #[test]
 fn a_dissolve_cut_above_its_baseline_raises_the_baseline() {
     let mut fx = GrantScenario::new();
@@ -26528,19 +26529,82 @@ fn a_dissolve_cut_above_its_baseline_raises_the_baseline() {
     fx.world.record_store.heal_put_for(root.as_str());
     refuse_folder_root(&fx);
     let _ = fx.owed_scopes();
+    let parent = write_name(ROOT);
+    fx.world.record_store.fail_put_for(parent.as_str());
+    assert_eq!(
+        fx.dissolve(),
+        Ok(Some(DissolveStep::Cut)),
+        "the re-point stops"
+    );
+    assert_eq!(
+        fx.standing_dissolve().scopes[0].cut_epoch,
+        cut_epoch + 1,
+        "raised once the cut set landed"
+    );
+    assert_no_sweep_reads(&fx, &fx.granted_scope_repoint().current_root);
+    fx.world.record_store.heal_put_for(parent.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+}
+
+/// ADR 0077 D1: a raised cut that stops before its cut set lands keeps the
+/// landed baseline, so a grant made at that baseline still stops the
+/// dissolve. When the owed re-drive lands the cut later, the dissolve stops
+/// too, which fails safe.
+#[test]
+fn a_raised_cut_that_does_not_land_keeps_the_baseline() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let cut_epoch = fx.folder_section().commitment.cut_epoch;
+    let root = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert!(matches!(fx.dissolve(), Err(EngineError::Seam { .. })));
+    fx.world.record_store.heal_put_for(root.as_str());
+    refuse_folder_root(&fx);
+    let _ = fx.owed_scopes();
     let pointer = folder_pointer(&fx);
     fx.world.record_store.fail_put_for(pointer.as_str());
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the wave stops");
     assert_eq!(
         fx.standing_dissolve().scopes[0].cut_epoch,
-        cut_epoch + 1,
-        "raised before the publish"
+        cut_epoch,
+        "the baseline stays"
     );
     fx.world.record_store.heal_put_for(pointer.as_str());
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+    assert_eq!(fx.folder_section().commitment.cut_epoch, cut_epoch + 1);
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
+}
+
+/// ADR 0077 D1: a raised cut whose owed entry does not write publishes
+/// nothing and keeps the baseline.
+#[test]
+fn a_raised_cut_whose_owed_entry_does_not_write_keeps_the_baseline() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let cut_epoch = fx.folder_section().commitment.cut_epoch;
+    let root = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert!(matches!(fx.dissolve(), Err(EngineError::Seam { .. })));
+    fx.world.record_store.heal_put_for(root.as_str());
+    refuse_folder_root(&fx);
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&owed_rotation_key(&kdf::enc_subkey(&SECRET)));
+
+    assert!(fx.dissolve().is_err());
+
+    assert_eq!(fx.standing_dissolve().scopes[0].cut_epoch, cut_epoch);
+    assert_eq!(fx.granted_scope_repoint().current_root, root, "no wave ran");
 }
 
 /// ADR 0068 D1, D3: the read cascade refuses a refused root, so a last copy
@@ -26603,6 +26667,7 @@ fn an_owed_recut_after_a_concurrent_grant_stops_the_dissolve() {
     let sequence = sequence_at(&fx.world, &old_root) + 1;
     assert_eq!(plant_root_at(&fx, &grantee_seed, sequence), old_root);
     fx.world.record_store.heal_put_for(pointer.as_str());
+    let _ = events_so_far(&mut fx._events);
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
@@ -26613,6 +26678,11 @@ fn an_owed_recut_after_a_concurrent_grant_stops_the_dissolve() {
         "the owed re-drive cut the last copy"
     );
     assert!(section.commitment.entries.is_empty());
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())],
+        "the host is told the grant goes"
+    );
     assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
 }
 
@@ -26632,6 +26702,35 @@ fn an_owed_redrive_of_a_dissolve_cut_files_no_sweep() {
 
     assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
     assert_no_sweep_reads(&fx, &root);
+}
+
+/// The journal decides the sweep of a cut. So an owed re-drive whose
+/// dissolve header does not read stops before it publishes, files no sweep,
+/// and keeps its owed entry.
+#[test]
+fn an_owed_redrive_whose_dissolve_header_does_not_read_files_no_sweep() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    keep_owed_entry(&fx);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
+    restart_owner(&mut fx);
+    let _ = fx.world.scheduler.take_spawned_tasks();
+    let root = fx.granted_scope_repoint().current_root;
+    let published = sequence_at(&fx.world, &root);
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(RESEAL_JOURNAL_PREFIX);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_no_sweep_reads(&fx, &root);
+    assert_eq!(
+        sequence_at(&fx.world, &root),
+        published,
+        "nothing published"
+    );
+    assert!(owed_entry(&fx).is_some(), "the owed entry stays");
 }
 
 /// ADR 0063: a read cut whose owed entry does not clear keeps the dissolve

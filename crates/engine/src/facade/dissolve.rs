@@ -9,7 +9,7 @@
 //! this step waits until it lands.
 
 use super::claim_conversion::{ConversionSites, HeldRecord, OnRunning};
-use super::owed_rotation::{OwedScope, OwedStop, owed_write_cut};
+use super::owed_rotation::{OwedCut, OwedScope, OwedStop, owed_write_cut};
 use super::*;
 use crate::grants::{OwnerAuthority, committed_links};
 use crate::net::cut::{republish_scope_pointer, reseal_root_in_place};
@@ -31,7 +31,7 @@ enum ScopeCut {
     Waiting,
     /// Work that the dissolve did not do landed on the scope, so the dissolve
     /// stops.
-    NewRow,
+    Concurrent,
 }
 
 impl EngineError {
@@ -137,7 +137,7 @@ where
                 Ok(Some(DissolveStep::Map))
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
-            ScopeCut::NewRow => {
+            ScopeCut::Concurrent => {
                 journal
                     .drop_entry(&hold, &header)
                     .await
@@ -164,21 +164,26 @@ where
     }
 
     /// Whether a dissolve entry at its cut step lists `scope`. The dissolve
-    /// files no sweep of the scopes it cuts, also on an owed re-drive.
-    pub(super) async fn dissolving(&self, scope: NodeId) -> bool {
+    /// files no sweep of the scopes it cuts, also on an owed re-drive. A
+    /// journal that does not read proves neither answer.
+    pub(super) async fn dissolving(&self, scope: NodeId) -> SeamResult<bool> {
         let journal = self.dissolve_journal();
-        let Ok(roots) = journal.roots().await else {
-            return false;
-        };
-        for root in roots {
-            if let Ok(HeaderSlot::Own(header)) = journal.header(root).await
-                && header.step == DissolveStep::Cut
-                && header.scopes.iter().any(|cut| cut.scope_id == scope)
-            {
-                return true;
+        for root in journal.roots().await? {
+            match journal.header(root).await? {
+                HeaderSlot::Own(header) => {
+                    if header.step == DissolveStep::Cut
+                        && header.scopes.iter().any(|cut| cut.scope_id == scope)
+                    {
+                        return Ok(true);
+                    }
+                }
+                HeaderSlot::Absent | HeaderSlot::Foreign => {}
+                HeaderSlot::Unreadable => {
+                    return Err(SeamError::new("dissolve-journal-header-unreadable"));
+                }
             }
         }
-        false
+        Ok(false)
     }
 
     /// Whether an owed rotation entry names `scope`.
@@ -225,7 +230,7 @@ where
         if at != 0 {
             let parent = NodeId(sites.enclosing(scope).await?.scope.scope_id);
             if header.scopes.iter().all(|cut| cut.scope_id != parent) {
-                return Ok(ScopeCut::NewRow);
+                return Ok(ScopeCut::Concurrent);
             }
         }
         let rows = !current.commitment.entries.is_empty();
@@ -234,7 +239,7 @@ where
         // work the dissolve did not do: a concurrent grant wins.
         let epoch = current.commitment.cut_epoch;
         if base.cut_time != 0 && (epoch > base.cut_epoch || rows && epoch >= base.cut_epoch) {
-            return Ok(ScopeCut::NewRow);
+            return Ok(ScopeCut::Concurrent);
         }
         if base.final_landed {
             return Ok(ScopeCut::Done);
@@ -264,14 +269,11 @@ where
             .then(|| recut_from_last_copy(&plan, fell_back))
             .transpose()
             .map_err(EngineError::from_revoke)?;
-        // Durable before this drive publishes, and a cut of this drive raises
-        // the baseline first.
+        // The baseline is durable before the first publish of the scope, for
+        // the EOL term of the module header and for the guard above.
         let cut_epoch = cut.as_ref().map_or(epoch, |cut| cut.commitment.cut_epoch);
-        if base.cut_time == 0 || cut_epoch > base.cut_epoch {
-            let cut_time = match base.cut_time {
-                0 => self.scheduler.now().0,
-                set => set,
-            };
+        if base.cut_time == 0 {
+            let cut_time = self.scheduler.now().0;
             self.commit_dissolve(journal, hold, header, |header| {
                 header.scopes[at].cut_epoch = cut_epoch;
                 header.scopes[at].cut_time = cut_time;
@@ -280,7 +282,7 @@ where
         }
         let target = match cut {
             Some(cut) => {
-                let Some(report) = self
+                let owed = self
                     .rotate_owed_cut(
                         scope,
                         &target,
@@ -290,9 +292,16 @@ where
                         current.write_epoch,
                         sites.command(),
                     )
-                    .await?
-                    .into_report()
-                else {
+                    .await?;
+                // A raise waits for its cut set: one that never lands would hide
+                // a grant made at the baseline it replaced.
+                if cut_epoch > header.scopes[at].cut_epoch && owed != OwedCut::Unproved {
+                    self.commit_dissolve(journal, hold, header, |header| {
+                        header.scopes[at].cut_epoch = cut_epoch;
+                    })
+                    .await?;
+                }
+                let Some(report) = owed.into_report() else {
                     return Ok(ScopeCut::Waiting);
                 };
                 record.retire_cut(&links);

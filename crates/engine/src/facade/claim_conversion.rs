@@ -24,7 +24,9 @@ use crate::grants::{
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
 use crate::record_plane::within;
-use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
+use crate::rotation::{
+    Boundaries, CascadeError, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope,
+};
 use crate::session::RootSequences;
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
@@ -524,7 +526,14 @@ where
         reads: &CutRootReads,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
-        let sweeps = !self.dissolving(node).await;
+        // The journal decides the sweep, so a journal that does not read
+        // stops the cut before its first publish.
+        let sweeps = !self.dissolving(node).await.map_err(|_| {
+            RotateOnCutError::PublishCut(CascadeError::Resolve {
+                scope_id: target.scope.scope_id,
+                reason: ResolveFailure::Unavailable,
+            })
+        })?;
         let owed_bound = self.owed_bound(node).await;
         let bound = owed_bound
             .as_ref()
@@ -556,6 +565,7 @@ where
                 if sweeps {
                     (sweep.task)(scope, target.parent_node_seed.clone())
                 } else {
+                    // Ready on every poll: the tick polls a done task again.
                     Box::pin(core::future::poll_fn(|_| core::task::Poll::Ready(())))
                 }
             },
