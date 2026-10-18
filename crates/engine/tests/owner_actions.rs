@@ -8218,6 +8218,166 @@ fn an_unsettled_grant_holds_the_hard_delete_when_its_origin_changes() {
     assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
 }
 
+/// The walk read shows the grant, and the gate read fails. A peer removes
+/// `inner` from `outer` and links `outer` from a second folder with a
+/// higher-ranked link, so a new proof completes with no read of `inner`, but
+/// each parent publish fails and the delete stays queued. When the peer links
+/// `inner` again, the next proof reads it through the gate alone and holds.
+#[test]
+fn an_unsettled_grant_holds_the_hard_delete_after_a_failed_publish() {
+    let mut live = None;
+    let (mut fx, outer, inner, op_id, _) = unindexed_grant_on_a_file_scenario_with(|fx| {
+        live = Some(create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            "live",
+        ));
+    });
+    let live = live.expect("the second parent is created");
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    let mut link = None;
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| {
+            let at = children
+                .iter()
+                .position(|child| child.id == inner.0)
+                .expect("outer links inner");
+            link = Some(children.remove(at));
+        },
+    );
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        live,
+        &read_key_of(live),
+        SCOPE,
+        |children| {
+            let mut second = named_child(outer, "second", &write_name(outer));
+            second.link_counter = 9;
+            children.push(second);
+        },
+    );
+    let parents = [write_name(ROOT), write_name(live)];
+    for parent in &parents {
+        fx.world.record_store.fail_put_for(parent.as_str());
+    }
+    block_on(fx.engine.command(Command::SetFocus { node: Some(live) })).unwrap();
+    let before = reads_of(&fx, &[inner]);
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(reads_of(&fx, &[inner]), before, "no proof reads inner");
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| children.push(link.expect("the link was removed")),
+    );
+    for parent in &parents {
+        fx.world.record_store.heal_put_for(parent.as_str());
+    }
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_the_delete_of_outer_holds(&mut fx, outer);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_the_unindexed_grant_refused_the_delete(&mut fx, op_id, outer);
+}
+
+/// The walk read shows the grant, and the gate read fails until the delete
+/// dead-letters. A new delete of `outer` then reads the node through the gate
+/// alone and holds, until the grant refuses it.
+#[test]
+fn an_unsettled_grant_holds_a_later_hard_delete_of_the_same_folder() {
+    let (mut fx, outer, inner, first, _) = unindexed_grant_on_a_file_scenario();
+    let one_read = fx.world.record_store.endpoints().len();
+    let name = write_name(inner);
+    fx.world
+        .record_store
+        .fail_get_for_after(name.as_str(), one_read);
+    // The unattributed budget spends one charge per draining pass.
+    serve_http(
+        &fx.owner_device,
+        &fx.blocks,
+        16 * cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize,
+    );
+    for _ in 0..2 * cipherbox_engine::sync::UNATTRIBUTED_BUDGET {
+        if queued_ops(&fx.owner_device) == 0 {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .iter()
+            .map(|dead| (dead.op_id, dead.reason))
+            .collect::<Vec<_>>(),
+        vec![(first, DeadLetterReason::AttemptsExhausted)]
+    );
+    events_so_far(&mut fx._events);
+
+    let second = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    for _ in 0..2 {
+        let before = reads_of(&fx, &[inner]);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            reads_of(&fx, &[inner]) - before,
+            one_read,
+            "the tick reads the node through the gate alone"
+        );
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete holds");
+    assert!(
+        published_child_names(&fx.world, &fx.blocks, ROOT, &read_key_of(ROOT))
+            .contains(&"outer".to_owned()),
+        "the root still names {outer:?}"
+    );
+    assert_eq!(abuse_events_in(&events_so_far(&mut fx._events)), 0);
+
+    fx.world.record_store.heal_get_for(name.as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, second, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
 /// The walk read shows the grant, and the gate read then gets a plain folder
 /// record. The tick ends the walk at the node with two reads of it, and the
 /// next tick reads the node again and the delete completes.
