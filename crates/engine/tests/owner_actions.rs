@@ -9264,6 +9264,304 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     );
 }
 
+/// The vault root's own record at `node`'s write name, at `sequence`: signed by
+/// the name's key, and refused by every gate because its commitment names
+/// another name.
+fn misplaced_root_record(world: &FakeWorld, node: NodeId, sequence: u64) -> Vec<u8> {
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    IpnsRecord::create_v2(
+        &signer,
+        &published_value(world, &write_name(ROOT)),
+        sequence,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal()
+}
+
+/// A fresh owner session with the link sweep due, over the granted folder and
+/// `extra` more scope roots, before any of its passes.
+struct DueSweep {
+    fx: GrantScenario,
+    scopes: Vec<NodeId>,
+    engine: Engine<FakeSeamTypes>,
+    events: EventStream,
+    tasks: Vec<BoxedTask>,
+}
+
+fn due_sweep(extra: usize) -> DueSweep {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let mut scopes = vec![fx.folder];
+    for i in 0..extra {
+        let folder = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            &format!("linked-{i}"),
+        );
+        assert!(matches!(
+            block_on(fx.engine.command(Command::CreateInviteLink {
+                node: folder,
+                permission: Permission::Read,
+                expires_at: None,
+                owner_name: "owner".to_owned(),
+                admission_cap: None,
+            })),
+            Ok(CommandOutcome::InviteLinkMinted(_))
+        ));
+        scopes.push(folder);
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.world
+        .scheduler
+        .advance(engine.profile().link_sweep_cadence);
+    DueSweep {
+        fx,
+        scopes,
+        engine,
+        events,
+        tasks,
+    }
+}
+
+/// Serve `record` at every endpoint for `node`'s write name.
+fn serve_everywhere(world: &FakeWorld, node: NodeId, record: &[u8]) {
+    let name = write_name(node);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.to_vec());
+    }
+}
+
+/// The scope roots that the abuse events of `reader` name.
+fn named_scopes(abuse: &[String], reader: &str) -> Vec<String> {
+    const MARK: &str = "scope root [";
+    abuse
+        .iter()
+        .filter(|description| description.contains(reader))
+        .filter_map(|description| {
+            let start = description.find(MARK)? + MARK.len();
+            description.get(start..start + 32).map(str::to_owned)
+        })
+        .collect()
+}
+
+/// A descendant scope root that the boundary walk refused sends one abuse
+/// event on that pass, also when the link sweep reads the same record again.
+#[test]
+fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let sequence = sequence_at(&due.fx.world, &write_name(folder)) + 1;
+    serve_everywhere(
+        &due.fx.world,
+        folder,
+        &misplaced_root_record(&due.fx.world, folder, sequence),
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 1, "{abuse:#?}");
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![hex_lower(&folder.0)]
+    );
+}
+
+/// A descendant whose live owner blob the gate refuses, read on from the
+/// cached owner copy, sends one abuse event on that pass, also when the link
+/// sweep reads the same record again.
+#[test]
+fn a_recovered_descendant_sends_one_abuse_event_when_the_sweep_is_due() {
+    use cipherbox_core::seal::{OverrideSeedPayload, STRUCT_TAG_OWNER_BLOB, seal_owner_blob};
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    let head = published_head(&due.fx.world, &due.fx.blocks, &name).expect("the folder root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let mut section = decode_grant_section(grant_section_bytes(&envelope).expect("a scope root"))
+        .expect("the section decodes");
+    let blob = seal_owner_blob(
+        &kdf::enc_subkey(&SECRET).public(),
+        &[0x99; 32],
+        &AadContext {
+            v: envelope.v,
+            id: envelope.id,
+            scope: envelope.scope,
+            epoch: envelope.epoch,
+            struct_tag: STRUCT_TAG_OWNER_BLOB,
+        },
+        &OverrideSeedPayload::new([0x98; 32], envelope.epoch),
+    )
+    .expect("the blob seals");
+    section.owner_blob.enc = blob.enc;
+    section.owner_blob.ciphertext = blob.ciphertext;
+    cipherbox_engine::testkit::resign_section(
+        &mut section,
+        folder.0,
+        envelope.epoch,
+        &kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &folder.0),
+    );
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = due
+        .fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    sign_at(
+        &due.fx,
+        &WRITE_SCOPE_SEED,
+        folder,
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&due.fx.world, &name) + 1,
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 1, "{abuse:#?}");
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![hex_lower(&folder.0)]
+    );
+}
+
+/// The walk refuses a root past the re-seal reservation, and the sweep steps
+/// over it to the cached copy, whose write body does not open. The refusal of
+/// the copy sends its own event.
+#[test]
+fn a_cached_copy_the_sweep_refuses_after_the_step_over_sends_its_own_abuse_event() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    // The copy: an authentic signature over a write body that does not open.
+    let head = published_head(&due.fx.world, &due.fx.blocks, &name).expect("the folder root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let mut section = decode_grant_section(grant_section_bytes(&envelope).expect("a scope root"))
+        .expect("the section decodes");
+    let last = section.write_body.sealed.len() - 1;
+    section.write_body.sealed[last] ^= 1;
+    cipherbox_engine::testkit::resign_section(
+        &mut section,
+        folder.0,
+        envelope.epoch,
+        &kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &folder.0),
+    );
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = due
+        .fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    let copy_sequence = sequence_at(&due.fx.world, &name) + 1;
+    sign_at(
+        &due.fx,
+        &WRITE_SCOPE_SEED,
+        folder,
+        format!("/ipfs/{cid}").as_bytes(),
+        copy_sequence,
+    );
+    // The walk passes the copy and caches it. The sweep of this pass refuses
+    // it, and the next sweep waits out the cadence.
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+    let _ = events_so_far(&mut due.events);
+
+    plant_unresealable_root_at(&due.fx, &WRITE_SCOPE_SEED, copy_sequence + 1);
+    due.fx
+        .world
+        .scheduler
+        .advance(due.engine.profile().link_sweep_cadence);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    let scope = hex_lower(&folder.0);
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![scope.clone()],
+        "{abuse:#?}"
+    );
+    assert_eq!(
+        named_scopes(&abuse, "link sweep"),
+        vec![scope],
+        "{abuse:#?}"
+    );
+    assert_eq!(
+        abuse
+            .iter()
+            .filter(|description| description.contains("leaves no room"))
+            .count(),
+        1,
+        "the step-over is surfaced once: {abuse:#?}"
+    );
+    assert_eq!(abuse.len(), 3, "{abuse:#?}");
+}
+
+/// The sweep reads a record other than the one the walk refused, so each
+/// refused record sends its own event.
+#[test]
+fn a_second_refused_record_that_the_sweep_reads_sends_its_own_abuse_event() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    let sequence = sequence_at(&due.fx.world, &name) + 1;
+    serve_everywhere(
+        &due.fx.world,
+        folder,
+        &misplaced_root_record(&due.fx.world, folder, sequence + 1),
+    );
+    // The walk sends one fan-out GET at the name ahead of the sweep.
+    let walk_gets = due.fx.world.record_store.endpoints().len();
+    due.fx.world.record_store.serve_gets_for_after(
+        name.as_str(),
+        walk_gets,
+        usize::MAX,
+        Some(misplaced_root_record(&due.fx.world, folder, sequence)),
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 2, "{abuse:#?}");
+    let scope = hex_lower(&folder.0);
+    assert_eq!(named_scopes(&abuse, "boundary walk"), vec![scope.clone()]);
+    assert_eq!(named_scopes(&abuse, "link sweep"), vec![scope]);
+}
+
+/// The walk sends one event for the first of two refused scope roots, and the
+/// sweep sends the event of the other.
+#[test]
+fn each_of_two_refused_scope_roots_sends_one_abuse_event() {
+    let mut due = due_sweep(1);
+    for node in due.scopes.clone() {
+        let sequence = sequence_at(&due.fx.world, &write_name(node)) + 1;
+        serve_everywhere(
+            &due.fx.world,
+            node,
+            &misplaced_root_record(&due.fx.world, node, sequence),
+        );
+    }
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 2, "{abuse:#?}");
+    let mut named = named_scopes(&abuse, "boundary walk");
+    named.extend(named_scopes(&abuse, "link sweep"));
+    named.sort();
+    let mut scopes: Vec<String> = due.scopes.iter().map(|node| hex_lower(&node.0)).collect();
+    scopes.sort();
+    assert_eq!(named, scopes);
+}
+
 /// The crossing a command journals is a plan, not the authority. A session that
 /// has run no pass names no boundary below the render root, so the overlay
 /// places a queued create under a granted scope root and the move out of it

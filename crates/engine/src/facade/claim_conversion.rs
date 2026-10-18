@@ -379,6 +379,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            refused: RefusedRoot::default(),
             root_fallback: None,
         }
     }

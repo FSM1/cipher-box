@@ -33,11 +33,9 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, read_cut_epoch_floor, verify_commitment_in_force,
 };
-use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::OwnerPointerRead;
-use crate::net::{
-    PointerConsult, PointerConsultError, assemble_candidate, fanout_get_verify_failed,
-};
+use crate::net::{PointerConsult, PointerConsultError, assemble_candidate};
 use crate::seams::{
     FloorStore, Http, Mailbox, NoPersistFloorStore, RecordTransport, StagingStore, UnixMillis,
 };
@@ -246,17 +244,15 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
         }
         Err(PointerConsultError::Rejected) => return Err(LinkReadRefusal::Repoint),
     };
-    let Some((verified, record, endpoint_failed)) =
-        fanout_get_verify_failed(seams.transport, &root).await
-    else {
+    let Ok(read) = LeafRead::fetch(seams.transport, &root).await else {
         return Ok(LinkEntryRead::Unavailable);
     };
-    let candidate = match assemble_candidate(seams.gateway, seams.http, &root, &record, None).await
-    {
-        Ok(candidate) => candidate,
-        Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
-        Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
-    };
+    let candidate =
+        match assemble_candidate(seams.gateway, seams.http, &root, &read.bytes, None).await {
+            Ok(candidate) => candidate,
+            Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
+            Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
+        };
     let Ok(cut_epoch_floor) = read_cut_epoch_floor(&seams.floors, &share.scope_id).await else {
         return Ok(LinkEntryRead::Unavailable);
     };
@@ -275,23 +271,12 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
     })?;
     // Ahead of the link verdict, so a rollback never reads as revoked or
     // expired.
-    match floor::check_sequence(
-        &seams.floors,
-        name,
-        verified.sequence,
-        floor::Strictness::AtOrAboveFloor,
-    )
-    .await
-    {
+    match read.check_floor(&seams.floors, name).await {
         Ok(()) => {}
-        Err(GateError::Rejected(rejection))
-            if sequence_refusal(&rejection.reason, endpoint_failed)
-                == Some(BelowFloor::Unavailable) =>
-        {
+        Err(LeafRefusal::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
+        Err(LeafRefusal::Withheld | LeafRefusal::Seam(_)) => {
             return Ok(LinkEntryRead::Unavailable);
         }
-        Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
-        Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
     }
     let Some(entry) = recipient_blinded_tag(invitee.enc_secret(), &owner.enc_subkey(), name)
         .and_then(|tag| committed_link_entry(&candidate, &tag))

@@ -52,11 +52,8 @@ pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::{assemble_candidate, assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
-pub(crate) use fanout::{
-    AnsweredFetch, fanout_get_answered, fanout_get_classified, fanout_get_verify,
-    fanout_get_verify_failed, signed_data,
-};
 pub use fanout::{EndpointFailure, EndpointFailures, FanoutRecord, MAX_RECORD_BYTES, VacancyRule};
+pub(crate) use fanout::{fanout_get_classified, fanout_get_verify, signed_data};
 pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg, OwedMoveLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
