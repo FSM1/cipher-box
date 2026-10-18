@@ -434,14 +434,13 @@ impl ReceivedSharesList {
         core::mem::replace(&mut self.entries[at].scope_pointer_name, name)
     }
 
-    /// Set the `ended` and `grantCut` values of the bookmark under `key`, as
-    /// a later release writes them.
+    /// Set `marks`, the `(ended, grantCut)` values, on the bookmark under
+    /// `key`, as a later release writes them.
     #[cfg(feature = "test-kit")]
-    pub(crate) fn mark_for_test(
+    pub fn mark_for_test(
         &mut self,
         key: &BookmarkKey,
-        ended: Option<u64>,
-        grant_cut: Option<u64>,
+        (ended, grant_cut): (Option<u64>, Option<u64>),
     ) {
         if let Some(at) = self.position(key) {
             self.entries[at].ended = ended;
@@ -1453,7 +1452,7 @@ pub(super) fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cipherbox_core::codec::encode;
     use cipherbox_core::suite::secret::ct_eq;
@@ -1995,7 +1994,7 @@ mod tests {
 
     /// `bytes` with `field` set on each bookmark: `held` on the bookmark of
     /// `held_share`, `personal` on the one of scope `0x3c`.
-    fn with_field(bytes: &[u8], field: &str, held: Value, personal: Value) -> Vec<u8> {
+    pub(crate) fn with_field(bytes: &[u8], field: &str, held: Value, personal: Value) -> Vec<u8> {
         let tree = decode(bytes).unwrap();
         let mut map = tree.as_map().unwrap().clone();
         let shares = map
@@ -2163,17 +2162,17 @@ mod tests {
             ended,
             ..share(b"k51otherroot", 0x3c)
         };
-        for (grant_cut, ended, outcome, kept_cut) in [
-            (None, None, "unchanged", 3),
-            (Some(2), Some(1), "unchanged", 3),
-            (Some(3), None, "unchanged", 3),
-            (Some(9), None, "healed", 9),
+        for (grant_cut, ended, healed, kept_cut) in [
+            (None, None, false, 3),
+            (Some(2), Some(1), false, 3),
+            (Some(3), None, false, 3),
+            (Some(9), None, true, 9),
         ] {
             let mut list = decode_stored_list(&marked_list()).expect("reads");
             let reconciled = list.reconcile(incoming(grant_cut, ended));
             assert_eq!(
                 matches!(reconciled, Reconciled::Healed(_)),
-                outcome == "healed",
+                healed,
                 "{grant_cut:?}"
             );
             let share = list.find(&key).expect("the bookmark");
