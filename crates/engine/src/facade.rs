@@ -6526,8 +6526,9 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Whether the staging store holds any durable debt the erase would take
     /// with it: an owed retirement, a delete's doomed-name journal entry, a
-    /// scope-exit cut, owed rotation work, or a subtree re-seal. A store that will not enumerate reads as owing, so the
-    /// pass runs rather than the debt being assumed away.
+    /// scope-exit cut, owed rotation work, or a subtree re-seal. A store that
+    /// will not enumerate reads as owing, so the pass runs rather than the
+    /// debt being assumed away.
     async fn owes_bookkeeping(&self) -> bool {
         let Ok(keys) = self.seams.staging_store.staged_keys().await else {
             return true;

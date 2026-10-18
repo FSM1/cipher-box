@@ -3238,16 +3238,41 @@ mod tests {
             let noted = notices(&store).await;
             assert_eq!(kept.len(), 21);
             assert_eq!(noted.len(), 21);
-            for (n, (entry, notice)) in (1..=21u8).zip(kept.iter().zip(&noted)) {
+            let previous = [
+                DeadLetterReason::TargetGone,
+                DeadLetterReason::DestinationGone,
+                DeadLetterReason::DestinationInsideTarget,
+                DeadLetterReason::SuffixExhausted,
+                DeadLetterReason::Undecodable,
+                DeadLetterReason::PayloadRefused,
+                DeadLetterReason::AttemptsExhausted,
+                DeadLetterReason::HeadTooLarge,
+                DeadLetterReason::BaseSuperseded,
+                DeadLetterReason::ContentUnrecoverable,
+                DeadLetterReason::PreservationRefused,
+                DeadLetterReason::AlreadyPublished,
+                DeadLetterReason::TargetStillLinked,
+                DeadLetterReason::ScopeRootNotResealable,
+                DeadLetterReason::BinIndexFull,
+                DeadLetterReason::CrossingUnauthorable,
+                DeadLetterReason::BinIndexStrandedMint,
+                DeadLetterReason::TargetLinkedAcrossScopes,
+                DeadLetterReason::GraftedScopeVaultSurface,
+                DeadLetterReason::NewerRelease,
+                DeadLetterReason::TargetIsScopeRoot,
+            ];
+            for ((n, reason), (entry, notice)) in
+                (1..=21u8).zip(previous).zip(kept.iter().zip(&noted))
+            {
                 assert_eq!(entry.op_id, OpId(u64::from(n)));
-                assert_eq!(Some(entry.reason), reason_of_tag(n));
+                assert_eq!(entry.reason, reason, "tag {n}");
                 assert_eq!(
                     entry.preserved_at,
                     UnixMillis(1_700_000_000_000 + u64::from(n))
                 );
                 assert_eq!(entry.record, vec![n; 3]);
                 assert_eq!(notice.op_id, OpId(100 + u64::from(n)));
-                assert_eq!(Some(notice.reason), reason_of_tag(n));
+                assert_eq!(notice.reason, reason, "tag {n}");
             }
         });
     }

@@ -181,11 +181,10 @@ pub struct ReceivedShare {
     /// until the owner posts again (D2).
     pub scope_pointer_name: Option<IpnsName>,
     /// The `grantCut` value: the cut epoch of the latest verified commitment
-    /// whose personal grant blob this device opened. This build sets none and
-    /// keeps the value it read.
+    /// whose personal grant blob this device opened.
     pub(crate) grant_cut: Option<u64>,
     /// The `ended` value: the cut epoch of the verified commitment that left
-    /// the personal tag out. This build sets none and keeps the value it read.
+    /// the personal tag out.
     pub(crate) ended: Option<u64>,
 }
 
@@ -202,9 +201,10 @@ impl ReceivedShare {
 
     /// Whether two bookmarks for the same scope carry identical authority and
     /// discovery bytes — the "true no-op re-accept" test. A drift in the
-    /// re-pointed scope-root name, the committed permission, the rotated pointer
-    /// read key, the grant cut, or the courtesy display fields means the freshly-verified
-    /// metadata is authority and the stored entry must self-heal to it.
+    /// re-pointed scope-root name, the committed permission, the rotated
+    /// pointer read key, the grant cut, or the courtesy display fields means
+    /// the freshly-verified metadata is authority and the stored entry must
+    /// self-heal to it.
     fn same_bookmark(&self, other: &ReceivedShare) -> bool {
         self.key() == other.key()
             && self.scope_root_name == other.scope_root_name
@@ -432,6 +432,21 @@ impl ReceivedSharesList {
     ) -> Option<IpnsName> {
         let at = self.position(key)?;
         core::mem::replace(&mut self.entries[at].scope_pointer_name, name)
+    }
+
+    /// Set the `ended` and `grantCut` values of the bookmark under `key`, as
+    /// a later release writes them.
+    #[cfg(feature = "test-kit")]
+    pub(crate) fn mark_for_test(
+        &mut self,
+        key: &BookmarkKey,
+        ended: Option<u64>,
+        grant_cut: Option<u64>,
+    ) {
+        if let Some(at) = self.position(key) {
+            self.entries[at].ended = ended;
+            self.entries[at].grant_cut = grant_cut;
+        }
     }
 
     /// Point the bookmark under `key` at the scope root its scope pointer

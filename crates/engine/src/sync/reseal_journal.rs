@@ -432,6 +432,23 @@ mod tests {
     }
 
     #[test]
+    fn a_caller_replaces_its_own_entry() {
+        run(async |journal| {
+            journal.put(b"", &envelope(1)).await.unwrap();
+            let second = ResealEnvelope {
+                payload: b"second rows".to_vec(),
+                ..envelope(1)
+            };
+            journal.put(b"", &second).await.unwrap();
+
+            assert_eq!(
+                journal.read(ROOT, b"").await.unwrap(),
+                JournalSlot::Kept(second)
+            );
+        });
+    }
+
+    #[test]
     fn an_entry_of_another_caller_is_kept_and_never_replaced() {
         run(async |journal| {
             journal.put(b"", &envelope(2)).await.unwrap();
