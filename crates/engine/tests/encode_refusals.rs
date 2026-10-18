@@ -637,6 +637,13 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
         ),
         (
             edit(&|h| {
+                h.scopes[0].cut_epoch = 8;
+                h.scopes[0].final_landed = false;
+            }),
+            "dissolve-journal-cut-epoch-raised-after-relink",
+        ),
+        (
+            edit(&|h| {
                 h.scopes.pop();
             }),
             "dissolve-journal-scopes-not-append-only",
@@ -707,6 +714,25 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
         Ok(()),
         "a rebind that appends the former binding takes a new floor"
     );
+}
+
+/// Before Relink, a re-cut raises the cut epoch of a landed scope, and only
+/// the commit that raises it clears the landed mark.
+#[test]
+fn the_dissolve_journal_writer_clears_a_landed_mark_only_with_a_raise() {
+    let mut held = dissolve_header_at(DissolveStep::Cut);
+    held.scopes[0].cut_epoch = 7;
+    held.scopes[0].cut_time = 1_500;
+    held.scopes[0].final_landed = true;
+    let mut cleared = held.clone();
+    cleared.scopes[0].final_landed = false;
+    assert_eq!(
+        dissolve_commit(&held, &[], &cleared),
+        Err("dissolve-journal-sticky-mark-cleared".to_owned())
+    );
+    let mut raised = cleared.clone();
+    raised.scopes[0].cut_epoch = 8;
+    assert_eq!(dissolve_commit(&held, &[], &raised), Ok(()));
 }
 
 /// The journal writer refuses to rewrite a page of the live map, so a stop
