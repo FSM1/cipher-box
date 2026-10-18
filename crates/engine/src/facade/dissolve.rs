@@ -9,13 +9,12 @@
 //! this step waits until it lands.
 
 use super::claim_conversion::{ConversionSites, HeldRecord, OnRunning};
-use super::owed_rotation::{OwedCut, OwedScope, OwedStop, owed_write_cut};
+use super::owed_rotation::{OwedScope, OwedStop, owed_write_cut};
 use super::*;
 use crate::grants::{OwnerAuthority, committed_links};
 use crate::net::cut::{republish_scope_pointer, reseal_root_in_place};
 use crate::rotation::{
     CascadeError, CommittedSet, NoBound, WriteRotationOutcome, recut_from_last_copy,
-    revoke_every_row,
 };
 #[cfg(any(test, feature = "test-kit"))]
 use crate::sync::dissolve_journal::{DissolveBinding, DissolvedScope, MAX_DISSOLVED_SCOPES};
@@ -30,7 +29,8 @@ enum ScopeCut {
     /// The scope waits for owed rotation work, a link conversion, or another
     /// driver.
     Waiting,
-    /// A row appeared after the dissolve cut the scope.
+    /// Work that the dissolve did not do landed on the scope, so the dissolve
+    /// stops.
     NewRow,
 }
 
@@ -64,7 +64,7 @@ where
     St: StagingStore,
 {
     /// This owner's dissolve entries.
-    pub(super) fn dissolve_journal(&self) -> DissolveJournal<'_, St> {
+    fn dissolve_journal(&self) -> DissolveJournal<'_, St> {
         DissolveJournal::new(self.staging, self.seal(), self.owed.dissolve())
     }
 
@@ -92,7 +92,7 @@ where
 
     /// Drive the cut step of the entry at `root`. Answers the step the entry
     /// holds after the drive, or `None` when no entry stands there.
-    pub(super) async fn drive_dissolve_cut(
+    async fn drive_dissolve_cut(
         &self,
         sites: &impl ConversionSites,
         pointers: &PointerIndex,
@@ -260,19 +260,12 @@ where
         // read cascade refuses the refused root, so the name wave moves the
         // root off it first (ADR 0068 D1, D3, D5).
         let plan = GrantCutPlan::over(&current, &name, self.identity);
-        let cut = if fell_back {
-            Some(recut_from_last_copy(&plan, true))
-        } else if rows {
-            Some(revoke_every_row(&plan))
-        } else {
-            None
-        }
-        .transpose()
-        .map_err(EngineError::from_revoke)?;
-        // Before the first publish of this scope, so every final record it
-        // signs carries an EOL past `cut_time` plus the EOL window. The cut
-        // epoch is the baseline a later row is measured against, and a cut
-        // of this drive raises it before it publishes.
+        let cut = (fell_back || rows)
+            .then(|| recut_from_last_copy(&plan, fell_back))
+            .transpose()
+            .map_err(EngineError::from_revoke)?;
+        // Durable before this drive publishes, and a cut of this drive raises
+        // the baseline first.
         let cut_epoch = cut.as_ref().map_or(epoch, |cut| cut.commitment.cut_epoch);
         if base.cut_time == 0 || cut_epoch > base.cut_epoch {
             let cut_time = match base.cut_time {
@@ -287,7 +280,7 @@ where
         }
         let target = match cut {
             Some(cut) => {
-                let report = match self
+                let Some(report) = self
                     .rotate_owed_cut(
                         scope,
                         &target,
@@ -298,9 +291,9 @@ where
                         sites.command(),
                     )
                     .await?
-                {
-                    OwedCut::Ran(report) => *report,
-                    OwedCut::SetLanded | OwedCut::Unproved => return Ok(ScopeCut::Waiting),
+                    .into_report()
+                else {
+                    return Ok(ScopeCut::Waiting);
                 };
                 record.retire_cut(&links);
                 match report.write {
@@ -362,10 +355,9 @@ where
             .await
             .map_err(EngineError::from_contact_store)?
         {
-            let identity = contact.identity_pk().to_sec1();
-            if let (Some(_), Ok(identity)) = (source, identity.as_slice().try_into()) {
+            if source.is_some() {
                 contacts
-                    .forget_link_grant(identity, &scope.0)
+                    .forget_link_grant(&contact.identity_pk().to_sec1(), &scope.0)
                     .await
                     .map_err(EngineError::from_contact_store)?;
             }
@@ -518,16 +510,14 @@ impl<T: SeamTypes> Engine<T> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &keys);
-        Ok(
-            match pass
-                .dissolve_journal()
-                .header(root)
-                .await
-                .map_err(EngineError::from_seam)?
-            {
-                HeaderSlot::Own(header) => Some(header),
-                HeaderSlot::Absent | HeaderSlot::Foreign | HeaderSlot::Unreadable => None,
-            },
-        )
+        let slot = pass
+            .dissolve_journal()
+            .header(root)
+            .await
+            .map_err(EngineError::from_seam)?;
+        Ok(match slot {
+            HeaderSlot::Own(header) => Some(header),
+            HeaderSlot::Absent | HeaderSlot::Foreign | HeaderSlot::Unreadable => None,
+        })
     }
 }

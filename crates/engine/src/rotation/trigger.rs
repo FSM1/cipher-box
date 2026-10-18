@@ -563,17 +563,6 @@ pub fn recut_from_last_copy(
     drop_every_row(plan, write)
 }
 
-/// The cut of a dissolve (ADR 0077 D1): every row of `plan`, each read
-/// grant, write grant and invite link, in one cut. A set with no row is
-/// [`RevokeError::NotGranted`].
-pub fn revoke_every_row(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
-    authorize_cut(plan)?;
-    if plan.commitment.entries.is_empty() {
-        return Err(RevokeError::NotGranted);
-    }
-    drop_every_row(plan, false)
-}
-
 /// Drop every row of `plan` in one cut. A write row needs the wave.
 fn drop_every_row(
     plan: &GrantCutPlan<'_>,

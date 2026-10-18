@@ -26004,6 +26004,11 @@ impl GrantScenario {
         block_on(self.engine.dissolve_header_for_test(self.folder)).expect("the journal reads")
     }
 
+    /// The dissolve header that must stand at the folder.
+    fn standing_dissolve(&self) -> DissolveHeader {
+        self.dissolve_header().expect("the entry stands")
+    }
+
     /// Move virtual time to the next whole second, then `millis` past it, and
     /// answer that instant.
     fn at_millis_past_a_second(&self, millis: u64) -> u64 {
@@ -26033,6 +26038,37 @@ fn signed_eol_millis(world: &FakeWorld, name: &IpnsName) -> u64 {
 fn holds_for_a_term_from(world: &FakeWorld, name: &IpnsName, cut_time: u64) -> bool {
     let term = u64::try_from(EOL_WINDOW.as_millis()).expect("a short window") - 1_000;
     signed_eol_millis(world, name) >= cut_time + term
+}
+
+/// Serve the vault root's value at the folder, so the gate refuses the folder
+/// root.
+fn refuse_folder_root(fx: &GrantScenario) {
+    publish_value_at(
+        &fx.world,
+        fx.folder,
+        &published_value(&fx.world, &write_name(ROOT)),
+    );
+}
+
+/// Keep the owed rotation entry when its scope's cut tries to clear it.
+fn keep_owed_entry(fx: &GrantScenario) {
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_removal_after(&owed_rotation_key(&kdf::enc_subkey(&SECRET)), 0);
+}
+
+/// Run the spawned tasks and assert that no lazy-wave sweep reads `root`.
+fn assert_no_sweep_reads(fx: &GrantScenario, root: &IpnsName) {
+    let gets = fx.world.record_store.get_count(root.as_str());
+    for task in fx.world.scheduler.take_spawned_tasks() {
+        block_on(task);
+    }
+    assert_eq!(
+        fx.world.record_store.get_count(root.as_str()),
+        gets,
+        "no sweep reads the cut scope"
+    );
 }
 
 /// ADR 0077 D1: the dissolve cuts every row of the scope, the read grant,
@@ -26083,13 +26119,13 @@ fn a_dissolve_cuts_every_read_write_and_link_row_in_one_cut() {
         read_epoch + 1,
         "the read plane rotated"
     );
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     assert_eq!(header.scopes.len(), 1);
     assert_eq!(header.scopes[0].cut_epoch, cut.commitment.cut_epoch);
     assert!(fx.owed_scopes().is_empty(), "nothing is owed");
 }
 
-/// ADR 0077 D1, R2: each scope root that the gated index names below the
+/// ADR 0077 D1: each scope root that the gated index names below the
 /// folder is cut too, the nested one first.
 #[test]
 fn a_dissolve_cuts_each_nested_scope_root() {
@@ -26109,7 +26145,7 @@ fn a_dissolve_cuts_each_nested_scope_root() {
 
     assert!(fx.folder_section().commitment.entries.is_empty());
     assert!(inner_section(&fx).commitment.entries.is_empty());
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     let scopes: Vec<NodeId> = header.scopes.iter().map(|scope| scope.scope_id).collect();
     assert_eq!(scopes, vec![fx.folder, inner]);
     assert!(header.scopes.iter().all(|scope| scope.cut_epoch != 0));
@@ -26132,7 +26168,7 @@ fn the_final_records_hold_for_a_term_from_a_cut_time_that_a_retry_keeps() {
         matches!(fx.dissolve(), Err(EngineError::Seam { .. })),
         "the pointer publish does not land"
     );
-    let stopped = fx.dissolve_header().expect("the entry stands");
+    let stopped = fx.standing_dissolve();
     assert_eq!(stopped.step, DissolveStep::Cut);
     assert_eq!(stopped.scopes[0].cut_time, cut_time);
     assert_ne!(stopped.scopes[0].cut_epoch, 0, "the cut landed");
@@ -26149,7 +26185,7 @@ fn the_final_records_hold_for_a_term_from_a_cut_time_that_a_retry_keeps() {
     fx.world.record_store.heal_put_for(pointer.as_str());
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
 
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     assert_eq!(
         header.scopes[0].cut_time, cut_time,
         "the retry keeps cut_time"
@@ -26175,7 +26211,7 @@ fn the_cut_baseline_is_durable_before_the_first_publish_of_the_scope() {
     let _ = fx.dissolve();
 
     assert_eq!(sequence_at(&fx.world, &root), published, "nothing landed");
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     assert_eq!(header.step, DissolveStep::Cut);
     assert_eq!(header.scopes[0].cut_time, cut_time);
     assert_eq!(
@@ -26192,10 +26228,7 @@ fn the_cut_baseline_is_durable_before_the_first_publish_of_the_scope() {
 fn a_dissolve_of_a_scope_with_no_row_publishes_its_final_records_again() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
     let root = fx.granted_scope_repoint().current_root;
     let pointer = folder_pointer(&fx);
     let section = fx.folder_section();
@@ -26242,7 +26275,7 @@ fn a_dissolve_cut_that_stops_is_finished_through_the_owed_entry() {
     fx.world.record_store.heal_put_for(pointer.as_str());
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     assert_eq!(
         header.step,
         DissolveStep::Map,
@@ -26402,10 +26435,7 @@ fn a_scope_pointer_served_below_its_floor_is_refused_by_its_class() {
             );
         }
         assert_eq!(sequence_at(&fx.world, &pointer), served);
-        assert_eq!(
-            fx.dissolve_header().expect("the entry stands").step,
-            DissolveStep::Cut
-        );
+        assert_eq!(fx.standing_dissolve().step, DissolveStep::Cut);
     }
 }
 
@@ -26442,7 +26472,7 @@ fn a_drive_that_waits_does_not_publish_a_done_scope_again() {
     let pointer = folder_pointer(&fx);
     fx.world.record_store.fail_put_for(pointer.as_str());
     assert!(matches!(fx.dissolve(), Err(EngineError::Seam { .. })));
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     let done = header
         .scopes
         .iter()
@@ -26469,17 +26499,10 @@ fn a_drive_that_waits_does_not_publish_a_done_scope_again() {
 fn a_dissolve_over_a_last_copy_with_no_row_cuts_it() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let cut_epoch = fx.folder_section().commitment.cut_epoch;
-    publish_value_at(
-        &fx.world,
-        fx.folder,
-        &published_value(&fx.world, &write_name(ROOT)),
-    );
+    refuse_folder_root(&fx);
 
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
 
@@ -26495,31 +26518,21 @@ fn a_dissolve_over_a_last_copy_with_no_row_cuts_it() {
 fn a_dissolve_cut_above_its_baseline_raises_the_baseline() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let cut_epoch = fx.folder_section().commitment.cut_epoch;
     let root = fx.granted_scope_repoint().current_root;
     fx.world.record_store.fail_put_for(root.as_str());
     assert!(matches!(fx.dissolve(), Err(EngineError::Seam { .. })));
-    assert_eq!(
-        fx.dissolve_header().expect("the entry stands").scopes[0].cut_epoch,
-        cut_epoch
-    );
+    assert_eq!(fx.standing_dissolve().scopes[0].cut_epoch, cut_epoch);
     fx.world.record_store.heal_put_for(root.as_str());
-    publish_value_at(
-        &fx.world,
-        fx.folder,
-        &published_value(&fx.world, &write_name(ROOT)),
-    );
+    refuse_folder_root(&fx);
     let _ = fx.owed_scopes();
     let pointer = folder_pointer(&fx);
     fx.world.record_store.fail_put_for(pointer.as_str());
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the wave stops");
     assert_eq!(
-        fx.dissolve_header().expect("the entry stands").scopes[0].cut_epoch,
+        fx.standing_dissolve().scopes[0].cut_epoch,
         cut_epoch + 1,
         "raised before the publish"
     );
@@ -26527,10 +26540,7 @@ fn a_dissolve_cut_above_its_baseline_raises_the_baseline() {
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(
-        fx.dissolve_header().expect("the entry stands").step,
-        DissolveStep::Map
-    );
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
 }
 
 /// ADR 0068 D1, D3: the read cascade refuses a refused root, so a last copy
@@ -26542,11 +26552,7 @@ fn a_dissolve_over_a_last_copy_with_a_read_row_cuts_it_with_a_wave() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let before = fx.granted_scope_repoint();
     let cut_epoch = fx.folder_section().commitment.cut_epoch;
-    publish_value_at(
-        &fx.world,
-        fx.folder,
-        &published_value(&fx.world, &write_name(ROOT)),
-    );
+    refuse_folder_root(&fx);
 
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
 
@@ -26610,39 +26616,22 @@ fn an_owed_recut_after_a_concurrent_grant_stops_the_dissolve() {
     assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
 }
 
-/// Owner ruling Q1: an owed re-drive of a dissolve cut, after a restart,
-/// files no lazy-wave sweep of the cut scope either.
+/// An owed re-drive of a dissolve cut, after a restart, files no lazy-wave
+/// sweep of the cut scope either.
 #[test]
 fn an_owed_redrive_of_a_dissolve_cut_files_no_sweep() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    fx.owner_device
-        .staging_store
-        .inner()
-        .interrupt_staged_removal_after(&owed_rotation_key(&kdf::enc_subkey(&SECRET)), 0);
+    keep_owed_entry(&fx);
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
-    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    fx.engine = engine;
-    fx._events = events;
-    fx._tasks = tasks;
+    restart_owner(&mut fx);
     let _ = fx.world.scheduler.take_spawned_tasks();
     let root = fx.granted_scope_repoint().current_root;
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(
-        fx.dissolve_header().expect("the entry stands").step,
-        DissolveStep::Map
-    );
-    let gets = fx.world.record_store.get_count(root.as_str());
-    for task in fx.world.scheduler.take_spawned_tasks() {
-        block_on(task);
-    }
-    assert_eq!(
-        fx.world.record_store.get_count(root.as_str()),
-        gets,
-        "no sweep reads the cut scope"
-    );
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+    assert_no_sweep_reads(&fx, &root);
 }
 
 /// ADR 0063: a read cut whose owed entry does not clear keeps the dissolve
@@ -26652,15 +26641,11 @@ fn an_owed_redrive_of_a_dissolve_cut_files_no_sweep() {
 fn a_cut_whose_owed_entry_stays_holds_the_dissolve_and_a_new_row_stops_it() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let owed = owed_rotation_key(&kdf::enc_subkey(&SECRET));
-    fx.owner_device
-        .staging_store
-        .inner()
-        .interrupt_staged_removal_after(&owed, 0);
+    keep_owed_entry(&fx);
 
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
 
-    let header = fx.dissolve_header().expect("the entry stands");
+    let header = fx.standing_dissolve();
     assert_ne!(header.scopes[0].cut_time, 0, "the baseline is durable");
     let cut_epoch = fx.folder_section().commitment.cut_epoch;
     assert_eq!(header.scopes[0].cut_epoch, cut_epoch, "the cut landed");
@@ -26677,8 +26662,7 @@ fn a_cut_whose_owed_entry_stays_holds_the_dissolve_and_a_new_row_stops_it() {
     assert_eq!(fx.committed_permission(&root), Some(CorePermission::Read));
 }
 
-/// Owner ruling Q1: the dissolve files no lazy-wave sweep of the scopes it
-/// cuts.
+/// The dissolve files no lazy-wave sweep of the scopes it cuts.
 #[test]
 fn a_dissolve_cut_files_no_sweep() {
     let mut fx = GrantScenario::new();
@@ -26689,15 +26673,7 @@ fn a_dissolve_cut_files_no_sweep() {
 
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
 
-    let gets = fx.world.record_store.get_count(root.as_str());
-    for task in fx.world.scheduler.take_spawned_tasks() {
-        block_on(task);
-    }
-    assert_eq!(
-        fx.world.record_store.get_count(root.as_str()),
-        gets,
-        "no sweep reads the cut scope"
-    );
+    assert_no_sweep_reads(&fx, &root);
 }
 
 /// A scope pointer that lapsed has nothing to publish again, so the dissolve

@@ -511,8 +511,7 @@ where
     }
 
     /// [`Self::rotate_planes`], noting what the cut's root reads met in
-    /// `reads`. A cut of a scope that a dissolve cuts files a sweep that does
-    /// nothing.
+    /// `reads`.
     #[expect(clippy::too_many_arguments, reason = "one cut's full input set")]
     pub(super) async fn rotate_planes_reading(
         &self,
