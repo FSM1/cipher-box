@@ -224,6 +224,11 @@ fn dissolve_header_at(step: DissolveStep) -> DissolveHeader {
         header.map_pages = 1;
         header.rows = 2;
     }
+    if step > DissolveStep::Cut {
+        for scope in &mut header.scopes {
+            scope.cut_time = 1_000;
+        }
+    }
     if step >= DissolveStep::Relink {
         for scope in &mut header.scopes {
             scope.manifest = Some(Manifest {
@@ -421,6 +426,10 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             edit(DissolveStep::Cut, &|h| h.scopes[1].cut_epoch = 7),
             DissolveCodecError::CutEpochBeforeCutTime,
         ),
+        (
+            edit(DissolveStep::Map, &|h| h.scopes[1].cut_time = 0),
+            DissolveCodecError::UncutPastCut,
+        ),
     ];
     for (header, refusal) in cases {
         assert_eq!(
@@ -550,10 +559,7 @@ fn dissolve_commit(
 #[test]
 fn the_dissolve_journal_writer_refuses_each_map_its_reader_refuses() {
     let cut = dissolve_header_at(DissolveStep::Cut);
-    let seal = DissolveHeader {
-        scopes: cut.scopes.clone(),
-        ..dissolve_header_at(DissolveStep::Seal)
-    };
+    let seal = dissolve_header_at(DissolveStep::Seal);
     let map_shape = DissolveCodecError::MapShape.check();
     for (rows, check) in [
         (&[(0x59, 0x61, None), (0x53, 0x63, Some(0))][..], map_shape),
@@ -640,7 +646,19 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
                 h.scopes[0].cut_epoch = 8;
                 h.scopes[0].final_landed = false;
             }),
-            "dissolve-journal-cut-epoch-raised-after-relink",
+            "dissolve-journal-cut-epoch-raised-off-cut",
+        ),
+        (
+            edit(&|h| {
+                h.step = DissolveStep::Seal;
+                h.scopes[0].cut_epoch = 8;
+                h.scopes[0].final_landed = false;
+            }),
+            "dissolve-journal-step-back-after-relink",
+        ),
+        (
+            edit(&|h| h.step = DissolveStep::Seal),
+            "dissolve-journal-step-back-after-relink",
         ),
         (
             edit(&|h| {
@@ -733,6 +751,29 @@ fn the_dissolve_journal_writer_clears_a_landed_mark_only_with_a_raise() {
     let mut raised = cleared.clone();
     raised.scopes[0].cut_epoch = 8;
     assert_eq!(dissolve_commit(&held, &[], &raised), Ok(()));
+}
+
+/// A raise of a set cut epoch commits only at Cut: a raise that stays at Map
+/// or Seal is refused, and a return from Seal to Cut takes it.
+#[test]
+fn the_dissolve_journal_writer_takes_a_raise_only_at_cut() {
+    for step in [DissolveStep::Map, DissolveStep::Seal] {
+        let mut held = dissolve_header_at(step);
+        held.scopes[0].cut_epoch = 7;
+        let mut raised = held.clone();
+        raised.scopes[0].cut_epoch = 8;
+        assert_eq!(
+            dissolve_commit(&held, &[], &raised),
+            Err("dissolve-journal-cut-epoch-raised-off-cut".to_owned()),
+            "{step:?}"
+        );
+    }
+    let mut held = dissolve_header_at(DissolveStep::Seal);
+    held.scopes[0].cut_epoch = 7;
+    let mut recut = held.clone();
+    recut.step = DissolveStep::Cut;
+    recut.scopes[0].cut_epoch = 8;
+    assert_eq!(dissolve_commit(&held, &[], &recut), Ok(()));
 }
 
 /// The journal writer refuses to rewrite a page of the live map, so a stop

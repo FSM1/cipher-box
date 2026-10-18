@@ -135,13 +135,13 @@ pub struct DissolvedScope {
     pub scope_id: NodeId,
     /// The cut epoch the scope holds once the dissolve's cut lands. 0 until
     /// `cut_time` is set, then written with it. Never lower after that, and
-    /// higher only before Relink.
+    /// higher only in a commit at Cut from a step before Relink.
     pub cut_epoch: u64,
     /// The scheduler time of the cut, 0 until it is set. Set once, before the
     /// first publish of the scope.
     pub cut_time: u64,
     /// The final records of the cut published again. Sticky, except that the
-    /// commit that raises `cut_epoch` clears it.
+    /// commit that raises `cut_epoch` may clear it.
     pub final_landed: bool,
     /// The final records, from the relink on.
     pub manifest: Option<Manifest>,
@@ -303,6 +303,8 @@ pub enum DissolveCodecError {
     LandedBeforeCut,
     /// A scope holds a cut epoch with no `cut_time`.
     CutEpochBeforeCutTime,
+    /// A step after the cut holds a scope with no `cut_time`.
+    UncutPastCut,
 }
 
 impl DissolveCodecError {
@@ -327,6 +329,7 @@ impl DissolveCodecError {
             Self::MapAtHold => "dissolve-journal-map-at-hold",
             Self::LandedBeforeCut => "dissolve-journal-landed-before-cut",
             Self::CutEpochBeforeCutTime => "dissolve-journal-cut-epoch-before-cut-time",
+            Self::UncutPastCut => "dissolve-journal-uncut-past-cut",
         }
     }
 }
@@ -361,6 +364,9 @@ fn check_header(header: &DissolveHeader, source_root: NodeId) -> Result<(), Diss
         }
         if scope.cut_epoch != 0 && scope.cut_time == 0 {
             return Err(E::CutEpochBeforeCutTime);
+        }
+        if scope.cut_time == 0 && header.step != S::Cut {
+            return Err(E::UncutPastCut);
         }
         if let Some(manifest) = &scope.manifest {
             cap(name_ok(&manifest.pointer_name)
@@ -761,8 +767,9 @@ pub fn decode_name_log_page(payload: &[u8], index: u32) -> Result<NameLogPage, D
 }
 
 /// The rules that compare a header with the one it replaces: the entry identity,
-/// the scope list, a set `cut_time` and a sticky mark stay; the cut epoch does not
-/// fall, and once set rises only before Relink; the lists only grow at their end.
+/// the scope list, a set `cut_time` and a sticky mark stay; the step does not go
+/// back from Relink on; the cut epoch does not fall, and once set rises only in
+/// a commit at Cut from a step before Relink; the lists only grow at their end.
 fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'static str> {
     if held.new_root != new.new_root || held.relink_parent != new.relink_parent {
         return Err("dissolve-journal-entry-identity-changed");
@@ -792,15 +799,18 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-cut-epoch-fell");
     }
-    // A re-cut returns to the cut step only before the copy is named.
-    if new.step >= DissolveStep::Relink
+    if held.step >= DissolveStep::Relink && new.step < held.step {
+        return Err("dissolve-journal-step-back-after-relink");
+    }
+    // A re-cut returns to the cut step, and only before the copy is named.
+    if (new.step != DissolveStep::Cut || held.step >= DissolveStep::Relink)
         && held
             .scopes
             .iter()
             .zip(&new.scopes)
             .any(|(was, now)| was.cut_time != 0 && now.cut_epoch > was.cut_epoch)
     {
-        return Err("dissolve-journal-cut-epoch-raised-after-relink");
+        return Err("dissolve-journal-cut-epoch-raised-off-cut");
     }
     if (held.copy_started && !new.copy_started)
         || held.scopes.iter().zip(&new.scopes).any(|(was, now)| {
@@ -1263,6 +1273,11 @@ mod tests {
             header.map_pages = 1;
             header.rows = 2;
         }
+        if step > DissolveStep::Cut {
+            for scope in &mut header.scopes {
+                scope.cut_time = 1_000;
+            }
+        }
         if step >= DissolveStep::Relink {
             for scope in &mut header.scopes {
                 scope.manifest = Some(manifest());
@@ -1646,7 +1661,7 @@ mod tests {
                 (shortened, "dissolve-journal-sticky-mark-cleared"),
                 (uncopied, "dissolve-journal-sticky-mark-cleared"),
                 (unlanded, "dissolve-journal-sticky-mark-cleared"),
-                (raised, "dissolve-journal-cut-epoch-raised-after-relink"),
+                (raised, "dissolve-journal-cut-epoch-raised-off-cut"),
                 (dropped, "dissolve-journal-scopes-not-append-only"),
                 (unbound, "dissolve-journal-prior-bindings-not-append-only"),
             ] {
@@ -1656,6 +1671,7 @@ mod tests {
             let mut grown = held.clone();
             grown.scopes.push(DissolvedScope {
                 manifest: Some(manifest()),
+                cut_time: 1_000,
                 ..DissolvedScope::uncut(NodeId([0x53; 16]))
             });
             journal.commit(&hold, Some(&held), &grown).await.unwrap();
