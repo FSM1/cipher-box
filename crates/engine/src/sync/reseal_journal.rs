@@ -3,9 +3,7 @@
 //!
 //! Each value is a common envelope: a format byte, a caller byte, the source
 //! root id, and a payload that the caller owns. This module reads and checks
-//! the envelope only. It keeps every entry as it finds it: an entry of any
-//! caller, and a value that does not open, blocks an overlap with its source
-//! root, and no write replaces a value that does not open.
+//! the envelope only, and keeps every entry as it finds it.
 
 use std::collections::BTreeSet;
 
@@ -71,16 +69,18 @@ impl ResealEnvelopeError {
 
 /// The check that encode and decode share (AGENTS.md rule 8).
 fn check_reseal_envelope(
-    envelope: &ResealEnvelope,
+    caller: u8,
+    source_root: NodeId,
+    payload: &[u8],
     key_root: NodeId,
 ) -> Result<(), ResealEnvelopeError> {
-    if envelope.caller == 0 {
+    if caller == 0 {
         return Err(ResealEnvelopeError::NoCaller);
     }
-    if envelope.source_root != key_root {
+    if source_root != key_root {
         return Err(ResealEnvelopeError::RootMismatch);
     }
-    if envelope.payload.len() > MAX_RESEAL_PAYLOAD {
+    if payload.len() > MAX_RESEAL_PAYLOAD {
         return Err(ResealEnvelopeError::PayloadTooLarge);
     }
     Ok(())
@@ -92,7 +92,12 @@ pub fn encode_reseal_envelope(
     envelope: &ResealEnvelope,
     key_root: NodeId,
 ) -> Result<Zeroizing<Vec<u8>>, ResealEnvelopeError> {
-    check_reseal_envelope(envelope, key_root)?;
+    check_reseal_envelope(
+        envelope.caller,
+        envelope.source_root,
+        &envelope.payload,
+        key_root,
+    )?;
     let mut body = Zeroizing::new(Vec::with_capacity(
         ENVELOPE_HEAD_LEN + envelope.payload.len(),
     ));
@@ -117,13 +122,12 @@ pub fn decode_reseal_envelope(
     let (root, payload) = rest
         .split_first_chunk::<16>()
         .ok_or(ResealEnvelopeError::Truncated)?;
-    let envelope = ResealEnvelope {
+    check_reseal_envelope(caller, NodeId(*root), payload, key_root)?;
+    Ok(ResealEnvelope {
         caller,
         source_root: NodeId(*root),
         payload: payload.to_vec(),
-    };
-    check_reseal_envelope(&envelope, key_root)?;
-    Ok(envelope)
+    })
 }
 
 /// What one journal key holds.
@@ -372,57 +376,33 @@ mod tests {
         });
     }
 
-    /// A value that does not open is never absent: it blocks its root, and a
+    /// A value that does not open, and a sealed value whose envelope this
+    /// build does not read, are never absent: each blocks its root, and a
     /// write leaves its bytes as they are.
     #[test]
-    fn a_value_that_does_not_open_blocks_and_is_never_replaced() {
+    fn an_unreadable_value_blocks_and_is_never_replaced() {
         run(async |journal| {
-            let key = journal.key(ROOT, b"");
-            journal
-                .store
-                .put_staged_bytes(&key, b"not a sealed value")
-                .await
-                .unwrap();
-
-            assert_eq!(
-                journal.read(ROOT, b"").await.unwrap(),
-                JournalSlot::Unreadable
-            );
-            assert!(journal.journaled().await.unwrap().blocks(ROOT));
-            assert!(matches!(
-                journal.put(b"", &envelope(1)).await,
-                Err(JournalError::Unreadable)
-            ));
-            assert_eq!(
-                journal.store.staged_bytes(&key).await.unwrap().as_deref(),
-                Some(&b"not a sealed value"[..])
-            );
-        });
-    }
-
-    /// A sealed value whose envelope this build does not read blocks the same
-    /// way.
-    #[test]
-    fn a_sealed_value_of_another_format_blocks_and_is_never_replaced() {
-        run(async |journal| {
-            let mut body = encoded(1);
-            body[0] = 2;
-            let blob = journal
+            let mut other_format = encoded(1);
+            other_format[0] = 2;
+            let sealed = journal
                 .seal
-                .seal(OwnerLocalKind::SubtreeReseal, &body)
+                .seal(OwnerLocalKind::SubtreeReseal, &other_format)
                 .unwrap();
-            let key = journal.key(ROOT, b"");
-            journal.store.put_staged_bytes(&key, &blob).await.unwrap();
+            for blob in [b"not a sealed value".to_vec(), sealed] {
+                let key = journal.key(ROOT, b"");
+                journal.store.put_staged_bytes(&key, &blob).await.unwrap();
 
-            assert_eq!(
-                journal.read(ROOT, b"").await.unwrap(),
-                JournalSlot::Unreadable
-            );
-            assert!(matches!(
-                journal.put(b"", &envelope(1)).await,
-                Err(JournalError::Unreadable)
-            ));
-            assert_eq!(journal.store.staged_bytes(&key).await.unwrap(), Some(blob));
+                assert_eq!(
+                    journal.read(ROOT, b"").await.unwrap(),
+                    JournalSlot::Unreadable
+                );
+                assert!(journal.journaled().await.unwrap().blocks(ROOT));
+                assert!(matches!(
+                    journal.put(b"", &envelope(1)).await,
+                    Err(JournalError::Unreadable)
+                ));
+                assert_eq!(journal.store.staged_bytes(&key).await.unwrap(), Some(blob));
+            }
         });
     }
 

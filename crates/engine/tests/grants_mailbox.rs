@@ -43,9 +43,7 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
-use cipherbox_engine::testkit::{
-    FakeDevice, FakeWorld, SeededEntropy, block_on, bookmark_marks, mark_bookmark,
-};
+use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on, bookmark_marks};
 
 /// The recipient's own vault root scope — the anchor a received share may never
 /// name. The fixture's shared scope is `[0x55; 16]`, so no accept here collides.
@@ -1058,7 +1056,7 @@ fn a_repost_adds_the_scope_pointer_name_to_a_bookmark_with_none() {
     accept(&first, &mut received).expect("the first post accepts");
     let key = (fx.owner_identity_pub.to_sec1(), fx.scope_id);
     assert_eq!(received.find(&key).unwrap().scope_pointer_name, None);
-    mark_bookmark(&mut received, &key, (Some(7), Some(5)));
+    received.mark_for_test(&key, (Some(7), Some(5)));
 
     let pointer_name =
         IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key());
@@ -1370,7 +1368,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         "the first accept persisted durably"
     );
     let key = received.iter().next().unwrap().key();
-    mark_bookmark(&mut received, &key, (Some(7), Some(5)));
+    received.mark_for_test(&key, (Some(7), Some(5)));
 
     // Re-accept the SAME scope with drifted authority. A fresh mailbox item (a
     // distinct idempotency key) redelivers the pointer.
@@ -1475,7 +1473,7 @@ fn an_added_bookmark_keeps_the_marks_of_the_bookmarks_held() {
     let mut received = ReceivedSharesList::new();
     accept(&other, &mut received);
     let held = (other.owner_identity_pub.to_sec1(), other.scope_id);
-    mark_bookmark(&mut received, &held, (Some(7), Some(5)));
+    received.mark_for_test(&held, (Some(7), Some(5)));
 
     assert!(accept(&fx, &mut received).newly_added);
 
