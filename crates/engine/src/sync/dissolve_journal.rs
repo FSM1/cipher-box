@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 
 use core::cell::RefCell;
+use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
 use crate::seams::{SeamError, SeamResult, StagingStore};
@@ -979,7 +980,11 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
 
     /// The payload of `part` of the entry at `root`: `None` when absent,
     /// `Some(Err(()))` when it does not read as a dissolve value.
-    async fn payload(&self, root: NodeId, part: &[u8]) -> SeamResult<Option<Result<Vec<u8>, ()>>> {
+    async fn payload(
+        &self,
+        root: NodeId,
+        part: &[u8],
+    ) -> SeamResult<Option<Result<Zeroizing<Vec<u8>>, ()>>> {
         Ok(match self.journal.read(root, part).await? {
             JournalSlot::Absent => None,
             JournalSlot::Kept(envelope) if envelope.caller == DISSOLVE_CALLER => {
@@ -1024,7 +1029,7 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
                 &ResealEnvelope {
                     caller: DISSOLVE_CALLER,
                     source_root: root,
-                    payload,
+                    payload: payload.into(),
                 },
             )
             .await
@@ -1871,7 +1876,7 @@ mod tests {
                     &ResealEnvelope {
                         caller: 2,
                         source_root: ROOT,
-                        payload: b"rows".to_vec(),
+                        payload: b"rows".to_vec().into(),
                     },
                 )
                 .await
