@@ -237,8 +237,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                         name.as_str(),
                         &AcceptError::Gate(GateError::Rejected(rejection)),
                     ),
-                    // Withheld (ADR 0071 D1) or a seam fault: the item waits
-                    // for the next pass.
+                    // The item waits for the next pass.
                     LeafRefusal::Withheld | LeafRefusal::Seam(_) => {}
                 },
                 Err(e) => report(events, name.as_str(), &e),

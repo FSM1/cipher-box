@@ -56,8 +56,8 @@ pub(crate) fn sequence_refusal(
     }
 }
 
-/// One leaf read: the fan-out of a read that is not a scope root read, and the
-/// below-floor rule over the check the route runs on its pick. Each route keeps
+/// One leaf read: the fan-out of one name's record, and the below-floor rule
+/// over the check the route runs on its pick. Each route keeps
 /// its own check and the order of it.
 pub(crate) struct LeafRead {
     pub(crate) pick: VerifiedRecord,

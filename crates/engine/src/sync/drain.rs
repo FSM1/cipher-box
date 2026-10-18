@@ -14991,15 +14991,21 @@ mod tests {
 
     /// A scope root below its sequence floor in a delete's subtree is a
     /// rollback when every endpoint answers, and holds the delete while an
-    /// endpoint fails (ADR 0071 D1, D4).
+    /// endpoint fails (ADR 0071 D1, D4). At its floor it refuses the delete as
+    /// a scope root, even while an endpoint fails.
     #[test]
     fn a_scope_root_below_its_floor_in_a_delete_subtree_is_refused_only_when_every_endpoint_answers()
      {
         const CHILD: NodeId = NodeId([0x75; 16]);
         let endpoints = vec![EndpointId::new("a"), EndpointId::new("b")];
-        for (failed, expected) in [
-            (false, Halt::RecordRefused),
-            (true, Halt::DeletePlaneUnavailable),
+        for (failed, floor, expected) in [
+            (false, 5, Halt::RecordRefused),
+            (true, 5, Halt::DeletePlaneUnavailable),
+            (
+                true,
+                1,
+                Halt::Permanent(DeadLetterReason::TargetIsScopeRoot),
+            ),
         ] {
             let mut harness = drain_harness(Some(harness_root_envelope()));
             let child = owner_root_fixture(OwnerRootSpec {
@@ -15048,7 +15054,7 @@ mod tests {
                 scope
                     .source
                     .floors(&harness.seams.floors)
-                    .raise_sequence_floor(name.as_str().as_bytes(), 5),
+                    .raise_sequence_floor(name.as_str().as_bytes(), floor),
             )
             .expect("the floor is raised");
 
@@ -15060,7 +15066,11 @@ mod tests {
                 HARNESS_ROOT,
                 &harness_folder_ref(CHILD),
             ));
-            assert_eq!(proved.err(), Some(expected), "endpoint failed {failed}");
+            assert_eq!(
+                proved.err(),
+                Some(expected),
+                "endpoint failed {failed}, floor {floor}"
+            );
         }
     }
 
