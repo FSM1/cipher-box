@@ -20,6 +20,7 @@ pub mod boot;
 pub(crate) mod cancel;
 pub(crate) mod crossing;
 pub mod dead_letter_name;
+pub mod dissolve_journal;
 pub(crate) mod doomed;
 pub(crate) mod drain;
 pub(crate) mod kept_judge;
