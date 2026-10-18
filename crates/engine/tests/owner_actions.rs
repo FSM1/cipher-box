@@ -7198,6 +7198,7 @@ fn create_published_folders(fx: &mut GrantScenario, parent: NodeId, count: usize
         .unwrap()
         .children(parent)
         .into_iter()
+        .filter(|child| child.kind == NodeKind::Folder)
         .map(|child| child.id)
         .collect();
     assert_eq!(children.len(), count);
@@ -7889,6 +7890,128 @@ fn a_hard_delete_walk_read_that_the_gate_refuses_starts_the_proof_again() {
         reads_of(&fx, &[outer]) > before,
         "a new proof reads the target again"
     );
+}
+
+/// A hard delete scenario as [`large_delete_scenario`] at retention `0`, with
+/// a confirmed file that the first of the two folders names before its own
+/// folders, so the walk reads the file on its last tick. Also the file.
+fn large_hard_delete_with_a_file() -> (GrantScenario, NodeId, Vec<NodeId>, NodeId) {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    let folders = create_published_folders(&mut fx, inner, 2);
+    write_version(
+        &mut fx,
+        WriteTarget::NewFile {
+            parent: folders[0],
+            name: "file".into(),
+        },
+        &[4u8; 64],
+    );
+    let file = block_on(fx.engine.view())
+        .unwrap()
+        .children(folders[0])
+        .into_iter()
+        .find(|child| child.name == "file")
+        .expect("the file is listed")
+        .id;
+    let mut subtree = vec![outer, inner];
+    subtree.extend(folders.iter().copied());
+    for folder in folders {
+        subtree.extend(create_published_folders(&mut fx, folder, 70));
+    }
+    serve_http(&fx.owner_device, &fx.blocks, 4000);
+    focus_each(&mut fx, &[subtree[2]]);
+    assert_eq!(viewed(&fx, subtree[2], file), (NodeKind::File, Some(1)));
+    (fx, outer, subtree, file)
+}
+
+/// The first sweep skips a confirmed file. A peer grants the file, the index
+/// names it, and the walk then reads it with the ref labelled `ref_kind`. The
+/// delete is refused as a scope root, and no abuse is reported.
+fn assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(ref_kind: CoreNodeKind) {
+    let (mut fx, outer, subtree, file) = large_hard_delete_with_a_file();
+    let holder = subtree[2];
+    if ref_kind == CoreNodeKind::Folder {
+        label_child(&fx, holder, file, CoreNodeKind::Folder);
+    }
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    let file_before = reads_of(&fx, &[file]);
+    let (op_id, _) = hard_delete_two_ticks(&mut fx, outer, &subtree);
+    assert_eq!(
+        reads_of(&fx, &[file]),
+        file_before,
+        "the proof skips the file, and the walk did not reach it"
+    );
+    navigate_and_settle(&fx, &mut engine, &mut tasks, holder);
+    peer_grants_read(&mut engine, file);
+    events_so_far(&mut fx._events);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
+}
+
+#[test]
+fn a_grant_on_a_skipped_file_refuses_the_hard_delete() {
+    assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(CoreNodeKind::File);
+}
+
+#[test]
+fn a_grant_on_a_skipped_file_with_a_folder_ref_refuses_the_hard_delete() {
+    assert_a_grant_on_a_skipped_file_refuses_the_hard_delete(CoreNodeKind::Folder);
+}
+
+/// A version projected before a folder's grant makes the base call the new
+/// root a file, and the index omits the root. Both sweeps skip it, so the
+/// walk read is the only read of the grant. The hard delete is refused as a
+/// scope root, and no abuse is reported.
+#[test]
+fn an_unindexed_grant_on_a_node_the_base_calls_a_file_refuses_the_hard_delete() {
+    let (mut fx, outer) = GrantScenario::nested();
+    set_retention(&mut fx, 0);
+    let inner = fx.folder;
+    let folder_record = published_value(&fx.world, &write_name(inner));
+    let versions = a_published_version_list(&mut fx);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    plant_file_body(&fx, inner, versions);
+    focus_each(&mut fx, &[outer, inner]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+    label_child(&fx, outer, inner, CoreNodeKind::Folder);
+    publish_value_at(&fx.world, inner, &folder_record);
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    navigate_and_settle(&fx, &mut engine, &mut tasks, outer);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    focus_each(&mut fx, &[outer]);
+    assert_eq!(viewed(&fx, outer, inner), (NodeKind::File, Some(1)));
+
+    let op_id = block_on(fx.engine.command(Command::Delete { node: outer }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let unindexed = published_value(&fx.world, &write_name(ROOT));
+    peer_grants_read(&mut engine, inner);
+    publish_value_at(&fx.world, ROOT, &unindexed);
+    label_child(&fx, outer, inner, CoreNodeKind::File);
+    events_so_far(&mut fx._events);
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(dead_lettered_as_scope_root(&events, op_id, outer));
+    assert_eq!(abuse_events_in(&events), 0, "a grant is not abuse");
+    assert!(retired(&fx.owner_device).is_empty(), "no node retires");
 }
 
 /// A writer of the scope publishes a scope root's record at the name of a

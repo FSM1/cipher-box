@@ -2618,9 +2618,19 @@ enum DoomedStep {
     Paused,
     /// The walk passed its node bound.
     Stopped(Overflow),
-    /// A folder carries a grant section, which only a fresh delete proof
-    /// can authenticate.
-    Granted,
+}
+
+/// The bound of a delete's doomed walk, and what its gate read of a grant
+/// needs ([`Drain::prove_node_plane`]).
+#[derive(Clone, Copy)]
+struct WalkBudget<'b, 'e> {
+    /// The reads left to the tick.
+    reads: &'b Cell<usize>,
+    /// The nodes the walk may hold.
+    bound: usize,
+    scope: &'b DrainScope<'e>,
+    pass: &'b Pass,
+    target: NodeId,
 }
 
 /// What a record read is anchored to: the scope epoch the reader is at, and the
@@ -5510,8 +5520,13 @@ where
             if let (Swept::Paused, Some(walk)) = (&swept, walk)
                 && proof.sweep.pending.is_empty()
             {
-                let budget = (!proof.overflowed)
-                    .then_some((&self.delete_proof_reads, self.delete_proof_nodes));
+                let budget = (!proof.overflowed).then_some(WalkBudget {
+                    reads: &self.delete_proof_reads,
+                    bound: self.delete_proof_nodes,
+                    scope,
+                    pass,
+                    target: bin_target,
+                });
                 let stepped = self
                     .step_doomed(plane, pass.anchor_for(plane)?, walk, Boundary::None, budget)
                     .await;
@@ -5524,7 +5539,6 @@ where
                         return hold(proof);
                     }
                     Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
-                    Ok(DoomedStep::Granted) => proof = new_proof(false),
                     // Only a seam fault may answer on a later tick. A refused
                     // read drops the proof, so a new one reads the subtree
                     // from the target.
@@ -6153,7 +6167,7 @@ where
         anchor: Anchor<'_>,
         walk: &mut DoomedWalk,
         boundary: Boundary<'_>,
-        budget: Option<(&Cell<usize>, usize)>,
+        budget: Option<WalkBudget<'_, '_>>,
     ) -> Result<DoomedStep, Halt> {
         while let Some(&(node, kind)) = walk.pending.last() {
             // Child refs are wire data, so a diamond or a cycle among them is
@@ -6163,15 +6177,46 @@ where
                 walk.pending.pop();
                 continue;
             }
-            if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
+            if budget.is_some_and(|budget| !take_tick_read(budget.reads)) {
                 return Ok(DoomedStep::Paused);
             }
-            let mut children = Vec::new();
-            let write_name = plane.end.write_name(&node.0);
-            let (name, versions) = match self
+            let mut read = self
                 .load_child_node_unreported(plane, anchor, node, ResolveMode::CacheFirst)
-                .await
+                .await;
+            // The child gate refuses any grant section. Only the scope root
+            // gate tells a grant from abuse, so the walk reads the node again
+            // through it.
+            if let Some(budget) = budget
+                && let Err(ChildFault::Refused(rejection)) = &read
+                && rejection.stage == GateStage::GrantSection
             {
+                if !take_tick_read(budget.reads) {
+                    return Ok(DoomedStep::Paused);
+                }
+                let child = ChildRef {
+                    id: node.0,
+                    name: String::new(),
+                    ipns_name: plane.end.write_name(&node.0).as_str().as_bytes().to_vec(),
+                    kind,
+                    link_counter: 0,
+                    unknown: PreservedFields::new(),
+                };
+                match self
+                    .prove_node_plane(budget.scope, budget.pass, plane, budget.target, &child)
+                    .await
+                {
+                    // A record with no grant now: read it again.
+                    Ok(_) => continue,
+                    Err(Halt::DeletePlaneUnavailable) => return Err(Halt::Unclassified),
+                    Err(halt @ Halt::Permanent(DeadLetterReason::TargetIsScopeRoot)) => {
+                        return Err(halt);
+                    }
+                    // The gate read reported the refusal.
+                    Err(halt) => read = Err(ChildFault::Halt(halt)),
+                }
+            }
+            let mut children = Vec::new();
+            let (name, versions) = match read {
                 Ok(loaded) => {
                     let versions = match loaded.body {
                         ReadBody::Folder { children: refs, .. } => {
@@ -6194,26 +6239,17 @@ where
                     };
                     (loaded.name, versions)
                 }
-                // A grant can land between two ticks of a bounded walk. The
-                // fresh proof gates a node that is not a confirmed file, so
-                // that proof, not this read, decides the grant.
-                Err(ChildFault::Refused(rejection))
-                    if budget.is_some()
-                        && rejection.stage == GateStage::GrantSection
-                        && !confirmed_file(self.cells.base, node) =>
-                {
-                    return Ok(DoomedStep::Granted);
-                }
                 // An unreadable node's sealed body cannot confirm its ref
                 // kind, so only a confirmed file licenses the best-effort arm.
                 Err(fault)
                     if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) =>
                 {
-                    return Err(self.report_fault(&write_name, fault));
+                    return Err(self.report_fault(&plane.end.write_name(&node.0), fault));
                 }
                 Err(fault) => {
-                    self.report_fault(&write_name, fault);
-                    (write_name, Vec::new())
+                    let name = plane.end.write_name(&node.0);
+                    self.report_fault(&name, fault);
+                    (name, Vec::new())
                 }
             };
             walk.pending.pop();
@@ -6224,7 +6260,7 @@ where
                 name,
                 versions,
             });
-            if budget.is_some_and(|(_, bound)| walk.seen.len() + walk.pending.len() > bound) {
+            if budget.is_some_and(|budget| walk.seen.len() + walk.pending.len() > budget.bound) {
                 return Ok(DoomedStep::Stopped(Overflow));
             }
         }
