@@ -24,6 +24,7 @@ use crate::bin_index::BinIndexKeys;
 use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, OnRunning, PointerIndex, TickSites, placed, scope_pointer_index,
 };
+use crate::facade::link_sweep::ReportedRefusal;
 use crate::facade::{
     EngineError, Event, ForkSightings, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
 };
@@ -435,7 +436,8 @@ where
         let recovered_root = resolved
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
-        let (descendants, walk_complete) = self.walk_scopes(state, &pass, recovered_root).await;
+        let (descendants, walk_complete, reported) =
+            self.walk_scopes(state, &pass, recovered_root).await;
         lap();
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
         lap();
@@ -450,7 +452,7 @@ where
         lap();
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
         lap();
-        self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
+        self.convert_claims(state, &pass, boundaries.as_ref(), pulled, reported.as_ref())
             .await;
         lap();
         self.repost_claims(state, &pass).await;
@@ -740,14 +742,15 @@ where
         (resolved, read_seed)
     }
 
-    /// The scope walk below the vault root, the boundaries it proved, and
-    /// whether it proved the whole set.
+    /// The scope walk below the vault root, the boundaries it proved, whether
+    /// it proved the whole set, and the scope root and record bytes of the
+    /// refusal it sent as abuse.
     async fn walk_scopes(
         &self,
         state: &SessionState,
         pass: &Pass,
         recovered_root: bool,
-    ) -> (Vec<DescendantScopeRoot>, bool) {
+    ) -> (Vec<DescendantScopeRoot>, bool, Option<ReportedRefusal>) {
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let mut held_root = state
@@ -767,6 +770,7 @@ where
         let walk_keys = self.secrets.sweep_keys.borrow().clone();
         let mut descendants = Vec::new();
         let mut complete = false;
+        let mut reported = None;
         let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
             owner_seed_cache: Some(owner_seed_cache),
             transport: &self.seams.transport,
@@ -800,7 +804,14 @@ where
                 .as_ref()
                 .map(|walked| walked.refused.clone())
                 .unwrap_or_default();
-            if let Ok(walked) = walked {
+            if let Ok(mut walked) = walked {
+                // The walk sends one event, for the refusal `failure` names.
+                if let Some(WalkFailure::Rejected { scope_id }) = failure {
+                    reported = walked
+                        .refused_records
+                        .remove(&NodeId(scope_id))
+                        .map(|record| (NodeId(scope_id), record));
+                }
                 note_walked_sequences(
                     &state.root_sequences,
                     NodeId(self.root_id),
@@ -850,7 +861,7 @@ where
                 Some(WalkFailure::Unavailable) => {}
             }
         }
-        (descendants, complete)
+        (descendants, complete, reported)
     }
 
     /// The focus-window legs, one per scope, and the scope sets they grouped by.
@@ -1550,6 +1561,7 @@ where
         pass: &Pass,
         boundaries: Option<&Boundaries<'_>>,
         pulled: MailboxPull,
+        reported: Option<&ReportedRefusal>,
     ) {
         let MailboxPull {
             owner_keys,
@@ -1622,12 +1634,17 @@ where
             });
         }
         // After the conversion above, so a claim acked this
-        // pass converts before its link can be cut.
-        if pace_due(
-            pass.now,
-            self.link_swept.get(),
-            seams.profile.link_sweep_cadence,
-        ) && let Some(swept) = conversion.sweep_links(&root_name, &pointers).await
+        // pass converts before its link can be cut. The sweep reads the vault
+        // root first, so it runs only on a pass that reconciled the root.
+        if pass.root_reconciled
+            && pace_due(
+                pass.now,
+                self.link_swept.get(),
+                seams.profile.link_sweep_cadence,
+            )
+            && let Some(swept) = conversion
+                .sweep_links(&root_name, &pointers, reported)
+                .await
         {
             // A capped sweep continues on the next tick.
             if !swept.more {

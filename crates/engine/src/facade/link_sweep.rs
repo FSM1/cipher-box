@@ -22,6 +22,9 @@ const SWEEP_CUT_MOVES_THE_WRITE_PLANE: &str = "an expired-link cut named a write
 /// count, so failures cannot hide the scope roots behind them.
 pub(super) const MAX_SWEEP_CUTS: usize = 8;
 
+/// The scope root and record bytes of a refusal that a pass sent as abuse.
+pub(crate) type ReportedRefusal = (NodeId, Vec<u8>);
+
 /// What one sweep did.
 #[derive(Debug, Default)]
 pub(crate) struct LinkSweepReport {
@@ -94,11 +97,14 @@ where
 {
     /// Walk the vault from `root_name` and cut expired links until
     /// [`MAX_SWEEP_CUTS`] cuts land. `None` while a pass or a cut holds
-    /// [`Running`].
+    /// [`Running`]. `reported` is the refusal that this pass already sent as
+    /// abuse: a refusal of the same record at the same scope root goes into
+    /// no report again.
     pub(crate) async fn sweep_links(
         &self,
         root_name: &IpnsName,
         pointers: &PointerIndex,
+        reported: Option<&ReportedRefusal>,
     ) -> Option<LinkSweepReport> {
         let mut report = LinkSweepReport::default();
         let mut held = match self.hold_record(OnRunning::Refuse).await {
@@ -115,7 +121,15 @@ where
             .saturating_sub(self.profile.link_sweep_grace);
         let pending = held.pending_links();
         let due = self
-            .walk(root_name, now, &pending, &mut held, pointers, &mut report)
+            .walk(
+                root_name,
+                now,
+                &pending,
+                &mut held,
+                pointers,
+                reported,
+                &mut report,
+            )
             .await;
         report.more = cut_deepest_first(&due, async |target| {
             match self.cut_expired(target, now, &pending).await {
@@ -163,6 +177,7 @@ where
     /// under the wrong parent fails there, and the parent that really holds it
     /// still reaches it. A scope root that no parent resolves is left, with its
     /// subtree, for the next sweep.
+    #[allow(clippy::too_many_arguments)]
     async fn walk(
         &self,
         root_name: &IpnsName,
@@ -170,6 +185,7 @@ where
         pending: &[[u8; IDENTITY_PUBLIC_LEN]],
         held: &mut HeldRecord<'_>,
         pointers: &PointerIndex,
+        reported: Option<&ReportedRefusal>,
         report: &mut LinkSweepReport,
     ) -> Vec<OwnerScope> {
         let mut visited = BTreeSet::new();
@@ -192,12 +208,23 @@ where
                 if visited.contains(&id) || !tried.insert((parent, id)) {
                     continue;
                 }
-                let current = match self
-                    .net(&target, PointerConsultArm::Refused)
-                    .resolve_anchored(&target.scope)
-                    .await
-                {
+                let net = self.net(&target, PointerConsultArm::Refused);
+                let current = match net.resolve_anchored(&target.scope).await {
                     Ok(current) => current,
+                    Err(ResolveFailure::Rejected) => {
+                        let refused = net.refused.take();
+                        if !reported.is_some_and(|(node, record)| {
+                            *node == NodeId(id) && refused.as_ref() == Some(record)
+                        }) {
+                            report.fail(EngineError::TrustViolation {
+                                message: format!(
+                                    "link sweep: scope root [{}] rejected by the adoption gate",
+                                    hex_lower(&id)
+                                ),
+                            });
+                        }
+                        continue;
+                    }
                     Err(e) => {
                         report.fail(EngineError::from_resolve_failure(e, "link-sweep-scope"));
                         continue;

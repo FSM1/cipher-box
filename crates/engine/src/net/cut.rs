@@ -25,8 +25,8 @@ use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, RootFallback, RootReports, RootWait, RotationAncestry,
-    SweptScopeState, WaveSubtree, WriteWaveNet,
+    OwnerRotationNet, PointerConsultArm, RefusedRoot, RootFallback, RootReports, RootWait,
+    RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -201,6 +201,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            refused: RefusedRoot::default(),
             root_fallback: Some(
                 RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
                     .noting_root_puts(&self.root_reads.put_sent),
