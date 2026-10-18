@@ -1427,7 +1427,7 @@ impl From<PointerPublishFailure> for RotationPublishError {
 /// Hold a published scope pointer for sub-EOL renewal. Its EOL is
 /// client-signed and only the owner derives the name, so a pointer nothing
 /// renews lapses and a read-only survivor never finds the moved root again.
-fn hold_scope_pointer(
+pub(super) fn hold_scope_pointer(
     held: &RefCell<HeldRecords>,
     scope_id: [u8; 16],
     name: &IpnsName,
@@ -18050,6 +18050,7 @@ mod tests {
                 deferred: false,
                 record_bytes: b"a record read before the flip".to_vec(),
                 value: b"the block read before the flip".to_vec(),
+                endpoint_failed: false,
             },
             &harness.held,
         );

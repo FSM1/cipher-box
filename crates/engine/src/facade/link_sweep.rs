@@ -309,7 +309,7 @@ where
             )
             .await?;
         let rekeyed = report
-            .into_report()
+            .into_planes_report()
             .and_then(|report| report.read)
             .map(|read| {
                 read.rekeyed

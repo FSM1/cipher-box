@@ -252,6 +252,27 @@ pub async fn fanout_get_under<T: RecordTransport>(
     scan(transport, name).await.classify(rule)
 }
 
+/// What [`fanout_get_answered`] read at a name.
+pub(crate) struct AnsweredFetch {
+    /// [`fanout_get_classified`]'s answer.
+    pub(crate) record: FanoutRecord,
+    /// [`TiedFetch::endpoint_failed`].
+    pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_classified`], and whether an endpoint gave no answer.
+pub(crate) async fn fanout_get_answered<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> AnsweredFetch {
+    let scan = scan(transport, name).await;
+    let endpoint_failed = scan.endpoint_failed();
+    AnsweredFetch {
+        record: scan.classify(VacancyRule::Unanimous),
+        endpoint_failed,
+    }
+}
+
 /// The freshest verified record, and every other record another endpoint
 /// served at its sequence. The freshest pick takes the record that ranks
 /// above the others at a tie ([`ranks_above`]), so without the ties a

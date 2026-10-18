@@ -24,6 +24,9 @@ pub(crate) enum OwedCut {
     Ran(Box<CutRotationReport>),
     /// The cut set is durable, and a later step stands owed.
     SetLanded,
+    /// Every plane ran, and the clear of its entry failed, so the entry stays
+    /// for a re-drive.
+    Uncleared(Box<CutRotationReport>),
     /// A step stopped before any proof that the cut set is durable.
     Unproved,
 }
@@ -33,6 +36,15 @@ impl OwedCut {
     pub(crate) fn into_report(self) -> Option<CutRotationReport> {
         match self {
             Self::Ran(report) => Some(*report),
+            Self::SetLanded | Self::Uncleared(_) | Self::Unproved => None,
+        }
+    }
+
+    /// The report of a cut that ran through every plane, also when its entry
+    /// stays.
+    pub(crate) fn into_planes_report(self) -> Option<CutRotationReport> {
+        match self {
+            Self::Ran(report) | Self::Uncleared(report) => Some(*report),
             Self::SetLanded | Self::Unproved => None,
         }
     }
@@ -314,10 +326,10 @@ where
     /// answers what it proved of the cut set ([`OwedCut`]). `write_epoch` is the write epoch of the record the
     /// cut was authorized against.
     ///
-    /// A read-only cut clears its entry here. A cut that moves the write plane
-    /// leaves it for the caller, which clears it after the post-steps. The
-    /// caller holds the scope
-    /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
+    /// A read-only cut clears its entry here, and a clear that fails answers
+    /// [`OwedCut::Uncleared`]. A cut that moves the write plane leaves it for
+    /// the caller, which clears it after the post-steps. The caller holds the
+    /// scope ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
     /// across both.
     #[expect(clippy::too_many_arguments, reason = "one owed cut's full input set")]
     pub(super) async fn rotate_owed_cut(
@@ -434,8 +446,8 @@ where
             .await;
             return Ok(OwedCut::SetLanded);
         }
-        if write.is_none() {
-            let _ = self.owed().clear(node).await;
+        if write.is_none() && self.owed().clear(node).await.is_err() {
+            return Ok(OwedCut::Uncleared(Box::new(report)));
         }
         Ok(OwedCut::Ran(Box::new(report)))
     }
@@ -823,7 +835,7 @@ where
     /// none: a sync pass proves no material for a scope whose write cut
     /// stopped, because the write seed it holds does not derive the name the
     /// scope answers at.
-    async fn owed_scope(
+    pub(super) async fn owed_scope(
         &self,
         sites: &impl ConversionSites,
         node: NodeId,
@@ -1137,14 +1149,14 @@ where
 
 /// The scope an owed step acts on: the name the parent's index gives it, if
 /// any, and the root its pointer vouches for, gated.
-struct OwedScope {
-    indexed: Option<Vec<u8>>,
-    target: OwnerScope,
-    current: CascadeTarget,
+pub(super) struct OwedScope {
+    pub(super) indexed: Option<Vec<u8>>,
+    pub(super) target: OwnerScope,
+    pub(super) current: CascadeTarget,
     /// The owner-signed scope pointer names `target`.
     pointer_placed: bool,
     /// The read ran on the last copy of a root the gate refused (ADR 0068 D1).
-    fell_back: bool,
+    pub(super) fell_back: bool,
 }
 
 /// The stop a plane rotation failure reports, classed as the command's own

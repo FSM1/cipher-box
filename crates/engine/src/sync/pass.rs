@@ -1634,8 +1634,10 @@ where
             });
         }
         // After the conversion above, so a claim acked this
-        // pass converts before its link can be cut. The sweep reads the vault
-        // root first, so it runs only on a pass that reconciled the root.
+        // pass converts before its link can be cut.
+        conversion.redrive_dissolve_cuts(&sites, &pointers).await;
+        // The sweep reads the vault root first, so it runs only on a pass
+        // that reconciled the root.
         if pass.root_reconciled
             && pace_due(
                 pass.now,
