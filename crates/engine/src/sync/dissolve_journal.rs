@@ -767,10 +767,10 @@ pub fn decode_name_log_page(payload: &[u8], index: u32) -> Result<NameLogPage, D
 }
 
 /// The rules that compare a header with the one it replaces: the entry identity,
-/// the scope list, a set `cut_time` and a sticky mark stay; the scope list grows
-/// only at Cut; the step does not go back from Relink on; the cut epoch does not
-/// fall, and once set rises only in a commit at Cut from a step before Relink;
-/// the lists only grow at their end.
+/// the scope list, a set `cut_time` and a sticky mark stay; the step does not go
+/// back from Relink on; the cut epoch does not fall, and once set rises only in a
+/// commit at Cut from a step before Relink; the other lists only grow at their
+/// end.
 fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'static str> {
     if held.new_root != new.new_root || held.relink_parent != new.relink_parent {
         return Err("dissolve-journal-entry-identity-changed");
@@ -784,9 +784,9 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-scopes-not-append-only");
     }
-    // The scope list is built before the first commit, at Cut.
-    if new.scopes.len() > held.scopes.len() && new.step != DissolveStep::Cut {
-        return Err("dissolve-journal-scope-appended-past-cut");
+    // The scope list is built before the first commit.
+    if new.scopes.len() != held.scopes.len() {
+        return Err("dissolve-journal-scope-appended");
     }
     if held
         .scopes
@@ -807,8 +807,7 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     if held.step >= DissolveStep::Relink && new.step < held.step {
         return Err("dissolve-journal-step-back-after-relink");
     }
-    // A re-cut returns to the cut step, and only before the copy is named:
-    // the rule above keeps a step from Relink on off Cut.
+    // A re-cut returns to the cut step, and only before the copy is named.
     if new.step != DissolveStep::Cut
         && held
             .scopes
@@ -1619,7 +1618,8 @@ mod tests {
     }
 
     /// `cut_time` is set once, the sticky marks only grow, the cut epoch
-    /// rises only at Cut, and the lists only take additions at their end.
+    /// rises only at Cut, the scope list does not grow, and the other lists
+    /// only take additions at their end.
     #[test]
     fn a_commit_refuses_a_header_that_undoes_what_the_held_one_records() {
         run(async |journal, cell| {
@@ -1686,7 +1686,7 @@ mod tests {
                 .commit(&hold, Some(&held), &grown)
                 .await
                 .unwrap_err();
-            assert_eq!(refused.check(), "dissolve-journal-scope-appended-past-cut");
+            assert_eq!(refused.check(), "dissolve-journal-scope-appended");
             assert_eq!(journal.header(ROOT).await.unwrap(), HeaderSlot::Own(held));
         });
     }
@@ -1735,8 +1735,12 @@ mod tests {
             journal.commit(&hold, Some(&landed), &recut).await.unwrap();
             let mut grown = recut.clone();
             grown.scopes.push(DissolvedScope::uncut(NodeId([0x53; 16])));
-            journal.commit(&hold, Some(&recut), &grown).await.unwrap();
-            assert_eq!(journal.header(ROOT).await.unwrap(), HeaderSlot::Own(grown));
+            let refused = journal
+                .commit(&hold, Some(&recut), &grown)
+                .await
+                .unwrap_err();
+            assert_eq!(refused.check(), "dissolve-journal-scope-appended");
+            assert_eq!(journal.header(ROOT).await.unwrap(), HeaderSlot::Own(recut));
         });
     }
 
