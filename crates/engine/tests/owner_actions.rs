@@ -43,12 +43,12 @@ use cipherbox_engine::grants::conversion::{
     conversions_key, load_conversions, persist_conversions,
 };
 use cipherbox_engine::grants::{
-    AckedClaim, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, CommittedLink, Contact, ContactStore,
-    ContactStoreError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRow,
-    InviteClaim, InviteFragment, LinkHold, LinkTerms, MAX_ADMISSION_CAP, MAX_LINK_CONTACTS,
-    ReceivedShareStore, ResolutionClass, StagingContactStore, StagingGranteeNameCache,
-    StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
-    post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
+    AckedClaim, BookmarkKey, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, CommittedLink, Contact,
+    ContactStore, ContactStoreError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
+    EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms,
+    MAX_ADMISSION_CAP, MAX_LINK_CONTACTS, ReceivedShareStore, ResolutionClass, StagingContactStore,
+    StagingGranteeNameCache, StagingReceivedShareStore, import_contact, mint_grant_row,
+    mint_invite_grant, post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::net::StagingRetireLedger;
@@ -17191,6 +17191,54 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
     );
 }
 
+/// A join writes the bookmark list back with the values that a later release
+/// set on a bookmark the holder already held, and sets none on the new one.
+#[test]
+fn a_link_join_keeps_the_marks_of_the_bookmarks_held() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let planted = cipherbox_engine::testkit::plant_marked_bookmark(
+        &fx.recipient_device.staging_store,
+        &enc,
+        [0x6e; 16],
+        (Some(7), Some(5)),
+    );
+
+    assert_eq!(
+        block_on_while_ticking(
+            holder.command(Command::ClaimInviteLink {
+                fragment,
+                name: String::new(),
+            }),
+            &mut holder_tasks
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    poll_tasks_until_parked(&mut holder_tasks);
+
+    assert_eq!(
+        stored_marks(&fx, &planted),
+        Some((Some(7), Some(5))),
+        "the held bookmark keeps both values"
+    );
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 2, "the join added its bookmark");
+    let joined = shares
+        .iter()
+        .find(|share| share.scope == fx.folder)
+        .expect("the joined share");
+    assert_eq!(
+        stored_marks(
+            &fx,
+            &(owner_identity().verifying_key().to_sec1(), joined.scope.0)
+        ),
+        Some((None, None)),
+        "the join sets no value"
+    );
+}
+
 /// ADR 0024 D2, D4: a write conversion runs a real write wave that moves the
 /// scope root. A holder that still reads through the link follows the scope
 /// pointer to the moved root, and the converted claimant holds write there.
@@ -17296,6 +17344,19 @@ fn stored_link_hold(fx: &GrantScenario) -> Option<LinkHold> {
     .expect("the list loads");
     list.link_hold(&(owner_identity().verifying_key().to_sec1(), fx.folder.0))
         .cloned()
+}
+
+/// The `(ended, grantCut)` values of the bookmark under `key` in the
+/// recipient's durable list.
+fn stored_marks(fx: &GrantScenario, key: &BookmarkKey) -> Option<(Option<u64>, Option<u64>)> {
+    let entropy = RefCell::new(SeededEntropy::new(41));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    block_on(
+        StagingReceivedShareStore::new(&fx.recipient_device.staging_store, &enc, &entropy).load(),
+    )
+    .expect("the list loads")
+    .find(key)
+    .map(cipherbox_engine::testkit::bookmark_marks)
 }
 
 /// Whether the recipient's durable list holds a bookmark for the owner's

@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.14.0](https://github.com/FSM1/cipher-box/compare/v2.13.2...v2.14.0) (2026-10-18)
+
+
+### Features
+
+* **engine:** read the subtree re-seal journal, its dead-letter tag and the ended mark ([#2476](https://github.com/FSM1/cipher-box/issues/2476)) ([7d413e5](https://github.com/FSM1/cipher-box/commit/7d413e5631b4092a8fa74861603a185865270095))
+
+
+### Bug Fixes
+
+* **desktop:** end the FUSE-T server of a mount when the mount drops ([#2443](https://github.com/FSM1/cipher-box/issues/2443)) ([5f3c728](https://github.com/FSM1/cipher-box/commit/5f3c7285db10d68a4c1aa500772d52dfd138e9cc))
+* **desktop:** give each macOS FUSE-T mount a name of its own ([#2437](https://github.com/FSM1/cipher-box/issues/2437)) ([be84eef](https://github.com/FSM1/cipher-box/commit/be84eefa55d0f1c6f1d1b06c22591fc567b8cb1f))
+* **desktop:** show a trust warning on the tray line before a minor warning ([#2473](https://github.com/FSM1/cipher-box/issues/2473)) ([e7c233d](https://github.com/FSM1/cipher-box/commit/e7c233d6918586f0e3dfec3952f2b05fa44cf9e7))
+* **engine:** bound the reads of a subtree delete proof on each tick ([#2446](https://github.com/FSM1/cipher-box/issues/2446)) ([b743bca](https://github.com/FSM1/cipher-box/commit/b743bca861042d3dd94c984b7bc8a12677e6a9f1))
+* **engine:** continue a sweep past a scope root too large to re-seal ([#2442](https://github.com/FSM1/cipher-box/issues/2442)) ([b083ff7](https://github.com/FSM1/cipher-box/commit/b083ff7f6b4b7bf525c9f866b1247629447409a4))
+* **engine:** hold the sequence of an unacknowledged PUT as a second mark ([#2436](https://github.com/FSM1/cipher-box/issues/2436)) ([f44bc8d](https://github.com/FSM1/cipher-box/commit/f44bc8dc0c71907e0b0724c52e726443b7bcc28f))
+* **engine:** tell the owner when a capture strands a nested scope root ([#2441](https://github.com/FSM1/cipher-box/issues/2441)) ([0383da6](https://github.com/FSM1/cipher-box/commit/0383da699cb66ae605a73775bbfa6a4875e06e55))
+* **web:** disable sign-in during a resume and bound the key assignment ([#2439](https://github.com/FSM1/cipher-box/issues/2439)) ([567bc10](https://github.com/FSM1/cipher-box/commit/567bc106189da680cd4c1041c1697a549cdabac3))
+* **web:** show notices for a dropped node and for removed shares, share the token sweep delete ([#2440](https://github.com/FSM1/cipher-box/issues/2440)) ([88c76ba](https://github.com/FSM1/cipher-box/commit/88c76bab453fc10022b6fe9a2e7b3cd7d6289e2f))
+
 ## [2.13.2](https://github.com/FSM1/cipher-box/compare/v2.13.1...v2.13.2) (2026-10-15)
 
 
