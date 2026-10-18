@@ -219,8 +219,8 @@ fn dissolve_header_at(step: DissolveStep) -> DissolveHeader {
         ],
     );
     header.step = step;
+    header.copy_started = step >= DissolveStep::Seal;
     if (DissolveStep::Seal..=DissolveStep::Retire).contains(&step) {
-        header.copy_started = true;
         header.map_pages = 1;
         header.rows = 2;
     }
@@ -234,7 +234,6 @@ fn dissolve_header_at(step: DissolveStep) -> DissolveHeader {
                 retired: false,
             });
         }
-        header.copy_started = true;
         header.relink_sent = true;
         header.relink_names = vec![b"k51parent".to_vec()];
     }
@@ -242,8 +241,7 @@ fn dissolve_header_at(step: DissolveStep) -> DissolveHeader {
 }
 
 /// The dissolve journal decoder refuses each header that breaks an invariant
-/// of its step, so the encode refuses the same header (ADR 0077 D3). A header
-/// at the cut and at the hold holds no map.
+/// of its step, so the encode refuses the same header (ADR 0077 D3).
 #[test]
 fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
     let root = NodeId([0x51; 16]);
@@ -479,114 +477,6 @@ fn a_dissolve_page_the_decoder_refuses_is_refused_at_encode() {
     }
 }
 
-/// The journal writer refuses a header whose map is not one rooted tree, a
-/// changed `cut_time`, and a cleared relink mark, before it writes anything.
-#[test]
-fn the_dissolve_journal_writer_refuses_a_header_its_reader_refuses() {
-    let root = NodeId([0x51; 16]);
-    let store = InMemoryStagingStore::default();
-    let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
-    let secret = kdf::enc_subkey(&SECRET);
-    let cell = DissolveCell::default();
-    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
-    let hold = cell.hold(root).expect("one driver");
-    let mut cut = dissolve_header_at(DissolveStep::Cut);
-    cut.scopes[0].cut_time = 1_500;
-    block_on(journal.commit(&hold, None, &cut)).expect("the first header lands");
-
-    let mut retimed = cut.clone();
-    retimed.scopes[0].cut_time = 2_500;
-    assert_eq!(
-        block_on(journal.commit(&hold, Some(&cut), &retimed))
-            .expect_err("a set cut_time stays")
-            .check(),
-        "dissolve-journal-cut-time-set-once"
-    );
-
-    let seal = dissolve_header_at(DissolveStep::Seal);
-    block_on(journal.put_map_page(
-        &hold,
-        &MapPage {
-            generation: 0,
-            page: 0,
-            rows: vec![
-                MapRow {
-                    old: root,
-                    new: seal.new_root,
-                    parent: None,
-                    old_name: b"k51old".to_vec(),
-                },
-                MapRow {
-                    old: NodeId([0x53; 16]),
-                    new: root,
-                    parent: Some(0),
-                    old_name: b"k51old".to_vec(),
-                },
-            ],
-        },
-    ))
-    .expect("a page writes");
-    let seal = DissolveHeader {
-        scopes: cut.scopes.clone(),
-        ..seal
-    };
-    assert_eq!(
-        block_on(journal.commit(&hold, Some(&cut), &seal))
-            .expect_err("a new id that is also an old id")
-            .check(),
-        DissolveCodecError::MapShape.check()
-    );
-
-    let valid_page = MapPage {
-        generation: 0,
-        page: 0,
-        rows: vec![
-            MapRow {
-                old: root,
-                new: seal.new_root,
-                parent: None,
-                old_name: b"k51old".to_vec(),
-            },
-            MapRow {
-                old: NodeId([0x53; 16]),
-                new: NodeId([0x63; 16]),
-                parent: Some(0),
-                old_name: b"k51old".to_vec(),
-            },
-        ],
-    };
-    block_on(journal.put_map_page(&hold, &valid_page)).expect("a page writes");
-    block_on(journal.commit(&hold, Some(&cut), &seal)).expect("a valid map lands");
-    let relink = DissolveHeader {
-        scopes: dissolve_header_at(DissolveStep::Relink)
-            .scopes
-            .into_iter()
-            .zip(&seal.scopes)
-            .map(|(with_manifest, held)| DissolvedScope {
-                manifest: with_manifest.manifest,
-                ..held.clone()
-            })
-            .collect(),
-        ..dissolve_header_at(DissolveStep::Relink)
-    };
-    block_on(journal.commit(&hold, Some(&seal), &relink)).expect("the relink header lands");
-    let unsent = DissolveHeader {
-        relink_sent: false,
-        ..relink.clone()
-    };
-    assert_eq!(
-        block_on(journal.commit(&hold, Some(&relink), &unsent))
-            .expect_err("a relink mark stays")
-            .check(),
-        "dissolve-journal-sticky-mark-cleared"
-    );
-    assert_eq!(
-        block_on(journal.header(root)).expect("the header reads"),
-        HeaderSlot::Own(relink),
-        "no refused header landed"
-    );
-}
-
 /// A map page of the entry at `0x51` from `(old, new, parent)` rows.
 fn dissolve_map(rows: &[(u8, u8, Option<u32>)]) -> MapPage {
     MapPage {
@@ -672,6 +562,7 @@ fn the_dissolve_journal_writer_refuses_each_map_its_reader_refuses() {
         (&[(0x51, 0x61, None), (0x53, 0x63, Some(1))][..], map_shape),
         (&[(0x51, 0x61, None), (0x51, 0x63, Some(0))][..], map_shape),
         (&[(0x51, 0x61, None), (0x53, 0x61, Some(0))][..], map_shape),
+        (&[(0x51, 0x61, None), (0x53, 0x51, Some(0))][..], map_shape),
         (
             &[(0x51, 0x61, None)][..],
             DissolveCodecError::RowCount.check(),
@@ -721,7 +612,15 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
     };
     for (new, check) in [
         (
+            edit(&|h| h.scopes[0].cut_time = 2_500),
+            "dissolve-journal-cut-time-set-once",
+        ),
+        (
             edit(&|h| h.copy_started = false),
+            "dissolve-journal-sticky-mark-cleared",
+        ),
+        (
+            edit(&|h| h.relink_sent = false),
             "dissolve-journal-sticky-mark-cleared",
         ),
         (
