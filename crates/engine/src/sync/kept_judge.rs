@@ -1441,14 +1441,12 @@ mod tests {
         );
     }
 
-    /// A scope root that the boundary walk did not prove.
-    const UNPROVED: NodeId = NodeId([4; 16]);
-
     /// ADR 0069 D5 and D6: a kept op whose root another pass answers for,
     /// after a cut raised the floor of that root to 3. Each case gives the
     /// reads of the op and the fate that follows from what they showed.
     #[test]
     fn a_kept_op_another_pass_answers_for_reads_and_takes_its_fate() {
+        const UNPROVED: NodeId = NodeId([4; 16]);
         struct Case {
             name: &'static str,
             op: Op,
@@ -1469,13 +1467,6 @@ mod tests {
             op(OpKind::Rename {
                 new_name: "b".into(),
             })
-        };
-        let restore = op(OpKind::RestoreVersion {
-            content_cid: vec![2; 4],
-        });
-        let restored = KeptResult::RestoreVersion {
-            before: vec![1; 4],
-            after: vec![2; 4],
         };
         let unchecked = |root, unlinked| ScanReads::Unchecked { root, unlinked };
         let none = ScanFacts::default();
@@ -1592,8 +1583,17 @@ mod tests {
             },
             Case {
                 name: "a version restore whose folder or file was seen unlinked dead-letters",
-                op: restore,
-                note: noted(SCOPE, Some(PARENT), Some(restored)),
+                op: op(OpKind::RestoreVersion {
+                    content_cid: vec![2; 4],
+                }),
+                note: noted(
+                    SCOPE,
+                    Some(PARENT),
+                    Some(KeptResult::RestoreVersion {
+                        before: vec![1; 4],
+                        after: vec![2; 4],
+                    }),
+                ),
                 base: &[],
                 want_reads: unchecked(SCOPE, Some([PARENT, TARGET])),
                 facts: unanchored,
@@ -1603,14 +1603,19 @@ mod tests {
         ];
         let mut wrong = Vec::new();
         for case in &cases {
-            let place = KeptPlace::Elsewhere;
-            let reads = scan_reads(&case.op, &case.note, place, &base_with(case.base), &[SCOPE]);
+            let reads = scan_reads(
+                &case.op,
+                &case.note,
+                KeptPlace::Elsewhere,
+                &base_with(case.base),
+                &[SCOPE],
+            );
             let place = match reads {
                 ScanReads::Unchecked { root, .. } => KeptPlace::Unchecked {
                     root,
                     live_write_epoch: 3,
                 },
-                _ => place,
+                _ => KeptPlace::Elsewhere,
             };
             let queue = [(OpId(1), case.op.clone())];
             let fate = KeptJudge::new(&queue, &[], at(case.after)).scan(
