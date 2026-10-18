@@ -9456,6 +9456,21 @@ mod tests {
         assert!(net.fell_back());
     }
 
+    /// A fallback for another scope does not cover this one, so the net steps
+    /// over a root that fills the reservation.
+    #[test]
+    fn a_fallback_for_another_scope_leaves_the_step_over_to_the_net() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(CHILD_SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the step-over");
+
+        assert_eq!(read.over_sequence, Some(2), "the step-over");
+        assert!(!net.fell_back());
+    }
+
     /// A last copy at an envelope version this build does not author passes
     /// the gate, but the rotation refuses it, so the trust event and the
     /// fallback mark say the rotation stops.
