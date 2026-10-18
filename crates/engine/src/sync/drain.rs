@@ -5475,12 +5475,20 @@ where
                     DeadLetterReason::TargetIsScopeRoot,
                 )));
             }
-            self.prove_node_plane(scope, pass, plane, bin_target, child)
-                .await
-                .map_err(|halt| match halt {
-                    Halt::DeletePlaneUnavailable => ReadFault::Unanswered,
-                    halt => ReadFault::Fatal(halt),
-                })
+            let read = self
+                .prove_node_plane(scope, pass, plane, bin_target, child)
+                .await;
+            // A plain record or a refused one settles a marked node.
+            if matches!(read, Ok(_) | Err(Halt::RecordRefused)) {
+                self.cells
+                    .unproved_grants
+                    .borrow_mut()
+                    .remove(&NodeId(child.id));
+            }
+            read.map_err(|halt| match halt {
+                Halt::DeletePlaneUnavailable => ReadFault::Unanswered,
+                halt => ReadFault::Fatal(halt),
+            })
         };
         let mut proof = self
             .cells
@@ -15115,7 +15123,8 @@ mod tests {
 
     /// The walk read of a file shows a grant section, and the gate read then
     /// gets a record that does not open under the plane while the bin index
-    /// cannot load. The next tick reads the file through the gate alone.
+    /// cannot load. The next tick reads the file through the gate alone, and
+    /// the refusal there settles the mark.
     #[test]
     fn a_grant_seen_before_a_bin_index_fault_is_read_through_the_gate() {
         let (mut harness, mut blocks, file, name, endpoints) = granted_file_harness();
@@ -15153,7 +15162,7 @@ mod tests {
             Some(sealed_elsewhere),
         );
         harness.state.bin_index_unsettled.set(Some(1));
-        let tick = || {
+        let tick = |harness: &DrainHarness| {
             let drain = harness.drain();
             let scope = harness.scope();
             block_on(drain.prove_delete_plane(
@@ -15168,10 +15177,10 @@ mod tests {
             .map(drop)
         };
 
-        assert!(matches!(tick(), Err(Halt::HeldByBinIndex(_))));
+        assert!(matches!(tick(&harness), Err(Halt::HeldByBinIndex(_))));
         assert_eq!(reads_of(&harness, file), 2 * endpoints);
         // The harness grant names another root, so the gate refuses it.
-        assert_eq!(tick(), Err(Halt::RecordRefused));
+        assert_eq!(tick(&harness), Err(Halt::RecordRefused));
         assert_eq!(
             reads_of(&harness, file),
             3 * endpoints,
@@ -15182,6 +15191,42 @@ mod tests {
             .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
             .count();
         assert_eq!(reported, 1);
+        // The refusal settled the mark, so the next attempt does not refuse
+        // again. Its walk reads the forged record again and reports that read.
+        assert_eq!(tick(&harness), Ok(()));
+        let reported = drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        assert_eq!(reported, 1);
+    }
+
+    /// The proof reads a marked confirmed file through the scope root gate.
+    /// A plain record from each endpoint settles the mark.
+    #[test]
+    fn a_marked_file_that_the_proof_reads_plain_loses_its_mark() {
+        const FILE: NodeId = NodeId([0x74; 16]);
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let file = projected_file_ref(&harness, FILE);
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, vec![file]);
+        let read_key = harness.scope().source.read_key(&FILE.0);
+        publish_harness_file(&mut harness, &mut blocks, FILE, &read_key, &[3u8; 100]);
+        harness.state.unproved_grants.borrow_mut().insert(FILE);
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let proved = block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            HARNESS_ROOT,
+            &harness_folder_ref(WALK_FOLDER),
+            OpId(7),
+            true,
+        ));
+
+        assert!(proved.is_ok());
+        assert!(reads_of(&harness, FILE) > 0, "the proof reads the file");
+        assert!(harness.state.unproved_grants.borrow().is_empty());
     }
 
     /// Past the node bound, the next tick of the same delete holds.

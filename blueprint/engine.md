@@ -878,10 +878,11 @@ delete does (ADR 0043).
   node for the session. The proof of each later delete in this session reads a
   marked node through the scope root gate, also a confirmed file, and each later
   walk read of that node by a hard delete in this session goes through the scope
-  root gate alone, until that gate reads a plain record or refuses the record.
-  The soft re-key reads the whole subtree in the tick that writes the bin entry.
-  Only a file whose own body this device has read, and that is not marked, skips
-  the proof, as a ref kind is authored by any writer of the scope. A node every
+  root gate alone, until a scope root gate read of the node, by a walk or by a
+  sweep, reads a plain record from each endpoint or refuses the record. The soft
+  re-key reads the whole subtree in the tick that writes the bin entry. Only a
+  file whose own body this device has read, and that is not marked, skips the
+  proof, as a ref kind is authored by any writer of the scope. A node every
   endpoint calls vacant, or one at a name the scope's write seed does not
   derive, has no proof to wait for: the delete is charged, and it dead-letters
   having published nothing. A missing index entry does not prove that the target
