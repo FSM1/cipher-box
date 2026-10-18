@@ -5306,9 +5306,9 @@ where
         // the origin link resolved onto: a node joins the scope of the parent
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
-        let soft = to_bin && names_this_scope(&plane.end, &child);
+        let soft = !scope.is_grafted() && to_bin && names_this_scope(&plane.end, &child);
         let walked = match scope.is_grafted() {
-            true => Vec::new(),
+            true => None,
             false => {
                 self.prove_delete_plane(scope, pass, &plane, origin, &child, applied.op_id, !soft)
                     .await?
@@ -5318,9 +5318,7 @@ where
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
         // republish every parent, which is where the op completes.
-        let doomed = if scope.is_grafted() {
-            None
-        } else if soft {
+        let doomed = if soft {
             let unlinked = UnlinkedChild {
                 scope_id: plane.end.root.0,
                 // The highest-ranked link still standing: the folder a reader
@@ -5348,7 +5346,7 @@ where
             .await?;
             None
         } else {
-            Some(walked)
+            walked
         };
         // Before the publish that completes the op: a crash in between leaves a
         // live scope with no entry, which its next confirmed read saves again.
@@ -5436,7 +5434,7 @@ where
         target: &ChildRef,
         op_id: OpId,
         doomed: bool,
-    ) -> Result<Vec<Doomed>, Halt> {
+    ) -> Result<Option<Vec<Doomed>>, Halt> {
         let bin_target = NodeId(target.id);
         let new_proof =
             |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed, doomed);
@@ -5449,7 +5447,7 @@ where
         };
         let hold = |proof: DeleteProof| {
             keep(proof);
-            Halt::DeletePlaneUnavailable
+            Err(Halt::DeletePlaneUnavailable)
         };
         let read_node = async |child: &ChildRef| {
             if scope.known_scope_roots.contains(&NodeId(child.id)) {
@@ -5477,13 +5475,13 @@ where
         // sweep up to that node.
         if let Some(index) = proof.probe {
             if !take_tick_read(&self.delete_proof_reads) {
-                return Err(hold(proof));
+                return hold(proof);
             }
             let mark = proof.sweep.read[index].1;
             match read_node(&proof.sweep.read[index].0).await {
                 Ok((read, _)) if read == mark => proof.probe = None,
                 Ok(_) | Err(ReadFault::Untrusted) => proof = new_proof(false),
-                Err(ReadFault::Unanswered) => return Err(hold(proof)),
+                Err(ReadFault::Unanswered) => return hold(proof),
                 Err(ReadFault::Fatal(halt)) => return Err(halt),
             }
         }
@@ -5520,7 +5518,7 @@ where
                     // the unlink waits for a second sweep.
                     Ok(DoomedStep::Paused) => {
                         proof.carried = true;
-                        return Err(hold(proof));
+                        return hold(proof);
                     }
                     Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
                     // Only a seam fault may answer on a later tick. A refused
@@ -5542,22 +5540,20 @@ where
                     return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
                 }
                 Swept::Complete if proof.skipped_a_folder(self.cells.base) => {
-                    return Err(hold(new_proof(proof.overflowed)));
+                    return hold(new_proof(proof.overflowed));
                 }
-                Swept::Complete => {
-                    return Ok(proof.walk.map(|walk| walk.doomed).unwrap_or_default());
-                }
+                Swept::Complete => return Ok(proof.walk.map(|walk| walk.doomed)),
                 Swept::Moved | Swept::Fault(ReadFault::Untrusted) => {
                     proof = new_proof(proof.overflowed);
                 }
                 Swept::Fault(ReadFault::Unanswered) if proof.sweep.pending.is_empty() => {
                     proof.probe = Some(proof.sweep.confirmed);
                     proof.sweep.confirmed = 0;
-                    return Err(hold(proof));
+                    return hold(proof);
                 }
                 Swept::Paused | Swept::Fault(ReadFault::Unanswered) => {
                     proof.carried = !proof.sweep.read.is_empty();
-                    return Err(hold(proof));
+                    return hold(proof);
                 }
                 Swept::Fault(ReadFault::Fatal(halt)) => return Err(halt),
                 Swept::Stopped(Overflow) => proof = new_proof(true),
@@ -15088,7 +15084,8 @@ mod tests {
             OpId(7),
             true,
         ))
-        .expect("the subtree is proved and walked in one tick");
+        .expect("the subtree is proved and walked in one tick")
+        .expect("a hard delete walks");
         let walked: BTreeSet<NodeId> = walked.iter().map(|doomed| doomed.node).collect();
         assert_eq!(walked, PROOF_CHAIN.into_iter().chain(FILES).collect());
         assert_eq!(

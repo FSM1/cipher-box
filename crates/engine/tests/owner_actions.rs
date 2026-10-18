@@ -7930,12 +7930,7 @@ fn a_folder_that_changes_between_walk_ticks_starts_the_walk_again() {
     let late = create_published_folder(&fx.world, &mut engine, &mut tasks, holder, "late");
     subtree.push(late);
 
-    for _ in 0..12 {
-        if queued_ops(&fx.owner_device) == 0 {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_drained(&mut fx, 12);
     assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
     assert!(
         block_on(fx.engine.status())
