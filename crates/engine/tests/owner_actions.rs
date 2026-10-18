@@ -7994,7 +7994,7 @@ fn a_grant_on_a_skipped_file_with_a_folder_ref_refuses_the_hard_delete() {
 
 /// A version projected before a folder's grant makes the base call the new
 /// root a file, and the index omits the root. Both sweeps skip it, so the
-/// walk read is the only read of the grant. A hard delete of `outer` is
+/// walk is the only reader of the grant. A hard delete of `outer` is
 /// queued. Also the root, the op and the plain folder record of the root.
 fn unindexed_grant_on_a_file_scenario() -> (
     GrantScenario,
@@ -8163,8 +8163,12 @@ fn a_grant_gone_at_the_gate_read_holds_the_walk_for_one_tick() {
         "the walk read and the gate read, and no read again in the tick"
     );
     assert_the_delete_of_outer_holds(&mut fx, outer);
-    tick_until_drained(&mut fx, 8);
-    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete completes");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
+        "the next tick completes the delete"
+    );
     assert!(
         block_on(fx.engine.status())
             .unwrap()

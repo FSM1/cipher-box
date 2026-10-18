@@ -1550,6 +1550,10 @@ pub(crate) struct DeleteProof {
     /// The doomed walk of a hard delete. It runs between the two sweeps, so
     /// the tick that ends it reads the subtree fresh before the unlink.
     walk: Option<DoomedWalk>,
+    /// Each node whose walk read showed a grant section that the scope root
+    /// gate did not settle. A later read of it goes to that gate alone, also
+    /// in a new proof, so a cached copy cannot answer it.
+    unproved: BTreeSet<NodeId>,
 }
 
 impl DeleteProof {
@@ -1574,6 +1578,7 @@ impl DeleteProof {
             probe: None,
             overflowed,
             walk: doomed.then(|| DoomedWalk::new(origin, NodeId(target.id), target.kind)),
+            unproved: BTreeSet::new(),
         }
     }
 
@@ -2595,9 +2600,6 @@ struct DoomedWalk {
     pending: Vec<(NodeId, NodeKind)>,
     seen: BTreeSet<[u8; 16]>,
     doomed: Vec<Doomed>,
-    /// The next node to read showed a grant section that the scope root gate
-    /// did not settle, so its next read goes to that gate alone.
-    grant_unproved: bool,
 }
 
 impl DoomedWalk {
@@ -2606,7 +2608,6 @@ impl DoomedWalk {
             pending: vec![(target, kind)],
             seen: BTreeSet::from([parent.0]),
             doomed: Vec::new(),
-            grant_unproved: false,
         }
     }
 
@@ -5449,14 +5450,22 @@ where
         doomed: bool,
     ) -> Result<Option<Vec<Doomed>>, Halt> {
         let bin_target = NodeId(target.id);
-        let new_proof =
-            |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed, doomed);
+        let new_proof = |overflowed, unproved| DeleteProof {
+            unproved,
+            ..DeleteProof::new(origin, plane.end.root, target, overflowed, doomed)
+        };
         let keep = |proof: DeleteProof| {
             let kept = match proof.overflowed {
-                true => new_proof(true),
+                true => new_proof(true, proof.unproved),
                 false => proof,
             };
             self.cells.delete_proofs.borrow_mut().insert(op_id, kept);
+        };
+        // A proof that ends on a halt keeps only its unproved nodes.
+        let drop_proof = |proof: DeleteProof| {
+            if !proof.unproved.is_empty() {
+                keep(new_proof(proof.overflowed, proof.unproved));
+            }
         };
         let hold = |proof: DeleteProof| {
             keep(proof);
@@ -5483,7 +5492,7 @@ where
             .filter(|proof| {
                 proof.proves(origin, plane.end.root, target) && proof.walk.is_some() == doomed
             })
-            .unwrap_or_else(|| new_proof(false));
+            .unwrap_or_else(|| new_proof(false, BTreeSet::new()));
         // An outage on one node costs one read on each tick, not the second
         // sweep up to that node.
         if let Some(index) = proof.probe {
@@ -5493,9 +5502,14 @@ where
             let mark = proof.sweep.read[index].1;
             match read_node(&proof.sweep.read[index].0).await {
                 Ok((read, _)) if read == mark => proof.probe = None,
-                Ok(_) | Err(ReadFault::Untrusted) => proof = new_proof(false),
+                Ok(_) | Err(ReadFault::Untrusted) => {
+                    proof = new_proof(false, core::mem::take(&mut proof.unproved));
+                }
                 Err(ReadFault::Unanswered) => return hold(proof),
-                Err(ReadFault::Fatal(halt)) => return Err(halt),
+                Err(ReadFault::Fatal(halt)) => {
+                    drop_proof(proof);
+                    return Err(halt);
+                }
             }
         }
         loop {
@@ -5534,7 +5548,7 @@ where
                         walk,
                         Boundary::None,
                         budget,
-                        Some(gate),
+                        Some((gate, &mut proof.unproved)),
                     )
                     .await;
                 match stepped {
@@ -5545,16 +5559,21 @@ where
                         proof.carried = true;
                         return hold(proof);
                     }
-                    Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
-                    // Only a seam fault may answer on a later tick. A refused
-                    // read drops the proof, so a new one reads the subtree
-                    // from the target.
+                    Ok(DoomedStep::Stopped(Overflow)) => {
+                        proof = new_proof(true, core::mem::take(&mut proof.unproved));
+                    }
+                    // A seam fault, or a gate read that did not settle a grant,
+                    // answers on a later tick. A refused read drops the walk,
+                    // so a new proof reads the subtree from the target.
                     Err(Halt::Unclassified) => {
                         proof.carried = true;
                         keep(proof);
                         return Err(Halt::Unclassified);
                     }
-                    Err(halt) => return Err(halt),
+                    Err(halt) => {
+                        drop_proof(proof);
+                        return Err(halt);
+                    }
                 }
                 continue;
             }
@@ -5565,11 +5584,11 @@ where
                     return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
                 }
                 Swept::Complete if proof.skipped_a_folder(self.cells.base) => {
-                    return hold(new_proof(proof.overflowed));
+                    return hold(new_proof(proof.overflowed, proof.unproved));
                 }
                 Swept::Complete => return Ok(proof.walk.map(|walk| walk.doomed)),
                 Swept::Moved | Swept::Fault(ReadFault::Untrusted) => {
-                    proof = new_proof(proof.overflowed);
+                    proof = new_proof(proof.overflowed, core::mem::take(&mut proof.unproved));
                 }
                 Swept::Fault(ReadFault::Unanswered) if proof.sweep.pending.is_empty() => {
                     proof.probe = Some(proof.sweep.confirmed);
@@ -5580,8 +5599,13 @@ where
                     proof.carried = !proof.sweep.read.is_empty();
                     return hold(proof);
                 }
-                Swept::Fault(ReadFault::Fatal(halt)) => return Err(halt),
-                Swept::Stopped(Overflow) => proof = new_proof(true),
+                Swept::Fault(ReadFault::Fatal(halt)) => {
+                    drop_proof(proof);
+                    return Err(halt);
+                }
+                Swept::Stopped(Overflow) => {
+                    proof = new_proof(true, core::mem::take(&mut proof.unproved));
+                }
             }
         }
     }
@@ -6166,8 +6190,9 @@ where
     }
 
     /// Step `walk` ([`Self::enumerate_doomed`]) under `budget`: one read from
-    /// its share per node, until its node bound. A node that faults stays
-    /// next to read.
+    /// its share per node, and one more for the `gate` read of a grant
+    /// section, until its node bound. A node that faults stays next to read,
+    /// and a node in the unproved set of `gate` reads through the gate alone.
     async fn step_doomed(
         &self,
         plane: &SealPlane<'_>,
@@ -6175,8 +6200,13 @@ where
         walk: &mut DoomedWalk,
         boundary: Boundary<'_>,
         budget: Option<(&Cell<usize>, usize)>,
-        gate: Option<WalkGate<'_, '_>>,
+        gate: Option<(WalkGate<'_, '_>, &mut BTreeSet<NodeId>)>,
     ) -> Result<DoomedStep, Halt> {
+        let mut no_gate = BTreeSet::new();
+        let (gate, unproved) = match gate {
+            Some((gate, unproved)) => (Some(gate), unproved),
+            None => (None, &mut no_gate),
+        };
         while let Some(&(node, kind)) = walk.pending.last() {
             // Child refs are wire data, so a diamond or a cycle among them is
             // reachable: a node already walked is never walked again, which is
@@ -6189,7 +6219,7 @@ where
             if gate.is_some_and(|gate| gate.scope.known_scope_roots.contains(&node)) {
                 return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
             }
-            let read = match walk.grant_unproved {
+            let read = match unproved.contains(&node) {
                 true => None,
                 false => {
                     if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
@@ -6219,7 +6249,7 @@ where
             let read = match gate {
                 Some(gate) if granted => {
                     if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
-                        walk.grant_unproved = true;
+                        unproved.insert(node);
                         return Ok(DoomedStep::Paused);
                     }
                     let child = ChildRef {
@@ -6238,18 +6268,19 @@ where
                             return Err(halt);
                         }
                         Err(Halt::RecordRefused) => {
-                            walk.grant_unproved = false;
+                            unproved.remove(&node);
                             Err(ChildFault::Halt(Halt::RecordRefused))
                         }
                         // The two reads disagree: the next tick reads again.
                         Ok(_) => {
-                            walk.grant_unproved = false;
+                            unproved.remove(&node);
                             return Err(Halt::Unclassified);
                         }
-                        Err(_) => {
-                            walk.grant_unproved = true;
+                        Err(Halt::DeletePlaneUnavailable | Halt::Unclassified) => {
+                            unproved.insert(node);
                             return Err(Halt::Unclassified);
                         }
+                        Err(halt) => return Err(halt),
                     }
                 }
                 _ => read.unwrap_or(Err(ChildFault::Halt(Halt::Unclassified))),
@@ -14972,6 +15003,110 @@ mod tests {
             "the whole read ends the share"
         );
         assert!(harness.state.delete_proofs.borrow().is_empty());
+    }
+
+    /// A doomed walk past the node bound reads a grant section at a projected
+    /// file, and the scope root gate read does not answer. The delete holds
+    /// with no abuse event, and the next tick reads that node through the gate
+    /// alone and holds again.
+    #[test]
+    fn a_doomed_walk_past_its_node_bound_holds_on_an_unsettled_grant() {
+        const FILES: [NodeId; 2] = [NodeId([0x74; 16]), NodeId([0x75; 16])];
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let files = FILES.map(|file| projected_file_ref(&harness, file));
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, files.to_vec());
+        let root_block = encode_envelope(&harness_root_envelope()).expect("the fixture encodes");
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &root_block));
+        blocks.insert(cid.clone(), root_block);
+        harness.seams.http = serve_walk_blocks(&blocks);
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(
+                kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &FILES[0].0).as_bytes(),
+            ),
+            format!("/ipfs/{cid}").as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &FILES[0].0);
+        let endpoints = harness.seams.transport.endpoints();
+        for endpoint in &endpoints {
+            harness
+                .seams
+                .transport
+                .seed_record(endpoint, name.as_str(), record.clone());
+        }
+        // The walk read answers, and each read after it fails.
+        harness
+            .seams
+            .transport
+            .fail_get_for_after(name.as_str(), endpoints.len());
+        let tick = || {
+            let drain = harness
+                .drain()
+                .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
+            let scope = harness.scope();
+            block_on(drain.prove_delete_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(WALK_FOLDER),
+                OpId(7),
+                true,
+            ))
+            .map(drop)
+        };
+
+        assert_eq!(tick(), Err(Halt::Unclassified));
+        assert_eq!(reads_of(&harness, FILES[0]), 2 * endpoints.len());
+        assert_eq!(tick(), Err(Halt::Unclassified), "the next tick holds again");
+        assert_eq!(
+            reads_of(&harness, FILES[0]),
+            3 * endpoints.len(),
+            "the next tick reads the node through the gate alone"
+        );
+        let reported = drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        assert_eq!(reported, 0);
+    }
+
+    /// A projected file that becomes a known root after the first sweep
+    /// refuses the delete when the walk reaches it, with no read of it.
+    #[test]
+    fn a_known_root_refuses_the_doomed_walk_with_no_read() {
+        const FILE: NodeId = NodeId([0x74; 16]);
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let file = projected_file_ref(&harness, FILE);
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, vec![file]);
+        let tick = |harness: &DrainHarness, reads| {
+            let drain = harness.drain().with_delete_proof_reads(reads);
+            let scope = harness.scope();
+            block_on(drain.prove_delete_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(WALK_FOLDER),
+                OpId(7),
+                true,
+            ))
+            .map(drop)
+        };
+        assert_eq!(
+            tick(&harness, PROOF_CHAIN.len()),
+            Err(Halt::DeletePlaneUnavailable),
+            "the first sweep ends, and the walk has no read left"
+        );
+        harness.known_scope_roots.push(FILE);
+        assert_eq!(
+            tick(&harness, MAX_DELETE_PROOF_READS),
+            Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot))
+        );
+        assert_eq!(reads_of(&harness, FILE), 0);
     }
 
     /// A folder that moves between the two sweeps starts the proof again.
