@@ -580,7 +580,7 @@ impl<'a> RootFallback<'a> {
 /// A scope root read under an owner cut's [`RootFallback`]: the gated root,
 /// or, where the fallback admits the refusal, the last copy. The `bool` of
 /// each read is whether the root is the last copy.
-pub(super) struct FallbackRead<'r, H, F, S> {
+struct FallbackRead<'r, H, F, S> {
     adopter: &'r RootAdopter<'r, H, F>,
     snapshot_cache: &'r S,
     /// The child binding of the read ([`RootRead`]).
@@ -591,24 +591,6 @@ pub(super) struct FallbackRead<'r, H, F, S> {
 }
 
 impl<'r, H: Http, F: FloorStore, S: SnapshotCache> FallbackRead<'r, H, F, S> {
-    pub(super) fn new(
-        adopter: &'r RootAdopter<'r, H, F>,
-        snapshot_cache: &'r S,
-        expected_child: Option<[u8; 16]>,
-        fallback: Option<&'r RootFallback<'r>>,
-        events: &'r mpsc::UnboundedSender<Event>,
-        scope_id: [u8; 16],
-    ) -> Self {
-        Self {
-            adopter,
-            snapshot_cache,
-            expected_child,
-            fallback,
-            events,
-            scope_id,
-        }
-    }
-
     fn root_read(&self) -> RootRead<'r, H, F, S> {
         RootRead::new(self.adopter, self.snapshot_cache, self.expected_child)
     }
@@ -2180,7 +2162,7 @@ where
         let (sequence, block) =
             fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
                 .await
-                .map_err(|error| ResolveFailure::from(cache_gate_verdict(error)))?;
+                .map_err(cache_gate_verdict)?;
         Ok(RecordHead {
             name,
             record_bytes,
@@ -2217,14 +2199,14 @@ where
         let adopter = self.root_adopter(scope_id);
         let expected_child = anchor.expected_child(scope_id);
         if self.falls_back(&scope_id) {
-            return FallbackRead::new(
-                &adopter,
-                self.snapshot_cache,
+            return FallbackRead {
+                adopter: &adopter,
+                snapshot_cache: self.snapshot_cache,
                 expected_child,
-                self.root_fallback.as_ref(),
-                self.events,
+                fallback: self.root_fallback.as_ref(),
+                events: self.events,
                 scope_id,
-            )
+            }
             .read(self.transport, name)
             .await
             .map(|(root, _)| ResealableRoot {
@@ -5234,14 +5216,14 @@ where
     ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
         let identity = self.owner.verifying_key();
         let adopter = self.root_adopter(&identity);
-        FallbackRead::new(
-            &adopter,
-            self.snapshot_cache,
-            None,
-            self.root_fallback.as_ref(),
-            self.events,
-            self.scope_id,
-        )
+        FallbackRead {
+            adopter: &adopter,
+            snapshot_cache: self.snapshot_cache,
+            expected_child: None,
+            fallback: self.root_fallback.as_ref(),
+            events: self.events,
+            scope_id: self.scope_id,
+        }
         .gate_served(name, sequence, record_bytes, endpoint_failed)
         .await
     }
@@ -6826,40 +6808,35 @@ mod tests {
             ))
         }
 
-        /// An owner adopter of `scope_id`'s root over `floors`, with no owner
-        /// seed cache.
-        fn adopter<'a, F: FloorStore>(
-            &'a self,
-            floors: &'a F,
-            scope_id: [u8; 16],
-            parent_node_seed: Option<[u8; 32]>,
-        ) -> RootAdopter<'a, ScriptedHttp, F> {
-            let adopter = RootAdopter::new(
-                &self.gateway,
-                &self.http,
-                floors,
-                &self.enc_secret,
-                &self.identity,
-                scope_id,
-            );
-            match parent_node_seed {
-                Some(seed) => adopter.under_parent_node_seed(Zeroizing::new(seed)),
-                None => adopter,
-            }
-        }
-
-        /// The vault-anchored root at `name`, read over the transport under
-        /// `fallback`.
+        /// The vault-anchored root at `name`, read under `net`'s root adopter
+        /// and `fallback`.
         fn read_root<F: FloorStore>(
             &self,
-            adopter: &RootAdopter<'_, ScriptedHttp, F>,
+            net: &OwnerRotationNet<
+                '_,
+                T,
+                ScriptedHttp,
+                InMemoryCredentialStore,
+                F,
+                VirtualScheduler,
+                SeededEntropy,
+                InMemorySnapshotCache,
+            >,
             fallback: Option<&RootFallback<'_>>,
             scope_id: [u8; 16],
             name: &IpnsName,
         ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+            let adopter = net.root_adopter(scope_id);
             block_on(
-                FallbackRead::new(adopter, &self.cache, None, fallback, &self.events, scope_id)
-                    .read(&self.transport, name),
+                FallbackRead {
+                    adopter: &adopter,
+                    snapshot_cache: &self.cache,
+                    expected_child: None,
+                    fallback,
+                    events: &self.events,
+                    scope_id,
+                }
+                .read(&self.transport, name),
             )
         }
 
@@ -9125,10 +9102,10 @@ mod tests {
         let floors = NotFoundFloors(harness.floors.clone());
         let reported = RootReports::default();
         let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
-        let adopter = harness.adopter(&floors, SCOPE, None);
+        let net = net_over(&harness, &floors);
 
         let read = harness
-            .read_root(&adopter, Some(&fallback), SCOPE, &root.name)
+            .read_root(&net, Some(&fallback), SCOPE, &root.name)
             .map(|_| ());
 
         assert_eq!(read, Err(RootGateVerdict::Unavailable));
@@ -9336,9 +9313,11 @@ mod tests {
         serve_at(&harness, root_id, &good, 1);
         // One earlier rotation read, which raises this name's sequence floor
         // and leaves the gate-passing record in the cache the fallback reads.
-        let adopter = harness.adopter(&harness.floors, scope_id, parent_node_seed);
+        let net = harness.net_rooted(
+            RotationAncestry::default().under_parent_node_seed(scope_id, parent_node_seed.as_ref()),
+        );
         harness
-            .read_root(&adopter, None, scope_id, &good.name)
+            .read_root(&net, None, scope_id, &good.name)
             .expect("the good root gates");
         assert!(
             block_on(harness.cache.get(good.name.as_str().as_bytes()))
@@ -9445,10 +9424,10 @@ mod tests {
         serve_at(&harness, SCOPE, &wedge, u64::MAX);
         let reported = RootReports::default();
         let fallback = RootFallback::new(SCOPE, RootWait::Bound(&NoBound), &reported);
-        let adopter = harness.adopter(&harness.floors, SCOPE, None);
+        let net = harness.net(&[]);
 
         let (read, last_copy) = harness
-            .read_root(&adopter, Some(&fallback), SCOPE, &good.name)
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
             .expect("the last copy");
 
         assert_eq!(
@@ -9485,10 +9464,10 @@ mod tests {
         let (harness, good) = wedged_scope_of(SCOPE, SCOPE, None, ENVELOPE_V + 1);
         let reported = RootReports::default();
         let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
-        let adopter = harness.adopter(&harness.floors, SCOPE, None);
+        let net = harness.net(&[]);
 
         let (read, _) = harness
-            .read_root(&adopter, Some(&fallback), SCOPE, &good.name)
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
             .expect("the copy passes the gate");
 
         assert!(read.observed.is_err(), "no publish builds on the copy");
@@ -9509,10 +9488,10 @@ mod tests {
         let (harness, good) = wedged_scope_of(SCOPE, CHILD_SCOPE, None, ENVELOPE_V);
         let reported = RootReports::default();
         let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
-        let adopter = harness.adopter(&harness.floors, SCOPE, None);
+        let net = harness.net(&[]);
 
         let (read, _) = harness
-            .read_root(&adopter, Some(&fallback), SCOPE, &good.name)
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
             .expect("the copy passes the gate");
 
         assert_eq!(read.envelope.id, CHILD_SCOPE);
@@ -9541,10 +9520,10 @@ mod tests {
         .expect("a floor above the served record");
         let reported = RootReports::default();
         let fallback = RootFallback::new(SCOPE, RootWait::Bound(&NoBound), &reported);
-        let adopter = harness.adopter(&harness.floors, SCOPE, None);
+        let net = harness.net(&[]);
 
         let read = harness
-            .read_root(&adopter, Some(&fallback), SCOPE, &good.name)
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
             .map(|_| ());
 
         assert_eq!(read, Err(RootGateVerdict::BelowFloor));
@@ -18410,15 +18389,23 @@ mod tests {
             let harness = Harness::plain();
             let staged = staged_scope(&harness);
             raise_past(&harness.floors, &staged.root.name);
-            let adopter = harness.adopter(&harness.floors, SCOPE, None);
+            let net = harness.net(&[]);
+            let adopter = net.root_adopter(SCOPE);
             let bytes = harness
                 .store
                 .record_at(&harness.store.endpoints()[0], staged.root.name.as_str())
                 .expect("an endpoint serves the root");
             let gate = |endpoint_failed| {
                 block_on(
-                    FallbackRead::new(&adopter, &harness.cache, None, None, &harness.events, SCOPE)
-                        .gate_served(&staged.root.name, 1, &bytes, endpoint_failed),
+                    FallbackRead {
+                        adopter: &adopter,
+                        snapshot_cache: &harness.cache,
+                        expected_child: None,
+                        fallback: None,
+                        events: &harness.events,
+                        scope_id: SCOPE,
+                    }
+                    .gate_served(&staged.root.name, 1, &bytes, endpoint_failed),
                 )
                 .map(|_| ())
                 .map_err(ResolveFailure::from)
