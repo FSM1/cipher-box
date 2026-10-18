@@ -8985,7 +8985,6 @@ where {
                 vault_pointer_signer.as_ref(),
                 write_epoch,
                 true,
-                true,
             )
             .await?
         {

@@ -505,14 +505,14 @@ where
             cut,
             vault_pointer_signer,
             command,
-            true,
             &reads,
         )
         .await
     }
 
     /// [`Self::rotate_planes`], noting what the cut's root reads met in
-    /// `reads`. With `sweeps` false, the cut files a sweep that does nothing.
+    /// `reads`. A cut of a scope that a dissolve cuts files a sweep that does
+    /// nothing.
     #[expect(clippy::too_many_arguments, reason = "one cut's full input set")]
     pub(super) async fn rotate_planes_reading(
         &self,
@@ -522,10 +522,10 @@ where
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
         command: bool,
-        sweeps: bool,
         reads: &CutRootReads,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
+        let sweeps = !self.dissolving(node).await;
         let owed_bound = self.owed_bound(node).await;
         let bound = owed_bound
             .as_ref()
@@ -557,7 +557,7 @@ where
                 if sweeps {
                     (sweep.task)(scope, target.parent_node_seed.clone())
                 } else {
-                    Box::pin(core::future::ready(()))
+                    Box::pin(core::future::poll_fn(|_| core::task::Poll::Ready(())))
                 }
             },
             cut_durable: &*sweep.cut,

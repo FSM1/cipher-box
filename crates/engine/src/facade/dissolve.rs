@@ -163,6 +163,24 @@ where
             .map_err(EngineError::from_dissolve_write)
     }
 
+    /// Whether a dissolve entry at its cut step lists `scope`. The dissolve
+    /// files no sweep of the scopes it cuts, also on an owed re-drive.
+    pub(super) async fn dissolving(&self, scope: NodeId) -> bool {
+        let journal = self.dissolve_journal();
+        let Ok(roots) = journal.roots().await else {
+            return false;
+        };
+        for root in roots {
+            if let Ok(HeaderSlot::Own(header)) = journal.header(root).await
+                && header.step == DissolveStep::Cut
+                && header.scopes.iter().any(|cut| cut.scope_id == scope)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Whether an owed rotation entry names `scope`.
     async fn owes(&self, scope: NodeId) -> Result<bool, EngineError> {
         Ok(self
@@ -212,7 +230,10 @@ where
         }
         let rows = !current.commitment.entries.is_empty();
         let base = header.scopes[at].clone();
-        if rows && base.cut_time != 0 && current.commitment.cut_epoch >= base.cut_epoch {
+        // After the baseline, a row at or above it, or a cut above it, is
+        // work the dissolve did not do: a concurrent grant wins.
+        let epoch = current.commitment.cut_epoch;
+        if base.cut_time != 0 && (epoch > base.cut_epoch || rows && epoch >= base.cut_epoch) {
             return Ok(ScopeCut::NewRow);
         }
         if base.final_landed {
@@ -235,14 +256,14 @@ where
         if links.iter().any(|link| pending.contains(link)) {
             return Ok(ScopeCut::Waiting);
         }
-        // A last copy cannot prove that it holds no row, so it is cut too, and
-        // the name wave moves the root off the refused record (ADR 0068 D1,
-        // D3, D5).
+        // A last copy cannot prove that it holds no row, so it is cut too. The
+        // read cascade refuses the refused root, so the name wave moves the
+        // root off it first (ADR 0068 D1, D3, D5).
         let plan = GrantCutPlan::over(&current, &name, self.identity);
-        let cut = if rows {
-            Some(revoke_every_row(&plan))
-        } else if fell_back {
+        let cut = if fell_back {
             Some(recut_from_last_copy(&plan, true))
+        } else if rows {
+            Some(revoke_every_row(&plan))
         } else {
             None
         }
@@ -250,12 +271,14 @@ where
         .map_err(EngineError::from_revoke)?;
         // Before the first publish of this scope, so every final record it
         // signs carries an EOL past `cut_time` plus the EOL window. The cut
-        // epoch is the baseline a later row is measured against.
-        if base.cut_time == 0 {
-            let cut_epoch = cut
-                .as_ref()
-                .map_or(current.commitment.cut_epoch, |cut| cut.commitment.cut_epoch);
-            let cut_time = self.scheduler.now().0;
+        // epoch is the baseline a later row is measured against, and a cut
+        // of this drive raises it before it publishes.
+        let cut_epoch = cut.as_ref().map_or(epoch, |cut| cut.commitment.cut_epoch);
+        if base.cut_time == 0 || cut_epoch > base.cut_epoch {
+            let cut_time = match base.cut_time {
+                0 => self.scheduler.now().0,
+                set => set,
+            };
             self.commit_dissolve(journal, hold, header, |header| {
                 header.scopes[at].cut_epoch = cut_epoch;
                 header.scopes[at].cut_time = cut_time;
@@ -273,7 +296,6 @@ where
                         None,
                         current.write_epoch,
                         sites.command(),
-                        false,
                     )
                     .await?
                 {

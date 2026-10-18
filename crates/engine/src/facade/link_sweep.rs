@@ -279,7 +279,6 @@ where
                 None,
                 current.write_epoch,
                 false,
-                true,
             )
             .await?;
         let rekeyed = report

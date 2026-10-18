@@ -318,7 +318,7 @@ where
     /// [`OwedCut::SetLanded`]. A cut that moves the write plane leaves it for
     /// the caller, which clears it after the post-steps. The caller holds the
     /// scope ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
-    /// across both. `sweeps` is false for a cut that files no lazy-wave sweep.
+    /// across both.
     #[expect(clippy::too_many_arguments, reason = "one owed cut's full input set")]
     pub(super) async fn rotate_owed_cut(
         &self,
@@ -329,7 +329,6 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
         write_epoch: u64,
         command: bool,
-        sweeps: bool,
     ) -> Result<OwedCut, EngineError> {
         let write = if cut.planes().write() {
             Some(owed_write_cut(write_epoch)?)
@@ -363,7 +362,6 @@ where
                 cut,
                 vault_pointer_signer,
                 command,
-                sweeps,
                 &reads,
             )
             .await
