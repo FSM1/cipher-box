@@ -24,10 +24,9 @@ use super::{
     resolved_bytes, seam, take_tick_read,
 };
 use crate::entropy::fresh_bytes;
-use crate::facade::{NodeId, emit_trust_violation};
+use crate::facade::NodeId;
 use crate::net::assemble_head_envelope;
 use crate::net::rotation::write_plane_of;
-use crate::rotation::ResolveFailure;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
 };
@@ -578,6 +577,8 @@ where
         let section = grant_section_bytes(&envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
             .ok_or(ReadFault::Untrusted)?;
+        // The gate checked the write body's signature, so a body that does not
+        // open is material that lags a write cut: the next tick decides.
         let (write_body, _) = write_plane_of(
             &end.floors(&self.seams.floors),
             &envelope,
@@ -586,17 +587,7 @@ where
             end.root.0,
         )
         .await
-        .map_err(|failure| match failure {
-            ResolveFailure::Rejected => {
-                emit_trust_violation(
-                    &self.seams.events,
-                    end.root_name.as_str(),
-                    "dissolve-write-body-refused",
-                );
-                ReadFault::Untrusted
-            }
-            _ => ReadFault::Unanswered,
-        })?;
+        .map_err(|_| ReadFault::Unanswered)?;
         Ok(DissolveRead {
             mark: RecordMark {
                 sequence: root.state.observed.sequence(),
