@@ -27,6 +27,7 @@ use crate::net::rotation::RootReports;
 use crate::rotation::NodeBound;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
+use crate::sync::dissolve_journal::DissolveCell;
 use crate::sync::drain::owner_scoped_key;
 
 /// The staging-key prefix the owed rotation record is journaled under.
@@ -204,6 +205,8 @@ pub struct OwedCell {
     /// This session's [`RootReports`].
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
+    /// The session's dissolve drivers and journal writer.
+    dissolve: DissolveCell,
 }
 
 /// A count of passes, each counted once.
@@ -260,6 +263,11 @@ impl OwedCell {
     /// This session's [`RootReports`].
     pub(crate) fn root_reports(&self) -> &RootReports {
         &self.root_reports
+    }
+
+    /// This session's [`DissolveCell`].
+    pub(crate) fn dissolve(&self) -> &DissolveCell {
+        &self.dissolve
     }
 
     /// Note that the host hears of the rows a cut at `scope` and `cut_epoch`

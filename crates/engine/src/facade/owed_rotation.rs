@@ -823,7 +823,7 @@ where
     /// none: a sync pass proves no material for a scope whose write cut
     /// stopped, because the write seed it holds does not derive the name the
     /// scope answers at.
-    async fn owed_scope(
+    pub(super) async fn owed_scope(
         &self,
         sites: &impl ConversionSites,
         node: NodeId,
@@ -1137,14 +1137,14 @@ where
 
 /// The scope an owed step acts on: the name the parent's index gives it, if
 /// any, and the root its pointer vouches for, gated.
-struct OwedScope {
-    indexed: Option<Vec<u8>>,
-    target: OwnerScope,
-    current: CascadeTarget,
+pub(super) struct OwedScope {
+    pub(super) indexed: Option<Vec<u8>>,
+    pub(super) target: OwnerScope,
+    pub(super) current: CascadeTarget,
     /// The owner-signed scope pointer names `target`.
     pointer_placed: bool,
     /// The read ran on the last copy of a root the gate refused (ADR 0068 D1).
-    fell_back: bool,
+    pub(super) fell_back: bool,
 }
 
 /// The stop a plane rotation failure reports, classed as the command's own

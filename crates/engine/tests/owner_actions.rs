@@ -53,7 +53,7 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::net::StagingRetireLedger;
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
-use cipherbox_engine::net::eol::eol_from;
+use cipherbox_engine::net::eol::{EOL_WINDOW, eol_from, remaining_millis};
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
@@ -63,6 +63,7 @@ use cipherbox_engine::seams::{
     UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
+use cipherbox_engine::sync::dissolve_journal::{DissolveBinding, DissolveHeader, DissolveStep};
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
 use cipherbox_engine::sync::owed_rotation::{
@@ -25894,4 +25895,384 @@ fn a_sweep_enqueued_before_a_write_cut_reads_the_current_root() {
     let reports = old_epoch_counts(&events_so_far(&mut fx._events), folder);
     assert!(!reports.is_empty(), "the enqueued sweep reports");
     assert!(reports.iter().all(|nodes| *nodes == 0), "and converges");
+}
+
+// ---------------------------------------------------------------------------
+// Dissolve: the cut and the final records (ADR 0077 D1)
+// ---------------------------------------------------------------------------
+
+/// One day of virtual time.
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The destination the dissolve entry records. The cut step reads none of
+/// it.
+fn dissolve_binding() -> DissolveBinding {
+    DissolveBinding {
+        read_scope: ROOT,
+        read_epoch: EPOCH,
+        restart_floor: EPOCH,
+        base_cut: 0,
+        write_scope: ROOT,
+        write_epoch: 1,
+    }
+}
+
+impl GrantScenario {
+    /// Start, or drive again, the dissolve of the folder, moving virtual time
+    /// on by one poll cadence each time it sleeps between attempts.
+    fn dissolve(&mut self) -> Result<Option<DissolveStep>, EngineError> {
+        let cadence = self.engine.profile().poll_cadence;
+        let scheduler = self.world.scheduler.clone();
+        let mut future = pin!(self.engine.dissolve_cut_for_test(
+            self.folder,
+            ROOT,
+            dissolve_binding()
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..64 {
+            if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
+                return outcome;
+            }
+            scheduler.advance(cadence);
+        }
+        panic!("the dissolve never settled");
+    }
+
+    /// The dissolve header that stands at the folder.
+    fn dissolve_header(&self) -> Option<DissolveHeader> {
+        block_on(self.engine.dissolve_header_for_test(self.folder)).expect("the journal reads")
+    }
+
+    /// Move virtual time to the next whole second, then `millis` past it, and
+    /// answer that instant.
+    fn at_millis_past_a_second(&self, millis: u64) -> u64 {
+        let now = self.world.scheduler.now().0;
+        let at = (now / 1000 + 1) * 1000 + millis;
+        self.world.scheduler.advance_to(UnixMillis(at));
+        at
+    }
+}
+
+/// The signed EOL of the record at `name`, in Unix milliseconds.
+fn signed_eol_millis(world: &FakeWorld, name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .expect("a record is published at the name");
+    let verified = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the published record verifies under its own name");
+    u64::try_from(remaining_millis(UnixMillis(0), &verified.validity).expect("the EOL parses"))
+        .expect("an EOL after the epoch")
+}
+
+/// Whether the record at `name` signs an EOL that holds for one full term
+/// from `cut_time`. The EOL keeps whole seconds, so the term is one second
+/// short of the window.
+fn holds_for_a_term_from(world: &FakeWorld, name: &IpnsName, cut_time: u64) -> bool {
+    let term = u64::try_from(EOL_WINDOW.as_millis()).expect("a short window") - 1_000;
+    signed_eol_millis(world, name) >= cut_time + term
+}
+
+/// ADR 0077 D1: the dissolve cuts every row of the scope, the read grant,
+/// the write grant and the invite link, in one cut: one cut-epoch step, a
+/// fresh read epoch, and a name wave that moves the root.
+#[test]
+fn a_dissolve_cuts_every_read_write_and_link_row_in_one_cut() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let _fragment = fx.mint_link();
+    let before = fx.granted_scope_repoint();
+    let section = fx.folder_section();
+    assert_eq!(
+        section.commitment.entries.len(),
+        3,
+        "a read, a write and a link row"
+    );
+    let read_epoch = decode_envelope(
+        &published_head(&fx.world, &fx.blocks, &before.current_root).expect("the root"),
+    )
+    .expect("the root decodes")
+    .epoch;
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    let after = fx.granted_scope_repoint();
+    let cut = fx.folder_section();
+    assert!(cut.commitment.entries.is_empty(), "no row is left");
+    assert!(cut.grant_blobs.is_empty(), "and no grantee holds a blob");
+    assert_eq!(
+        cut.commitment.cut_epoch,
+        section.commitment.cut_epoch + 1,
+        "one cut"
+    );
+    assert_eq!(after.write_epoch, before.write_epoch + 1, "one name wave");
+    assert_ne!(
+        after.current_root, before.current_root,
+        "the wave moved the root"
+    );
+    assert_eq!(
+        decode_envelope(&published_head(&fx.world, &fx.blocks, &after.current_root).unwrap())
+            .unwrap()
+            .epoch,
+        read_epoch + 1,
+        "the read plane rotated"
+    );
+    let header = fx.dissolve_header().expect("the entry stands");
+    assert_eq!(header.scopes.len(), 1);
+    assert_eq!(header.scopes[0].cut_epoch, cut.commitment.cut_epoch);
+    assert!(fx.owed_scopes().is_empty(), "nothing is owed");
+}
+
+/// ADR 0077 D1, R2: each scope root that the gated index names below the
+/// folder is cut too, the nested one first.
+#[test]
+fn a_dissolve_cuts_each_nested_scope_root() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let inner_section = |fx: &GrantScenario| {
+        published_grant_section_at(
+            &fx.world,
+            &fx.blocks,
+            &scope_repoint(&fx.world, &inner.0).current_root,
+        )
+        .expect("the nested scope root answers")
+    };
+    assert!(!inner_section(&fx).commitment.entries.is_empty());
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    assert!(fx.folder_section().commitment.entries.is_empty());
+    assert!(inner_section(&fx).commitment.entries.is_empty());
+    let header = fx.dissolve_header().expect("the entry stands");
+    let scopes: Vec<NodeId> = header.scopes.iter().map(|scope| scope.scope_id).collect();
+    assert_eq!(scopes, vec![fx.folder, inner]);
+    assert!(header.scopes.iter().all(|scope| scope.cut_epoch != 0));
+}
+
+/// ADR 0077 D1: each final record of the dissolved scope, its pointer and its
+/// root, signs an EOL that holds for one full term from `cut_time`. The cut
+/// starts at a fractional second, and the pointer publish lands hours later
+/// on a retry, which keeps `cut_time`.
+#[test]
+fn the_final_records_hold_for_a_term_from_a_cut_time_that_a_retry_keeps() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    fx.world.scheduler.advance(DAY);
+    let cut_time = fx.at_millis_past_a_second(500);
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+
+    assert!(fx.dissolve().is_err(), "the pointer publish does not land");
+    let stopped = fx.dissolve_header().expect("the entry stands");
+    assert_eq!(stopped.step, DissolveStep::Cut);
+    assert_eq!(stopped.scopes[0].cut_time, cut_time);
+    assert_ne!(stopped.scopes[0].cut_epoch, 0, "the cut landed");
+
+    fx.world
+        .scheduler
+        .advance(Duration::from_millis(3 * 60 * 60 * 1000 + 700));
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    let header = fx.dissolve_header().expect("the entry stands");
+    assert_eq!(
+        header.scopes[0].cut_time, cut_time,
+        "the retry keeps cut_time"
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    assert!(holds_for_a_term_from(&fx.world, &pointer, cut_time));
+    assert!(holds_for_a_term_from(&fx.world, &root, cut_time));
+}
+
+/// ADR 0077 D1: a scope that holds no row needs no cut, so the dissolve
+/// publishes its root again at the next sequence with the same set, and its
+/// pointer again, each under a fresh EOL.
+#[test]
+fn a_dissolve_of_a_scope_with_no_row_publishes_its_final_records_again() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    let pointer = folder_pointer(&fx);
+    let section = fx.folder_section();
+    assert!(section.commitment.entries.is_empty());
+    let (root_at, pointer_at) = (
+        sequence_at(&fx.world, &root),
+        sequence_at(&fx.world, &pointer),
+    );
+    fx.world.scheduler.advance(DAY * 10);
+    let cut_time = fx.world.scheduler.now().0;
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    assert_eq!(fx.granted_scope_repoint().current_root, root, "no wave ran");
+    assert_eq!(sequence_at(&fx.world, &root), root_at + 1);
+    assert_eq!(sequence_at(&fx.world, &pointer), pointer_at + 1);
+    assert_eq!(
+        fx.folder_section().commitment,
+        section.commitment,
+        "the same set, so no cut"
+    );
+    assert!(holds_for_a_term_from(&fx.world, &root, cut_time));
+    assert!(holds_for_a_term_from(&fx.world, &pointer, cut_time));
+}
+
+/// ADR 0063, ADR 0077 D1: a cut whose name wave stops leaves an owed entry,
+/// and the dissolve waits at its cut step. The next sync pass finishes the
+/// owed wave, then moves the dissolve past its cut.
+#[test]
+fn a_dissolve_cut_that_stops_is_finished_through_the_owed_entry() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.granted_scope_repoint();
+    let _ = fx.owed_scopes();
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "behind its owed wave");
+
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.dissolve_header().expect("the entry stands");
+    assert_eq!(
+        header.step,
+        DissolveStep::Map,
+        "the pass moved it past the cut"
+    );
+    let after = fx.granted_scope_repoint();
+    assert_eq!(
+        after.write_epoch,
+        before.write_epoch + 1,
+        "the owed wave ran"
+    );
+    assert!(fx.folder_section().commitment.entries.is_empty());
+    assert!(fx.owed_scopes().is_empty(), "nothing is owed");
+}
+
+/// ADR 0077 Consequences, a concurrent grant wins: a row that appears after
+/// the dissolve cut the scope stops the dissolve before any copy, and its
+/// entry goes. The new row stays.
+#[test]
+fn a_row_after_the_dissolve_cut_stops_the_dissolve() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert!(fx.dissolve().is_err(), "the pointer publish does not land");
+    assert_ne!(
+        fx.dissolve_header().expect("the entry").scopes[0].cut_epoch,
+        0
+    );
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.dissolve(), Ok(None), "the dissolve stops");
+
+    assert_eq!(fx.dissolve_header(), None, "and its entry goes");
+    let root = fx.granted_scope_repoint().current_root;
+    assert_eq!(fx.committed_permission(&root), Some(CorePermission::Read));
+}
+
+/// ADR 0023 D4: a claim that waits for conversion on a link of the scope
+/// holds the dissolve at its cut, as it holds a link revoke. Once the claim
+/// converts, the cut removes the link and the grant the claim made.
+#[test]
+fn a_dissolve_waits_for_a_pending_link_conversion() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the conversion publish fails");
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the cut waits");
+    assert_eq!(fx.link_entries(), 1, "the link is not cut");
+
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    assert_eq!(fx.link_entries(), 0, "the link is cut");
+    assert!(fx.granted_to().is_empty(), "and the grant the claim made");
+}
+
+/// ADR 0025 E7: the cut of the dissolve retires the claims each cut link
+/// refused, and a claim that arrives after the cut settles with no grant.
+#[test]
+fn a_conversion_after_the_dissolve_cut_settles() {
+    let mut fx = GrantScenario::new();
+    let (fragment, _, cap) = a_link_past_its_cap(&mut fx);
+    assert_eq!(recorded_refusals(&fx), 1);
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    assert_eq!(recorded_refusals(&fx), 0, "the cut retires the refusals");
+
+    let late = fx.post_claimant(&fragment, cap + 1, cap + 1);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let pending = block_on(fx.engine.snapshot(ROOT))
+        .expect("the root lists")
+        .children
+        .into_iter()
+        .find(|child| child.id == fx.folder)
+        .expect("the folder is listed")
+        .pending_invite_claims;
+    assert_eq!(pending, 0, "the late claim does not wait");
+    assert!(inbox(&fx.owner_device).is_empty(), "it leaves the inbox");
+    assert!(!fx.granted_to().contains(&late), "and grants nothing");
+}
+
+/// A scope pointer record served below the sequence this device last
+/// published there is stale, so the dissolve does not publish it again.
+#[test]
+fn a_dissolve_does_not_publish_again_a_pointer_served_below_its_floor() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let inner_pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &inner.0);
+    let stale = fx
+        .world
+        .record_store
+        .record_at(
+            &fx.world.record_store.endpoints()[0],
+            inner_pointer.as_str(),
+        )
+        .expect("the nested scope's pointer");
+    let stale_sequence = sequence_at(&fx.world, &inner_pointer);
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert!(
+        fx.dissolve().is_err(),
+        "the folder's pointer publish does not land"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &inner_pointer),
+        stale_sequence + 1,
+        "the nested pointer published again"
+    );
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, inner_pointer.as_str(), stale.clone());
+    }
+
+    assert!(fx.dissolve().is_err(), "the stale pointer is refused");
+
+    assert_eq!(sequence_at(&fx.world, &inner_pointer), stale_sequence);
+    assert_eq!(
+        fx.dissolve_header().expect("the entry stands").step,
+        DissolveStep::Cut
+    );
 }

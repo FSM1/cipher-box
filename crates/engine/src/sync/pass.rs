@@ -1623,6 +1623,7 @@ where
         }
         // After the conversion above, so a claim acked this
         // pass converts before its link can be cut.
+        conversion.redrive_dissolve_cuts(&sites, &pointers).await;
         if pace_due(
             pass.now,
             self.link_swept.get(),

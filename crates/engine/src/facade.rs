@@ -16,6 +16,7 @@
 //! variant with no arm of its own returns [`EngineError::Unimplemented`].
 
 pub(crate) mod claim_conversion;
+mod dissolve;
 pub(crate) mod link_sweep;
 pub(crate) mod owed_rotation;
 
