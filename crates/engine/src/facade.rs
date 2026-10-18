@@ -9981,7 +9981,7 @@ where {
                 let moved = match cut {
                     OwedCut::Unproved => return Ok(()),
                     OwedCut::Ran(report) => report.write.map(|write| write.new_root_name),
-                    OwedCut::SetLanded => None,
+                    OwedCut::SetLanded | OwedCut::Uncleared(_) => None,
                 };
                 // A landed set holds the row at read, and the grantee follows
                 // the pointer name to the root the owed wave moves to.
@@ -13937,6 +13937,12 @@ where {
     /// The measured storage split this engine runs under.
     pub fn storage_policy(&self) -> &StoragePolicy {
         &self.storage_policy
+    }
+
+    /// The read epoch that the tick's last descendant walk holds for `scope`.
+    #[cfg(feature = "test-kit")]
+    pub fn walked_read_epoch(&self, scope: NodeId) -> Option<u64> {
+        self.state.walked_read_epochs.borrow().get(&scope).copied()
     }
 
     /// What the tick's last descendant walk proved one interior scope root

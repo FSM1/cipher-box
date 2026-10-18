@@ -25251,6 +25251,31 @@ fn the_sweep_cuts_an_expired_link_over_a_cut_that_never_landed() {
     );
 }
 
+/// A link sweep whose read-only cut lands while the owed clear fails keeps
+/// the entry, and still drops the walked read epoch of the scope it re-keyed.
+#[test]
+fn a_link_sweep_cut_whose_owed_clear_fails_still_reports_its_rekeyed_scopes() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    fx.mint_link_until(Permission::Read, deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.engine.walked_read_epoch(fx.folder), Some(1));
+    keep_owed_entry(&fx);
+
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.link_entries(), 0, "the expired link is cut");
+    assert!(owed_entry(&fx).is_some(), "the entry stays");
+    assert_eq!(
+        fx.engine.walked_read_epoch(fx.folder),
+        None,
+        "the pass drops the walked epoch that the cut superseded"
+    );
+}
+
 /// ADR 0068 D1 as amended: the read cut lands, the wave stops at its
 /// re-point, and the revokee then publishes a root whose head block no source
 /// holds. The revoke run again re-drives the cut from the last copy at once,
