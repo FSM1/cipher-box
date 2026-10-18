@@ -662,6 +662,16 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
         ),
         (
             edit(&|h| {
+                h.scopes.push(DissolvedScope {
+                    cut_time: 1_000,
+                    ..h.scopes[1].clone()
+                });
+                h.scopes[2].scope_id = NodeId([0x53; 16]);
+            }),
+            "dissolve-journal-scope-appended-past-cut",
+        ),
+        (
+            edit(&|h| {
                 h.scopes.pop();
             }),
             "dissolve-journal-scopes-not-append-only",
@@ -774,6 +784,21 @@ fn the_dissolve_journal_writer_takes_a_raise_only_at_cut() {
     recut.step = DissolveStep::Cut;
     recut.scopes[0].cut_epoch = 8;
     assert_eq!(dissolve_commit(&held, &[], &recut), Ok(()));
+}
+
+/// From Relink on, the step does not go back: a header past Relink refuses
+/// a return to Relink too.
+#[test]
+fn the_dissolve_journal_writer_refuses_a_step_back_past_relink() {
+    let held = dissolve_header_at(DissolveStep::Unindex);
+    let back = DissolveHeader {
+        step: DissolveStep::Relink,
+        ..held.clone()
+    };
+    assert_eq!(
+        dissolve_commit(&held, &[], &back),
+        Err("dissolve-journal-step-back-after-relink".to_owned())
+    );
 }
 
 /// The journal writer refuses to rewrite a page of the live map, so a stop
