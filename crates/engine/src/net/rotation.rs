@@ -18273,6 +18273,64 @@ mod tests {
         }
 
         #[test]
+        fn the_promoted_root_read() {
+            let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+            let net = harness.net(&[]);
+            let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
+            let node = &swept.children[0];
+            let name = scope_name(&node.ipns_name).expect("a node name");
+            raise_past(&harness.floors, &name);
+            let read = || block_on(net.promoted_root(&scope, node)).map(|_| ());
+
+            assert_eq!(
+                failed_then_healed(&harness, read),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
+                )
+            );
+        }
+
+        /// A sequence floor the store cannot read is availability, not a
+        /// verdict on the record.
+        #[test]
+        fn the_sweep_read_of_an_interior_node_with_an_unreadable_floor() {
+            let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+            let net = harness.net(&[]);
+            let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
+            let node = &swept.children[0];
+            let name = scope_name(&node.ipns_name).expect("a node name");
+            harness
+                .floors
+                .fail_sequence_floor_reads_for(name.as_str().as_bytes());
+
+            assert_eq!(
+                block_on(net.resolve_child(&scope, node)).map(|_| ()),
+                Err(SweepResolveFailure::Unavailable)
+            );
+        }
+
+        /// A name that no endpoint serves a record for is unavailable, both
+        /// when every endpoint answers that it holds none and when every
+        /// endpoint fails.
+        #[test]
+        fn a_head_read_of_a_name_with_no_served_record_is_unavailable() {
+            let harness = Harness::plain();
+            let net = harness.net(&[]);
+            let vacant = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x5e; 16]);
+            let failing = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x5f; 16]);
+            harness.store.fail_get_for(failing.as_str());
+            for name in [&vacant, &failing] {
+                assert_eq!(
+                    block_on(net.head_at(name.as_str().as_bytes())).map(|_| ()),
+                    Err(ResolveFailure::Unavailable),
+                    "{}",
+                    name.as_str()
+                );
+            }
+        }
+
+        #[test]
         fn a_forged_record_stays_a_rejection() {
             let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
             let impostor = owner_root_fixture(OwnerRootSpec {

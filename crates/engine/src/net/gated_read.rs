@@ -740,6 +740,44 @@ mod tests {
 
     /// Two endpoints, a record on the second, and a sequence floor of
     /// [`FLOOR`] at the name.
+    /// The leaf read given as a value, as a fake fan-out serves it: the floor
+    /// rule runs on the pick and the endpoint flag alone.
+    #[test]
+    fn a_leaf_read_given_as_a_value_applies_the_floor_rule() {
+        let signer = Ed25519Signer::from_seed([6u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), FLOOR))
+            .expect("the floor is raised");
+        let served = |sequence, endpoint_failed| {
+            let bytes =
+                IpnsRecord::create_v2(&signer, b"/ipfs/leaf", sequence, 1, "2099-01-01T00:00:00Z")
+                    .marshal();
+            let pick = IpnsRecord::unmarshal(&bytes)
+                .expect("the record decodes")
+                .verify(&name)
+                .expect("the record verifies");
+            let read = LeafRead {
+                pick,
+                bytes,
+                tied: Vec::new(),
+                endpoint_failed,
+            };
+            block_on(read.check_floor(&floors, name.as_str().as_bytes()))
+        };
+
+        assert!(matches!(
+            served(FLOOR - 1, true),
+            Err(LeafRefusal::Withheld)
+        ));
+        assert!(matches!(
+            served(FLOOR - 1, false),
+            Err(LeafRefusal::Rejected(_))
+        ));
+        assert!(served(FLOOR, true).is_ok());
+        assert!(served(FLOOR, false).is_ok());
+    }
+
     struct Served {
         name: IpnsName,
         store: InMemoryRecordStore,
