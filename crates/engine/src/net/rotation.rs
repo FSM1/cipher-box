@@ -88,12 +88,11 @@ use crate::grants::{
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{
-    AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_verify,
-    fanout_get_verify_failed, signed_data,
+    FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed, signed_data,
 };
 use crate::net::gated_read::{
-    BelowFloor, GatedScopeRoot, RootGateVerdict, RootRead, RootReadPass, RootRefusal,
-    cache_gate_verdict, gated_root, sequence_refusal,
+    GatedScopeRoot, LeafRead, LeafRefusal, RootGateVerdict, RootRead, RootReadPass, RootRefusal,
+    Unserved, cache_gate_verdict, check_leaf_floor, gated_root,
 };
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
@@ -112,7 +111,7 @@ use crate::rotation::{
 use crate::scope_seeds::seed_names;
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
-    SeamError, SharerScopedFloorStore, SnapshotCache, UnixMillis,
+    SharerScopedFloorStore, SnapshotCache, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
@@ -338,6 +337,27 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     pub moved_seed: MovedScopeSeed,
     /// An owner cut's fallback for its scope root ([`RootFallback`]).
     pub(crate) root_fallback: Option<RootFallback<'a>>,
+    /// The served record the last scope-root read refused ([`RefusedRoot`]).
+    pub refused: RefusedRoot,
+}
+
+/// The bytes of the served record that the last scope-root read of a net
+/// refused, so a caller can tell a refusal already reported from a new one.
+/// Empty after a read that passed, also over the last gate-passing copy.
+#[derive(Default)]
+pub struct RefusedRoot {
+    inner: RefCell<Option<Vec<u8>>>,
+}
+
+impl RefusedRoot {
+    fn park(&self, record: Vec<u8>) {
+        *self.inner.borrow_mut() = Some(record);
+    }
+
+    /// The refused record, if the last read refused one.
+    pub(crate) fn take(&self) -> Option<Vec<u8>> {
+        self.inner.borrow_mut().take()
+    }
 }
 
 /// The one scope root this pass gated and has not yet republished.
@@ -546,62 +566,6 @@ impl<'a> RootFallback<'a> {
         }
     }
 
-    /// The folded `verdict` on `scope_id`'s record at `refused_sequence`, or,
-    /// where `fallback` admits it, the last copy of `name` this device cached,
-    /// gated again in full. No copy, or one that does not gate now, keeps the
-    /// verdict. Either way an admitted refusal is one trust event in the
-    /// session (AGENTS.md rule 6).
-    #[expect(clippy::too_many_arguments, reason = "one root read's full seam set")]
-    async fn fall_back<H: Http, F: FloorStore, S: SnapshotCache>(
-        fallback: Option<&Self>,
-        adopter: &RootAdopter<'_, H, F>,
-        snapshot_cache: &S,
-        events: &mpsc::UnboundedSender<Event>,
-        name: &IpnsName,
-        scope_id: [u8; 16],
-        expected_child: Option<[u8; 16]>,
-        refused_sequence: u64,
-        verdict: RootGateVerdict,
-    ) -> Result<GatedScopeRoot, RootGateVerdict> {
-        let Some(this) = fallback.filter(|fallback| fallback.admits(&scope_id, verdict)) else {
-            return Err(verdict);
-        };
-        // Keep nested rotation fallback state off the caller's stack.
-        let copy = Box::pin(Self::last_copy(
-            adopter,
-            snapshot_cache,
-            name,
-            expected_child,
-            verdict,
-        ))
-        .await;
-        let stop = match &copy {
-            Ok(root) if root.reseals_as(&scope_id) => None,
-            Ok(root) if root.envelope.id == scope_id => Some(FOREIGN_VERSION_STOPS),
-            Ok(_) => Some(OTHER_NODE_STOPS),
-            Err(_) => Some(NO_COPY_STOPS),
-        };
-
-        if this
-            .reported
-            .borrow_mut()
-            .insert((this.scope_id, refused_sequence))
-        {
-            emit_trust_violation(
-                events,
-                name.as_str(),
-                format_args!(
-                    "scope root [{}] refused at sequence {refused_sequence}; {}",
-                    hex_lower(&this.scope_id),
-                    stop.unwrap_or(LAST_COPY_RUNS)
-                ),
-            );
-        }
-        if stop.is_none() {
-            this.fell_back.set(true);
-        }
-        copy
-    }
     async fn last_copy<H: Http, F: FloorStore, S: SnapshotCache>(
         adopter: &RootAdopter<'_, H, F>,
         snapshot_cache: &S,
@@ -630,6 +594,115 @@ impl<'a> RootFallback<'a> {
             }
         }
         durable.ok_or(verdict)
+    }
+}
+
+/// A scope root read under an owner cut's [`RootFallback`]: the gated root,
+/// or, where the fallback admits the refusal, the last copy. The `bool` of
+/// each read is whether the root is the last copy.
+struct FallbackRead<'r, H, F, S> {
+    adopter: &'r RootAdopter<'r, H, F>,
+    snapshot_cache: &'r S,
+    /// The child binding of the read ([`RootRead`]).
+    expected_child: Option<[u8; 16]>,
+    fallback: Option<&'r RootFallback<'r>>,
+    events: &'r mpsc::UnboundedSender<Event>,
+    scope_id: [u8; 16],
+}
+
+impl<'r, H: Http, F: FloorStore, S: SnapshotCache> FallbackRead<'r, H, F, S> {
+    fn root_read(&self) -> RootRead<'r, H, F, S> {
+        RootRead::new(self.adopter, self.snapshot_cache, self.expected_child)
+    }
+
+    /// The root at `name`, read over `transport`.
+    async fn read<T: RecordTransport>(
+        &self,
+        transport: &T,
+        name: &IpnsName,
+    ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+        match self.root_read().read(transport, name).await {
+            Ok(root) => Ok((root, false)),
+            Err(RootRefusal { served: None, .. }) => Err(RootGateVerdict::Unavailable),
+            Err(RootRefusal {
+                verdict,
+                served: Some((sequence, _)),
+            }) => self.fall_back(name, sequence, verdict).await,
+        }
+    }
+
+    /// The root in `bytes`, which a fan-out served at `name` at `sequence`.
+    /// `endpoint_failed` is whether that fan-out met a failed endpoint (ADR
+    /// 0071 D1).
+    async fn gate_served(
+        &self,
+        name: &IpnsName,
+        sequence: u64,
+        bytes: &[u8],
+        endpoint_failed: bool,
+    ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+        match self
+            .root_read()
+            .gate_served(name, bytes, endpoint_failed)
+            .await
+        {
+            Ok(root) => Ok((root, false)),
+            Err(verdict) => self.fall_back(name, sequence, verdict).await,
+        }
+    }
+
+    /// The folded `verdict` on the record at `refused_sequence`, or, where the
+    /// fallback admits it, the last copy of `name` this device cached, gated
+    /// again in full. No copy, or one that does not gate now, keeps the
+    /// verdict. Either way an admitted refusal is one trust event in the
+    /// session (AGENTS.md rule 6).
+    async fn fall_back(
+        &self,
+        name: &IpnsName,
+        refused_sequence: u64,
+        verdict: RootGateVerdict,
+    ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+        let Some(this) = self
+            .fallback
+            .filter(|fallback| fallback.admits(&self.scope_id, verdict))
+        else {
+            return Err(verdict);
+        };
+        // Keep nested rotation fallback state off the caller's stack.
+        let copy = Box::pin(RootFallback::last_copy(
+            self.adopter,
+            self.snapshot_cache,
+            name,
+            self.expected_child,
+            verdict,
+        ))
+        .await;
+        let stop = match &copy {
+            Ok(root) if root.reseals_as(&self.scope_id) => None,
+            Ok(root) if root.envelope.id == self.scope_id => Some(FOREIGN_VERSION_STOPS),
+            Ok(_) => Some(OTHER_NODE_STOPS),
+            Err(_) => Some(NO_COPY_STOPS),
+        };
+
+        if this
+            .reported
+            .borrow_mut()
+            .insert((this.scope_id, refused_sequence))
+        {
+            emit_trust_violation(
+                self.events,
+                name.as_str(),
+                format_args!(
+                    "scope root [{}] refused at sequence {refused_sequence}; {}",
+                    hex_lower(&this.scope_id),
+                    stop.unwrap_or(LAST_COPY_RUNS)
+                ),
+            );
+        }
+        if stop.is_none() {
+            this.fell_back.set(true);
+        }
+        copy.map(|root| (root, true))
     }
 }
 
@@ -1026,6 +1099,9 @@ pub(crate) struct WalkedBoundaries {
     pub(crate) failure: Option<WalkFailure>,
     /// Every scope root the gate refused that a gated parent's index named.
     pub(crate) refused: BTreeSet<NodeId>,
+    /// The bytes of each served record the gate refused, also when the walk
+    /// read on from the cached owner copy.
+    pub(crate) refused_records: BTreeMap<NodeId, Vec<u8>>,
 }
 
 /// A boundary walk's reading of a root gate verdict. A superseded name is this
@@ -1408,12 +1484,14 @@ where
     /// promotion not published yet: availability ([`Self::is_unpromoted_folder`]).
     ///
     /// Answers the anchor of the root it gated beside its index, for an owed
-    /// root one level down.
+    /// root one level down. `refused_record` takes the bytes of a served
+    /// record the gate refused.
     async fn descend(
         &self,
         parent_read_scope_seed: &[u8; SECRET_LEN],
         child: &ChildScopeRef,
         owed_from: Option<([u8; 16], &LaggingAnchor)>,
+        refused_record: &mut Option<Vec<u8>>,
     ) -> Result<(DescendantScopeRoot, Vec<ChildScopeRef>, LaggingAnchor), WalkFailure> {
         let name = scope_name(&child.ipns_name).map_err(|_| WalkFailure::Rejected {
             scope_id: child.scope_id,
@@ -1439,8 +1517,9 @@ where
             Ok(pass) => (pass.root, pass.data, pass.fork, false),
             Err(RootRefusal {
                 verdict: RootGateVerdict::OwnerSeedRefused,
-                ..
+                served,
             }) => {
+                *refused_record = served.map(|(_, bytes)| bytes);
                 let (root, record_data) = adopter
                     .recover_cached_owner_root(&name)
                     .await
@@ -1457,6 +1536,9 @@ where
             }
             Err(RootRefusal { verdict, served }) => {
                 let met = walk_verdict(verdict, child.scope_id);
+                if let WalkFailure::Rejected { .. } = met {
+                    *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
+                }
                 if let (WalkFailure::Rejected { .. }, Some((left, anchor)), Some((_, record_bytes))) =
                     (met, owed_from, served)
                     && self
@@ -1788,6 +1870,7 @@ where
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
         let mut refused = BTreeSet::new();
+        let mut refused_records = BTreeMap::new();
         let root_owed = owed_children(owed, root_scope_id, root_write.as_ref().ok(), &index);
         let root_anchor = LaggingAnchor {
             epoch: gated.envelope.epoch,
@@ -1855,12 +1938,24 @@ where
                         }
                         continue;
                     }
-                    match self
-                        .descend(&parent_read_scope_seed, &child, owed_from)
-                        .await
-                    {
+                    let mut refused_record = None;
+                    let descended = self
+                        .descend(
+                            &parent_read_scope_seed,
+                            &child,
+                            owed_from,
+                            &mut refused_record,
+                        )
+                        .await;
+                    let mut note_refused = || {
+                        if let Some(bytes) = refused_record.take() {
+                            refused_records.insert(NodeId(child.scope_id), bytes);
+                        }
+                    };
+                    match descended {
                         Ok((descendant, grandchildren, descendant_anchor)) => {
                             if descendant.recovered_after_rejection {
+                                note_refused();
                                 // The durable copy proves nothing about the record.
                                 WalkFailure::accumulate(
                                     &mut failure,
@@ -1896,6 +1991,7 @@ where
                         Err(met) => {
                             if matches!(met, WalkFailure::Rejected { .. }) {
                                 refused.insert(NodeId(child.scope_id));
+                                note_refused();
                             }
                             WalkFailure::accumulate(&mut failure, met);
                         }
@@ -1909,6 +2005,7 @@ where
             unproved,
             failure,
             refused,
+            refused_records,
         })
     }
 }
@@ -2101,15 +2198,18 @@ where
     /// read refuses and on which axis.
     async fn head_at(&self, ipns_name: &[u8]) -> Result<RecordHead, ResolveFailure> {
         let name = scope_name(ipns_name)?;
-        let Some((_, record_bytes, endpoint_failed)) =
-            fanout_get_verify_failed(self.transport, &name).await
+        let Ok(LeafRead {
+            bytes: record_bytes,
+            endpoint_failed,
+            ..
+        }) = LeafRead::fetch(self.transport, &name).await
         else {
             return Err(ResolveFailure::Unavailable);
         };
         let (sequence, block) =
             fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
                 .await
-                .map_err(resolve_verdict)?;
+                .map_err(cache_gate_verdict)?;
         Ok(RecordHead {
             name,
             record_bytes,
@@ -2144,23 +2244,45 @@ where
         anchor: RootAnchor,
     ) -> Result<ResealableRoot, RootGateVerdict> {
         let adopter = self.root_adopter(scope_id);
-        // This arm's own fallback reads the cached copy back
-        // ([`Self::last_known_good_root`]).
-        let read = RootRead::new(
-            &adopter,
-            self.snapshot_cache,
-            anchor.expected_child(scope_id),
-        );
-        match read.read(self.transport, name).await {
-            Ok(root) => Ok(ResealableRoot {
+        let expected_child = anchor.expected_child(scope_id);
+        self.refused.take();
+        if self.falls_back(&scope_id) {
+            return FallbackRead {
+                adopter: &adopter,
+                snapshot_cache: self.snapshot_cache,
+                expected_child,
+                fallback: self.root_fallback.as_ref(),
+                events: self.events,
+                scope_id,
+            }
+            .read(self.transport, name)
+            .await
+            .map(|(root, _)| ResealableRoot {
                 root,
                 over_sequence: None,
-            }),
-            Err(RootRefusal { served: None, .. }) => Err(RootGateVerdict::Unavailable),
+            });
+        }
+        // This arm's own fallback reads the cached copy back
+        // ([`Self::last_known_good_root`]).
+        let read = RootRead::new(&adopter, self.snapshot_cache, expected_child);
+        let (verdict, sequence) = match read.read(self.transport, name).await {
+            Ok(root) => {
+                return Ok(ResealableRoot {
+                    root,
+                    over_sequence: None,
+                });
+            }
+            Err(RootRefusal { served: None, .. }) => return Err(RootGateVerdict::Unavailable),
             Err(RootRefusal {
-                verdict: RootGateVerdict::NotResealable,
-                served: Some((sequence, _)),
-            }) if !self.falls_back(&scope_id) => {
+                verdict,
+                served: Some((sequence, bytes)),
+            }) => {
+                self.refused.park(bytes);
+                (verdict, sequence)
+            }
+        };
+        let over_copy = match verdict {
+            RootGateVerdict::NotResealable => {
                 let stepped_over = self
                     .last_known_good_root(&adopter, name, scope_id, anchor, sequence)
                     .await;
@@ -2180,26 +2302,13 @@ where
                 );
                 stepped_over
             }
-            Err(RootRefusal {
-                verdict,
-                served: Some((sequence, _)),
-            }) => RootFallback::fall_back(
-                self.root_fallback.as_ref(),
-                &adopter,
-                self.snapshot_cache,
-                self.events,
-                name,
-                scope_id,
-                anchor.expected_child(scope_id),
-                sequence,
-                verdict,
-            )
-            .await
-            .map(|root| ResealableRoot {
-                root,
-                over_sequence: None,
-            }),
+            verdict => Err(verdict),
+        };
+        // A later refusal names the copy read, not the record it stepped over.
+        if over_copy.is_ok() {
+            self.refused.take();
         }
+        over_copy
     }
 
     /// Whether this net's [`RootFallback`] covers `scope_id`'s root.
@@ -3389,25 +3498,11 @@ impl SweptScopeState {
     }
 }
 
-/// Carry a gate error onto rule 6's axis: a rejection is a fail-closed trust
-/// violation, a seam failure is availability.
-fn resolve_verdict(error: GateError) -> ResolveFailure {
-    match error {
-        GateError::Seam(_) => ResolveFailure::Unavailable,
-        GateError::Rejected(_) => ResolveFailure::Rejected,
-    }
-}
-
-/// [`resolve_verdict`] for a sequence check on a fan-out read ([`sequence_refusal`]).
-fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
-    match &error {
-        GateError::Rejected(rejection)
-            if sequence_refusal(&rejection.reason, endpoint_failed)
-                == Some(BelowFloor::Unavailable) =>
-        {
-            ResolveFailure::Unavailable
-        }
-        _ => resolve_verdict(error),
+/// A leaf read's sequence check on rule 6's axis.
+fn sequence_verdict(refusal: LeafRefusal) -> ResolveFailure {
+    match refusal {
+        LeafRefusal::Rejected(_) => ResolveFailure::Rejected,
+        LeafRefusal::Withheld | LeafRefusal::Seam(_) => ResolveFailure::Unavailable,
     }
 }
 
@@ -3570,14 +3665,14 @@ where
             ..
         } = head;
         let (sequence, endpoint_failed) = (*sequence, *endpoint_failed);
-        floor::check_sequence(
+        check_leaf_floor(
             self.floors,
             name.as_str().as_bytes(),
             sequence,
-            floor::Strictness::AtOrAboveFloor,
+            endpoint_failed,
         )
         .await
-        .map_err(|error| SweepResolveFailure::from(sequence_verdict(error, endpoint_failed)))?;
+        .map_err(|refusal| SweepResolveFailure::from(sequence_verdict(refusal)))?;
         // A seed the ratchet does not reach fails this pass's read, not the
         // record's trust: an epoch above the root is also a label a committed
         // writer can choose freely (the epoch is only AAD).
@@ -4018,14 +4113,14 @@ where
         // Ahead of the "not promoted" answer, so a rolled-back record cannot
         // withdraw a promotion this device has already seen and send the caller
         // on to mint a second scope over it.
-        floor::check_sequence(
+        check_leaf_floor(
             self.floors,
             head.name.as_str().as_bytes(),
             head.sequence,
-            floor::Strictness::AtOrAboveFloor,
+            head.endpoint_failed,
         )
         .await
-        .map_err(|error| sequence_verdict(error, head.endpoint_failed))?;
+        .map_err(sequence_verdict)?;
         let envelope = head.envelope()?;
         // Still an ordinary child of the parent scope, so no promotion of this
         // folder's stands to resume. Past this point the record claims to be a
@@ -4630,16 +4725,8 @@ fn rewrite_child_names(
     Ok(())
 }
 
-/// Carry a gate verdict into the wave on rule 6's axis: a rejection is a trust
-/// violation no retry clears, a seam failure is availability.
-fn wave_verdict(error: GateError) -> WritePublishError {
-    match error {
-        GateError::Rejected(_) => WritePublishError::Rejected,
-        GateError::Seam(_) => WritePublishError::NotLanded,
-    }
-}
-
-/// The same axis for a read the wave shares with the read-plane rotation edges.
+/// Carry a read the wave shares with the read-plane rotation edges into the
+/// wave on rule 6's axis.
 ///
 /// [`ResolveFailure::ConflictingChildLabel`] is retryable to the cascade and the
 /// sweep because the write-rotation re-point wave repairs both parent indexes.
@@ -4776,28 +4863,18 @@ where
         root: Option<Option<u64>>,
         refused: &impl Fn(ResolveFailure, Option<DropCause>, bool) -> NodeStop,
     ) -> Result<WaveSource, NodeStop> {
-        let AnsweredFetch {
-            record,
-            answered,
-            endpoint_failed,
-        } = fanout_get_answered(self.transport, name).await;
-        let (sequence, record_bytes) = match record {
-            FanoutRecord::Found(verified, bytes) => (verified.sequence, bytes),
-            FanoutRecord::Absent => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::NoRecord),
-                    true,
-                ));
-            }
-            FanoutRecord::Unavailable(_) => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::EndpointUnavailable),
-                    answered,
-                ));
-            }
-        };
+        let (sequence, record_bytes, endpoint_failed) =
+            match LeafRead::fetch(self.transport, name).await {
+                Ok(read) => (read.pick.sequence, read.bytes, read.endpoint_failed),
+                Err(Unserved { absent, answered }) => {
+                    let cause = if absent {
+                        DropCause::NoRecord
+                    } else {
+                        DropCause::EndpointUnavailable
+                    };
+                    return Err(refused(ResolveFailure::Unavailable, Some(cause), answered));
+                }
+            };
         let source = if let Some(resumed_write_epoch) = root {
             self.root_source(
                 name,
@@ -4851,7 +4928,11 @@ where
             node_id,
         )
         .with_seed_stamp(Some(self.read_seed_epoch));
-        match adopter.adopt(name, record_bytes).await {
+        match adopter
+            .adopt(name, record_bytes)
+            .await
+            .map_err(|error| LeafRefusal::of(error, endpoint_failed))
+        {
             Ok(outcome) => {
                 keep_then_commit(
                     self.snapshot_cache,
@@ -4860,11 +4941,11 @@ where
                     outcome.pass.commit(self.floors),
                 )
                 .await
-                .map_err(|e| wave_verdict(GateError::Seam(e)))?;
+                .map_err(|_| WritePublishError::NotLanded)?;
             }
             // A head block that does not match its CID is what one bad source
             // serves, not the record's own bytes.
-            Err(GateError::Rejected(rejection))
+            Err(LeafRefusal::Rejected(rejection))
                 if adopter.assembled_epoch().is_none()
                     && rejection.reason
                         == RejectionReason::Trust(TrustViolation::ContentCidMismatch.into()) =>
@@ -4874,24 +4955,24 @@ where
                     DropCause::NoHeadBlock,
                 ));
             }
-            Err(GateError::Rejected(rejection)) => match rejection.reason {
+            // ADR 0071 D1: as for an endpoint that serves nothing.
+            Err(LeafRefusal::Withheld) => {
+                return Err(WaveRefusal::dropping(
+                    WritePublishError::NotLanded,
+                    DropCause::EndpointUnavailable,
+                ));
+            }
+            Err(LeafRefusal::Rejected(rejection)) => match rejection.reason {
                 // Our own current record at exactly the floor: the at-floor
                 // re-open below is the path for it. A strictly older sequence is
                 // a replay, which a stale endpoint can serve, so it waits for
                 // the bound.
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {}
-                // ADR 0071 D1: as for an endpoint that serves nothing.
-                ref reason @ RejectionReason::SequenceNotNewer { .. } => {
-                    return Err(match sequence_refusal(reason, endpoint_failed) {
-                        Some(BelowFloor::Unavailable) => WaveRefusal::dropping(
-                            WritePublishError::NotLanded,
-                            DropCause::EndpointUnavailable,
-                        ),
-                        Some(BelowFloor::Rollback) | None => WaveRefusal::dropping(
-                            WritePublishError::Rejected,
-                            DropCause::BelowSequenceFloor,
-                        ),
-                    });
+                RejectionReason::SequenceNotNewer { .. } => {
+                    return Err(WaveRefusal::dropping(
+                        WritePublishError::Rejected,
+                        DropCause::BelowSequenceFloor,
+                    ));
                 }
                 _ => {
                     return self
@@ -4899,8 +4980,8 @@ where
                         .await;
                 }
             },
-            Err(GateError::Seam(error)) => {
-                return Err(self.seam_refusal(&adopter, error));
+            Err(LeafRefusal::Seam(_)) => {
+                return Err(self.seam_refusal(&adopter));
             }
         }
         match adopter.open_carried_at_floor(name, record_bytes).await {
@@ -4909,14 +4990,14 @@ where
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
             }
-            Err(GateError::Seam(error)) => Err(self.seam_refusal(&adopter, error)),
+            Err(GateError::Seam(_)) => Err(self.seam_refusal(&adopter)),
         }
     }
 
     /// A seam failure of an interior adopt. Before the head block assembled it
     /// is a block no endpoint served. After, at an epoch above the gated
     /// root's, it is a record no held seed opens.
-    fn seam_refusal(&self, adopter: &ChildAdopter<'_, H, F>, error: SeamError) -> WaveRefusal {
+    fn seam_refusal(&self, adopter: &ChildAdopter<'_, H, F>) -> WaveRefusal {
         match adopter.assembled_epoch() {
             None => WaveRefusal::dropping(WritePublishError::NotLanded, DropCause::NoHeadBlock),
             Some(epoch)
@@ -4927,7 +5008,7 @@ where
             {
                 WaveRefusal::dropping(WritePublishError::NotLanded, DropCause::EpochAboveRoot)
             }
-            Some(_) => wave_verdict(GateError::Seam(error)).into(),
+            Some(_) => WritePublishError::NotLanded.into(),
         }
     }
 
@@ -5184,25 +5265,16 @@ where
     ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
         let identity = self.owner.verifying_key();
         let adopter = self.root_adopter(&identity);
-        match RootRead::new(&adopter, self.snapshot_cache, None)
-            .gate_served(name, record_bytes, endpoint_failed)
-            .await
-        {
-            Ok(gated) => Ok((gated, false)),
-            Err(verdict) => RootFallback::fall_back(
-                self.root_fallback.as_ref(),
-                &adopter,
-                self.snapshot_cache,
-                self.events,
-                name,
-                self.scope_id,
-                None,
-                sequence,
-                verdict,
-            )
-            .await
-            .map(|gated| (gated, true)),
+        FallbackRead {
+            adopter: &adopter,
+            snapshot_cache: self.snapshot_cache,
+            expected_child: None,
+            fallback: self.root_fallback.as_ref(),
+            events: self.events,
+            scope_id: self.scope_id,
         }
+        .gate_served(name, sequence, record_bytes, endpoint_failed)
+        .await
     }
 
     /// No wave is in flight, so read what the live root supersedes: its own
@@ -6181,6 +6253,7 @@ where
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
+        refused: RefusedRoot::default(),
         root_fallback: None,
     };
     let Ok(root) = net.resolve_vault_root(&vault_root).await else {
@@ -6417,7 +6490,7 @@ mod tests {
         ScopeRootIdentity, WriteRotateError, cascade_rotate_scope, derive_write_name,
         enumerate_eager_set, reseal_scope_root, rotate_scope, rotate_scope_write, sweep_pass,
     };
-    use crate::seams::{EndpointId, HttpResponse, SeamResult};
+    use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
     use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint, vault_pointer_name};
     use crate::sync::provision::GENESIS_VAULT_POINTER_INDEX;
     use crate::testkit::fakes::{
@@ -6785,6 +6858,38 @@ mod tests {
             ))
         }
 
+        /// The vault-anchored root at `name`, read under `net`'s root adopter
+        /// and `fallback`.
+        fn read_root<F: FloorStore>(
+            &self,
+            net: &OwnerRotationNet<
+                '_,
+                T,
+                ScriptedHttp,
+                InMemoryCredentialStore,
+                F,
+                VirtualScheduler,
+                SeededEntropy,
+                InMemorySnapshotCache,
+            >,
+            fallback: Option<&RootFallback<'_>>,
+            scope_id: [u8; 16],
+            name: &IpnsName,
+        ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+            let adopter = net.root_adopter(scope_id);
+            block_on(
+                FallbackRead {
+                    adopter: &adopter,
+                    snapshot_cache: &self.cache,
+                    expected_child: None,
+                    fallback,
+                    events: &self.events,
+                    scope_id,
+                }
+                .read(&self.transport, name),
+            )
+        }
+
         /// [`Harness::net_rooted`] over an arbitrary floor store.
         fn net_rooted_with_floors<'a, F: FloorStore>(
             &'a self,
@@ -6824,6 +6929,7 @@ mod tests {
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
                 moved_seed: MovedScopeSeed::default(),
+                refused: RefusedRoot::default(),
                 root_fallback: None,
             }
         }
@@ -8889,6 +8995,11 @@ mod tests {
         );
         assert_eq!(restarted.proved.len(), 2);
         assert!(restarted.proved[0].recovered_after_rejection);
+        // The refused live record, which the walk's event names.
+        assert_eq!(
+            restarted.refused_records.get(&NodeId(CHILD_SCOPE)),
+            Some(&record_for(&CHILD_SCOPE, &child.head_cid_str, 2))
+        );
         assert!(restarted.proved[0].write.is_err());
         assert_eq!(restarted.proved[0].adopted.sequence, 1);
         assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);
@@ -9046,13 +9157,15 @@ mod tests {
         let (harness, root, _) = staged_cut();
         let floors = NotFoundFloors(harness.floors.clone());
         let reported = RootReports::default();
-        let mut net = net_over(&harness, &floors);
-        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+        let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
+        let net = net_over(&harness, &floors);
 
-        let read = block_on(net.gated_root(SCOPE, &root.name)).map(|_| ());
+        let read = harness
+            .read_root(&net, Some(&fallback), SCOPE, &root.name)
+            .map(|_| ());
 
         assert_eq!(read, Err(RootGateVerdict::Unavailable));
-        assert!(!net.fell_back());
+        assert!(!fallback.fell_back());
         assert!(harness.events().is_empty(), "a fault is no trust event");
     }
 
@@ -9256,14 +9369,12 @@ mod tests {
         serve_at(&harness, root_id, &good, 1);
         // One earlier rotation read, which raises this name's sequence floor
         // and leaves the gate-passing record in the cache the fallback reads.
-        let ancestry =
-            RotationAncestry::default().under_parent_node_seed(scope_id, parent_node_seed.as_ref());
-        block_on(
-            harness
-                .net_rooted(ancestry)
-                .gated_root(scope_id, &good.name),
-        )
-        .expect("the good root gates");
+        let net = harness.net_rooted(
+            RotationAncestry::default().under_parent_node_seed(scope_id, parent_node_seed.as_ref()),
+        );
+        harness
+            .read_root(&net, None, scope_id, &good.name)
+            .expect("the good root gates");
         assert!(
             block_on(harness.cache.get(good.name.as_str().as_bytes()))
                 .expect("the cache answers")
@@ -9319,6 +9430,68 @@ mod tests {
         assert_eq!(target.read_sequence, 1, "the gate adopted the copy at 1");
     }
 
+    /// A read over the last gate-passing copy holds no refused record, so a
+    /// later refusal of that copy is not read as the refusal of the record it
+    /// stepped over.
+    #[test]
+    fn a_refusal_after_the_step_over_names_no_stepped_over_record() {
+        // The cached copy passes the root gate, and its write body, signed
+        // over bytes that do not unseal, does not open.
+        let mut good = crate::testkit::owner_root_fixture_sealed(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &owner_enc().public(),
+                scope_id: SCOPE,
+                root_id: SCOPE,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: None,
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            },
+            OWNER_ROOT_EPOCH,
+            ENVELOPE_V,
+        );
+        let sealed = &mut good.grant_section.write_body.sealed;
+        let last = sealed.len() - 1;
+        sealed[last] ^= 1;
+        crate::testkit::resign_section(
+            &mut good.grant_section,
+            SCOPE,
+            good.envelope.epoch,
+            &owner_root_pseudonym(),
+        );
+        set_grant_section(
+            &mut good.envelope,
+            encode_grant_section(&good.grant_section).unwrap(),
+        );
+        good.head_block = encode_envelope(&good.envelope).unwrap();
+        good.head_cid_str = root_block_cid(&good.head_block);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
+        serve_at(&harness, SCOPE, &good, 1);
+        block_on(
+            harness
+                .net_rooted(RotationAncestry::default())
+                .gated_root(SCOPE, &good.name),
+        )
+        .expect("the copy passes the root gate");
+        let wedge = root_past_the_reseal_reservation_of(SCOPE, SCOPE, None);
+        serve_at(&harness, SCOPE, &wedge, 2);
+        let scope = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+
+        let net = harness.net(&[]);
+        assert_eq!(
+            block_on(net.resolve_anchored(&scope)).err(),
+            Some(ResolveFailure::Rejected)
+        );
+        assert_eq!(net.refused.take(), None);
+        assert_eq!(harness.events().len(), 1, "the step-over is surfaced once");
+    }
+
     /// No cached copy, no fallback: a rotation that cannot prove a body under
     /// the gate refuses rather than inventing one. The wedge still reaches the
     /// host — a refusal is where it matters most.
@@ -9368,19 +9541,52 @@ mod tests {
         let wedge = root_past_the_reseal_reservation(SCOPE, None);
         serve_at(&harness, SCOPE, &wedge, u64::MAX);
         let reported = RootReports::default();
+        let fallback = RootFallback::new(SCOPE, RootWait::Bound(&NoBound), &reported);
+        let net = harness.net(&[]);
+
+        let (read, last_copy) = harness
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
+            .expect("the last copy");
+
+        assert_eq!(
+            (read.sequence, last_copy),
+            (1, true),
+            "nothing lands above the ceiling, so the read runs on the last copy"
+        );
+        assert!(fallback.fell_back());
+        assert_eq!(harness.events().len(), 1, "one trust event");
+        assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// ADR 0068 D1: under a fallback that covers the scope, the net reads a
+    /// root that fills the reservation from its last copy and does not step
+    /// over it, so the cut sees the fallback (ADR 0068 D5).
+    #[test]
+    fn a_cut_under_its_fallback_does_not_step_over_a_root_that_fills_the_reservation() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let reported = RootReports::default();
         let mut net = harness.net(&[]);
-        net.root_fallback = Some(RootFallback::new(
-            SCOPE,
-            RootWait::Bound(&NoBound),
-            &reported,
-        ));
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
 
         let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the last copy");
 
-        assert_eq!(read.over_sequence, None, "nothing lands above the ceiling");
+        assert_eq!(read.over_sequence, None, "no step-over");
         assert!(net.fell_back());
-        assert_eq!(harness.events().len(), 1, "one trust event");
-        assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// A fallback for another scope does not cover this one, so the net steps
+    /// over a root that fills the reservation.
+    #[test]
+    fn a_fallback_for_another_scope_leaves_the_step_over_to_the_net() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(CHILD_SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the step-over");
+
+        assert_eq!(read.over_sequence, Some(2), "the step-over");
+        assert!(!net.fell_back());
     }
 
     /// A last copy at an envelope version this build does not author passes
@@ -9390,13 +9596,15 @@ mod tests {
     fn a_cut_does_not_fall_back_on_a_last_copy_at_a_foreign_envelope_version() {
         let (harness, good) = wedged_scope_of(SCOPE, SCOPE, None, ENVELOPE_V + 1);
         let reported = RootReports::default();
-        let mut net = harness.net(&[]);
-        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+        let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
+        let net = harness.net(&[]);
 
-        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the copy passes the gate");
+        let (read, _) = harness
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
+            .expect("the copy passes the gate");
 
-        assert!(read.root.observed.is_err(), "no publish builds on the copy");
-        assert!(!net.fell_back());
+        assert!(read.observed.is_err(), "no publish builds on the copy");
+        assert!(!fallback.fell_back());
         let events = harness.events();
         assert_eq!(events.len(), 1, "one trust event");
         assert!(matches!(
@@ -9412,13 +9620,15 @@ mod tests {
     fn a_cut_does_not_fall_back_on_a_last_copy_that_names_another_node() {
         let (harness, good) = wedged_scope_of(SCOPE, CHILD_SCOPE, None, ENVELOPE_V);
         let reported = RootReports::default();
-        let mut net = harness.net(&[]);
-        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+        let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
+        let net = harness.net(&[]);
 
-        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the copy passes the gate");
+        let (read, _) = harness
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
+            .expect("the copy passes the gate");
 
-        assert_eq!(read.root.envelope.id, CHILD_SCOPE);
-        assert!(!net.fell_back());
+        assert_eq!(read.envelope.id, CHILD_SCOPE);
+        assert!(!fallback.fell_back());
         let events = harness.events();
         assert_eq!(events.len(), 1, "one trust event");
         assert!(matches!(
@@ -9442,17 +9652,15 @@ mod tests {
         )
         .expect("a floor above the served record");
         let reported = RootReports::default();
-        let mut net = harness.net(&[]);
-        net.root_fallback = Some(RootFallback::new(
-            SCOPE,
-            RootWait::Bound(&NoBound),
-            &reported,
-        ));
+        let fallback = RootFallback::new(SCOPE, RootWait::Bound(&NoBound), &reported);
+        let net = harness.net(&[]);
 
-        let read = block_on(net.gated_root(SCOPE, &good.name)).map(|_| ());
+        let read = harness
+            .read_root(&net, Some(&fallback), SCOPE, &good.name)
+            .map(|_| ());
 
         assert_eq!(read, Err(RootGateVerdict::BelowFloor));
-        assert!(!net.fell_back());
+        assert!(!fallback.fell_back());
         assert!(
             harness.events().is_empty(),
             "no fallback, so no trust event"
@@ -18185,6 +18393,25 @@ mod tests {
         }
 
         #[test]
+        fn the_promoted_root_read() {
+            let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+            let net = harness.net(&[]);
+            let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
+            let node = &swept.children[0];
+            let name = scope_name(&node.ipns_name).expect("a node name");
+            raise_past(&harness.floors, &name);
+            let read = || block_on(net.promoted_root(&scope, node)).map(|_| ());
+
+            assert_eq!(
+                failed_then_healed(&harness, read),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
+                )
+            );
+        }
+
+        #[test]
         fn a_forged_record_stays_a_rejection() {
             let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
             let impostor = owner_root_fixture(OwnerRootSpec {
@@ -18310,6 +18537,42 @@ mod tests {
             );
         }
 
+        #[test]
+        fn the_served_root_gate() {
+            let harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            raise_past(&harness.floors, &staged.root.name);
+            let net = harness.net(&[]);
+            let adopter = net.root_adopter(SCOPE);
+            let bytes = harness
+                .store
+                .record_at(&harness.store.endpoints()[0], staged.root.name.as_str())
+                .expect("an endpoint serves the root");
+            let gate = |endpoint_failed| {
+                block_on(
+                    FallbackRead {
+                        adopter: &adopter,
+                        snapshot_cache: &harness.cache,
+                        expected_child: None,
+                        fallback: None,
+                        events: &harness.events,
+                        scope_id: SCOPE,
+                    }
+                    .gate_served(&staged.root.name, 1, &bytes, endpoint_failed),
+                )
+                .map(|_| ())
+                .map_err(ResolveFailure::from)
+            };
+
+            assert_eq!(
+                (gate(true), gate(false)),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
+                )
+            );
+        }
+
         /// The wave reads an interior node below its floor as unavailable while
         /// an endpoint fails, and reads the current record once it recovers.
         #[test]
@@ -18394,6 +18657,51 @@ mod tests {
                 ),
                 "{read:?}"
             );
+        }
+    }
+
+    /// The leaf reads of a rotation that find no record, or no floor, to
+    /// judge: availability, not a trust verdict.
+    mod leaf_read_availability {
+        use super::*;
+
+        /// A sequence floor the store cannot read is availability, not a
+        /// verdict on the record.
+        #[test]
+        fn the_sweep_read_of_an_interior_node_with_an_unreadable_floor() {
+            let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+            let net = harness.net(&[]);
+            let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
+            let node = &swept.children[0];
+            let name = scope_name(&node.ipns_name).expect("a node name");
+            harness
+                .floors
+                .fail_sequence_floor_reads_for(name.as_str().as_bytes());
+
+            assert_eq!(
+                block_on(net.resolve_child(&scope, node)).map(|_| ()),
+                Err(SweepResolveFailure::Unavailable)
+            );
+        }
+
+        /// A name that no endpoint serves a record for is unavailable, both
+        /// when every endpoint answers that it holds none and when every
+        /// endpoint fails.
+        #[test]
+        fn a_head_read_of_a_name_with_no_served_record_is_unavailable() {
+            let harness = Harness::plain();
+            let net = harness.net(&[]);
+            let vacant = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x5e; 16]);
+            let failing = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x5f; 16]);
+            harness.store.fail_get_for(failing.as_str());
+            for name in [&vacant, &failing] {
+                assert_eq!(
+                    block_on(net.head_at(name.as_str().as_bytes())).map(|_| ()),
+                    Err(ResolveFailure::Unavailable),
+                    "{}",
+                    name.as_str()
+                );
+            }
         }
     }
 }

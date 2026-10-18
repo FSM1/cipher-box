@@ -29,8 +29,8 @@ use crate::net::pointer_fetch::{PointerConsult, PointerConsultError};
 use crate::net::publish::Observed;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, PointerPipeline, RootFallback, RootReports, RootWait,
-    RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet, hold_scope_pointer,
+    OwnerRotationNet, PointerConsultArm, PointerPipeline, RefusedRoot, RootFallback, RootReports,
+    RootWait, RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet, hold_scope_pointer,
     publish_pointer_over,
 };
 use crate::profile::SyncTimingProfile;
@@ -207,6 +207,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            refused: RefusedRoot::default(),
             root_fallback: Some(
                 RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
                     .noting_root_puts(&self.root_reads.put_sent),

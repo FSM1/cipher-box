@@ -256,23 +256,19 @@ pub async fn fanout_get_under<T: RecordTransport>(
 pub(crate) struct AnsweredFetch {
     /// [`fanout_get_classified`]'s answer.
     pub(crate) record: FanoutRecord,
-    /// [`Scan::answered`].
-    pub(crate) answered: bool,
     /// [`TiedFetch::endpoint_failed`].
     pub(crate) endpoint_failed: bool,
 }
 
-/// [`fanout_get_classified`], and what the endpoints said beside it.
+/// [`fanout_get_classified`], and whether an endpoint gave no answer.
 pub(crate) async fn fanout_get_answered<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> AnsweredFetch {
     let scan = scan(transport, name).await;
-    let answered = scan.answered();
     let endpoint_failed = scan.endpoint_failed();
     AnsweredFetch {
         record: scan.classify(VacancyRule::Unanimous),
-        answered,
         endpoint_failed,
     }
 }
@@ -300,6 +296,8 @@ pub(crate) struct TiedFetch {
     /// An endpoint gave no answer about the name, so a below-floor pick is
     /// unavailable, not a rollback (ADR 0071 D1, D2).
     pub(crate) endpoint_failed: bool,
+    /// [`Scan::answered`].
+    pub(crate) answered: bool,
 }
 
 /// [`fanout_get_verify`], and [`TiedFetch::endpoint_failed`].
@@ -323,11 +321,13 @@ pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
     let scan = scan(transport, name).await;
     let absent = scan.absent(VacancyRule::Unanimous);
     let endpoint_failed = scan.endpoint_failed();
+    let answered = scan.answered();
     let Scan { best, tied, .. } = scan;
     TiedFetch {
         pick: best.map(|(verified, bytes)| (verified, bytes, tied)),
         absent,
         endpoint_failed,
+        answered,
     }
 }
 

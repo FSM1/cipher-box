@@ -13,8 +13,8 @@ use cipherbox_core::ipns::VerifiedRecord;
 use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
-use super::fanout::{FanoutRecord, TiedFetch, fanout_get_classified, fanout_get_tied_classified};
-use super::gated_read::{BelowFloor, sequence_refusal};
+use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::gated_read::{LeafRead, LeafRefusal, Unserved};
 use super::publish::{BarFloor, Observed, PublishError};
 use super::renewal_walk::RenewalSeams;
 use super::retire::HeldMarks;
@@ -25,8 +25,7 @@ use super::revival::{
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::{ApiClient, ApiError};
 use crate::entropy::Entropy;
-use crate::gate::GateError;
-use crate::gate::floor::{self, FloorRegression, PointerPlane, Strictness};
+use crate::gate::floor::{self, FloorRegression, PointerPlane};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{PublishedRoot, ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamResult};
@@ -101,16 +100,12 @@ where
         root_name: &[u8],
     ) -> Result<StandingVouch, RotationPublishError> {
         let name = self.name();
-        let TiedFetch {
-            pick,
-            absent,
-            endpoint_failed,
-        } = fanout_get_tied_classified(self.transport, &name).await;
-        let standing = match pick {
-            Some((record, _, _)) => record,
-            None if absent => return Err(RotationPublishError::Rejected),
-            None => return Err(RotationPublishError::NotPublished),
+        let read = match LeafRead::fetch(self.transport, &name).await {
+            Ok(read) => read,
+            Err(Unserved { absent: true, .. }) => return Err(RotationPublishError::Rejected),
+            Err(Unserved { absent: false, .. }) => return Err(RotationPublishError::NotPublished),
         };
+        let standing = &read.pick;
         let vouched = open_repoint(
             self.pointer_read_key.as_bytes(),
             self.payload_version,
@@ -128,14 +123,9 @@ where
         if vouched_floor.is_some_and(|floor| vouched.min_read_epoch < floor) {
             return Err(RotationPublishError::Rejected);
         }
-        floor::check_sequence(
-            self.floors,
-            name.as_str().as_bytes(),
-            standing.sequence,
-            Strictness::AtOrAboveFloor,
-        )
-        .await
-        .map_err(|error| standing_verdict(error, endpoint_failed))?;
+        read.check_floor(self.floors, name.as_str().as_bytes())
+            .await
+            .map_err(standing_verdict)?;
         Ok(StandingVouch {
             sequence: standing.sequence,
             repoint: vouched,
@@ -439,15 +429,10 @@ where
 
 /// The standing re-point's sequence check on rule 6's axis: a record below the
 /// floor while an endpoint failed is unavailable (ADR 0071 D1).
-fn standing_verdict(error: GateError, endpoint_failed: bool) -> RotationPublishError {
-    match error {
-        GateError::Rejected(rejection)
-            if sequence_refusal(&rejection.reason, endpoint_failed)
-                != Some(BelowFloor::Unavailable) =>
-        {
-            RotationPublishError::Rejected
-        }
-        _ => RotationPublishError::NotPublished,
+fn standing_verdict(refusal: LeafRefusal) -> RotationPublishError {
+    match refusal {
+        LeafRefusal::Rejected(_) => RotationPublishError::Rejected,
+        LeafRefusal::Withheld | LeafRefusal::Seam(_) => RotationPublishError::NotPublished,
     }
 }
 
@@ -461,7 +446,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use crate::api::ApiError;
-    use crate::gate::{GateRejection, GateStage, RejectionReason};
+    use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::eol::eol_from;
     use crate::seams::{HttpResponse, UnixMillis};
     use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
@@ -477,11 +462,11 @@ mod tests {
     #[test]
     fn a_below_floor_standing_pointer_is_unavailable_only_while_an_endpoint_fails() {
         assert_eq!(
-            standing_verdict(sequence(3, 2), true),
+            standing_verdict(LeafRefusal::of(sequence(3, 2), true)),
             RotationPublishError::NotPublished
         );
         assert_eq!(
-            standing_verdict(sequence(3, 2), false),
+            standing_verdict(LeafRefusal::of(sequence(3, 2), false)),
             RotationPublishError::Rejected
         );
     }
