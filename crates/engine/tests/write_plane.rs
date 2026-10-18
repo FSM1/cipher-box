@@ -17404,11 +17404,14 @@ fn root_gets_after_a_due_refresh(replayed: bool) -> (usize, usize) {
         .advance(SyncTimingProfile::CI.link_sweep_cadence);
     let refreshed =
         command_while_ticking(&mut fx.engine_b, Command::ManualRefresh, &mut fx.tasks_b);
-    assert_eq!(
-        matches!(refreshed, Err(EngineError::TrustViolation { .. })),
-        replayed,
-        "{refreshed:?}"
-    );
+    if replayed {
+        assert!(
+            matches!(refreshed, Err(EngineError::TrustViolation { .. })),
+            "{refreshed:?}"
+        );
+    } else {
+        assert!(refreshed.is_ok(), "{refreshed:?}");
+    }
     heal(&fx);
     let mut root_gets = || {
         let before = fx.world.record_store.get_count(root_name.as_str());

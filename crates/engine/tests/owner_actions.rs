@@ -8735,6 +8735,78 @@ fn a_recovered_descendant_sends_one_abuse_event_when_the_sweep_is_due() {
     );
 }
 
+/// The walk refuses a root past the re-seal reservation, and the sweep steps
+/// over it to the cached copy, whose write body does not open. The refusal of
+/// the copy sends its own event.
+#[test]
+fn a_cached_copy_the_sweep_refuses_after_the_step_over_sends_its_own_abuse_event() {
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    // The copy: an authentic signature over a write body that does not open.
+    let head = published_head(&due.fx.world, &due.fx.blocks, &name).expect("the folder root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let mut section = decode_grant_section(grant_section_bytes(&envelope).expect("a scope root"))
+        .expect("the section decodes");
+    let last = section.write_body.sealed.len() - 1;
+    section.write_body.sealed[last] ^= 1;
+    cipherbox_engine::testkit::resign_section(
+        &mut section,
+        folder.0,
+        envelope.epoch,
+        &kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &folder.0),
+    );
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = due
+        .fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    let copy_sequence = sequence_at(&due.fx.world, &name) + 1;
+    sign_at(
+        &due.fx,
+        &WRITE_SCOPE_SEED,
+        folder,
+        format!("/ipfs/{cid}").as_bytes(),
+        copy_sequence,
+    );
+    // The walk passes the copy and caches it. The sweep of this pass refuses
+    // it, and the next sweep waits out the cadence.
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+    let _ = events_so_far(&mut due.events);
+
+    plant_unresealable_root_at(&due.fx, &WRITE_SCOPE_SEED, copy_sequence + 1);
+    due.fx
+        .world
+        .scheduler
+        .advance(due.engine.profile().link_sweep_cadence);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    let scope = hex_lower(&folder.0);
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![scope.clone()],
+        "{abuse:#?}"
+    );
+    assert_eq!(
+        named_scopes(&abuse, "link sweep"),
+        vec![scope],
+        "{abuse:#?}"
+    );
+    assert_eq!(
+        abuse
+            .iter()
+            .filter(|description| description.contains("leaves no room"))
+            .count(),
+        1,
+        "the step-over is surfaced once: {abuse:#?}"
+    );
+    assert_eq!(abuse.len(), 3, "{abuse:#?}");
+}
+
 /// The sweep reads a record other than the one the walk refused, so each
 /// refused record sends its own event.
 #[test]
