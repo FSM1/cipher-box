@@ -102,8 +102,8 @@ where
         let name = self.name();
         let read = match LeafRead::fetch(self.transport, &name).await {
             Ok(read) => read,
-            Err(Unserved { absent: true }) => return Err(RotationPublishError::Rejected),
-            Err(Unserved { absent: false }) => return Err(RotationPublishError::NotPublished),
+            Err(Unserved { absent: true, .. }) => return Err(RotationPublishError::Rejected),
+            Err(Unserved { absent: false, .. }) => return Err(RotationPublishError::NotPublished),
         };
         let standing = &read.pick;
         let vouched = open_repoint(
