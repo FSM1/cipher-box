@@ -1695,7 +1695,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         let entropy = RefCell::new(crate::testkit::SeededEntropy::new(4));
         let secret = X25519Secret::from_scalar([9; 32]);
-        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), [3; 32]);
+        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy));
         block_on(async {
             for caller in [1u8, 2] {
                 journal
@@ -3255,6 +3255,7 @@ mod tests {
                 DeadLetterReason::NewerRelease,
                 DeadLetterReason::TargetIsScopeRoot,
             ];
+            assert_eq!(previous.len(), 21);
             for ((n, reason), (entry, notice)) in
                 (1..=21u8).zip(previous).zip(kept.iter().zip(&noted))
             {

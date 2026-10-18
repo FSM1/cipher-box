@@ -929,15 +929,10 @@ pub struct DissolveJournal<'a, S> {
 }
 
 impl<'a, S: StagingStore> DissolveJournal<'a, S> {
-    /// The journal of the owner `owner_tag` names, over the session's `cell`.
-    pub fn new(
-        store: &'a S,
-        seal: BookkeepingSeal<'a>,
-        owner_tag: [u8; 32],
-        cell: &'a DissolveCell,
-    ) -> Self {
+    /// The journal of the owner of `seal`, over the session's `cell`.
+    pub fn new(store: &'a S, seal: BookkeepingSeal<'a>, cell: &'a DissolveCell) -> Self {
         Self {
-            journal: ResealJournal::new(store, seal, owner_tag),
+            journal: ResealJournal::new(store, seal),
             cell,
         }
     }
@@ -1215,7 +1210,6 @@ mod tests {
 
     use super::*;
     use crate::seams::OpId;
-    use crate::sync::reseal_journal::RESEAL_JOURNAL_PREFIX;
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{SeededEntropy, block_on};
 
@@ -1459,12 +1453,7 @@ mod tests {
         let entropy = RefCell::new(SeededEntropy::new(5));
         let secret = X25519Secret::from_scalar([9; 32]);
         let cell = DissolveCell::default();
-        let journal = DissolveJournal::new(
-            store,
-            BookkeepingSeal::new(&secret, &entropy),
-            [3; 32],
-            &cell,
-        );
+        let journal = DissolveJournal::new(store, BookkeepingSeal::new(&secret, &entropy), &cell);
         block_on(test(&journal, &cell));
     }
 
@@ -1533,8 +1522,14 @@ mod tests {
     }
 
     /// Write `bytes` raw at `part` of `root`, as a value that does not open.
-    async fn put_raw<S: StagingStore>(store: &S, root: NodeId, part: &[u8], bytes: &[u8]) {
-        let key = [RESEAL_JOURNAL_PREFIX, &[3; 32], &root.0, part].concat();
+    async fn put_raw<S: StagingStore>(
+        journal: &DissolveJournal<'_, S>,
+        store: &S,
+        root: NodeId,
+        part: &[u8],
+        bytes: &[u8],
+    ) {
+        let key = journal.journal.key(root, part);
         store.put_staged_bytes(&key, bytes).await.unwrap();
     }
 
@@ -1764,7 +1759,14 @@ mod tests {
             let seal = at(DissolveStep::Seal);
             journal.put_map_page(&hold, &tree()).await.unwrap();
             journal.commit(&hold, None, &seal).await.unwrap();
-            put_raw(&store, ROOT, &[LOG_PART, 0, 0, 0, 1], b"not sealed").await;
+            put_raw(
+                journal,
+                &store,
+                ROOT,
+                &[LOG_PART, 0, 0, 0, 1],
+                b"not sealed",
+            )
+            .await;
             assert!(matches!(
                 journal.name_log(ROOT).await,
                 Err(DissolveWriteError::Blocked)
@@ -1787,14 +1789,21 @@ mod tests {
                 "the refused drop removed no page"
             );
 
-            put_raw(&store, ROOT, &[MAP_PART, 0, 0, 0, 0], b"not sealed").await;
+            put_raw(
+                journal,
+                &store,
+                ROOT,
+                &[MAP_PART, 0, 0, 0, 0],
+                b"not sealed",
+            )
+            .await;
             assert!(matches!(
                 journal.map(ROOT, &seal).await,
                 Err(DissolveWriteError::Blocked)
             ));
         });
         run_on(&store, async |journal, _| {
-            put_raw(&store, NESTED, &[LOG_PART, 0, 1], b"not sealed").await;
+            put_raw(journal, &store, NESTED, &[LOG_PART, 0, 1], b"not sealed").await;
             assert!(matches!(
                 journal.name_log(NESTED).await,
                 Err(DissolveWriteError::Blocked)
@@ -1845,7 +1854,7 @@ mod tests {
             ));
 
             let nested = cell.hold(NESTED).unwrap();
-            put_raw(&store, NESTED, HEADER_PART, b"not sealed").await;
+            put_raw(journal, &store, NESTED, HEADER_PART, b"not sealed").await;
             assert_eq!(
                 journal.header(NESTED).await.unwrap(),
                 HeaderSlot::Unreadable

@@ -480,12 +480,7 @@ fn the_dissolve_journal_writer_refuses_a_header_its_reader_refuses() {
     let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
     let secret = kdf::enc_subkey(&SECRET);
     let cell = DissolveCell::default();
-    let journal = DissolveJournal::new(
-        &store,
-        BookkeepingSeal::new(&secret, &entropy),
-        [3; 32],
-        &cell,
-    );
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
     let mut cut = dissolve_header_at(DissolveStep::Cut);
     cut.scopes[0].cut_time = 1_500;
@@ -616,12 +611,7 @@ fn dissolve_commit(
     let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
     let secret = kdf::enc_subkey(&SECRET);
     let cell = DissolveCell::default();
-    let journal = DissolveJournal::new(
-        &store,
-        BookkeepingSeal::new(&secret, &entropy),
-        [3; 32],
-        &cell,
-    );
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
     if held.map_pages != 0 {
         block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
@@ -794,12 +784,7 @@ fn the_dissolve_journal_writer_refuses_a_page_of_the_live_map() {
     let entropy = core::cell::RefCell::new(SeededEntropy::new(5));
     let secret = kdf::enc_subkey(&SECRET);
     let cell = DissolveCell::default();
-    let journal = DissolveJournal::new(
-        &store,
-        BookkeepingSeal::new(&secret, &entropy),
-        [3; 32],
-        &cell,
-    );
+    let journal = DissolveJournal::new(&store, BookkeepingSeal::new(&secret, &entropy), &cell);
     let hold = cell.hold(root).expect("one driver");
     let seal = dissolve_header_at(DissolveStep::Seal);
     block_on(journal.put_map_page(&hold, &dissolve_map(DISSOLVE_TREE))).expect("a page writes");
