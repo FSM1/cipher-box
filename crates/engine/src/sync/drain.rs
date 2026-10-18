@@ -13690,6 +13690,34 @@ mod tests {
         dead_lettered_with_a_notice(&op, op_id, &queue, &report);
     }
 
+    /// A kept version restore writes under its file's folder as an edit does.
+    #[test]
+    fn a_kept_version_restore_whose_folder_or_file_this_session_saw_unlinked_dead_letters() {
+        let before = compute_cid(DAG_ROOT_CODEC, b"head");
+        let after = compute_cid(DAG_ROOT_CODEC, b"restored");
+        for unlinked in [KEPT_FOLDER, KEPT_NODE] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            let restore = Op::restore_version(KEPT_NODE, after.clone(), 1, UnixMillis(0));
+            let note = KeptNote {
+                result: Some(KeptResult::RestoreVersion {
+                    before: before.clone(),
+                    after: after.clone(),
+                }),
+                ..cut_note()
+            };
+            let (op, op_id, queue, report) = kept_op_under_an_unlinked_node(
+                &harness,
+                restore,
+                note,
+                unlinked,
+                true,
+                HARNESS_ROOT,
+            );
+
+            dead_lettered_with_a_notice(&op, op_id, &queue, &report);
+        }
+    }
+
     /// A folder that the base lacks with no such read shows nothing: a cold
     /// base lacks deep folders. An unlink read at an old name, or a pass that
     /// does not write the root, keeps the op too.
