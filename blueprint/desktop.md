@@ -348,7 +348,8 @@ navigation (FSM1/cipher-box-next#33 D2):
   notice in the window, which the member can dismiss. The notice never takes
   the tray status line, so it hides no rung and no later warning (ADR 0062
   D5). A stranded-scope warning (`scopeRootStranded`) takes the tray status
-  line only when no other condition stands. "Sync Now" is a manual-refresh
+  line only when no other warning stands. Like every warning, it displaces
+  the staleness rung. "Sync Now" is a manual-refresh
   facade command with nocache semantics.
 - **Lifecycle**: menu-bar app; mount failure never fails login (session stays
   up, tray shows the error); logout = facade logout (engine zeroizes),
