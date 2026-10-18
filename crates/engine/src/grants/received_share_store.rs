@@ -123,6 +123,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new(POINTER_KEY),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         });
         shares
     }
