@@ -5,8 +5,8 @@
 //! generation and page) and the name log (part `n`, by index). The header is
 //! the commit point: a page that the header does not count is not part of the
 //! entry. Each shape has one check that encode and decode both run
-//! (AGENTS.md rule 8), and [`DissolveJournal`] holds the rules that compare a
-//! header with the one it replaces.
+//! (AGENTS.md rule 8), and [`DissolveJournal::commit`] checks each header
+//! against the one it replaces.
 
 use std::collections::BTreeSet;
 
@@ -16,9 +16,7 @@ use zeroize::Zeroizing;
 use crate::facade::NodeId;
 use crate::seams::{SeamError, SeamResult, StagingStore};
 use crate::sync::BookkeepingSeal;
-use crate::sync::reseal_journal::{
-    JournalError, JournalSlot, Journaled, ResealEnvelope, ResealJournal,
-};
+use crate::sync::reseal_journal::{JournalError, JournalSlot, ResealEnvelope, ResealJournal};
 
 /// The caller byte of a dissolve entry.
 pub const DISSOLVE_CALLER: u8 = 1;
@@ -422,27 +420,24 @@ pub fn check_map(
     {
         return Err(E::RowCount);
     }
-    let rows: Vec<&MapRow> = pages.iter().flat_map(|page| &page.rows).collect();
-    if u32::try_from(rows.len()) != Ok(header.rows) {
+    let rows = || pages.iter().flat_map(|page| &page.rows);
+    if u32::try_from(rows().count()) != Ok(header.rows) {
         return Err(E::RowCount);
     }
-    let root_row = rows.first().ok_or(E::RowCount)?;
+    let root_row = rows().next().ok_or(E::RowCount)?;
     if root_row.old != source_root || root_row.new != header.new_root || root_row.parent.is_some() {
         return Err(E::MapShape);
     }
-    let mut old = BTreeSet::new();
-    let mut new = BTreeSet::new();
-    for (at, row) in rows.iter().enumerate() {
+    // An old id and a new id share one set: no id is both.
+    let mut ids = BTreeSet::new();
+    for (at, row) in rows().enumerate() {
         let parent_ok = match row.parent {
             None => at == 0,
             Some(parent) => usize::try_from(parent).is_ok_and(|parent| parent < at),
         };
-        if !parent_ok || !old.insert(row.old) || !new.insert(row.new) {
+        if !parent_ok || !ids.insert(row.old) || !ids.insert(row.new) {
             return Err(E::MapShape);
         }
-    }
-    if !old.is_disjoint(&new) {
-        return Err(E::MapShape);
     }
     Ok(())
 }
@@ -478,6 +473,10 @@ fn bit(on: bool, flag: u8) -> u8 {
 
 fn push_count(out: &mut Vec<u8>, count: usize) {
     out.push(u8::try_from(count).unwrap_or(u8::MAX));
+}
+
+fn push_page_count(out: &mut Vec<u8>, count: usize) {
+    out.extend_from_slice(&u16::try_from(count).unwrap_or(u16::MAX).to_be_bytes());
 }
 
 /// The header payload of the entry at `source_root`.
@@ -574,10 +573,10 @@ impl<'a> Reader<'a> {
 
     fn name(&mut self) -> Result<Vec<u8>, DissolveCodecError> {
         let len = usize::from(self.u8()?);
-        if self.0.len() < len {
-            return Err(DissolveCodecError::Truncated);
-        }
-        let (name, rest) = self.0.split_at(len);
+        let (name, rest) = self
+            .0
+            .split_at_checked(len)
+            .ok_or(DissolveCodecError::Truncated)?;
         self.0 = rest;
         Ok(name.to_vec())
     }
@@ -686,11 +685,7 @@ pub fn encode_map_page(page: &MapPage) -> Result<Vec<u8>, DissolveCodecError> {
     let mut out = Vec::new();
     out.extend_from_slice(&page.generation.to_be_bytes());
     out.extend_from_slice(&page.page.to_be_bytes());
-    out.extend_from_slice(
-        &u16::try_from(page.rows.len())
-            .unwrap_or(u16::MAX)
-            .to_be_bytes(),
-    );
+    push_page_count(&mut out, page.rows.len());
     for row in &page.rows {
         out.extend_from_slice(&row.old.0);
         out.extend_from_slice(&row.new.0);
@@ -734,11 +729,7 @@ pub fn encode_name_log_page(page: &NameLogPage) -> Result<Vec<u8>, DissolveCodec
     check_name_log_page(page, page.index)?;
     let mut out = Vec::new();
     out.extend_from_slice(&page.index.to_be_bytes());
-    out.extend_from_slice(
-        &u16::try_from(page.entries.len())
-            .unwrap_or(u16::MAX)
-            .to_be_bytes(),
-    );
+    push_page_count(&mut out, page.entries.len());
     for entry in &page.entries {
         out.extend_from_slice(&entry.id.0);
         push_name(&mut out, &entry.name);
@@ -767,17 +758,12 @@ pub fn decode_name_log_page(payload: &[u8], index: u32) -> Result<NameLogPage, D
     Ok(page)
 }
 
-/// The rules that compare a header with the one it replaces: the entry keeps
-/// its copy root and its relink parent, a set `cut_time` stays, the sticky
-/// flags and lists only grow, and the scopes and the prior bindings only take
-/// additions at their end. A rebind to another read or write scope appends
-/// the former binding. For one read scope, the restart floor does not fall.
+/// The rules that compare a header with the one it replaces (ADR 0077 D3).
 fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'static str> {
     if held.new_root != new.new_root || held.relink_parent != new.relink_parent {
         return Err("dissolve-journal-entry-identity-changed");
     }
-    let keeps_prefix = |held_len: usize, new_len: usize| held_len <= new_len;
-    if !keeps_prefix(held.scopes.len(), new.scopes.len())
+    if held.scopes.len() > new.scopes.len()
         || held
             .scopes
             .iter()
@@ -944,13 +930,6 @@ pub struct DissolveHold<'a> {
     root: NodeId,
 }
 
-impl DissolveHold<'_> {
-    /// The source root this hold takes.
-    pub fn root(&self) -> NodeId {
-        self.root
-    }
-}
-
 impl Drop for DissolveHold<'_> {
     fn drop(&mut self) {
         self.cell.held.borrow_mut().remove(&self.root);
@@ -973,11 +952,6 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         }
     }
 
-    /// Every source root that a journal key names.
-    pub async fn journaled(&self) -> SeamResult<Journaled> {
-        self.journal.journaled().await
-    }
-
     /// Every source root that a journal key names, listed once in a session
     /// and then kept up to date by this journal's own writes.
     pub async fn roots(&self) -> SeamResult<BTreeSet<NodeId>> {
@@ -990,25 +964,30 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         if let Some(roots) = self.cell.roots.borrow().as_ref() {
             return Ok(roots.clone());
         }
-        let roots = self.journaled().await?.roots;
+        let roots = self.journal.journaled().await?.roots;
         *self.cell.roots.borrow_mut() = Some(roots.clone());
         Ok(roots)
     }
 
-    /// The payload of `part` of the entry at `root`: `None` when absent,
-    /// `Some(Err(()))` when it does not read as a dissolve value.
+    /// The payload of `part` of the entry at `root`, `None` when absent.
+    /// Refused when it does not read as a dissolve value.
     async fn payload(
         &self,
         root: NodeId,
         part: &[u8],
-    ) -> SeamResult<Option<Result<Zeroizing<Vec<u8>>, ()>>> {
-        Ok(match self.journal.read(root, part).await? {
-            JournalSlot::Absent => None,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, DissolveWriteError> {
+        match self
+            .journal
+            .read(root, part)
+            .await
+            .map_err(DissolveWriteError::Store)?
+        {
+            JournalSlot::Absent => Ok(None),
             JournalSlot::Kept(envelope) if envelope.caller == DISSOLVE_CALLER => {
-                Some(Ok(envelope.payload))
+                Ok(Some(envelope.payload))
             }
-            JournalSlot::Kept(_) | JournalSlot::Unreadable => Some(Err(())),
-        })
+            JournalSlot::Kept(_) | JournalSlot::Unreadable => Err(DissolveWriteError::Blocked),
+        }
     }
 
     /// What the header key of `root` holds.
@@ -1049,8 +1028,9 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
                     payload: payload.into(),
                 },
             )
-            .await
-            .map_err(DissolveWriteError::from)
+            .await?;
+        self.cell.note(root, true);
+        Ok(())
     }
 
     /// Replace the header `held` at the root of `hold` with `new`, or write
@@ -1075,9 +1055,7 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
             let pages = self.pages(root, new.map_gen, new.map_pages).await?;
             check_map(new, root, &pages).map_err(DissolveWriteError::Codec)?;
         }
-        self.put(root, HEADER_PART, payload).await?;
-        self.cell.note(root, true);
-        Ok(())
+        self.put(root, HEADER_PART, payload).await
     }
 
     fn map_part(generation: u16, page: u16) -> Vec<u8> {
@@ -1103,10 +1081,8 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         for index in 0..count {
             let payload = self
                 .payload(root, &Self::map_part(generation, index))
-                .await
-                .map_err(DissolveWriteError::Store)?
-                .ok_or(DissolveWriteError::Codec(DissolveCodecError::RowCount))?
-                .map_err(|()| DissolveWriteError::Blocked)?;
+                .await?
+                .ok_or(DissolveWriteError::Codec(DissolveCodecError::RowCount))?;
             pages.push(
                 decode_map_page(&payload, generation, index).map_err(DissolveWriteError::Codec)?,
             );
@@ -1114,10 +1090,8 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         Ok(pages)
     }
 
-    /// Write one map page at the root of `hold`. The page joins the entry
-    /// only when a header commit counts it, and a page of the live map is
-    /// never rewritten: until the next header commits, its generation stays
-    /// the map. A root with no dissolve header takes no page.
+    /// Write one map page at the root of `hold`. A page of the live map is
+    /// never rewritten, and a root with no dissolve header takes no page.
     pub async fn put_map_page(
         &self,
         hold: &DissolveHold<'_>,
@@ -1137,9 +1111,7 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
             &Self::map_part(page.generation, page.page),
             payload,
         )
-        .await?;
-        self.cell.note(hold.root, true);
-        Ok(())
+        .await
     }
 
     /// The live map of `header` at `root`.
@@ -1166,18 +1138,10 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         if self.standing(hold.root).await?.is_none() {
             return Err(DissolveWriteError::Stale);
         }
-        match self
-            .payload(hold.root, &part)
-            .await
-            .map_err(DissolveWriteError::Store)?
-        {
-            None => {}
-            Some(Ok(_)) => return Err(DissolveWriteError::LogPageWritten),
-            Some(Err(())) => return Err(DissolveWriteError::Blocked),
+        if self.payload(hold.root, &part).await?.is_some() {
+            return Err(DissolveWriteError::LogPageWritten);
         }
-        self.put(hold.root, &part, payload).await?;
-        self.cell.note(hold.root, true);
-        Ok(())
+        self.put(hold.root, &part, payload).await
     }
 
     /// Every name log page of the entry at `root`, by index.
@@ -1199,10 +1163,8 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         for index in indexes {
             let payload = self
                 .payload(root, &Self::log_part(index))
-                .await
-                .map_err(DissolveWriteError::Store)?
-                .ok_or(DissolveWriteError::Blocked)?
-                .map_err(|()| DissolveWriteError::Blocked)?;
+                .await?
+                .ok_or(DissolveWriteError::Blocked)?;
             pages.push(decode_name_log_page(&payload, index).map_err(DissolveWriteError::Codec)?);
         }
         Ok(pages)
@@ -1217,10 +1179,9 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
     ) -> Result<(), DissolveWriteError> {
         let root = hold.root;
         let _writer = self.cell.writer.lock().await;
-        if self.header(root).await.map_err(DissolveWriteError::Store)?
-            != HeaderSlot::Own(held.clone())
-        {
-            return Err(DissolveWriteError::Stale);
+        match self.header(root).await.map_err(DissolveWriteError::Store)? {
+            HeaderSlot::Own(header) if header == *held => {}
+            _ => return Err(DissolveWriteError::Stale),
         }
         let mut parts = self
             .journal
@@ -1229,13 +1190,7 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
             .map_err(DissolveWriteError::Store)?;
         parts.retain(|part| part != HEADER_PART);
         for part in &parts {
-            if let Some(Err(())) = self
-                .payload(root, part)
-                .await
-                .map_err(DissolveWriteError::Store)?
-            {
-                return Err(DissolveWriteError::Blocked);
-            }
+            self.payload(root, part).await?;
         }
         for part in parts.iter().map(Vec::as_slice).chain([HEADER_PART]) {
             self.journal.remove(root, part, DISSOLVE_CALLER).await?;
@@ -1291,16 +1246,15 @@ mod tests {
             vec![DissolvedScope::uncut(ROOT), DissolvedScope::uncut(NESTED)],
         );
         header.step = step;
+        header.copy_started = step >= DissolveStep::Seal;
         if (DissolveStep::Seal..=DissolveStep::Retire).contains(&step) {
             header.map_pages = 1;
             header.rows = 2;
-            header.copy_started = true;
         }
         if step >= DissolveStep::Relink {
             for scope in &mut header.scopes {
                 scope.manifest = Some(manifest());
             }
-            header.copy_started = true;
             header.relink_sent = true;
             header.relink_names = vec![b"k51parent".to_vec()];
         }
@@ -1612,8 +1566,7 @@ mod tests {
         run(async |journal, cell| {
             let hold = cell.hold(ROOT).unwrap();
             assert!(cell.hold(ROOT).is_none(), "one driver per entry");
-            let first = at(DissolveStep::Cut);
-            journal.commit(&hold, None, &first).await.unwrap();
+            let first = begin(journal, &hold).await;
             assert!(matches!(
                 journal.commit(&hold, None, &first).await,
                 Err(DissolveWriteError::Stale)
@@ -1738,8 +1691,7 @@ mod tests {
     fn a_header_counts_its_map_pages_only_once_they_form_its_map() {
         run(async |journal, cell| {
             let hold = cell.hold(ROOT).unwrap();
-            let cut = at(DissolveStep::Cut);
-            journal.commit(&hold, None, &cut).await.unwrap();
+            let cut = begin(journal, &hold).await;
             let seal = at(DissolveStep::Seal);
             assert!(
                 matches!(
@@ -1937,12 +1889,11 @@ mod tests {
     fn a_dropped_entry_leaves_no_key() {
         run(async |journal, cell| {
             let hold = cell.hold(ROOT).unwrap();
-            let header = at(DissolveStep::Cut);
-            journal.commit(&hold, None, &header).await.unwrap();
+            let header = begin(journal, &hold).await;
             journal.put_map_page(&hold, &tree()).await.unwrap();
             journal.drop_entry(&hold, &header).await.unwrap();
             assert_eq!(journal.header(ROOT).await.unwrap(), HeaderSlot::Absent);
-            assert!(!journal.journaled().await.unwrap().blocks(ROOT));
+            assert!(!journal.journal.journaled().await.unwrap().blocks(ROOT));
         });
     }
 
@@ -1960,7 +1911,7 @@ mod tests {
                 journal.append_name_log(&hold, &log(0, b"k51new")).await,
                 Err(DissolveWriteError::Stale)
             ));
-            assert!(!journal.journaled().await.unwrap().blocks(ROOT));
+            assert!(!journal.journal.journaled().await.unwrap().blocks(ROOT));
         });
     }
 
