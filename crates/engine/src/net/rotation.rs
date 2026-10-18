@@ -344,6 +344,7 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
 
 /// The bytes of the served record that the last scope-root read of a net
 /// refused, so a caller can tell a refusal already reported from a new one.
+/// Empty after a read that passed, also over the last gate-passing copy.
 #[derive(Default)]
 pub struct RefusedRoot {
     inner: RefCell<Option<Vec<u8>>>,
@@ -2195,25 +2196,25 @@ where
             self.snapshot_cache,
             anchor.expected_child(scope_id),
         );
-        let mut read = read.read(self.transport, name).await;
-        // The arms below read only the served sequence.
-        if let Err(RootRefusal {
-            served: Some((_, bytes)),
-            ..
-        }) = &mut read
-        {
-            self.refused.park(std::mem::take(bytes));
-        }
-        match read {
-            Ok(root) => Ok(ResealableRoot {
-                root,
-                over_sequence: None,
-            }),
-            Err(RootRefusal { served: None, .. }) => Err(RootGateVerdict::Unavailable),
+        self.refused.take();
+        let (verdict, sequence) = match read.read(self.transport, name).await {
+            Ok(root) => {
+                return Ok(ResealableRoot {
+                    root,
+                    over_sequence: None,
+                });
+            }
+            Err(RootRefusal { served: None, .. }) => return Err(RootGateVerdict::Unavailable),
             Err(RootRefusal {
-                verdict: RootGateVerdict::NotResealable,
-                served: Some((sequence, _)),
-            }) if !self.falls_back(&scope_id) => {
+                verdict,
+                served: Some((sequence, bytes)),
+            }) => {
+                self.refused.park(bytes);
+                (verdict, sequence)
+            }
+        };
+        let over_copy = match verdict {
+            RootGateVerdict::NotResealable if !self.falls_back(&scope_id) => {
                 let stepped_over = self
                     .last_known_good_root(&adopter, name, scope_id, anchor, sequence)
                     .await;
@@ -2233,10 +2234,7 @@ where
                 );
                 stepped_over
             }
-            Err(RootRefusal {
-                verdict,
-                served: Some((sequence, _)),
-            }) => RootFallback::fall_back(
+            verdict => RootFallback::fall_back(
                 self.root_fallback.as_ref(),
                 &adopter,
                 self.snapshot_cache,
@@ -2252,7 +2250,12 @@ where
                 root,
                 over_sequence: None,
             }),
+        };
+        // A later refusal names the copy read, not the record it stepped over.
+        if over_copy.is_ok() {
+            self.refused.take();
         }
+        over_copy
     }
 
     /// Whether this net's [`RootFallback`] covers `scope_id`'s root.
@@ -9377,6 +9380,68 @@ mod tests {
         let target = block_on(harness.net(&[]).resolve_anchored(&scope)).expect("the last copy");
 
         assert_eq!(target.read_sequence, 1, "the gate adopted the copy at 1");
+    }
+
+    /// A read over the last gate-passing copy holds no refused record, so a
+    /// later refusal of that copy is not read as the refusal of the record it
+    /// stepped over.
+    #[test]
+    fn a_refusal_after_the_step_over_names_no_stepped_over_record() {
+        // The cached copy passes the root gate, and its write body, signed
+        // over bytes that do not unseal, does not open.
+        let mut good = crate::testkit::owner_root_fixture_sealed(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &owner_enc().public(),
+                scope_id: SCOPE,
+                root_id: SCOPE,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: None,
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            },
+            OWNER_ROOT_EPOCH,
+            ENVELOPE_V,
+        );
+        let sealed = &mut good.grant_section.write_body.sealed;
+        let last = sealed.len() - 1;
+        sealed[last] ^= 1;
+        crate::testkit::resign_section(
+            &mut good.grant_section,
+            SCOPE,
+            good.envelope.epoch,
+            &owner_root_pseudonym(),
+        );
+        set_grant_section(
+            &mut good.envelope,
+            encode_grant_section(&good.grant_section).unwrap(),
+        );
+        good.head_block = encode_envelope(&good.envelope).unwrap();
+        good.head_cid_str = root_block_cid(&good.head_block);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
+        serve_at(&harness, SCOPE, &good, 1);
+        block_on(
+            harness
+                .net_rooted(RotationAncestry::default())
+                .gated_root(SCOPE, &good.name),
+        )
+        .expect("the copy passes the root gate");
+        let wedge = root_past_the_reseal_reservation_of(SCOPE, SCOPE, None);
+        serve_at(&harness, SCOPE, &wedge, 2);
+        let scope = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+
+        let net = harness.net(&[]);
+        assert_eq!(
+            block_on(net.resolve_anchored(&scope)).err(),
+            Some(ResolveFailure::Rejected)
+        );
+        assert_eq!(net.refused.take(), None);
+        assert_eq!(harness.events().len(), 1, "the step-over is surfaced once");
     }
 
     /// No cached copy, no fallback: a rotation that cannot prove a body under

@@ -8566,10 +8566,6 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     );
 }
 
-/// The fan-out GETs of a scope root's name that one pass sends ahead of its
-/// link sweep, per endpoint.
-const WALK_GETS: usize = 1;
-
 /// The vault root's own record at `node`'s write name, at `sequence`: signed by
 /// the name's key, and refused by every gate because its commitment names
 /// another name.
@@ -8679,6 +8675,66 @@ fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
     );
 }
 
+/// A descendant whose live owner blob the gate refuses, read on from the
+/// cached owner copy, sends one abuse event on that pass, also when the link
+/// sweep reads the same record again.
+#[test]
+fn a_recovered_descendant_sends_one_abuse_event_when_the_sweep_is_due() {
+    use cipherbox_core::seal::{OverrideSeedPayload, STRUCT_TAG_OWNER_BLOB, seal_owner_blob};
+    let mut due = due_sweep(0);
+    let folder = due.fx.folder;
+    let name = write_name(folder);
+    let head = published_head(&due.fx.world, &due.fx.blocks, &name).expect("the folder root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let mut section = decode_grant_section(grant_section_bytes(&envelope).expect("a scope root"))
+        .expect("the section decodes");
+    let blob = seal_owner_blob(
+        &kdf::enc_subkey(&SECRET).public(),
+        &[0x99; 32],
+        &AadContext {
+            v: envelope.v,
+            id: envelope.id,
+            scope: envelope.scope,
+            epoch: envelope.epoch,
+            struct_tag: STRUCT_TAG_OWNER_BLOB,
+        },
+        &OverrideSeedPayload::new([0x98; 32], envelope.epoch),
+    )
+    .expect("the blob seals");
+    section.owner_blob.enc = blob.enc;
+    section.owner_blob.ciphertext = blob.ciphertext;
+    cipherbox_engine::testkit::resign_section(
+        &mut section,
+        folder.0,
+        envelope.epoch,
+        &kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &folder.0),
+    );
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = due
+        .fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    sign_at(
+        &due.fx,
+        &WRITE_SCOPE_SEED,
+        folder,
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&due.fx.world, &name) + 1,
+    );
+    let _ = events_so_far(&mut due.events);
+    tick(&due.fx.world, &due.engine, &mut due.tasks);
+
+    let abuse = abuse_descriptions(&mut due.events);
+    assert_eq!(abuse.len(), 1, "{abuse:#?}");
+    assert_eq!(
+        named_scopes(&abuse, "boundary walk"),
+        vec![hex_lower(&folder.0)]
+    );
+}
+
 /// The sweep reads a record other than the one the walk refused, so each
 /// refused record sends its own event.
 #[test]
@@ -8692,10 +8748,11 @@ fn a_second_refused_record_that_the_sweep_reads_sends_its_own_abuse_event() {
         folder,
         &misplaced_root_record(&due.fx.world, folder, sequence + 1),
     );
-    let endpoints = due.fx.world.record_store.endpoints().len();
+    // The walk sends one fan-out GET at the name ahead of the sweep.
+    let walk_gets = due.fx.world.record_store.endpoints().len();
     due.fx.world.record_store.serve_gets_for_after(
         name.as_str(),
-        WALK_GETS * endpoints,
+        walk_gets,
         usize::MAX,
         Some(misplaced_root_record(&due.fx.world, folder, sequence)),
     );
