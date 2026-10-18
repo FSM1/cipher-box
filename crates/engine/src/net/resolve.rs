@@ -385,17 +385,15 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let fetch = LeafRead::fetch(transport, name).await;
-    let absent = matches!(fetch, Err(Unserved { absent: true }));
     let mut withheld = false;
-    let (fetched, tied, endpoint_failed) = match fetch {
+    let (fetched, tied, endpoint_failed, absent) = match LeafRead::fetch(transport, name).await {
         Ok(LeafRead {
             pick,
             bytes,
             tied,
             endpoint_failed,
-        }) => (Some((pick, bytes)), tied, endpoint_failed),
-        Err(_) => (None, Vec::new(), false),
+        }) => (Some((pick, bytes)), tied, endpoint_failed, false),
+        Err(Unserved { absent }) => (None, Vec::new(), false, absent),
     };
     let (outcome, mut parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
