@@ -43,6 +43,7 @@ const FLAG_RELINK_SENT: u8 = 1 << 1;
 const FLAG_PARKED: u8 = 1 << 2;
 const MANIFEST_SET: u8 = 1;
 const MANIFEST_RETIRED: u8 = 1 << 1;
+const SCOPE_FINAL_LANDED: u8 = 1 << 2;
 
 /// The step a dissolve still owes, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,10 +134,13 @@ pub struct Manifest {
 pub struct DissolvedScope {
     /// The scope id, which is also its root's node id.
     pub scope_id: NodeId,
-    /// The cut epoch the dissolve's cut left, 0 until the cut lands.
+    /// The cut epoch of the dissolve's cut, written before the cut publishes,
+    /// 0 until then.
     pub cut_epoch: u64,
     /// The scheduler time of the cut, 0 until it is set. Set once.
     pub cut_time: u64,
+    /// The final records of the cut published again. Sticky.
+    pub final_landed: bool,
     /// The final records, from the relink on.
     pub manifest: Option<Manifest>,
 }
@@ -148,6 +152,7 @@ impl DissolvedScope {
             scope_id,
             cut_epoch: 0,
             cut_time: 0,
+            final_landed: false,
             manifest: None,
         }
     }
@@ -292,6 +297,8 @@ pub enum DissolveCodecError {
     RetireCursor,
     /// The hold step still holds a map.
     MapAtHold,
+    /// A scope's final records landed before its cut epoch and `cut_time`.
+    LandedBeforeCut,
 }
 
 impl DissolveCodecError {
@@ -314,6 +321,7 @@ impl DissolveCodecError {
             Self::RetiredOutsideHold => "dissolve-journal-retired-outside-hold",
             Self::RetireCursor => "dissolve-journal-retire-cursor",
             Self::MapAtHold => "dissolve-journal-map-at-hold",
+            Self::LandedBeforeCut => "dissolve-journal-landed-before-cut",
         }
     }
 }
@@ -342,6 +350,9 @@ fn check_header(header: &DissolveHeader, source_root: NodeId) -> Result<(), Diss
     for scope in &header.scopes {
         if !seen.insert(scope.scope_id) {
             return Err(E::DuplicateScope);
+        }
+        if scope.final_landed && (scope.cut_epoch == 0 || scope.cut_time == 0) {
+            return Err(E::LandedBeforeCut);
         }
         if let Some(manifest) = &scope.manifest {
             cap(name_ok(&manifest.pointer_name)
@@ -505,10 +516,11 @@ pub fn encode_dissolve_header(
         out.extend_from_slice(&scope.scope_id.0);
         out.extend_from_slice(&scope.cut_epoch.to_be_bytes());
         out.extend_from_slice(&scope.cut_time.to_be_bytes());
+        let landed = bit(scope.final_landed, SCOPE_FINAL_LANDED);
         match &scope.manifest {
-            None => out.push(0),
+            None => out.push(landed),
             Some(manifest) => {
-                out.push(MANIFEST_SET | bit(manifest.retired, MANIFEST_RETIRED));
+                out.push(MANIFEST_SET | bit(manifest.retired, MANIFEST_RETIRED) | landed);
                 out.extend_from_slice(&manifest.hold_until.to_be_bytes());
                 push_name(&mut out, &manifest.pointer_name);
                 push_name(&mut out, &manifest.final_root_name);
@@ -613,25 +625,28 @@ pub fn decode_dissolve_header(
             let scope_id = r.id()?;
             let cut_epoch = r.u64()?;
             let cut_time = r.u64()?;
-            let manifest = match r.u8()? {
-                0 => None,
-                bits if bits & !(MANIFEST_SET | MANIFEST_RETIRED) == 0
-                    && bits & MANIFEST_SET != 0 =>
-                {
-                    Some(Manifest {
-                        hold_until: r.u64()?,
-                        pointer_name: r.name()?,
-                        final_root_name: r.name()?,
-                        head_cid: r.name()?,
-                        retired: bits & MANIFEST_RETIRED != 0,
-                    })
-                }
-                _ => return Err(DissolveCodecError::UnknownFlag),
+            let bits = r.u8()?;
+            if bits & !(MANIFEST_SET | MANIFEST_RETIRED | SCOPE_FINAL_LANDED) != 0
+                || (bits & MANIFEST_RETIRED != 0 && bits & MANIFEST_SET == 0)
+            {
+                return Err(DissolveCodecError::UnknownFlag);
+            }
+            let manifest = if bits & MANIFEST_SET == 0 {
+                None
+            } else {
+                Some(Manifest {
+                    hold_until: r.u64()?,
+                    pointer_name: r.name()?,
+                    final_root_name: r.name()?,
+                    head_cid: r.name()?,
+                    retired: bits & MANIFEST_RETIRED != 0,
+                })
             };
             Ok(DissolvedScope {
                 scope_id,
                 cut_epoch,
                 cut_time,
+                final_landed: bits & SCOPE_FINAL_LANDED != 0,
                 manifest,
             })
         })
@@ -772,6 +787,11 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
         return Err("dissolve-journal-cut-time-set-once");
     }
     if (held.copy_started && !new.copy_started)
+        || held
+            .scopes
+            .iter()
+            .zip(&new.scopes)
+            .any(|(was, now)| was.final_landed && !now.final_landed)
         || (held.relink_sent && !new.relink_sent)
         || !new.relink_names.starts_with(&held.relink_names)
     {
@@ -1289,6 +1309,9 @@ mod tests {
     fn a_header_at_each_step_round_trips() {
         let mut hold = at(DissolveStep::Hold);
         hold.scopes[0].manifest.as_mut().unwrap().retired = true;
+        hold.scopes[0].cut_epoch = 7;
+        hold.scopes[0].cut_time = 1_500;
+        hold.scopes[0].final_landed = true;
         hold.prior_bindings.push(PriorBinding {
             read_scope: NodeId([0x30; 16]),
             read_root: NodeId([0x31; 16]),
@@ -1307,6 +1330,7 @@ mod tests {
         extended.rows = 2;
         extended.scopes[0].cut_epoch = 7;
         extended.scopes[0].cut_time = 1_500;
+        extended.scopes[0].final_landed = true;
         for header in [
             at(DissolveStep::Cut),
             at(DissolveStep::Map),
@@ -1336,9 +1360,11 @@ mod tests {
         let mut trailing = valid.clone();
         trailing.push(0);
         let mut unknown_manifest = valid.clone();
-        *unknown_manifest.last_mut().unwrap() = 1 << 2;
+        *unknown_manifest.last_mut().unwrap() = 1 << 3;
         let mut retired_unset = valid.clone();
         *retired_unset.last_mut().unwrap() = MANIFEST_RETIRED;
+        let mut landed_uncut = valid.clone();
+        *landed_uncut.last_mut().unwrap() = SCOPE_FINAL_LANDED;
         for (body, refusal) in [
             (unknown_step, DissolveCodecError::UnknownStep),
             (zero_step, DissolveCodecError::UnknownStep),
@@ -1350,6 +1376,7 @@ mod tests {
             ),
             (unknown_manifest, DissolveCodecError::UnknownFlag),
             (retired_unset, DissolveCodecError::UnknownFlag),
+            (landed_uncut, DissolveCodecError::LandedBeforeCut),
         ] {
             assert_eq!(decode_dissolve_header(&body, ROOT), Err(refusal));
         }
@@ -1573,6 +1600,8 @@ mod tests {
             let hold = cell.hold(ROOT).unwrap();
             let mut held = at(DissolveStep::Relink);
             held.scopes[0].cut_time = 1_500;
+            held.scopes[0].cut_epoch = 7;
+            held.scopes[0].final_landed = true;
             held.prior_bindings.push(PriorBinding {
                 read_scope: NodeId([0x30; 16]),
                 read_root: NodeId([0x31; 16]),
@@ -1591,6 +1620,8 @@ mod tests {
             shortened.relink_names.clear();
             let mut uncopied = held.clone();
             uncopied.copy_started = false;
+            let mut unlanded = held.clone();
+            unlanded.scopes[0].final_landed = false;
             let mut dropped = held.clone();
             dropped.scopes.pop();
             let mut unbound = held.clone();
@@ -1600,6 +1631,7 @@ mod tests {
                 (unsent, "dissolve-journal-sticky-mark-cleared"),
                 (shortened, "dissolve-journal-sticky-mark-cleared"),
                 (uncopied, "dissolve-journal-sticky-mark-cleared"),
+                (unlanded, "dissolve-journal-sticky-mark-cleared"),
                 (dropped, "dissolve-journal-scopes-not-append-only"),
                 (unbound, "dissolve-journal-prior-bindings-not-append-only"),
             ] {

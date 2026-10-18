@@ -415,6 +415,20 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             }),
             DissolveCodecError::MapAtHold,
         ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes[1].cut_epoch = 7;
+                h.scopes[1].final_landed = true;
+            }),
+            DissolveCodecError::LandedBeforeCut,
+        ),
+        (
+            edit(DissolveStep::Cut, &|h| {
+                h.scopes[1].cut_time = 1_500;
+                h.scopes[1].final_landed = true;
+            }),
+            DissolveCodecError::LandedBeforeCut,
+        ),
     ];
     for (header, refusal) in cases {
         assert_eq!(
@@ -665,6 +679,9 @@ fn the_dissolve_journal_writer_refuses_each_map_its_reader_refuses() {
 #[test]
 fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
     let mut held = dissolve_header_at(DissolveStep::Relink);
+    held.scopes[0].cut_epoch = 7;
+    held.scopes[0].cut_time = 1_500;
+    held.scopes[0].final_landed = true;
     held.prior_bindings.push(PriorBinding {
         read_scope: NodeId([0x30; 16]),
         read_root: NodeId([0x31; 16]),
@@ -699,6 +716,10 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
         ),
         (
             edit(&|h| h.relink_names.clear()),
+            "dissolve-journal-sticky-mark-cleared",
+        ),
+        (
+            edit(&|h| h.scopes[0].final_landed = false),
             "dissolve-journal-sticky-mark-cleared",
         ),
         (
