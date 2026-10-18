@@ -188,6 +188,7 @@ use crate::sync::provision::{
 use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue};
 use crate::sync::record::RecordClass;
 use crate::sync::render::{RenderKey, RenderMemo};
+use crate::sync::reseal_journal::RESEAL_JOURNAL_PREFIX;
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
@@ -6523,9 +6524,10 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// Whether the staging store holds any durable debt the erase would take
-    /// with it: an owed retirement, a delete's doomed-name journal entry, or a
-    /// scope-exit cut. A store that will not enumerate reads as owing, so the
-    /// pass runs rather than the debt being assumed away.
+    /// with it: an owed retirement, a delete's doomed-name journal entry, a
+    /// scope-exit cut, owed rotation work, or a subtree re-seal. A store that
+    /// will not enumerate reads as owing, so the pass runs rather than the
+    /// debt being assumed away.
     async fn owes_bookkeeping(&self) -> bool {
         let Ok(keys) = self.seams.staging_store.staged_keys().await else {
             return true;
@@ -6535,6 +6537,7 @@ impl<T: SeamTypes> Engine<T> {
                 || key.starts_with(DOOMED_JOURNAL_PREFIX)
                 || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
                 || key.starts_with(OWED_ROTATION_PREFIX)
+                || key.starts_with(RESEAL_JOURNAL_PREFIX)
         })
     }
 
@@ -17705,6 +17708,25 @@ mod tests {
             );
         }
 
+        /// A subtree re-seal is debt the erase takes with it, so the forget
+        /// tries a pass first, as for an owed retirement.
+        #[test]
+        fn a_subtree_reseal_entry_is_debt_the_forget_reports() {
+            let (mut engine, device, _events) = loaded();
+            let entry = [RESEAL_JOURNAL_PREFIX, b"an-owed-re-seal"].concat();
+            block_on(device.staging_store.put_staged_bytes(&entry, b"sealed")).unwrap();
+
+            assert_eq!(
+                block_on(engine.command(Command::ForgetDevice)),
+                Ok(CommandOutcome::Forgotten {
+                    unsettled_bytes: None,
+                    unsettled_is_partial: false,
+                    stalls: 0
+                }),
+                "a forget with no pass behind it reports the debt as unread"
+            );
+        }
+
         /// The revoke is the only leg that needs the network, and on web the
         /// refresh credential is an HTTP-only cookie no seam can reach — so an
         /// unauthenticated `/auth/logout` the API rejects would leave the
@@ -19661,6 +19683,8 @@ mod tests {
                 permission: CorePermission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             });
             block_on(store.persist(&list)).expect("the list persists");
         }
