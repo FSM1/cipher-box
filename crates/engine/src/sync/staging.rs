@@ -1704,7 +1704,7 @@ mod tests {
                         &ResealEnvelope {
                             caller,
                             source_root: NodeId([caller; 16]),
-                            payload: vec![caller; 40],
+                            payload: vec![caller; 40].into(),
                         },
                     )
                     .await

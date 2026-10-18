@@ -1992,9 +1992,14 @@ pub(crate) mod tests {
         );
     }
 
-    /// `bytes` with `field` set on each bookmark: `held` on the bookmark of
-    /// `held_share`, `personal` on the one of scope `0x3c`.
-    pub(crate) fn with_field(bytes: &[u8], field: &str, held: Value, personal: Value) -> Vec<u8> {
+    /// `bytes` with `field` set: `held` on the bookmark of `held_share`, and
+    /// `personal`, when given, on every other bookmark.
+    pub(crate) fn with_field(
+        bytes: &[u8],
+        field: &str,
+        held: Value,
+        personal: Option<Value>,
+    ) -> Vec<u8> {
         let tree = decode(bytes).unwrap();
         let mut map = tree.as_map().unwrap().clone();
         let shares = map
@@ -2007,14 +2012,11 @@ pub(crate) mod tests {
                 let mut entry = entry.as_map().unwrap().clone();
                 let is_held =
                     entry.get("scopeId") == Some(&Value::Bytes(held_share().scope_id.to_vec()));
-                entry.insert(
-                    field,
-                    if is_held {
-                        held.clone()
-                    } else {
-                        personal.clone()
-                    },
-                );
+                match (is_held, &personal) {
+                    (true, _) => entry.insert(field, held.clone()),
+                    (false, Some(value)) => entry.insert(field, value.clone()),
+                    (false, None) => {}
+                }
                 Value::Map(entry)
             })
             .collect();
@@ -2029,9 +2031,14 @@ pub(crate) mod tests {
             &previous_release_list(),
             "ended",
             Value::Unsigned(7),
-            Value::Unsigned(0),
+            Some(Value::Unsigned(0)),
         );
-        with_field(&ended, "grantCut", Value::Unsigned(5), Value::Unsigned(3))
+        with_field(
+            &ended,
+            "grantCut",
+            Value::Unsigned(5),
+            Some(Value::Unsigned(3)),
+        )
     }
 
     /// The `(ended, grantCut)` values of the bookmark of `scope_id` in a
@@ -2185,7 +2192,8 @@ pub(crate) mod tests {
     }
 
     /// An `ended` or `grantCut` value that is not an unsigned number refuses
-    /// the list, as a malformed `linkDeadline` does.
+    /// the list, as a malformed `linkDeadline` does. Only the held bookmark
+    /// changes, so the refusal is the type check of that value.
     #[test]
     fn a_malformed_ended_or_grant_cut_value_refuses_the_list() {
         for field in ["ended", "grantCut", "linkDeadline"] {
@@ -2195,18 +2203,14 @@ pub(crate) mod tests {
                 Value::Text("7".into()),
                 Value::Bytes(vec![7]),
             ] {
-                assert!(
-                    matches!(
-                        decode_stored_list(&with_field(
-                            &previous_release_list(),
-                            field,
-                            malformed.clone(),
-                            Value::Unsigned(1),
-                        )),
-                        Err(ReceivedSharesCodecError::Codec(_))
-                    ),
-                    "{field}"
-                );
+                let bytes = with_field(&previous_release_list(), field, malformed.clone(), None);
+                match decode_stored_list(&bytes) {
+                    Err(ReceivedSharesCodecError::Codec(e)) => {
+                        assert_eq!(e.check(), "unexpected-type", "{field}: {malformed:?}");
+                        assert!(e.to_string().contains("expected unsigned"), "{field}: {e}");
+                    }
+                    other => panic!("{field}: {malformed:?} must refuse, got {:?}", other.err()),
+                }
             }
         }
     }

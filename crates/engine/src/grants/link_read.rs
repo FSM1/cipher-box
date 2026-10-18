@@ -733,7 +733,7 @@ mod tests {
             &holder.enc,
             OwnerLocalKind::ReceivedShares,
             &[0x44; 32],
-            &with_field(&body, "ended", Value::Bool(true), Value::Bool(true)),
+            &with_field(&body, "ended", Value::Bool(true), None),
         )
         .expect("seals");
         block_on(

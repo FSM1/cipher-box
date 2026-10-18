@@ -164,7 +164,7 @@ fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
     let envelope = |caller| ResealEnvelope {
         caller,
         source_root: root,
-        payload: b"rows".to_vec(),
+        payload: b"rows".to_vec().into(),
     };
     let body = encode_reseal_envelope(&envelope(1), root).expect("an envelope encodes");
     assert_eq!(decode_reseal_envelope(&body, root), Ok(envelope(1)));
@@ -177,12 +177,12 @@ fn a_reseal_envelope_the_decoder_refuses_is_refused_at_encode() {
         Err(ResealEnvelopeError::RootMismatch)
     );
     let at_cap = ResealEnvelope {
-        payload: vec![0; MAX_RESEAL_PAYLOAD],
+        payload: vec![0; MAX_RESEAL_PAYLOAD].into(),
         ..envelope(1)
     };
     assert!(encode_reseal_envelope(&at_cap, root).is_ok());
     let over_cap = ResealEnvelope {
-        payload: vec![0; MAX_RESEAL_PAYLOAD + 1],
+        payload: vec![0; MAX_RESEAL_PAYLOAD + 1].into(),
         ..envelope(1)
     };
     assert_eq!(
