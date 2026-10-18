@@ -237,7 +237,8 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                         &AcceptError::Gate(GateError::Rejected(rejection)),
                     ),
                     // ADR 0071 D1: unavailable; the item waits for the next pass.
-                    LeafRefusal::Withheld | LeafRefusal::Seam(_) => {}
+                    LeafRefusal::Withheld => {}
+                    LeafRefusal::Seam(_) => {}
                 },
                 Err(e) => report(events, name.as_str(), &e),
             }

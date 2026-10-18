@@ -1151,6 +1151,38 @@ mod tests {
         }
     }
 
+    /// Only a pick strictly below the floor is withheld while an endpoint
+    /// fails (ADR 0071 D1). A record at the floor stays the current record.
+    #[test]
+    fn a_record_at_the_floor_while_an_endpoint_fails_is_current() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let served = record_of(&signer, b"/ipfs/served", 3);
+        let endpoints = device.record_store.endpoints();
+        device
+            .record_store
+            .seed_record(&endpoints[1], name.as_str(), served.clone());
+        device.record_store.fail_endpoint(&endpoints[0]);
+
+        let gated = block_on(resolve_gated(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::EqualSequence),
+            &name,
+            ResolveMode::NoCache,
+        ))
+        .expect("the resolve settles");
+        assert_eq!(
+            gated.resolved.outcome,
+            ResolveOutcome::Current {
+                record_bytes: served
+            }
+        );
+        assert!(!gated.withheld);
+    }
+
     /// A forced refresh renders nothing from the cache, but the copy the
     /// keeper replaces with the served record is still evidence of a fork,
     /// and the next read finds none.

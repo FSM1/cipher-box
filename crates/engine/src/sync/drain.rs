@@ -14989,6 +14989,81 @@ mod tests {
         assert!(harness.state.delete_proofs.borrow().is_empty());
     }
 
+    /// A scope root below its sequence floor in a delete's subtree is a
+    /// rollback when every endpoint answers, and holds the delete while an
+    /// endpoint fails (ADR 0071 D1, D4).
+    #[test]
+    fn a_scope_root_below_its_floor_in_a_delete_subtree_is_refused_only_when_every_endpoint_answers()
+     {
+        const CHILD: NodeId = NodeId([0x75; 16]);
+        let endpoints = vec![EndpointId::new("a"), EndpointId::new("b")];
+        for (failed, expected) in [
+            (false, Halt::RecordRefused),
+            (true, Halt::DeletePlaneUnavailable),
+        ] {
+            let mut harness = drain_harness(Some(harness_root_envelope()));
+            let child = owner_root_fixture(OwnerRootSpec {
+                owner_identity: &EcdsaSigner::from_scalar(&HARNESS_SECRET).expect("valid scalar"),
+                owner_enc: &kdf::enc_subkey(&HARNESS_SECRET).public(),
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                scope_id: CHILD.0,
+                root_id: CHILD.0,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: Some(
+                    *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD.0).as_bytes(),
+                ),
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            });
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &CHILD.0).as_bytes(),
+                ),
+                format!("/ipfs/{}", child.head_cid_str).as_bytes(),
+                1,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &CHILD.0);
+            harness.seams.transport = InMemoryRecordStore::new(endpoints.clone());
+            for endpoint in &endpoints {
+                harness
+                    .seams
+                    .transport
+                    .seed_record(endpoint, name.as_str(), record.clone());
+            }
+            if failed {
+                harness.seams.transport.fail_endpoint(&endpoints[0]);
+            }
+            harness.seams.http = serve_walk_blocks(&BTreeMap::from([(
+                child.head_cid_str.clone(),
+                child.head_block.clone(),
+            )]));
+            let scope = harness.scope();
+            block_on(
+                scope
+                    .source
+                    .floors(&harness.seams.floors)
+                    .raise_sequence_floor(name.as_str().as_bytes(), 5),
+            )
+            .expect("the floor is raised");
+
+            let drain = harness.drain();
+            let proved = block_on(drain.prove_node_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(CHILD),
+            ));
+            assert_eq!(proved.err(), Some(expected), "endpoint failed {failed}");
+        }
+    }
+
     /// The first sweep skips a file this device projected. A grant makes it a
     /// known scope root between ticks, and the proof refuses the delete.
     #[test]
