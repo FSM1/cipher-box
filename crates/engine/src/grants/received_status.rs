@@ -1697,6 +1697,8 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x9a; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         }
     }
 
@@ -2618,6 +2620,8 @@ mod tests {
                 permission,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             });
             self.persist(&list).expect("the bookmark persists");
         }
@@ -2639,6 +2643,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             });
             self.persist(&list)
         }
@@ -2657,6 +2663,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -2689,6 +2697,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             self.persist(&list).expect("the bookmarks persist");
@@ -3733,6 +3743,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                     scope_pointer_name: None,
+                    grant_cut: None,
+                    ended: None,
                 });
             }
             block_on(
@@ -4485,6 +4497,12 @@ mod tests {
         }
 
         fn join_with(fx: &RenderedScope, secret: [u8; 32]) {
+            join_marked(fx, secret, (None, None));
+        }
+
+        /// The join, with `marks` as the `(ended, grantCut)` values that a
+        /// later release set on the bookmark.
+        fn join_marked(fx: &RenderedScope, secret: [u8; 32], marks: (Option<u64>, Option<u64>)) {
             let mut list = ReceivedSharesList::new();
             let share = ReceivedShare {
                 scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
@@ -4494,6 +4512,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: Some(pointer_name()),
+                grant_cut: marks.1,
+                ended: marks.0,
             };
             let key = share.key();
             list.reconcile(share);
@@ -4511,6 +4531,48 @@ mod tests {
                 share.scope_root_name.clone(),
                 list.link_hold(&share.key()).cloned(),
             )
+        }
+
+        /// The `(ended, grantCut)` values of the stored bookmark.
+        fn stored_marks(fx: &RenderedScope) -> (Option<u64>, Option<u64>) {
+            let list = block_on(
+                StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+            )
+            .expect("the list loads");
+            let share = list.iter().next().expect("one bookmark");
+            (share.ended, share.grant_cut)
+        }
+
+        /// The pointer follow heals the root name and the refresh writes the
+        /// link deadline, then drops the link keys. Each write keeps the
+        /// values that a later release set.
+        #[test]
+        fn the_follow_and_the_refresh_keep_ended_and_grant_cut() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join_marked(&fx, LINK_SECRET, (Some(7), Some(5)));
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+
+            fx.follow_pointers(0);
+            assert_eq!(stored(&fx).0, scope_root_name().as_str().as_bytes());
+            assert_eq!(stored_marks(&fx), (Some(7), Some(5)), "follow_from");
+
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+            assert_eq!(stored(&fx).1.expect("the link keys").deadline, Some(LATER));
+            assert_eq!(
+                stored_marks(&fx),
+                (Some(7), Some(5)),
+                "refresh sets the deadline"
+            );
+
+            serve_root(&mut fx, vec![link_row(LATER), personal_row()], 0, 2);
+            assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+            assert!(stored(&fx).1.is_none(), "the link keys drop");
+            assert_eq!(
+                stored_marks(&fx),
+                (Some(7), Some(5)),
+                "refresh drops the link"
+            );
         }
 
         /// A root a write wave moved still opens: the holder follows the owner's
@@ -4617,6 +4679,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: None,
+                grant_cut: None,
+                ended: None,
             }
         }
 
@@ -4965,6 +5029,8 @@ mod tests {
                         permission: Permission::Read,
                         pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                         scope_pointer_name: None,
+                        grant_cut: None,
+                        ended: None,
                     });
                     block_on(store.persist(&list)).expect("the join persists");
                 }))),
@@ -5064,6 +5130,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: Some(pointer_name()),
+                grant_cut: None,
+                ended: None,
             };
             let other_key = other.key();
             list.reconcile(other);
@@ -5285,6 +5353,8 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                 scope_pointer_name: name,
+                grant_cut: None,
+                ended: None,
             });
             fx.persist(&list).expect("the bookmark persists");
             serve_pointer(&fx, &sharer_signer(), 1);
@@ -5375,6 +5445,8 @@ mod tests {
                     permission: Permission::Read,
                     pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
                     scope_pointer_name: Some(scope_pointer_name(&POINTER_SEED, scope)),
+                    grant_cut: None,
+                    ended: None,
                 };
                 let key = share.key();
                 list.reconcile(share);
