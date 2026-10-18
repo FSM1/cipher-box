@@ -6826,8 +6826,8 @@ mod tests {
             ))
         }
 
-        /// The adopter an owner cut gates `scope_id`'s root under, over
-        /// `floors`, with no rotation net.
+        /// An owner adopter of `scope_id`'s root over `floors`, with no owner
+        /// seed cache.
         fn adopter<'a, F: FloorStore>(
             &'a self,
             floors: &'a F,
@@ -6849,7 +6849,7 @@ mod tests {
         }
 
         /// The vault-anchored root at `name`, read over the transport under
-        /// `fallback` with no rotation net.
+        /// `fallback`.
         fn read_root<F: FloorStore>(
             &self,
             adopter: &RootAdopter<'_, ScriptedHttp, F>,
@@ -9459,6 +9459,22 @@ mod tests {
         assert!(fallback.fell_back());
         assert_eq!(harness.events().len(), 1, "one trust event");
         assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// ADR 0068 D1: under a fallback that covers the scope, the net reads a
+    /// root that fills the reservation from its last copy and does not step
+    /// over it, so the cut sees the fallback (ADR 0068 D5).
+    #[test]
+    fn a_cut_under_its_fallback_does_not_step_over_a_root_that_fills_the_reservation() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the last copy");
+
+        assert_eq!(read.over_sequence, None, "no step-over");
+        assert!(net.fell_back());
     }
 
     /// A last copy at an envelope version this build does not author passes
@@ -18363,6 +18379,28 @@ mod tests {
                 (
                     Err(NodeStop::Stop(ResolveFailure::Unavailable)),
                     Err(NodeStop::Stop(ResolveFailure::Rejected))
+                )
+            );
+        }
+
+        #[test]
+        fn the_write_cut_gated_root_at() {
+            let harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            raise_past(&harness.floors, &staged.root.name);
+            let owner = owner_identity();
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            assert_eq!(
+                failed_then_healed(&harness, || block_on(net.gated_root_at(&staged.root.name))
+                    .map(|_| ())),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
                 )
             );
         }

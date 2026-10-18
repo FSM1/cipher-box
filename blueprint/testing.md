@@ -398,8 +398,8 @@ scenario fails the meta-test):
   endpoint serves the old record or answers 403, each stays a trust violation;
   the revoke finishes after the failed endpoint recovers
   (`tests/owner_actions.rs`); the root admit, the sweep read, the grantee root
-  read, the write cut's root, boundary and interior reads, and the gate of a
-  served root under the owner cut's fallback give the same split, and a forged
+  read, the write cut's root, boundary, interior and `gated_root_at` reads, and
+  the served-root gate of `FallbackRead` give the same split, and a forged
   record stays a rejection
   (`net::rotation`); the vault pointer's standing read does too
   (`net::vault_pointer`); the bin index load reports `suppressed`, not
