@@ -18,9 +18,8 @@ use core::cell::RefCell;
 use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
-use super::fanout::fanout_get_tied_classified;
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
-use super::gated_read::{BelowFloor, sequence_refusal};
+use super::gated_read::{LeafRead, LeafRefusal, Unserved};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
@@ -386,12 +385,15 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let fetch = fanout_get_tied_classified(transport, name).await;
-    let absent = fetch.absent;
     let mut withheld = false;
-    let (fetched, tied) = match fetch.pick {
-        Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
-        None => (None, Vec::new()),
+    let (fetched, tied, endpoint_failed, absent) = match LeafRead::fetch(transport, name).await {
+        Ok(LeafRead {
+            pick,
+            bytes,
+            tied,
+            endpoint_failed,
+        }) => (Some((pick, bytes)), tied, endpoint_failed, false),
+        Err(Unserved { absent }) => (None, Vec::new(), false, absent),
     };
     let (outcome, mut parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
@@ -454,8 +456,11 @@ where
             // the liveness loop holds them without a re-fetch.
             // A strictly older sequence is a rollback unless an endpoint failed
             // (ADR 0071); every other gate rejection stays a trust violation.
-            Err(GateError::Rejected(rejection)) => match &rejection.reason {
-                RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
+            Err(error) => match LeafRefusal::of(error, endpoint_failed) {
+                LeafRefusal::Rejected(GateRejection {
+                    reason: RejectionReason::SequenceNotNewer { floor, sequence },
+                    ..
+                }) if sequence == floor => {
                     // Our own current root at exactly the floor: recover the
                     // owner's own scope seeds so the liveness loop can
                     // hold+renew it before its EOL lapses and the write plane
@@ -517,19 +522,16 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                reason
-                    if sequence_refusal(reason, fetch.endpoint_failed)
-                        == Some(BelowFloor::Unavailable) =>
-                {
+                LeafRefusal::Withheld => {
                     withheld = true;
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
-                _ => (
+                LeafRefusal::Rejected(rejection) => (
                     ResolveOutcome::TrustViolation(rejection),
                     GatedParts::default(),
                 ),
+                LeafRefusal::Seam(error) => return Err(error),
             },
-            Err(GateError::Seam(error)) => return Err(error),
         },
     };
     let recovered_owner = if let ResolveOutcome::TrustViolation(rejection) = &outcome {
@@ -783,6 +785,8 @@ mod tests {
         EqualSequence,
         /// At the floor, and the floor re-check refuses the record.
         RefusedAtFloor,
+        /// One sequence below the floor.
+        BelowFloor,
     }
 
     struct StubAdopter {
@@ -896,6 +900,13 @@ mod tests {
                         },
                     }))
                 }
+                Verdict::BelowFloor => Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: sequence + 1,
+                        sequence,
+                    },
+                })),
             }
         }
 
@@ -1144,6 +1155,87 @@ mod tests {
                     served: false
                 })
             );
+        }
+    }
+
+    /// Only a pick strictly below the floor is withheld while an endpoint
+    /// fails (ADR 0071 D1). A record at the floor stays the current record.
+    #[test]
+    fn a_record_at_the_floor_while_an_endpoint_fails_is_current() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let served = record_of(&signer, b"/ipfs/served", 3);
+        let endpoints = device.record_store.endpoints();
+        device
+            .record_store
+            .seed_record(&endpoints[1], name.as_str(), served.clone());
+        device.record_store.fail_endpoint(&endpoints[0]);
+
+        let gated = block_on(resolve_gated(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::EqualSequence),
+            &name,
+            ResolveMode::NoCache,
+        ))
+        .expect("the resolve settles");
+        assert_eq!(
+            gated.resolved.outcome,
+            ResolveOutcome::Current {
+                record_bytes: served
+            }
+        );
+        assert!(!gated.withheld);
+    }
+
+    /// A pick below the floor is withheld while an endpoint fails (ADR 0071
+    /// D1), and is a trust violation when every endpoint answers (ADR 0071 D4).
+    #[test]
+    fn a_record_below_the_floor_is_withheld_only_while_an_endpoint_fails() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let served = record_of(&signer, b"/ipfs/served", 3);
+        for failed in [true, false] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
+            let endpoints = device.record_store.endpoints();
+            for endpoint in &endpoints {
+                device
+                    .record_store
+                    .seed_record(endpoint, name.as_str(), served.clone());
+            }
+            if failed {
+                device.record_store.fail_endpoint(&endpoints[0]);
+            }
+
+            let gated = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &StubAdopter::new(Verdict::BelowFloor),
+                &name,
+                ResolveMode::NoCache,
+            ))
+            .expect("the resolve settles");
+            if failed {
+                assert_eq!(gated.resolved.outcome, ResolveOutcome::NoUpdate);
+            } else {
+                assert!(
+                    matches!(
+                        gated.resolved.outcome,
+                        ResolveOutcome::TrustViolation(GateRejection {
+                            reason: RejectionReason::SequenceNotNewer {
+                                floor: 4,
+                                sequence: 3
+                            },
+                            ..
+                        })
+                    ),
+                    "every endpoint answers"
+                );
+            }
+            assert_eq!(gated.withheld, failed, "endpoint failed {failed}");
         }
     }
 
