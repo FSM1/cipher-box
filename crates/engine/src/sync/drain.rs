@@ -5609,8 +5609,8 @@ where
             ..
         } = match LeafRead::fetch(&self.seams.transport, &name).await {
             Ok(read) => read,
-            Err(Unserved { absent: true }) => return Err(Halt::Unclassified),
-            Err(Unserved { absent: false }) => return Err(Halt::DeletePlaneUnavailable),
+            Err(Unserved { absent: true, .. }) => return Err(Halt::Unclassified),
+            Err(Unserved { absent: false, .. }) => return Err(Halt::DeletePlaneUnavailable),
         };
         let fault = |error| match LeafRefusal::of(error, endpoint_failed) {
             LeafRefusal::Seam(_) | LeafRefusal::Withheld => Halt::DeletePlaneUnavailable,

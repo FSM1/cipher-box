@@ -393,7 +393,7 @@ where
             tied,
             endpoint_failed,
         }) => (Some((pick, bytes)), tied, endpoint_failed, false),
-        Err(Unserved { absent }) => (None, Vec::new(), false, absent),
+        Err(Unserved { absent, .. }) => (None, Vec::new(), false, absent),
     };
     let (outcome, mut parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
