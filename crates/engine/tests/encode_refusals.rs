@@ -668,7 +668,7 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
                 });
                 h.scopes[2].scope_id = NodeId([0x53; 16]);
             }),
-            "dissolve-journal-scope-appended-past-cut",
+            "dissolve-journal-scope-appended",
         ),
         (
             edit(&|h| {
