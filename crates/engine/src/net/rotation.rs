@@ -2041,7 +2041,7 @@ fn owed_children(
 /// epoch the seed's own recovery already bound, and the write epoch a re-seal of
 /// this root must republish at. A scope with no durable write-epoch floor has
 /// nothing to open the body under — availability, not a trust verdict.
-pub(crate) async fn write_plane_of<F: FloorStore>(
+async fn write_plane_of<F: FloorStore>(
     floors: &F,
     envelope: &Envelope,
     section: &GrantSection,
@@ -5358,6 +5358,20 @@ fn open_write_body(
     write_scope_seed: &[u8; SECRET_LEN],
     write_epoch: u64,
 ) -> Result<WriteBody, ResolveFailure> {
+    let plaintext = unseal_write_body(envelope, section, scope_id, write_scope_seed, write_epoch)
+        .ok_or(ResolveFailure::Rejected)?;
+    decode_write_body(&plaintext).map_err(|_| ResolveFailure::Rejected)
+}
+
+/// The plaintext of a scope root's write body under `write_scope_seed` at
+/// `write_epoch`, `None` when it does not unseal.
+pub(crate) fn unseal_write_body(
+    envelope: &Envelope,
+    section: &GrantSection,
+    scope_id: &[u8; 16],
+    write_scope_seed: &[u8; SECRET_LEN],
+    write_epoch: u64,
+) -> Option<Zeroizing<Vec<u8>>> {
     let write_seed = kdf::write_seed(write_scope_seed, scope_id);
     let write_key = kdf::write_key(write_seed.as_bytes());
     let ctx = AadContext {
@@ -5367,11 +5381,9 @@ fn open_write_body(
         epoch: write_epoch,
         struct_tag: STRUCT_TAG_WRITE_BODY,
     };
-    let plaintext = Zeroizing::new(
-        unseal(write_key.as_bytes(), &ctx, &section.write_body.sealed)
-            .map_err(|_| ResolveFailure::Rejected)?,
-    );
-    decode_write_body(&plaintext).map_err(|_| ResolveFailure::Rejected)
+    unseal(write_key.as_bytes(), &ctx, &section.write_body.sealed)
+        .ok()
+        .map(Zeroizing::new)
 }
 
 /// A moved root's grant set, re-minted at its new name: the entries the owner

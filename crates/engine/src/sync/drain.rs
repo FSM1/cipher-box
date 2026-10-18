@@ -1684,6 +1684,15 @@ fn take_tick_read(tick_left: &Cell<usize>) -> bool {
     true
 }
 
+/// The walk fault of a halt: a refused record is untrusted, and every other
+/// halt may answer on a later tick.
+fn walk_fault<F>(halt: Halt) -> ReadFault<F> {
+    match halt {
+        Halt::RecordRefused => ReadFault::Untrusted,
+        _ => ReadFault::Unanswered,
+    }
+}
+
 /// Whether this device's own gate-passing state calls `node` a file. A ref
 /// kind is authored by any write-seed holder and the base copies it, so only a
 /// file body this device projected confirms it.
@@ -2996,7 +3005,7 @@ where
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
-        self.drive_dissolve_maps(&passes).await;
+        self.drive_dissolve_maps(&passes, &ends).await;
         // The retire ledger is the identity's and reads under the vault root's
         // material, so only a tick that holds that root settles.
         if vault_held && let Some(vault) = passes.first() {
@@ -4547,6 +4556,20 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
+        self.open_root_envelope(scope, source, record_bytes, sequence, &envelope)
+            .await
+    }
+
+    /// [`Self::open_root_record`] over the head `envelope` that `record_bytes`
+    /// at `sequence` names.
+    async fn open_root_envelope(
+        &self,
+        scope: Option<&DrainScope<'_>>,
+        source: &ScopeEnd<'_>,
+        record_bytes: &[u8],
+        sequence: u64,
+        envelope: &Envelope,
+    ) -> Result<LoadedRoot, Halt> {
         // The cache can be older than the floors — a restored data dir is
         // exactly that. The whole pass anchors here: this record's epoch
         // becomes the epoch every record it publishes is sealed at, so a
@@ -4567,7 +4590,7 @@ where
         let observed = Observed::gated(source.root_name, sequence, envelope.v, record_bytes)
             .map_err(classify_publish_error)?;
         let read_key = source.read_key(&source.root.0);
-        let Ok(body) = open_read_body(&envelope, &read_key) else {
+        let Ok(body) = open_read_body(envelope, &read_key) else {
             return Err(self
                 .unopened_root(scope, source, record_bytes, envelope.epoch)
                 .await);
@@ -4584,7 +4607,7 @@ where
         let epoch = envelope.epoch;
         // A scope root the root gate passed carries a decodable section; bytes
         // that do not are not a root this pass may anchor a ratchet on.
-        let section = grant_section_bytes(&envelope)
+        let section = grant_section_bytes(envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
             .ok_or(Halt::Unclassified)?;
         Ok(LoadedRoot {
@@ -4593,8 +4616,8 @@ where
                 name: source.root_name.clone(),
                 record: record_bytes.to_vec(),
                 commitment: Some(section.commitment),
-                envelope_unknown: envelope.unknown,
-                epoch_tag_unknown: envelope.epoch_tag_unknown,
+                envelope_unknown: envelope.unknown.clone(),
+                epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
                 created_at,
                 modified_at,
                 children,
@@ -7089,27 +7112,8 @@ where
         node: NodeId,
         report: bool,
     ) -> Result<WalkRead, ReadFault<Infallible>> {
-        let fault = |halt: Halt| match halt {
-            Halt::RecordRefused => ReadFault::Untrusted,
-            _ => ReadFault::Unanswered,
-        };
         if node == end.root {
-            let resolved = self
-                .gated_scope_root(scope, end, ResolveMode::NoCache)
-                .await
-                .map_err(fault)?;
-            if !resolved.tied.is_empty()
-                || (!report
-                    && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
-            {
-                return Err(ReadFault::Untrusted);
-            }
-            let record =
-                resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(fault)?;
-            let root = self
-                .open_root_record(Some(scope), end, &record)
-                .await
-                .map_err(fault)?;
+            let (record, root, _) = self.walk_root(scope, end, report).await?;
             return Ok(WalkRead {
                 mark: RecordMark {
                     sequence: root.state.observed.sequence(),
@@ -7131,7 +7135,7 @@ where
             Ok(loaded) => loaded,
             Err(ChildFault::Refused(_)) if !report => return Err(ReadFault::Untrusted),
             Err(error) => {
-                return Err(fault(
+                return Err(walk_fault(
                     self.report_fault(&plane.end.write_name(&node.0), error),
                 ));
             }
@@ -7150,6 +7154,42 @@ where
             },
             anchor: None,
         })
+    }
+
+    /// One end's scope root for a walk, read through its own gate from the
+    /// record plane and never from the cache: the record, the root, and its
+    /// head envelope.
+    async fn walk_root(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        report: bool,
+    ) -> Result<(Vec<u8>, LoadedRoot, Envelope), ReadFault<Infallible>> {
+        let resolved = self
+            .gated_scope_root(scope, end, ResolveMode::NoCache)
+            .await
+            .map_err(walk_fault)?;
+        if !resolved.tied.is_empty()
+            || (!report && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
+        {
+            return Err(ReadFault::Untrusted);
+        }
+        let record =
+            resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(walk_fault)?;
+        let (sequence, envelope, _) = assemble_head_envelope(
+            &self.seams.gateway,
+            &self.seams.http,
+            end.root_name,
+            &record,
+            None,
+        )
+        .await
+        .map_err(|_| ReadFault::Unanswered)?;
+        let root = self
+            .open_root_envelope(Some(scope), end, &record, sequence, &envelope)
+            .await
+            .map_err(walk_fault)?;
+        Ok((record, root, envelope))
     }
 
     /// Put back the captures this pass did not settle, up to the frozen bound
