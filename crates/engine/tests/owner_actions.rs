@@ -26296,7 +26296,8 @@ fn a_dissolve_cut_that_stops_is_finished_through_the_owed_entry() {
 
 /// ADR 0077 Consequences, a concurrent grant wins: a row that appears after
 /// the dissolve cut the scope stops the dissolve before any copy, and its
-/// entry goes. The new row stays.
+/// entry goes. The new row stays, and so does a link grant made after the
+/// cut.
 #[test]
 fn a_row_after_the_dissolve_cut_stops_the_dissolve() {
     let mut fx = GrantScenario::new();
@@ -26314,8 +26315,11 @@ fn a_row_after_the_dissolve_cut_stops_the_dissolve() {
     );
     fx.world.record_store.heal_put_for(pointer.as_str());
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let identity = plant_link_contact(&fx);
 
     assert_eq!(fx.dissolve(), Ok(None), "the dissolve stops");
+
+    assert!(book_holds(&fx, &identity), "the later link grant stays");
 
     assert_eq!(fx.dissolve_header(), None, "and its entry goes");
     assert_eq!(
@@ -26608,6 +26612,156 @@ fn a_raised_cut_whose_owed_entry_does_not_write_keeps_the_baseline() {
     assert_eq!(fx.granted_scope_repoint().current_root, root, "no wave ran");
 }
 
+/// A drive that stops after its baseline, at the pointer publish, reads the
+/// scope at that baseline next time and cuts nothing more.
+#[test]
+fn a_drive_at_its_baseline_cuts_nothing_more() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let cut_epoch = fx.cut_epoch();
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert!(fx.dissolve().is_err(), "the pointer publish stops");
+    fx.world.record_store.heal_put_for(pointer.as_str());
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+
+    assert_eq!(fx.cut_epoch(), cut_epoch, "no second cut");
+}
+
+/// A scope with no row whose root the gate refuses, with a contact that a link
+/// at the scope admitted and a baseline below the cut that a drive makes.
+fn a_link_contact_over_a_refused_root(fx: &mut GrantScenario) -> (u64, Vec<u8>) {
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(fx), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let cut_epoch = fx.cut_epoch();
+    let root = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert!(matches!(fx.dissolve(), Err(EngineError::Seam { .. })));
+    fx.world.record_store.heal_put_for(root.as_str());
+    let identity = plant_link_contact(fx);
+    refuse_folder_root(fx);
+    (cut_epoch, identity)
+}
+
+/// Record a contact that a link at the folder admitted, and answer its
+/// identity key.
+fn plant_link_contact(fx: &GrantScenario) -> Vec<u8> {
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(13));
+    let book = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy);
+    let scalar = [0x33; 32];
+    block_on(book.record_from_link(
+        &contact_code(&scalar),
+        &committed_link_at(0x4e, [0x4f; 32]),
+        &fx.folder.0,
+    ))
+    .expect("the link admits the contact");
+    EcdsaSigner::from_scalar(&scalar)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec()
+}
+
+/// Whether the owner's contact book holds `identity_pk`.
+fn book_holds(fx: &GrantScenario, identity_pk: &[u8]) -> bool {
+    block_on(fx.engine.sharing(fx.folder))
+        .expect("the sharing read")
+        .contacts
+        .iter()
+        .any(|contact| contact.identity_public_key == identity_pk)
+}
+
+/// A contact book fault after a cut above the baseline still lets the raise
+/// commit, so the next drive reads the scope at its baseline, forgets the
+/// link grant, and moves past the cut.
+#[test]
+fn a_contact_book_fault_at_a_raised_cut_forgets_the_link_grant_on_the_next_drive() {
+    let mut fx = GrantScenario::new();
+    let (cut_epoch, identity) = a_link_contact_over_a_refused_root(&mut fx);
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(14));
+    let book_key = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy)
+        .staging_key()
+        .to_vec();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&book_key);
+
+    assert!(fx.dissolve().is_err(), "the forget fails");
+    assert_eq!(
+        fx.standing_dissolve().scopes[0].cut_epoch,
+        cut_epoch + 1,
+        "the raise commits"
+    );
+    assert!(book_holds(&fx, &identity));
+    fx.owner_device.staging_store.inner().heal_staged_writes();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+    assert!(!book_holds(&fx, &identity), "the next drive forgets it");
+}
+
+/// A journal fault on the raise commit comes after the forget, so the link
+/// grant goes. The next drive reads the cut as one the dissolve did not
+/// record, and stops.
+#[test]
+fn a_journal_fault_on_the_raise_comes_after_the_link_grant_forget() {
+    let mut fx = GrantScenario::new();
+    let (cut_epoch, identity) = a_link_contact_over_a_refused_root(&mut fx);
+    let header_key = [
+        RESEAL_JOURNAL_PREFIX,
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        &fx.folder.0,
+        b"h",
+    ]
+    .concat();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&header_key);
+
+    assert!(fx.dissolve().is_err(), "the raise commit fails");
+    assert_eq!(fx.standing_dissolve().scopes[0].cut_epoch, cut_epoch);
+    assert!(!book_holds(&fx, &identity), "the forget came first");
+    fx.owner_device.staging_store.inner().heal_staged_writes();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
+    assert!(!book_holds(&fx, &identity));
+}
+
+/// An unproved cut above the baseline forgets no link grant. When the owed
+/// re-drive lands it later, the drive that stops the dissolve forgets the
+/// grant before it drops the entry.
+#[test]
+fn a_stop_after_a_landed_cut_forgets_the_link_grant_before_the_entry_goes() {
+    let mut fx = GrantScenario::new();
+    let (cut_epoch, identity) = a_link_contact_over_a_refused_root(&mut fx);
+    let _ = fx.owed_scopes();
+    let pointer = folder_pointer(&fx);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)), "the wave stops");
+    assert_eq!(fx.standing_dissolve().scopes[0].cut_epoch, cut_epoch);
+    assert!(
+        book_holds(&fx, &identity),
+        "an unproved cut forgets nothing"
+    );
+    fx.world.record_store.heal_put_for(pointer.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
+    assert!(!book_holds(&fx, &identity), "the stop forgets it");
+}
+
 /// ADR 0068 D1, D3: the read cascade refuses a refused root, so a last copy
 /// that holds a read row is cut with a name wave too.
 #[test]
@@ -26807,8 +26961,7 @@ fn an_unreadable_dissolve_header_lets_a_revoke_elsewhere_land() {
 }
 
 /// ADR 0077 D1: a baseline that the scope never reached, when the cut that
-/// set it stopped before its publish, is cut to on the next drive. So the
-/// guard measures a later row against an epoch the scope holds.
+/// set it stopped before its publish, is cut to on the next drive.
 #[test]
 fn a_baseline_the_scope_never_reached_is_cut_to() {
     let mut fx = GrantScenario::new();

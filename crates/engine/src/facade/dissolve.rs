@@ -111,7 +111,7 @@ where
                     DissolveWriteError::Blocked,
                 ));
             }
-            // The bytes stay, and the entry stays blocked: no pass can remove it.
+            // The bytes stay, and the entry stays blocked.
             HeaderSlot::Unreadable => {
                 if self.owed.note_unreadable_dissolve(root) {
                     let _ = self.events.unbounded_send(Event::RotationWorkOwed {
@@ -241,21 +241,22 @@ where
             .owed_scope(sites, scope, "dissolve-cut", true)
             .await
             .map_err(EngineError::from_owed_stop)?;
+        let rows = !current.commitment.entries.is_empty();
+        let base = header.scopes[at].clone();
+        let epoch = current.commitment.cut_epoch;
+        let landed = base.cut_time != 0 && epoch >= base.cut_epoch && !rows;
         // A nested root that another device moved out of the subtree is no
         // longer the dissolve's to cut.
         if at != 0 {
             let parent = NodeId(sites.enclosing(scope).await?.scope.scope_id);
             if header.scopes.iter().all(|cut| cut.scope_id != parent) {
-                return Ok(ScopeCut::Concurrent);
+                return self.concurrent(scope, landed).await;
             }
         }
-        let rows = !current.commitment.entries.is_empty();
-        let base = header.scopes[at].clone();
         // After the baseline, a row at or above it, or a cut above it, is
         // work the dissolve did not do: a concurrent grant wins.
-        let epoch = current.commitment.cut_epoch;
         if base.cut_time != 0 && (epoch > base.cut_epoch || rows && epoch >= base.cut_epoch) {
-            return Ok(ScopeCut::Concurrent);
+            return self.concurrent(scope, landed).await;
         }
         if base.final_landed {
             return Ok(ScopeCut::Done);
@@ -277,13 +278,13 @@ where
         if links.iter().any(|link| pending.contains(link)) {
             return Ok(ScopeCut::Waiting);
         }
-        // A last copy cannot prove that it holds no row, so it is cut too. The
-        // read cascade refuses the refused root, so the name wave moves the
-        // root off it first (ADR 0068 D1, D3, D5).
         // A baseline that the scope never reached is cut to, so the guard
         // measures a row against an epoch that the scope holds.
         let short = base.cut_time != 0 && epoch < base.cut_epoch;
         let plan = GrantCutPlan::over(&current, &name, self.identity);
+        // A last copy cannot prove that it holds no row, so it is cut too. The
+        // read cascade refuses the refused root, so the name wave moves the
+        // root off it first (ADR 0068 D1, D3, D5).
         let cut = (fell_back || rows || short)
             .then(|| recut_from_last_copy(&plan, fell_back))
             .transpose()
@@ -291,6 +292,9 @@ where
         // The baseline is durable before the first publish of the scope, for
         // the EOL term of the module header and for the guard above.
         let cut_epoch = cut.as_ref().map_or(epoch, |cut| cut.commitment.cut_epoch);
+        if cut_epoch < base.cut_epoch {
+            return Ok(ScopeCut::Concurrent);
+        }
         if base.cut_time == 0 {
             let cut_time = self.scheduler.now().0;
             self.commit_dissolve(journal, hold, header, |header| {
@@ -314,15 +318,17 @@ where
                     .await?;
                 // A raise waits for its cut set: one that never lands would hide
                 // a grant made at the baseline it replaced. The link grants go
-                // first, so a raise that does not commit leaves none behind.
+                // too, and a forget that fails answers after the raise, so the
+                // next drive forgets again at the raised baseline.
                 if owed != OwedCut::Unproved {
-                    self.forget_link_grants(scope).await?;
+                    let forgot = self.forget_link_grants(scope).await;
                     if cut_epoch > header.scopes[at].cut_epoch {
                         self.commit_dissolve(journal, hold, header, |header| {
                             header.scopes[at].cut_epoch = cut_epoch;
                         })
                         .await?;
                     }
+                    forgot?;
                 }
                 let Some(report) = owed.into_report() else {
                     return Ok(ScopeCut::Waiting);
@@ -376,6 +382,16 @@ where
         })
         .await?;
         Ok(ScopeCut::Done)
+    }
+
+    /// The answer for a scope that work the dissolve did not do reached. When
+    /// a cut at or above the baseline left no row, the link grants go first;
+    /// a forget that fails keeps the entry, so a later drive forgets again.
+    async fn concurrent(&self, scope: NodeId, landed: bool) -> Result<ScopeCut, EngineError> {
+        if landed {
+            self.forget_link_grants(scope).await?;
+        }
+        Ok(ScopeCut::Concurrent)
     }
 
     /// Drop the grant at `scope` from each contact a link sourced: the scope
