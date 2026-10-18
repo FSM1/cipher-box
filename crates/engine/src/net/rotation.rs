@@ -350,6 +350,10 @@ pub struct RefusedRoot {
 }
 
 impl RefusedRoot {
+    fn park(&self, record: Vec<u8>) {
+        *self.inner.borrow_mut() = Some(record);
+    }
+
     /// The refused record, if the last read refused one.
     pub(crate) fn take(&self) -> Option<Vec<u8>> {
         self.inner.borrow_mut().take()
@@ -2191,13 +2195,14 @@ where
             self.snapshot_cache,
             anchor.expected_child(scope_id),
         );
-        let read = read.read(self.transport, name).await;
+        let mut read = read.read(self.transport, name).await;
+        // The arms below read only the served sequence.
         if let Err(RootRefusal {
             served: Some((_, bytes)),
             ..
-        }) = &read
+        }) = &mut read
         {
-            *self.refused.inner.borrow_mut() = Some(bytes.clone());
+            self.refused.park(std::mem::take(bytes));
         }
         match read {
             Ok(root) => Ok(ResealableRoot {

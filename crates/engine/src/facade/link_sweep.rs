@@ -22,8 +22,8 @@ const SWEEP_CUT_MOVES_THE_WRITE_PLANE: &str = "an expired-link cut named a write
 /// count, so failures cannot hide the scope roots behind them.
 pub(super) const MAX_SWEEP_CUTS: usize = 8;
 
-/// The scope root and record bytes of each refusal that a pass sent as abuse.
-pub(crate) type ReportedRefusals = BTreeSet<(NodeId, Vec<u8>)>;
+/// The scope root and record bytes of a refusal that a pass sent as abuse.
+pub(crate) type ReportedRefusal = (NodeId, Vec<u8>);
 
 /// What one sweep did.
 #[derive(Debug, Default)]
@@ -97,14 +97,14 @@ where
 {
     /// Walk the vault from `root_name` and cut expired links until
     /// [`MAX_SWEEP_CUTS`] cuts land. `None` while a pass or a cut holds
-    /// [`Running`]. `reported` holds the scope root and record bytes of each
-    /// refusal that this pass already sent as abuse: a refusal of the same
-    /// record at the same scope root goes into no report again.
+    /// [`Running`]. `reported` is the refusal that this pass already sent as
+    /// abuse: a refusal of the same record at the same scope root goes into
+    /// no report again.
     pub(crate) async fn sweep_links(
         &self,
         root_name: &IpnsName,
         pointers: &PointerIndex,
-        reported: &ReportedRefusals,
+        reported: Option<&ReportedRefusal>,
     ) -> Option<LinkSweepReport> {
         let mut report = LinkSweepReport::default();
         let mut held = match self.hold_record(OnRunning::Refuse).await {
@@ -185,7 +185,7 @@ where
         pending: &[[u8; IDENTITY_PUBLIC_LEN]],
         held: &mut HeldRecord<'_>,
         pointers: &PointerIndex,
-        reported: &ReportedRefusals,
+        reported: Option<&ReportedRefusal>,
         report: &mut LinkSweepReport,
     ) -> Vec<OwnerScope> {
         let mut visited = BTreeSet::new();
@@ -213,7 +213,9 @@ where
                     Ok(current) => current,
                     Err(ResolveFailure::Rejected) => {
                         let refused = net.refused.take();
-                        if !refused.is_some_and(|record| reported.contains(&(NodeId(id), record))) {
+                        if !reported.is_some_and(|(node, record)| {
+                            *node == NodeId(id) && refused.as_ref() == Some(record)
+                        }) {
                             report.fail(EngineError::TrustViolation {
                                 message: format!(
                                     "link sweep: scope root [{}] rejected by the adoption gate",
