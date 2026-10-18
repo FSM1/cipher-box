@@ -134,10 +134,11 @@ pub struct Manifest {
 pub struct DissolvedScope {
     /// The scope id, which is also its root's node id.
     pub scope_id: NodeId,
-    /// The cut epoch of the dissolve's cut, written before the cut publishes,
-    /// 0 until then.
+    /// The cut epoch the scope holds once the dissolve's cut lands. Set once,
+    /// with `cut_time`.
     pub cut_epoch: u64,
-    /// The scheduler time of the cut, 0 until it is set. Set once.
+    /// The scheduler time of the cut, 0 until it is set. Set once, before the
+    /// first publish of the scope.
     pub cut_time: u64,
     /// The final records of the cut published again. Sticky.
     pub final_landed: bool,
@@ -297,7 +298,7 @@ pub enum DissolveCodecError {
     RetireCursor,
     /// The hold step still holds a map.
     MapAtHold,
-    /// A scope's final records landed before its cut epoch and `cut_time`.
+    /// A scope's final records landed before its `cut_time`.
     LandedBeforeCut,
 }
 
@@ -351,7 +352,7 @@ fn check_header(header: &DissolveHeader, source_root: NodeId) -> Result<(), Diss
         if !seen.insert(scope.scope_id) {
             return Err(E::DuplicateScope);
         }
-        if scope.final_landed && (scope.cut_epoch == 0 || scope.cut_time == 0) {
+        if scope.final_landed && scope.cut_time == 0 {
             return Err(E::LandedBeforeCut);
         }
         if let Some(manifest) = &scope.manifest {
@@ -778,12 +779,9 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-scopes-not-append-only");
     }
-    if held
-        .scopes
-        .iter()
-        .zip(&new.scopes)
-        .any(|(was, now)| was.cut_time != 0 && was.cut_time != now.cut_time)
-    {
+    if held.scopes.iter().zip(&new.scopes).any(|(was, now)| {
+        was.cut_time != 0 && (was.cut_time != now.cut_time || was.cut_epoch != now.cut_epoch)
+    }) {
         return Err("dissolve-journal-cut-time-set-once");
     }
     if (held.copy_started && !new.copy_started)
@@ -1614,6 +1612,8 @@ mod tests {
             journal.commit(&hold, None, &held).await.unwrap();
             let mut retimed = held.clone();
             retimed.scopes[0].cut_time = 2_500;
+            let mut rebased = held.clone();
+            rebased.scopes[0].cut_epoch = 8;
             let mut unsent = held.clone();
             unsent.relink_sent = false;
             let mut shortened = held.clone();
@@ -1628,6 +1628,7 @@ mod tests {
             unbound.prior_bindings.clear();
             for (new, check) in [
                 (retimed, "dissolve-journal-cut-time-set-once"),
+                (rebased, "dissolve-journal-cut-time-set-once"),
                 (unsent, "dissolve-journal-sticky-mark-cleared"),
                 (shortened, "dissolve-journal-sticky-mark-cleared"),
                 (uncopied, "dissolve-journal-sticky-mark-cleared"),
