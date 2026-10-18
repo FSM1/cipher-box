@@ -189,11 +189,6 @@ impl<'a, S: StagingStore> ResealJournal<'a, S> {
         }
     }
 
-    /// The staging store the journal reads and writes.
-    pub fn store(&self) -> &'a S {
-        self.store
-    }
-
     /// The key of `part` of the entry at `source_root`.
     pub fn key(&self, source_root: NodeId, part: &[u8]) -> Vec<u8> {
         [RESEAL_JOURNAL_PREFIX, &self.owner_tag, &source_root.0, part].concat()
@@ -234,28 +229,65 @@ impl<'a, S: StagingStore> ResealJournal<'a, S> {
         Ok(journaled)
     }
 
+    /// The part of each key under the entry of `source_root`.
+    pub async fn parts(&self, source_root: NodeId) -> SeamResult<Vec<Vec<u8>>> {
+        let entry = self.key(source_root, &[]);
+        Ok(self
+            .store
+            .staged_keys()
+            .await?
+            .into_iter()
+            .filter_map(|key| key.strip_prefix(entry.as_slice()).map(<[u8]>::to_vec))
+            .collect())
+    }
+
+    /// Refuse a value at `part` that does not read, or that another caller
+    /// wrote.
+    async fn check_owner(
+        &self,
+        source_root: NodeId,
+        part: &[u8],
+        caller: u8,
+    ) -> Result<(), JournalError> {
+        match self
+            .read(source_root, part)
+            .await
+            .map_err(JournalError::Store)?
+        {
+            JournalSlot::Unreadable => Err(JournalError::Unreadable),
+            JournalSlot::Kept(held) if held.caller != caller => Err(JournalError::OtherCaller),
+            JournalSlot::Absent | JournalSlot::Kept(_) => Ok(()),
+        }
+    }
+
     /// Write `envelope` at `part` of its source root. Refused over a value that
     /// does not read, and over an entry of another caller.
     pub async fn put(&self, part: &[u8], envelope: &ResealEnvelope) -> Result<(), JournalError> {
         let body = encode_reseal_envelope(envelope, envelope.source_root)
             .map_err(JournalError::Envelope)?;
-        match self
-            .read(envelope.source_root, part)
-            .await
-            .map_err(JournalError::Store)?
-        {
-            JournalSlot::Unreadable => return Err(JournalError::Unreadable),
-            JournalSlot::Kept(held) if held.caller != envelope.caller => {
-                return Err(JournalError::OtherCaller);
-            }
-            JournalSlot::Absent | JournalSlot::Kept(_) => {}
-        }
+        self.check_owner(envelope.source_root, part, envelope.caller)
+            .await?;
         let blob = self
             .seal
             .seal(OwnerLocalKind::SubtreeReseal, &body)
             .map_err(JournalError::Store)?;
         self.store
             .put_staged_bytes(&self.key(envelope.source_root, part), &blob)
+            .await
+            .map_err(JournalError::Store)
+    }
+
+    /// Remove the value of `caller` at `part` of `source_root`. Refused over a
+    /// value that does not read, and over an entry of another caller.
+    pub async fn remove(
+        &self,
+        source_root: NodeId,
+        part: &[u8],
+        caller: u8,
+    ) -> Result<(), JournalError> {
+        self.check_owner(source_root, part, caller).await?;
+        self.store
+            .remove_staged_bytes(&self.key(source_root, part))
             .await
             .map_err(JournalError::Store)
     }
@@ -425,6 +457,36 @@ mod tests {
                 journal.read(ROOT, b"").await.unwrap(),
                 JournalSlot::Kept(second)
             );
+        });
+    }
+
+    #[test]
+    fn a_caller_removes_only_its_own_readable_value() {
+        run(async |journal| {
+            journal.put(b"a", &envelope(1)).await.unwrap();
+            journal.put(b"b", &envelope(2)).await.unwrap();
+            let unreadable = journal.key(ROOT, b"c");
+            journal
+                .store
+                .put_staged_bytes(&unreadable, b"not a sealed value")
+                .await
+                .unwrap();
+            let mut parts = journal.parts(ROOT).await.unwrap();
+            parts.sort();
+            assert_eq!(parts, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+
+            assert!(matches!(
+                journal.remove(ROOT, b"b", 1).await,
+                Err(JournalError::OtherCaller)
+            ));
+            assert!(matches!(
+                journal.remove(ROOT, b"c", 1).await,
+                Err(JournalError::Unreadable)
+            ));
+            journal.remove(ROOT, b"a", 1).await.unwrap();
+            let mut parts = journal.parts(ROOT).await.unwrap();
+            parts.sort();
+            assert_eq!(parts, [b"b".to_vec(), b"c".to_vec()]);
         });
     }
 
