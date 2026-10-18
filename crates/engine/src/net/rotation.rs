@@ -88,12 +88,11 @@ use crate::grants::{
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{
-    AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_verify,
-    fanout_get_verify_failed, signed_data,
+    FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed, signed_data,
 };
 use crate::net::gated_read::{
-    BelowFloor, GatedScopeRoot, RootGateVerdict, RootRead, RootReadPass, RootRefusal,
-    cache_gate_verdict, gated_root, sequence_refusal,
+    GatedScopeRoot, LeafRead, LeafRefusal, RootGateVerdict, RootRead, RootReadPass, RootRefusal,
+    Unserved, cache_gate_verdict, check_leaf_floor, gated_root,
 };
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
@@ -2154,8 +2153,11 @@ where
     /// read refuses and on which axis.
     async fn head_at(&self, ipns_name: &[u8]) -> Result<RecordHead, ResolveFailure> {
         let name = scope_name(ipns_name)?;
-        let Some((_, record_bytes, endpoint_failed)) =
-            fanout_get_verify_failed(self.transport, &name).await
+        let Ok(LeafRead {
+            bytes: record_bytes,
+            endpoint_failed,
+            ..
+        }) = LeafRead::fetch(self.transport, &name).await
         else {
             return Err(ResolveFailure::Unavailable);
         };
@@ -3437,17 +3439,11 @@ impl SweptScopeState {
     }
 }
 
-/// The root read's verdict on a gate error ([`cache_gate_verdict`]), for a
-/// sequence check on a fan-out read ([`sequence_refusal`]).
-fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
-    match &error {
-        GateError::Rejected(rejection)
-            if sequence_refusal(&rejection.reason, endpoint_failed)
-                == Some(BelowFloor::Unavailable) =>
-        {
-            ResolveFailure::Unavailable
-        }
-        _ => cache_gate_verdict(error).into(),
+/// A leaf read's sequence check on rule 6's axis.
+fn sequence_verdict(refusal: LeafRefusal) -> ResolveFailure {
+    match refusal {
+        LeafRefusal::Rejected(_) => ResolveFailure::Rejected,
+        LeafRefusal::Withheld | LeafRefusal::Seam(_) => ResolveFailure::Unavailable,
     }
 }
 
@@ -3610,14 +3606,14 @@ where
             ..
         } = head;
         let (sequence, endpoint_failed) = (*sequence, *endpoint_failed);
-        floor::check_sequence(
+        check_leaf_floor(
             self.floors,
             name.as_str().as_bytes(),
             sequence,
-            floor::Strictness::AtOrAboveFloor,
+            endpoint_failed,
         )
         .await
-        .map_err(|error| SweepResolveFailure::from(sequence_verdict(error, endpoint_failed)))?;
+        .map_err(|refusal| SweepResolveFailure::from(sequence_verdict(refusal)))?;
         // A seed the ratchet does not reach fails this pass's read, not the
         // record's trust: an epoch above the root is also a label a committed
         // writer can choose freely (the epoch is only AAD).
@@ -4058,14 +4054,14 @@ where
         // Ahead of the "not promoted" answer, so a rolled-back record cannot
         // withdraw a promotion this device has already seen and send the caller
         // on to mint a second scope over it.
-        floor::check_sequence(
+        check_leaf_floor(
             self.floors,
             head.name.as_str().as_bytes(),
             head.sequence,
-            floor::Strictness::AtOrAboveFloor,
+            head.endpoint_failed,
         )
         .await
-        .map_err(|error| sequence_verdict(error, head.endpoint_failed))?;
+        .map_err(sequence_verdict)?;
         let envelope = head.envelope()?;
         // Still an ordinary child of the parent scope, so no promotion of this
         // folder's stands to resume. Past this point the record claims to be a
@@ -4808,28 +4804,27 @@ where
         root: Option<Option<u64>>,
         refused: &impl Fn(ResolveFailure, Option<DropCause>, bool) -> NodeStop,
     ) -> Result<WaveSource, NodeStop> {
-        let AnsweredFetch {
-            record,
-            answered,
-            endpoint_failed,
-        } = fanout_get_answered(self.transport, name).await;
-        let (sequence, record_bytes) = match record {
-            FanoutRecord::Found(verified, bytes) => (verified.sequence, bytes),
-            FanoutRecord::Absent => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::NoRecord),
-                    true,
-                ));
-            }
-            FanoutRecord::Unavailable(_) => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::EndpointUnavailable),
+        let (sequence, record_bytes, endpoint_failed) =
+            match LeafRead::fetch(self.transport, name).await {
+                Ok(read) => (read.pick.sequence, read.bytes, read.endpoint_failed),
+                Err(Unserved { absent: true, .. }) => {
+                    return Err(refused(
+                        ResolveFailure::Unavailable,
+                        Some(DropCause::NoRecord),
+                        true,
+                    ));
+                }
+                Err(Unserved {
+                    absent: false,
                     answered,
-                ));
-            }
-        };
+                }) => {
+                    return Err(refused(
+                        ResolveFailure::Unavailable,
+                        Some(DropCause::EndpointUnavailable),
+                        answered,
+                    ));
+                }
+            };
         let source = if let Some(resumed_write_epoch) = root {
             self.root_source(
                 name,
@@ -4883,7 +4878,11 @@ where
             node_id,
         )
         .with_seed_stamp(Some(self.read_seed_epoch));
-        match adopter.adopt(name, record_bytes).await {
+        match adopter
+            .adopt(name, record_bytes)
+            .await
+            .map_err(|error| LeafRefusal::of(error, endpoint_failed))
+        {
             Ok(outcome) => {
                 keep_then_commit(
                     self.snapshot_cache,
@@ -4896,7 +4895,7 @@ where
             }
             // A head block that does not match its CID is what one bad source
             // serves, not the record's own bytes.
-            Err(GateError::Rejected(rejection))
+            Err(LeafRefusal::Rejected(rejection))
                 if adopter.assembled_epoch().is_none()
                     && rejection.reason
                         == RejectionReason::Trust(TrustViolation::ContentCidMismatch.into()) =>
@@ -4906,24 +4905,24 @@ where
                     DropCause::NoHeadBlock,
                 ));
             }
-            Err(GateError::Rejected(rejection)) => match rejection.reason {
+            // ADR 0071 D1: as for an endpoint that serves nothing.
+            Err(LeafRefusal::Withheld) => {
+                return Err(WaveRefusal::dropping(
+                    WritePublishError::NotLanded,
+                    DropCause::EndpointUnavailable,
+                ));
+            }
+            Err(LeafRefusal::Rejected(rejection)) => match rejection.reason {
                 // Our own current record at exactly the floor: the at-floor
                 // re-open below is the path for it. A strictly older sequence is
                 // a replay, which a stale endpoint can serve, so it waits for
                 // the bound.
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {}
-                // ADR 0071 D1: as for an endpoint that serves nothing.
-                ref reason @ RejectionReason::SequenceNotNewer { .. } => {
-                    return Err(match sequence_refusal(reason, endpoint_failed) {
-                        Some(BelowFloor::Unavailable) => WaveRefusal::dropping(
-                            WritePublishError::NotLanded,
-                            DropCause::EndpointUnavailable,
-                        ),
-                        Some(BelowFloor::Rollback) | None => WaveRefusal::dropping(
-                            WritePublishError::Rejected,
-                            DropCause::BelowSequenceFloor,
-                        ),
-                    });
+                RejectionReason::SequenceNotNewer { .. } => {
+                    return Err(WaveRefusal::dropping(
+                        WritePublishError::Rejected,
+                        DropCause::BelowSequenceFloor,
+                    ));
                 }
                 _ => {
                     return self
@@ -4931,7 +4930,7 @@ where
                         .await;
                 }
             },
-            Err(GateError::Seam(_)) => {
+            Err(LeafRefusal::Seam(_)) => {
                 return Err(self.seam_refusal(&adopter));
             }
         }

@@ -72,6 +72,8 @@ pub(crate) struct LeafRead {
 pub(crate) struct Unserved {
     /// [`TiedFetch::absent`].
     pub(crate) absent: bool,
+    /// [`TiedFetch::answered`].
+    pub(crate) answered: bool,
 }
 
 /// The error of a leaf read's check, folded by the below-floor rule.
@@ -109,8 +111,9 @@ impl LeafRead {
             pick,
             absent,
             endpoint_failed,
+            answered,
         } = fanout_get_tied_classified(transport, name).await;
-        let (pick, bytes, tied) = pick.ok_or(Unserved { absent })?;
+        let (pick, bytes, tied) = pick.ok_or(Unserved { absent, answered })?;
         Ok(Self {
             pick,
             bytes,
@@ -125,10 +128,21 @@ impl LeafRead {
         floors: &F,
         key: &[u8],
     ) -> Result<(), LeafRefusal> {
-        floor::check_sequence(floors, key, self.pick.sequence, Strictness::AtOrAboveFloor)
-            .await
-            .map_err(|error| LeafRefusal::of(error, self.endpoint_failed))
+        check_leaf_floor(floors, key, self.pick.sequence, self.endpoint_failed).await
     }
+}
+
+/// [`LeafRead::check_floor`] for a pick a route holds apart from its
+/// [`LeafRead`]: `sequence` at or above the floor of `key`.
+pub(crate) async fn check_leaf_floor<F: FloorStore>(
+    floors: &F,
+    key: &[u8],
+    sequence: u64,
+    endpoint_failed: bool,
+) -> Result<(), LeafRefusal> {
+    floor::check_sequence(floors, key, sequence, Strictness::AtOrAboveFloor)
+        .await
+        .map_err(|error| LeafRefusal::of(error, endpoint_failed))
 }
 
 /// Whether a root with `envelope` and `section` is the child `expected_child`
@@ -614,7 +628,7 @@ async fn picked<T: RecordTransport>(
         endpoint_failed,
     } = LeafRead::fetch(transport, name)
         .await
-        .map_err(|Unserved { absent }| RootRefusal {
+        .map_err(|Unserved { absent, .. }| RootRefusal {
             verdict: if absent {
                 RootGateVerdict::Absent
             } else {
