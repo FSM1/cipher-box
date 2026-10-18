@@ -16690,6 +16690,60 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
     );
 }
 
+/// A join writes the bookmark list back with the values that a later release
+/// set on a bookmark the holder already held, and sets none on the new one.
+#[test]
+fn a_link_join_keeps_the_marks_of_the_bookmarks_held() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let planted = (cipherbox_engine::testkit::PLANTED_SHARER_PK, [0x6e; 16]);
+    cipherbox_engine::testkit::plant_marked_bookmark(
+        &fx.recipient_device.staging_store,
+        &enc,
+        planted.1,
+        (Some(7), Some(5)),
+    );
+
+    assert_eq!(
+        block_on_while_ticking(
+            holder.command(Command::ClaimInviteLink {
+                fragment,
+                name: String::new(),
+            }),
+            &mut holder_tasks
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    poll_tasks_until_parked(&mut holder_tasks);
+
+    assert_eq!(
+        cipherbox_engine::testkit::stored_bookmark_marks(
+            &fx.recipient_device.staging_store,
+            &enc,
+            &planted
+        ),
+        Some((Some(7), Some(5))),
+        "the held bookmark keeps both values"
+    );
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 2, "the join added its bookmark");
+    let joined = shares
+        .iter()
+        .find(|share| share.scope == fx.folder)
+        .expect("the joined share");
+    assert_eq!(
+        cipherbox_engine::testkit::stored_bookmark_marks(
+            &fx.recipient_device.staging_store,
+            &enc,
+            &(owner_identity().verifying_key().to_sec1(), joined.scope.0)
+        ),
+        Some((None, None)),
+        "the join sets no value"
+    );
+}
+
 /// ADR 0024 D2, D4: a write conversion runs a real write wave that moves the
 /// scope root. A holder that still reads through the link follows the scope
 /// pointer to the moved root, and the converted claimant holds write there.

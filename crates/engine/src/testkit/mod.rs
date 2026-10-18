@@ -61,6 +61,69 @@ pub fn without_scope_pointer_names(
     bare
 }
 
+/// Set `marks`, the `(ended, grantCut)` values, on the bookmark under `key`,
+/// as a later release writes them.
+pub fn mark_bookmark(
+    list: &mut crate::grants::ReceivedSharesList,
+    key: &crate::grants::BookmarkKey,
+    marks: (Option<u64>, Option<u64>),
+) {
+    list.mark_for_test(key, marks.0, marks.1);
+}
+
+/// The `(ended, grantCut)` values of `share`.
+pub fn bookmark_marks(share: &crate::grants::ReceivedShare) -> (Option<u64>, Option<u64>) {
+    (share.ended, share.grant_cut)
+}
+
+/// The sharer key of the bookmark that [`plant_marked_bookmark`] plants.
+pub const PLANTED_SHARER_PK: [u8; cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN] =
+    [0x02; cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN];
+
+/// Add a bookmark of scope `scope_id` with `marks` to the list that
+/// `enc_secret` seals in `staging`, as a later release writes it.
+pub fn plant_marked_bookmark<S: crate::seams::StagingStore>(
+    staging: &S,
+    enc_secret: &cipherbox_core::suite::x25519::X25519Secret,
+    scope_id: [u8; 16],
+    marks: (Option<u64>, Option<u64>),
+) {
+    use crate::grants::ReceivedShareStore;
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(0x5b));
+    let store = crate::grants::received_share_store::StagingReceivedShareStore::new(
+        staging, enc_secret, &entropy,
+    );
+    let mut list = block_on(store.load()).expect("the stored list reads");
+    list.reconcile(crate::grants::ReceivedShare {
+        scope_root_name: b"k51plantedroot".to_vec(),
+        scope_id,
+        sharer_identity_pk: PLANTED_SHARER_PK,
+        display_name: "planted".into(),
+        permission: cipherbox_core::seal::Permission::Read,
+        pointer_read_key: cipherbox_core::suite::secret::SecretBytes::new([0x5b; 32]),
+        scope_pointer_name: None,
+        grant_cut: marks.1,
+        ended: marks.0,
+    });
+    block_on(store.persist(&list)).expect("the planted list persists");
+}
+
+/// The `(ended, grantCut)` values of the bookmark under `key` in the list
+/// that `enc_secret` seals in `staging`.
+pub fn stored_bookmark_marks<S: crate::seams::StagingStore>(
+    staging: &S,
+    enc_secret: &cipherbox_core::suite::x25519::X25519Secret,
+    key: &crate::grants::BookmarkKey,
+) -> Option<(Option<u64>, Option<u64>)> {
+    use crate::grants::ReceivedShareStore;
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(0x5c));
+    let store = crate::grants::received_share_store::StagingReceivedShareStore::new(
+        staging, enc_secret, &entropy,
+    );
+    let list = block_on(store.load()).expect("the stored list reads");
+    list.find(key).map(bookmark_marks)
+}
+
 /// The write-epoch lease of one scope, held for a test as a publish of this
 /// device holds it, so a sighting raise of that scope defers until the drop.
 pub struct HeldWriteEpochLease {

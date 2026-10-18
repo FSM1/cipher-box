@@ -43,7 +43,9 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{
+    FakeDevice, FakeWorld, SeededEntropy, block_on, bookmark_marks, mark_bookmark,
+};
 
 /// The recipient's own vault root scope — the anchor a received share may never
 /// name. The fixture's shared scope is `[0x55; 16]`, so no accept here collides.
@@ -1056,6 +1058,7 @@ fn a_repost_adds_the_scope_pointer_name_to_a_bookmark_with_none() {
     accept(&first, &mut received).expect("the first post accepts");
     let key = (fx.owner_identity_pub.to_sec1(), fx.scope_id);
     assert_eq!(received.find(&key).unwrap().scope_pointer_name, None);
+    mark_bookmark(&mut received, &key, (Some(7), Some(5)));
 
     let pointer_name =
         IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key());
@@ -1089,6 +1092,11 @@ fn a_repost_adds_the_scope_pointer_name_to_a_bookmark_with_none() {
         stored.find(&key).unwrap().scope_pointer_name,
         Some(pointer_name),
         "the name is durable"
+    );
+    assert_eq!(
+        bookmark_marks(stored.find(&key).unwrap()),
+        (Some(7), Some(5)),
+        "the write of the name keeps both values of a later release"
     );
     assert_eq!(inbox_len(&fx, &recipient), 0, "and the repost is acked");
 }
@@ -1361,6 +1369,8 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         persists_after_first, 1,
         "the first accept persisted durably"
     );
+    let key = received.iter().next().unwrap().key();
+    mark_bookmark(&mut received, &key, (Some(7), Some(5)));
 
     // Re-accept the SAME scope with drifted authority. A fresh mailbox item (a
     // distinct idempotency key) redelivers the pointer.
@@ -1421,6 +1431,68 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         inbox_len(&fx, &recipient),
         0,
         "acked after the durable heal"
+    );
+    let stored = block_on(recipient.received_share_store.load()).expect("loads");
+    assert_eq!(
+        bookmark_marks(stored.find(&key).unwrap()),
+        (Some(7), Some(5)),
+        "the replaced bookmark keeps both values of a later release"
+    );
+}
+
+/// An accept that adds a bookmark writes the list back with the values that a
+/// later release set on another bookmark, and sets none on the new one.
+#[test]
+fn an_added_bookmark_keeps_the_marks_of_the_bookmarks_held() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let accept = |fx: &GrantFixture, received: &mut ReceivedSharesList| {
+        let item = deliver_pointer(
+            fx,
+            &recipient,
+            &poster,
+            &fx.owner_identity,
+            &fx.share_pointer(),
+        );
+        block_on(accept_share(
+            &recipient.floor_store,
+            &recipient.mailbox,
+            &recipient.received_share_store,
+            &item,
+            &import_contact(&fx.owner_contact).unwrap(),
+            &fx.recipient_enc,
+            &recipient_contact_label_seed(),
+            &fx.candidate(),
+            &fx.grant_blobs(),
+            &VAULT_ROOT_SCOPE,
+            received,
+        ))
+        .expect("the share accepts")
+    };
+    let other = GrantFixture::under_owner(1, 1);
+    let mut received = ReceivedSharesList::new();
+    accept(&other, &mut received);
+    let held = (other.owner_identity_pub.to_sec1(), other.scope_id);
+    mark_bookmark(&mut received, &held, (Some(7), Some(5)));
+
+    assert!(accept(&fx, &mut received).newly_added);
+
+    let stored = block_on(recipient.received_share_store.load()).expect("loads");
+    assert_eq!(stored.len(), 2);
+    assert_eq!(
+        bookmark_marks(stored.find(&held).unwrap()),
+        (Some(7), Some(5))
+    );
+    assert_eq!(
+        bookmark_marks(
+            stored
+                .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+                .unwrap()
+        ),
+        (None, None),
+        "the accept sets no value"
     );
 }
 
