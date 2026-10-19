@@ -1909,8 +1909,9 @@ surviving committed grants uniformly in the republish it already does.
   personal tag is not in it, `grantCut` is present, and the cut epoch is
   above `grantCut`; a link-held read sets nothing. The mark stays through an
   unavailable read, an unresolvable read, an absent pointer, and a blob that
-  is present but does not open. While it is set, the `/shared` row reports
-  `RevocationSignal` and `observe_pointer_pins` skips the bookmark. Only a
+  is present but does not open. While it is set and no link hold stands, the
+  `/shared` row reports `RevocationSignal` and `observe_pointer_pins` skips
+  the bookmark. Only a
   personal blob that opens in a verified commitment at a cut epoch at or
   above the mark clears it. The mark removes no custody key and sends no
   event. A baseline backfill, in memory only, gives each personal bookmark

@@ -1133,8 +1133,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            // An ended share's pointer retires with its scope (ADR 0079 D1).
-            let (Some(name), None) = (&share.scope_pointer_name, share.ended) else {
+            // An ended share's pointer retires with its scope, and a link
+            // hold keeps its own revoke path (ADR 0079 D1).
+            let ended = share.ended.is_some() && received.link_hold(&key).is_none();
+            let (Some(name), false) = (&share.scope_pointer_name, ended) else {
                 continue;
             };
             let read = match pin_reads.get(&key) {
@@ -5738,6 +5740,23 @@ mod tests {
                 assert!(stored(&fx).1.is_some(), "the link keys stay");
             }
 
+            /// A mark that a link hold joins later skips no pointer read: the
+            /// hold of a link that still reads opens and escalates.
+            #[test]
+            fn a_link_hold_over_an_ended_mark_still_escalates_a_withheld_pointer() {
+                let mut fx = RenderedScope::new(Vec::new());
+                join_marked(&fx, LINK_SECRET, (Some(1), Some(0)));
+                serve_pointer(&fx, &sharer_signer(), 1);
+                serve_root(&mut fx, vec![link_row(LATER)], 1, 1);
+                assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+                fx.records.lapse(pointer_name().as_str());
+
+                fx.forced_pass(1_000);
+                assert!(pointer_pinned(&fx), "the hold opens");
+                fx.forced_pass(6_000);
+                assert_eq!(pointer_escalations(&fx), 1);
+            }
+
             /// The mark stays through an unavailable pointer, an absent root,
             /// a blob that is present but does not open, and a forged blob.
             #[test]
@@ -5821,6 +5840,7 @@ mod tests {
                 serve_root(&mut fx, vec![personal_row()], 1, 1);
                 assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
                 fx.records.lapse(pointer_name().as_str());
+                fx.records.lapse(scope_root_name().as_str());
 
                 for at in [2_000, 7_000, 60_000] {
                     fx.forced_pass(at);

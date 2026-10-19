@@ -12343,11 +12343,11 @@ where {
                         grafted_root_name(&share.display_name, NodeId(share.scope_id)).to_string()
                     },
                     permission: live_permission(&verdicts, share).into(),
-                    // The `ended` mark outlives the records that set it
-                    // (ADR 0079 D1).
-                    resolution: match share.ended {
-                        Some(_) => Some(ResolutionClass::RevocationSignal),
-                        None => verdicts.get(&share.key()).map(|v| v.class),
+                    // The `ended` mark outlives the records that set it, and a
+                    // link hold keeps its own revoke path (ADR 0079 D1).
+                    resolution: match (share.ended, via_link) {
+                        (Some(_), false) => Some(ResolutionClass::RevocationSignal),
+                        _ => verdicts.get(&share.key()).map(|v| v.class),
                     },
                     via_link,
                 }

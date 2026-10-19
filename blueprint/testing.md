@@ -284,7 +284,7 @@ scenario fails the meta-test):
   link-held read set nothing; an unavailable read, an absent root, a blob that
   does not open and a forged blob do not clear it; an opened re-grant clears
   it; a retired pointer of an ended share escalates nothing, and the custody
-  keys stay; the backfill reaches four baseline-less bookmarks per pass and
+  keys stay; a link hold over a mark still escalates a withheld pointer; the backfill reaches four baseline-less bookmarks per pass and
   leaves the ordinary refresh its half, and a restart repeats it for the
   bookmarks with no baseline only (`grants::received_status` `ended_mark`);
   the accept writes `grantCut` before the floor commit and clears the mark at
