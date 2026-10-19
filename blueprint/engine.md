@@ -456,7 +456,7 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
-   interior record below the floor is opened only by the four readers that the
+   interior record below the floor is opened only by the five readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed. While an owed entry holds the interior move of a scope
@@ -1356,7 +1356,7 @@ Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
-is behind its scope's current epoch. Reading one is one of exactly **four**
+is behind its scope's current epoch. Reading one is one of exactly **five**
 paths that run the sequence floor without the read-epoch floor. The second is
 the drain's re-author of a lagging interior node, which carries the same wave
 for an ordinary write
@@ -1366,13 +1366,15 @@ a member read before the wave arrives
 ([ADR 0021](../decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
 The fourth is the name wave's read of a lagging interior node, which it moves
 forward at the root's epoch (ADR 0064).
+The fifth is the subtree re-seal's open of a lagging source node, for a
+dissolve or a restore across scopes (ADR 0077 D3).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
 seed the scope's history-link ratchet walks back to. The re-seal relabels the
 node's epoch tag: the tag is a key-selection label that names the epoch whose
 read seed opens the body, and no reader treats it as authorship
 ([ADR 0017](../decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
-All four paths hold the same conditions: the record carries no grant section,
+All five paths hold the same conditions: the record carries no grant section,
 the read moves no read-epoch floor, the sequence bar is the replay bar, and the
 epoch is one the scope root's own ratchet reaches. A node the retained
 window no longer reaches is readable by nobody: it is reported unreachable and
