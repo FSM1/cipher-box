@@ -731,11 +731,10 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
     scope_id: &[u8; 16],
     write_epoch: u64,
 ) -> SeamResult<u64> {
+    let key = owed_raise_key(floors, scope_id)?;
     OWED_WRITE_RAISES.with(|owed| {
         let mut owed = owed.borrow_mut();
-        let epoch = owed
-            .entry(owed_raise_key(floors, scope_id))
-            .or_insert(write_epoch);
+        let epoch = owed.entry(key).or_insert(write_epoch);
         *epoch = (*epoch).max(write_epoch);
     });
     let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
@@ -751,15 +750,20 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
 /// The highest epoch that [`advance_write_epoch_after_wave`] asked for at
 /// `scope_id` in the namespace of `floors`, until a raise of that floor
 /// reaches it.
-pub(crate) fn owed_write_raise<F: FloorStore>(floors: &F, scope_id: &[u8; 16]) -> Option<u64> {
-    let key = owed_raise_key(floors, scope_id);
-    OWED_WRITE_RAISES.with(|owed| owed.borrow().get(&key).copied())
+pub(crate) fn owed_write_raise<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+) -> SeamResult<Option<u64>> {
+    let key = owed_raise_key(floors, scope_id)?;
+    Ok(OWED_WRITE_RAISES.with(|owed| owed.borrow().get(&key).copied()))
 }
 
 /// Drop the deferred raise at `scope_id` in the namespace of `floors` that
-/// `floor` reaches.
+/// `floor` reaches. A key that does not derive clears nothing.
 fn settle_owed_write_raise<F: FloorStore>(floors: &F, scope_id: &[u8; 16], floor: u64) {
-    let key = owed_raise_key(floors, scope_id);
+    let Ok(key) = owed_raise_key(floors, scope_id) else {
+        return;
+    };
     OWED_WRITE_RAISES.with(|owed| {
         let mut owed = owed.borrow_mut();
         if owed.get(&key).is_some_and(|epoch| *epoch <= floor) {
@@ -770,7 +774,7 @@ fn settle_owed_write_raise<F: FloorStore>(floors: &F, scope_id: &[u8; 16], floor
 
 /// The key of the write-epoch floor of `scope_id` in the namespace of
 /// `floors`, as the store keeps it.
-fn owed_raise_key<F: FloorStore>(floors: &F, scope_id: &[u8; 16]) -> Vec<u8> {
+fn owed_raise_key<F: FloorStore>(floors: &F, scope_id: &[u8; 16]) -> SeamResult<Vec<u8>> {
     floors.epoch_floor_key(&write_epoch_key(scope_id))
 }
 
@@ -880,21 +884,21 @@ mod tests {
                     .await
                     .is_err()
             );
-            assert_eq!(owed_write_raise(&floors, &SCOPE), Some(5));
+            assert_eq!(owed_write_raise(&floors, &SCOPE).unwrap(), Some(5));
             drop(lease);
 
             advance_write_epoch_on_sight(&floors, &SCOPE, 4)
                 .await
                 .unwrap();
             assert_eq!(
-                owed_write_raise(&floors, &SCOPE),
+                owed_write_raise(&floors, &SCOPE).unwrap(),
                 Some(5),
                 "a floor below the epoch"
             );
             advance_write_epoch_on_sight(&floors, &SCOPE, 5)
                 .await
                 .unwrap();
-            assert_eq!(owed_write_raise(&floors, &SCOPE), None);
+            assert_eq!(owed_write_raise(&floors, &SCOPE).unwrap(), None);
         });
     }
 
@@ -912,7 +916,7 @@ mod tests {
                     .is_err()
             );
         });
-        assert_eq!(owed_write_raise(&floors, &SHARED_SCOPE), Some(7));
+        assert_eq!(owed_write_raise(&floors, &SHARED_SCOPE).unwrap(), Some(7));
     }
 
     /// A post-wave raise that the store refuses under a free lease stays
@@ -930,7 +934,7 @@ mod tests {
                     .is_err()
             );
         });
-        assert_eq!(owed_write_raise(&floors, &REFUSED_SCOPE), Some(6));
+        assert_eq!(owed_write_raise(&floors, &REFUSED_SCOPE).unwrap(), Some(6));
     }
 
     /// A deferred raise belongs to the floor namespace of its store: the same
@@ -958,7 +962,7 @@ mod tests {
             );
             drop(lease);
             assert_eq!(
-                owed_write_raise(&granted, &NAMESPACED_SCOPE),
+                owed_write_raise(&granted, &NAMESPACED_SCOPE).unwrap(),
                 None,
                 "no pause in another namespace"
             );
@@ -968,11 +972,55 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                owed_write_raise(&own, &NAMESPACED_SCOPE),
+                owed_write_raise(&own, &NAMESPACED_SCOPE).unwrap(),
                 Some(4),
                 "a raise in another namespace does not clear it"
             );
         });
+    }
+
+    /// A deferred raise belongs to the owner of its store: two owners on one
+    /// thread keep apart entries for the same scope id, and an unbound view
+    /// derives no key, so it pauses.
+    #[test]
+    fn a_deferred_post_wave_raise_stays_with_its_owner() {
+        use crate::seams::OwnerScopedFloorStore;
+        use cipherbox_core::kdf;
+
+        let shared = InMemoryFloorStore::default();
+        let owner = |secret: &[u8]| {
+            let view = OwnerScopedFloorStore::new(shared.clone());
+            view.bind(&kdf::enc_subkey(secret), &kdf::contact_label_seed(secret));
+            view
+        };
+        let (alice, bob) = (owner(&[7u8; 32]), owner(&[9u8; 32]));
+        const ROOT_SCOPE: [u8; 16] = [0u8; 16];
+        block_on(async {
+            let lease = acquire_write_epoch_lease(&ROOT_SCOPE).expect("the scope starts free");
+            assert!(
+                advance_write_epoch_after_wave(&alice, &ROOT_SCOPE, 4)
+                    .await
+                    .is_err()
+            );
+            drop(lease);
+            assert_eq!(
+                owed_write_raise(&bob, &ROOT_SCOPE).unwrap(),
+                None,
+                "no pause for another owner"
+            );
+
+            advance_write_epoch_on_sight(&bob, &ROOT_SCOPE, 9)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                owed_write_raise(&alice, &ROOT_SCOPE).unwrap(),
+                Some(4),
+                "a raise of another owner does not clear it"
+            );
+        });
+        let unbound = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+        assert!(owed_write_raise(&unbound, &ROOT_SCOPE).is_err());
     }
 
     #[test]

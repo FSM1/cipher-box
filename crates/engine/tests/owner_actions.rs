@@ -29939,6 +29939,49 @@ fn a_refused_record_at_a_copy_name_holds_the_seal() {
     assert_eq!(abuse_events(&mut fx._events), 0);
 }
 
+/// A refused record at the copy name of one row holds the whole batch: the
+/// rows probed before it publish nothing, so a failed PUT there cannot hide
+/// the refusal, and a later tick sends no second trust violation.
+#[test]
+fn a_refused_copy_holds_the_rows_probed_before_it() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = fx.standing_dissolve();
+    let rows = dissolve_rows(&fx, &header);
+    let refused = rows[1].new;
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &refused.0).as_bytes()),
+        &published_value(&fx.world, &write_name(ROOT)),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, write_name(refused).as_str(), record.clone());
+    }
+    events_so_far(&mut fx._events);
+    let copy_puts = |fx: &GrantScenario| -> Vec<usize> {
+        rows.iter()
+            .map(|row| {
+                fx.world
+                    .record_store
+                    .put_count(write_name(row.new).as_str())
+            })
+            .collect()
+    };
+    let before = copy_puts(&fx);
+
+    ticks(&mut fx, 2);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(copy_puts(&fx), before, "no PUT at a copy name");
+}
+
 /// The folder as a destination: its read scope and its write scope, at the
 /// epochs and the cut that its root holds now.
 fn folder_binding(fx: &GrantScenario) -> DissolveBinding {

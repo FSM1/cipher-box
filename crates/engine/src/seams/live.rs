@@ -60,7 +60,7 @@ impl<S: FloorStore> FloorStore for LiveSeam<S> {
         self.seam.epoch_floor(scope_id).await
     }
 
-    fn epoch_floor_key(&self, scope_id: &[u8]) -> Vec<u8> {
+    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
         self.seam.epoch_floor_key(scope_id)
     }
 

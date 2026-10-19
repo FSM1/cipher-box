@@ -55,10 +55,13 @@ thread_local! {
 /// Drops the lease that an epoch floor read took, also when a test panics, so
 /// no later test on the thread finds it held.
 #[must_use]
-pub struct HeldLeaseRelease(());
+pub struct HeldLeaseRelease(Arc<Mutex<Inner>>);
 
 impl Drop for HeldLeaseRelease {
     fn drop(&mut self) {
+        if let Ok(mut inner) = self.0.lock() {
+            inner.lease_on_read = None;
+        }
         HELD_LEASE.with(|held| held.borrow_mut().take());
     }
 }
@@ -245,7 +248,7 @@ impl InMemoryFloorStore {
         skipped: u32,
     ) -> HeldLeaseRelease {
         self.inner.lock().expect("lock").lease_on_read = Some((key.to_vec(), scope_id, skipped));
-        HeldLeaseRelease(())
+        HeldLeaseRelease(Arc::clone(&self.inner))
     }
 
     /// Restore every injected floor fault, the clear's and the commit's

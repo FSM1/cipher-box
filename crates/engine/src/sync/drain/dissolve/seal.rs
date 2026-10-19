@@ -389,6 +389,10 @@ where
                 }
             }
         }
+        // A refusal holds the whole batch, so no later fault hides it.
+        if matches!(fault, Some(SealFault::Refused)) {
+            return Err(SealFault::Refused);
+        }
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
             // A write cut moves each copy name: no publish lands at a name of
@@ -398,7 +402,8 @@ where
             };
             let current = self.write_floor(write).await?;
             let deferred =
-                floor::owed_write_raise(&write.floors(&self.seams.floors), &write.root.0);
+                floor::owed_write_raise(&write.floors(&self.seams.floors), &write.root.0)
+                    .map_err(|_| SealFault::Unanswered)?;
             if !floor_holds(current, header.binding.write_epoch, deferred) {
                 return Err(SealFault::Unanswered);
             }

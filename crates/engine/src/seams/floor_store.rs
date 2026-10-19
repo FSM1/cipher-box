@@ -42,9 +42,9 @@ pub trait FloorStore {
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>>;
 
     /// The epoch floor key `scope_id` names in this store's namespace, apart
-    /// from the same id under another granting identity.
-    fn epoch_floor_key(&self, scope_id: &[u8]) -> Vec<u8> {
-        scope_id.to_vec()
+    /// from the same id under another owner or granting identity.
+    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
+        Ok(scope_id.to_vec())
     }
 
     /// Raises the name's sequence floor to `max(stored, sequence)`, durably,
@@ -243,6 +243,10 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
         self.inner.epoch_floor(&self.scoped(scope_id)?).await
     }
 
+    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
+        self.inner.epoch_floor_key(&self.scoped(scope_id)?)
+    }
+
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
         self.inner
             .raise_epoch_floor(&self.scoped(scope_id)?, epoch)
@@ -388,7 +392,7 @@ impl<F: FloorStore> FloorStore for SharerScopedFloorStore<'_, F> {
         self.inner.epoch_floor(&self.scoped(scope_id)).await
     }
 
-    fn epoch_floor_key(&self, scope_id: &[u8]) -> Vec<u8> {
+    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
         self.inner.epoch_floor_key(&self.scoped(scope_id))
     }
 
@@ -451,7 +455,7 @@ impl<F: FloorStore> FloorStore for NoPersistFloorStore<'_, F> {
         self.inner.epoch_floor(scope_id).await
     }
 
-    fn epoch_floor_key(&self, scope_id: &[u8]) -> Vec<u8> {
+    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
         self.inner.epoch_floor_key(scope_id)
     }
 
