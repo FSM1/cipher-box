@@ -158,6 +158,8 @@ where
                 Ok(Some(DissolveStep::Map))
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
+            // After the copy started, the entry and each copy stay.
+            ScopeCut::Concurrent if header.copy_started => Ok(Some(DissolveStep::Cut)),
             ScopeCut::Concurrent => {
                 if !forgot? {
                     return Ok(Some(DissolveStep::Cut));

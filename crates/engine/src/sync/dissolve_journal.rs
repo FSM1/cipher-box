@@ -767,10 +767,11 @@ pub fn decode_name_log_page(payload: &[u8], index: u32) -> Result<NameLogPage, D
 }
 
 /// The rules that compare a header with the one it replaces: the entry identity,
-/// the scope list, a set `cut_time` and a sticky mark stay; the step does not go
-/// back from Relink on; the cut epoch does not fall, and once set rises only in a
-/// commit at Cut from a step before Relink; the other lists only grow at their
-/// end.
+/// a set `cut_time` and a sticky mark stay; the step does not go back from
+/// Relink on; the cut epoch does not fall, and once set rises only in a commit
+/// at Cut from a step before Relink; the scope list grows only by an uncut
+/// scope in a commit at Cut after the copy started; the other lists only grow
+/// at their end.
 fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'static str> {
     if held.new_root != new.new_root || held.relink_parent != new.relink_parent {
         return Err("dissolve-journal-entry-identity-changed");
@@ -784,8 +785,15 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-scopes-not-append-only");
     }
-    // The scope list is built before the first commit.
-    if new.scopes.len() != held.scopes.len() {
+    // A folder shared after the copy started joins the dissolve as a scope
+    // that the cut step has still to cut (ADR 0077 D4).
+    if new.scopes.len() != held.scopes.len()
+        && (!held.copy_started
+            || new.step != DissolveStep::Cut
+            || new.scopes[held.scopes.len()..]
+                .iter()
+                .any(|scope| *scope != DissolvedScope::uncut(scope.scope_id)))
+    {
         return Err("dissolve-journal-scope-appended");
     }
     if held

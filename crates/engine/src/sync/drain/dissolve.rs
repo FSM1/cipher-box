@@ -24,8 +24,8 @@ use zeroize::Zeroizing;
 
 use super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 use super::{
-    Anchor, Drain, DrainScope, Halt, LoadedNode, RecordMark, ScopeEnd, WalkAnchor, refuse_record,
-    seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
+    Anchor, Drain, DrainScope, Halt, LoadedNode, LoadedRoot, RecordMark, ScopeEnd, WalkAnchor,
+    refuse_record, seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
 use crate::facade::{NodeId, emit_trust_violation};
@@ -41,8 +41,8 @@ use crate::seams::{
     SnapshotCache, StagingStore,
 };
 use crate::sync::dissolve_journal::{
-    DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
-    MAX_PAGE_ENTRIES, MapPage, MapRow,
+    DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError,
+    DissolvedScope, HeaderSlot, MAX_PAGE_ENTRIES, MapPage, MapRow,
 };
 use crate::sync::kept_op::retain_pending;
 use crate::sync::model::Snapshot;
@@ -138,6 +138,9 @@ pub(crate) struct DissolveWalk {
     /// material of a marked end. A refusal at the first root read marks no
     /// end, so that hold lasts until a new header.
     refused: bool,
+    /// The copy started, so a scope that a gated index names and the
+    /// dissolve does not cut joins the dissolve, and no stop drops the entry.
+    joining: bool,
 }
 
 /// Why a first-sweep visit stopped the walk.
@@ -150,6 +153,9 @@ enum MapHalt {
     Concurrent,
     /// The walk passed its node bound.
     TooLarge,
+    /// A gated index names scopes that the dissolve does not cut, after the
+    /// copy started.
+    Joined,
 }
 
 /// Where one tick left a dissolve walk.
@@ -166,6 +172,9 @@ pub(super) enum MapStep {
     Refused,
     /// The dissolve stops before the copy.
     Stop,
+    /// Each scope that a gated index names and the dissolve does not cut
+    /// joins the dissolve, which returns to its cut step (ADR 0077 D4).
+    Join(Vec<NodeId>),
 }
 
 fn scope_ids(header: &DissolveHeader) -> Vec<(NodeId, u64)> {
@@ -217,11 +226,12 @@ impl DissolveWalk {
             indexes: BTreeMap::new(),
             marks: BTreeMap::new(),
             refused: false,
+            joining: header.copy_started,
         }
     }
 
     fn walks(&self, header: &DissolveHeader) -> bool {
-        self.scopes == scope_ids(header)
+        self.scopes == scope_ids(header) && self.joining == header.copy_started
     }
 
     /// Whether each end that gave an anchor still has the material it had. An
@@ -259,6 +269,7 @@ impl DissolveWalk {
             sweep,
             anchors,
             indexes,
+            joining,
             ..
         } = self;
         let mut policy = DissolvePolicy {
@@ -268,6 +279,8 @@ impl DissolveWalk {
             ascends,
             left,
             bound,
+            joining: *joining,
+            joined: BTreeSet::new(),
             halt: None,
         };
         let swept = sweep
@@ -280,7 +293,7 @@ impl DissolveWalk {
                 },
             )
             .await;
-        let halt = policy.halt;
+        let (halt, joined) = (policy.halt, policy.joined);
         match swept {
             Swept::Complete => {
                 // Each scope the header cuts is a node of the walked tree.
@@ -293,6 +306,9 @@ impl DissolveWalk {
             Swept::Paused => MapStep::Unfinished,
             Swept::Moved => MapStep::Restart,
             Swept::Fault(ReadFault::Untrusted) => MapStep::Refused,
+            // After the copy started, a grant section waits for a gated index
+            // that names it.
+            Swept::Fault(ReadFault::Fatal(Unmapped::NewScopeRoot)) if *joining => MapStep::Restart,
             Swept::Fault(ReadFault::Fatal(Unmapped::NewScopeRoot)) => MapStep::Stop,
             Swept::Fault(ReadFault::Fatal(Unmapped::Outside)) => MapStep::Restart,
             Swept::Fault(ReadFault::Unanswered) => {
@@ -304,18 +320,20 @@ impl DissolveWalk {
             }
             Swept::Stopped(Overflow) => match halt {
                 Some(MapHalt::Restart) => MapStep::Restart,
+                Some(MapHalt::Joined) => MapStep::Join(joined.into_iter().collect()),
                 Some(MapHalt::Concurrent | MapHalt::TooLarge) | None => MapStep::Stop,
             },
         }
     }
 
     /// The map rows in walk order, which is one rooted tree in pre-order. The
-    /// root row takes `new_root`; every other row takes an id from `mint`.
+    /// root row takes `new_root`; every other row takes the id that `mint`
+    /// gives its old id.
     fn rows(
         &self,
         new_root: NodeId,
         name: impl Fn(&WalkKey) -> Option<Vec<u8>>,
-        mut mint: impl FnMut() -> Option<NodeId>,
+        mut mint: impl FnMut(NodeId) -> Option<NodeId>,
     ) -> Option<Vec<MapRow>> {
         self.sweep
             .read
@@ -324,7 +342,7 @@ impl DissolveWalk {
             .map(|(at, (key, _))| {
                 Some(MapRow {
                     old: key.node,
-                    new: if at == 0 { new_root } else { mint()? },
+                    new: if at == 0 { new_root } else { mint(key.node)? },
                     parent: key.parent,
                     old_name: name(key)?,
                 })
@@ -341,6 +359,9 @@ struct DissolvePolicy<'p> {
     ascends: &'p dyn Fn(NodeId, NodeId) -> bool,
     left: &'p Cell<usize>,
     bound: usize,
+    joining: bool,
+    /// The scopes that join the dissolve, with [`MapHalt::Joined`].
+    joined: BTreeSet<NodeId>,
     halt: Option<MapHalt>,
 }
 
@@ -377,10 +398,21 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
     ) -> Result<(), Overflow> {
         let at = u32::try_from(sweep.read.len() - 1).map_err(|_| Overflow)?;
         if let Some(root) = read.root {
-            if cut_overtaken(root.rows, root.cut_epoch, self.cuts(key.node))
-                || root.index.iter().any(|scope| self.cuts(*scope).is_none())
-            {
+            if cut_overtaken(root.rows, root.cut_epoch, self.cuts(key.node)) {
                 return self.stop(MapHalt::Concurrent);
+            }
+            let uncut: BTreeSet<NodeId> = root
+                .index
+                .iter()
+                .copied()
+                .filter(|scope| self.cuts(*scope).is_none())
+                .collect();
+            if !uncut.is_empty() {
+                if !self.joining {
+                    return self.stop(MapHalt::Concurrent);
+                }
+                self.joined = uncut;
+                return self.stop(MapHalt::Joined);
             }
             self.anchors.insert(key.node, root.anchor);
             self.indexes.insert(key.node, root.index);
@@ -483,9 +515,7 @@ where
         left: &Cell<usize>,
     ) -> Result<(), NotDriven> {
         let header = match journal.header(root).await.map_err(|_| NotDriven)? {
-            HeaderSlot::Own(header) if header.step == DissolveStep::Map && !header.copy_started => {
-                header
-            }
+            HeaderSlot::Own(header) if header.step == DissolveStep::Map => header,
             _ => {
                 self.cells.dissolve_walks.borrow_mut().remove(&root);
                 return Ok(());
@@ -538,7 +568,17 @@ where
                 self.cells.dissolve_walks.borrow_mut().insert(root, walk);
                 Ok(())
             }
+            // After the copy started, a stop keeps the entry and each copy.
+            MapStep::Stop if header.copy_started => Ok(()),
             MapStep::Stop => Ok(journal.drop_entry(&hold, &header).await?),
+            MapStep::Join(scopes) => {
+                let mut joined = header.clone();
+                joined.step = DissolveStep::Cut;
+                joined
+                    .scopes
+                    .extend(scopes.into_iter().map(DissolvedScope::uncut));
+                Ok(journal.commit(&hold, Some(&header), &joined).await?)
+            }
             MapStep::Complete => self.commit_map(journal, &hold, &header, &walk, ends).await,
         }
     }
@@ -566,8 +606,9 @@ where
     }
 
     /// Write the map of a complete walk as a new generation, then commit the
-    /// header at the seal step over it. A page of another generation is not
-    /// part of the entry, so it goes after the commit.
+    /// header at the seal step over it. A node of the live map keeps its new
+    /// id, so a remap mints ids for new nodes only. A page of another
+    /// generation is not part of the entry, so it goes after the commit.
     async fn commit_map(
         &self,
         journal: &DissolveJournal<'_, St>,
@@ -585,10 +626,23 @@ where
             };
             Some(name.as_str().as_bytes().to_vec())
         };
-        let mint = || {
-            fresh_bytes(&mut *self.seams.entropy.borrow_mut(), "node id")
-                .ok()
-                .map(NodeId)
+        let live: BTreeMap<NodeId, NodeId> = if header.map_pages == 0 {
+            BTreeMap::new()
+        } else {
+            journal
+                .map(header.scopes[0].scope_id, header)
+                .await?
+                .into_iter()
+                .flat_map(|page| page.rows)
+                .map(|row| (row.old, row.new))
+                .collect()
+        };
+        let mint = |old: NodeId| {
+            live.get(&old).copied().or_else(|| {
+                fresh_bytes(&mut *self.seams.entropy.borrow_mut(), "node id")
+                    .ok()
+                    .map(NodeId)
+            })
         };
         let rows = walk.rows(header.new_root, name, mint).ok_or(NotDriven)?;
         let generation = header.map_gen.checked_add(1).ok_or(NotDriven)?;
@@ -634,7 +688,7 @@ where
                 .await;
         }
         let cut_epoch = cut_epoch_of(header, key.node);
-        let (root, envelope) = self.walk_root(owner, end, true).await?;
+        let (root, envelope) = self.dissolve_root(owner, end).await?;
         let commitment = root.state.commitment.as_ref().ok_or(ReadFault::Untrusted)?;
         let rows = !commitment.entries.is_empty();
         let cut = commitment.cut_epoch;
@@ -804,9 +858,28 @@ where
         Ok(loaded)
     }
 
+    /// The root of `end` and its head envelope, read through its own gate as
+    /// [`Self::walk_root`] reads it. A tie holds the read only when the gate
+    /// passes it (ADR 0066 D1): one fork event, and the read is untrusted. The
+    /// root gate refuses a tie below the epoch floor.
+    pub(super) async fn dissolve_root<E>(
+        &self,
+        owner: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+    ) -> Result<(LoadedRoot, Envelope), ReadFault<E>> {
+        let resolved = self
+            .gated_scope_root(owner, end, ResolveMode::NoCache)
+            .await
+            .map_err(walk_fault)?;
+        if let Some(fork) = &resolved.resolved.fork {
+            return Err(self.fork_at(end.root_name, fork.sequence));
+        }
+        self.open_walk_root(owner, end, resolved).await
+    }
+
     /// Report a same-sequence fork at `sequence` of `name`, which holds the
     /// walk.
-    fn fork_at(&self, name: &IpnsName, sequence: u64) -> ReadFault<Unmapped> {
+    fn fork_at<E>(&self, name: &IpnsName, sequence: u64) -> ReadFault<E> {
         self.cells
             .forks
             .report(&self.seams.events, name.as_str(), sequence);
@@ -1012,7 +1085,7 @@ mod tests {
     use cipherbox_core::seal::{NodeKind, PreservedFields};
 
     use super::*;
-    use crate::sync::dissolve_journal::{DissolveBinding, DissolvedScope, check_map};
+    use crate::sync::dissolve_journal::{DissolveBinding, check_map};
     use crate::testkit::block_on;
 
     const S: NodeId = NodeId([0x10; 16]);
@@ -1170,7 +1243,7 @@ mod tests {
         walk.rows(
             NEW_ROOT,
             |key| Some([key.node.0, key.scope.0].concat()),
-            || {
+            |_| {
                 minted += 1;
                 Some(NodeId([minted; 16]))
             },

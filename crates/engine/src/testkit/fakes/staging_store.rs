@@ -113,6 +113,12 @@ impl InMemoryStagingStore {
         self.inner.lock().expect("lock").fail_staged_removals_under = Some(prefix.to_vec());
     }
 
+    /// Removes every staged key again after
+    /// [`fail_staged_removals_under`](Self::fail_staged_removals_under).
+    pub fn heal_staged_removals(&self) {
+        self.inner.lock().expect("lock").fail_staged_removals_under = None;
+    }
+
     /// Makes every `put_staged_bytes` at `staging_key` return a seam error, and
     /// keep the bytes there, until [`heal_staged_writes`](Self::heal_staged_writes).
     pub fn fail_staged_writes_at(&self, staging_key: &[u8]) {

@@ -18,22 +18,24 @@ use cipherbox_core::suite::secret::ct_eq;
 
 use super::super::{
     Anchor, Drain, DrainScope, LoadedRoot, LostWinner, ScopeEnd, SealPlane, checked_content_cid,
-    encode_content_cid_str, refuse_record, take_tick_read,
+    encode_content_cid_str, refuse_record, seal_open_failed, take_tick_read,
 };
 use super::{EndMark, cut_epoch_of, cut_overtaken};
-use crate::facade::NodeId;
+use crate::facade::{NodeId, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::gated_read::{LeafRead, Unserved};
-use crate::net::{ChildAdopter, Observed};
+use crate::net::{ChildAdopter, FanoutRecord, Observed, fanout_get_classified};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SharerScopedFloorStore,
     SnapshotCache, StagingStore,
 };
 use crate::sync::dissolve_journal::{
     DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep,
-    DissolveWriteError, HeaderSlot, LoggedName, MapRow, NameLogPage,
+    DissolveWriteError, HeaderSlot, LoggedName, MAX_PRIOR_BINDINGS, MapRow, NameLogPage,
+    PriorBinding,
 };
 use crate::sync::drain::walker::ReadFault;
+use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, open_repoint};
 use crate::sync::tick::scope_root_of;
 
 /// The seal of one dissolve entry, carried across ticks.
@@ -73,6 +75,9 @@ enum SealFault {
     /// A gate refused a record, or the endpoints served a fork. The event
     /// went out.
     Refused,
+    /// A source node moved out of the subtree, or a folder of it was shared
+    /// after the copy started: the entry returns to its map step.
+    Remap,
 }
 
 impl From<DissolveWriteError> for SealFault {
@@ -90,32 +95,81 @@ impl<E> From<ReadFault<E>> for SealFault {
     }
 }
 
-/// The header that the gated destination root at `epoch` and `cut_epoch`
-/// and the write epoch floor `write_epoch` give `header`, with the copy
-/// marked as started. `None` when a read lags the header, so the tick waits.
+/// The header that the gated destination root at `epoch` and `cut_epoch`,
+/// the read epoch `vouched` that the owner's pointer vouches, and the write
+/// epoch floor `write_epoch` give `header`, with the copy marked as started.
+/// `None` when a read lags the header or the pointer, so the tick waits.
 ///
-/// The seal cannot tell a grantee rise from an owner rise without the scope
-/// pointer, so each read rise moves `restart_floor` to the new epoch, and
-/// each node below it seals again.
+/// Only the owner moves the cut epoch and the pointer, so only those move
+/// `restart_floor`. A read rise alone is a grantee rise, and each sealed copy
+/// stays (ADR 0077 D4).
 fn restarted(
     header: &DissolveHeader,
     epoch: u64,
     cut_epoch: u64,
+    vouched: u64,
     write_epoch: u64,
 ) -> Option<DissolveHeader> {
     let was = header.binding;
-    if epoch < was.read_epoch || cut_epoch < was.base_cut || write_epoch < was.write_epoch {
+    if epoch < was.read_epoch
+        || cut_epoch < was.base_cut
+        || vouched > epoch
+        || write_epoch < was.write_epoch
+    {
         return None;
     }
     let mut next = header.clone();
     next.copy_started = true;
     let binding = &mut next.binding;
-    if epoch > was.read_epoch || cut_epoch > was.base_cut {
-        binding.read_epoch = epoch;
-        binding.restart_floor = was.restart_floor.max(epoch);
+    binding.read_epoch = epoch;
+    if cut_epoch > was.base_cut {
         binding.base_cut = cut_epoch;
+        binding.restart_floor = binding.restart_floor.max(epoch);
     }
+    binding.restart_floor = binding.restart_floor.max(vouched);
     binding.write_epoch = write_epoch;
+    Some(next)
+}
+
+/// The header that a new destination, `read_scope` and `write_scope`, gives
+/// `header` (ADR 0077 D4, owner ruling Q2 (a)): the former binding goes to
+/// `prior_bindings`, and the D4 check of the tick reads the epochs of the new
+/// one. A new read scope restarts every copy. `None` at a rebind past
+/// [`MAX_PRIOR_BINDINGS`], which waits.
+fn rebound(
+    header: &DissolveHeader,
+    read_scope: NodeId,
+    write_scope: NodeId,
+) -> Option<DissolveHeader> {
+    let was = header.binding;
+    if header.prior_bindings.len() >= MAX_PRIOR_BINDINGS {
+        return None;
+    }
+    let mut next = header.clone();
+    next.prior_bindings.push(PriorBinding {
+        read_scope: was.read_scope,
+        read_root: was.read_scope,
+        read_epoch: was.read_epoch,
+        restart_floor: was.restart_floor,
+        write_scope: was.write_scope,
+        write_epoch: was.write_epoch,
+    });
+    next.binding = if read_scope == was.read_scope {
+        DissolveBinding {
+            write_scope,
+            write_epoch: 0,
+            ..was
+        }
+    } else {
+        DissolveBinding {
+            read_scope,
+            read_epoch: 0,
+            restart_floor: 0,
+            base_cut: 0,
+            write_scope,
+            write_epoch: 0,
+        }
+    };
     Some(next)
 }
 
@@ -248,6 +302,23 @@ where
         let Some(hold) = self.cells.dissolve.hold(root) else {
             return;
         };
+        let Some((read_scope, write_scope)) =
+            self.destination_of(owner, ends, header.relink_parent)
+        else {
+            return;
+        };
+        let binding = header.binding;
+        let header = if (read_scope, write_scope) == (binding.read_scope, binding.write_scope) {
+            header
+        } else {
+            let Some(next) = rebound(&header, read_scope, write_scope) else {
+                return;
+            };
+            if journal.commit(&hold, Some(&header), &next).await.is_err() {
+                return;
+            }
+            next
+        };
         let Some(dest) = ends
             .iter()
             .find(|end| end.root == header.binding.read_scope)
@@ -286,7 +357,15 @@ where
         let root = header.scopes[0].scope_id;
         let end_of = |scope: NodeId| ends.iter().find(|end| end.root == scope);
         let write = end_of(header.binding.write_scope).ok_or(SealFault::Unanswered)?;
-        if owes_write_cut(self.inputs.owed_write_cuts, write.root) {
+        // A write cut of the write scope moves each copy name, and so does one
+        // that gives the destination a write seed of its own.
+        let guards: Vec<&ScopeEnd<'_>> = core::iter::once(write)
+            .chain((dest.root != write.root).then_some(dest))
+            .collect();
+        if guards
+            .iter()
+            .any(|end| owes_write_cut(self.inputs.owed_write_cuts, end.root))
+        {
             return Err(SealFault::Unanswered);
         }
         // Each copy name derives from the write scope's seed, which the
@@ -294,25 +373,21 @@ where
         if !ct_eq(dest.write_scope_seed, write.write_scope_seed) {
             return Err(SealFault::Unanswered);
         }
-        // A grant on an ancestor of the relink parent changes the destination
-        // (ADR 0077 D4), and the seal waits.
-        let roots: BTreeSet<NodeId> = owner.scope_roots.iter().copied().collect();
-        if scope_root_of(&self.cells.base.borrow(), header.relink_parent, &roots)
-            != header.binding.read_scope
-        {
-            return Err(SealFault::Unanswered);
-        }
         if !take_tick_read(left) {
             return Ok(());
         }
-        let (dest_root, _) = self.walk_root::<()>(owner, dest, true).await?;
+        let (dest_root, _) = self.dissolve_root::<()>(owner, dest).await?;
         let cut_epoch = dest_root
             .state
             .commitment
             .as_ref()
             .map_or(0, |commitment| commitment.cut_epoch);
-        let write_epoch = self.write_floor(write).await?;
-        let next = restarted(&header, dest_root.epoch, cut_epoch, write_epoch)
+        let vouched = self.vouched_read_epoch(owner, dest).await?;
+        let mut held_floors = Vec::with_capacity(guards.len());
+        for end in &guards {
+            held_floors.push(self.write_floor(end).await?);
+        }
+        let next = restarted(&header, dest_root.epoch, cut_epoch, vouched, held_floors[0])
             .ok_or(SealFault::Unanswered)?;
         if next != header {
             journal.commit(hold, Some(&header), &next).await?;
@@ -370,6 +445,7 @@ where
                     &name,
                     &body,
                     header.binding.restart_floor,
+                    &header.prior_bindings,
                 )
                 .await
             {
@@ -390,22 +466,35 @@ where
             }
         }
         // A refusal holds the whole batch, so no later fault hides it.
-        if matches!(fault, Some(SealFault::Refused)) {
-            return Err(SealFault::Refused);
+        match fault {
+            Some(SealFault::Refused) => return Err(SealFault::Refused),
+            // The map walks the subtree again and keeps each mapped id.
+            Some(SealFault::Remap) => {
+                let mut remap = header.clone();
+                remap.step = DissolveStep::Map;
+                journal.commit(hold, Some(&header), &remap).await?;
+                return Ok(());
+            }
+            _ => {}
         }
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
             // A write cut moves each copy name: no publish lands at a name of
             // the old write seed (ADR 0077 D4).
-            let Some(_lease) = floor::acquire_write_epoch_lease(&write.root.0) else {
-                return Err(SealFault::Unanswered);
-            };
-            let current = self.write_floor(write).await?;
-            let deferred =
-                floor::owed_write_raise(&write.floors(&self.seams.floors), &write.root.0)
-                    .map_err(|_| SealFault::Unanswered)?;
-            if !floor_holds(current, header.binding.write_epoch, deferred) {
-                return Err(SealFault::Unanswered);
+            let mut leases = Vec::with_capacity(guards.len());
+            for end in &guards {
+                leases.push(
+                    floor::acquire_write_epoch_lease(&end.root.0).ok_or(SealFault::Unanswered)?,
+                );
+            }
+            for (end, held) in guards.iter().zip(&held_floors) {
+                let current = self.write_floor(end).await?;
+                let deferred =
+                    floor::owed_write_raise(&end.floors(&self.seams.floors), &end.root.0)
+                        .map_err(|_| SealFault::Unanswered)?;
+                if !floor_holds(current, *held, deferred) {
+                    return Err(SealFault::Unanswered);
+                }
             }
             let content_cids = match &job.body {
                 ReadBody::File { versions, .. } => versions
@@ -437,6 +526,37 @@ where
         fault.map_or(Ok(()), Err)
     }
 
+    /// The read scope and the write scope of the relink parent `node` now: its
+    /// nearest scope root, and the nearest scope root from there up whose
+    /// write seed is not its parent scope's, or the vault root. `None` when the
+    /// tick holds no end for a scope on that path.
+    fn destination_of(
+        &self,
+        owner: &DrainScope<'_>,
+        ends: &[ScopeEnd<'_>],
+        node: NodeId,
+    ) -> Option<(NodeId, NodeId)> {
+        let base = self.cells.base.borrow();
+        let roots: BTreeSet<NodeId> = owner.scope_roots.iter().copied().collect();
+        let read = scope_root_of(&base, node, &roots);
+        let end_of = |scope: NodeId| ends.iter().find(|end| end.root == scope);
+        end_of(read)?;
+        let chain: Vec<NodeId> = core::iter::once(read)
+            .chain(
+                base.ancestors(read)
+                    .into_iter()
+                    .filter(|scope| roots.contains(scope) || *scope == base.root),
+            )
+            .collect();
+        for pair in chain.windows(2) {
+            let (scope, parent) = (end_of(pair[0])?, end_of(pair[1])?);
+            if !ct_eq(scope.write_scope_seed, parent.write_scope_seed) {
+                return Some((read, scope.root));
+            }
+        }
+        Some((read, *chain.last()?))
+    }
+
     /// The source body of the row at `node` under `end`, its scope. A scope
     /// root reads through its own gate once in a tick, into `roots`. `None`
     /// when the tick has no reads left.
@@ -457,7 +577,7 @@ where
                 if !take_tick_read(left) {
                     return Ok(None);
                 }
-                let (root, _) = self.walk_root::<()>(owner, end, true).await?;
+                let (root, _) = self.dissolve_root::<()>(owner, end).await?;
                 // A row or another cut at a cut scope is work that the dissolve
                 // did not do, and the seal waits.
                 let commitment = root
@@ -487,17 +607,22 @@ where
         if !take_tick_read(left) {
             return Ok(None);
         }
-        // A folder shared after the copy started is a stop of the read, and
-        // the seal waits.
-        let loaded = self
+        match self
             .gated_child(owner, ends, header, end, root.anchor(), node)
-            .await?;
-        Ok(Some(loaded.body))
+            .await
+        {
+            Ok(loaded) => Ok(Some(loaded.body)),
+            Err(ReadFault::Fatal(_)) => Err(SealFault::Remap),
+            Err(fault) => Err(fault.into()),
+        }
     }
 
     /// The basis to publish the copy `body` of `node` over at `name` under
     /// `plane`, or `None` when the record there holds that body, sealed at an
-    /// epoch from `restart_floor` to the plane's. The open commits nothing.
+    /// epoch from `restart_floor` to the plane's. A record that a destination
+    /// of `prior` seals is a copy from before a rebind, and the copy publishes
+    /// over it. The open commits nothing.
+    #[expect(clippy::too_many_arguments, reason = "one probe of one copy name")]
     async fn probe_copy(
         &self,
         plane: &SealPlane<'_>,
@@ -506,6 +631,7 @@ where
         name: &IpnsName,
         body: &ReadBody,
         restart_floor: u64,
+        prior: &[PriorBinding],
     ) -> Result<Option<Observed>, SealFault> {
         let read = match LeafRead::fetch(&self.seams.transport, name).await {
             Ok(read) => read,
@@ -528,6 +654,14 @@ where
             .await
         {
             Ok(opened) => opened,
+            Err(Some(rejection))
+                if seal_open_failed(&rejection)
+                    && adopter
+                        .unbound_scope()
+                        .is_some_and(|scope| prior.iter().any(|was| was.read_scope.0 == scope)) =>
+            {
+                return Ok(Some(Observed::record(name, read.pick.sequence)));
+            }
             Err(Some(rejection)) => {
                 refuse_record(&self.seams.events, name, &rejection);
                 return Err(SealFault::Refused);
@@ -547,7 +681,7 @@ where
             )
             .await
         {
-            return Err(self.fork_at(name, adopted.sequence).into());
+            return Err(self.fork_at::<()>(name, adopted.sequence).into());
         }
 
         // A kept copy carries no field at any layer, the envelope included.
@@ -557,6 +691,53 @@ where
             && (restart_floor..=plane.epoch).contains(&adopted.epoch)
             && adopted.read_body == *body;
         Ok((!sealed).then(|| Observed::record(name, read.pick.sequence)))
+    }
+
+    /// The read epoch that the owner vouches for the destination `dest`: the
+    /// `min_read_epoch` of its scope pointer, or the vouched floor of the vault
+    /// root. A pointer that does not open, or that rolls back the write epoch
+    /// floor, is a trust violation. A pointer that does not read pauses the
+    /// tick.
+    async fn vouched_read_epoch(
+        &self,
+        owner: &DrainScope<'_>,
+        dest: &ScopeEnd<'_>,
+    ) -> Result<u64, SealFault> {
+        let scope = dest.root.0;
+        let floors = dest.floors(&self.seams.floors);
+        if dest.root == self.cells.base.borrow().root {
+            return floor::vouched_floor(&floors, &scope)
+                .await
+                .map(Option::unwrap_or_default)
+                .map_err(|_| SealFault::Unanswered);
+        }
+        let keys = self.inputs.owner_pointers.ok_or(SealFault::Unanswered)?;
+        let name = keys.pointer_name(&scope);
+        let FanoutRecord::Found(verified, _) =
+            fanout_get_classified(&self.seams.transport, &name).await
+        else {
+            return Err(SealFault::Unanswered);
+        };
+        let refused = |check: &str| {
+            emit_trust_violation(&self.seams.events, name.as_str(), check);
+            SealFault::Refused
+        };
+        let repoint = open_repoint(
+            &keys.pointer_read_key(&scope),
+            POINTER_PAYLOAD_VERSION,
+            &scope,
+            owner.owner_identity,
+            &verified.value,
+        )
+        .map_err(|_| refused("dissolve-scope-pointer-refused"))?;
+        if floor::write_epoch_regression(&floors, &scope, repoint.write_epoch)
+            .await
+            .map_err(|_| SealFault::Unanswered)?
+            .is_some()
+        {
+            return Err(refused("dissolve-scope-pointer-write-epoch-regressed"));
+        }
+        Ok(repoint.min_read_epoch)
     }
 
     /// The write epoch floor of `write`. A floor that does not read, or one
@@ -704,42 +885,51 @@ mod tests {
         assert!(!floor_holds(6, 5, None), "a floor above the header");
     }
 
-    /// The D4 rows that the gated destination root and write floor show.
+    /// The D4 rows that the gated destination root, the owner's pointer and
+    /// the write floor show.
     #[test]
     fn each_destination_rise_restarts_the_binding_it_moves() {
         let held = header();
         let binding = |header: Option<DissolveHeader>| header.map(|header| header.binding);
         let was = held.binding;
 
-        let same = restarted(&held, 3, 2, 5).expect("no change");
+        let same = restarted(&held, 3, 2, 3, 5).expect("no change");
         assert!(same.copy_started, "the first seal tick marks the copy");
         assert_eq!(same.binding, was);
         assert_eq!(
-            binding(restarted(&held, 4, 2, 5)),
+            binding(restarted(&held, 4, 2, 3, 5)),
+            Some(DissolveBinding {
+                read_epoch: 4,
+                ..was
+            }),
+            "a grantee rise keeps the restart floor"
+        );
+        assert_eq!(
+            binding(restarted(&held, 4, 2, 4, 5)),
             Some(DissolveBinding {
                 read_epoch: 4,
                 restart_floor: 4,
                 ..was
             }),
-            "a read rise seals each node below it again"
+            "a pointer rise seals each node below it again"
         );
         assert_eq!(
-            binding(restarted(&held, 4, 3, 5)),
+            binding(restarted(&held, 4, 3, 3, 5)),
             Some(DissolveBinding {
                 read_epoch: 4,
                 restart_floor: 4,
                 base_cut: 3,
                 ..was
             }),
-            "an owner cut moves the cut baseline too"
+            "an owner cut with the pointer left as it was moves the floor"
         );
         assert_eq!(
-            binding(restarted(&held, 3, 3, 5)),
+            binding(restarted(&held, 3, 3, 3, 5)),
             Some(DissolveBinding { base_cut: 3, ..was }),
             "a cut rise with no read rise keeps the read epoch and the floor"
         );
         assert_eq!(
-            binding(restarted(&held, 3, 2, 6)),
+            binding(restarted(&held, 3, 2, 3, 6)),
             Some(DissolveBinding {
                 write_epoch: 6,
                 ..was
@@ -747,7 +937,7 @@ mod tests {
             "a write rise keeps the read binding"
         );
         assert_eq!(
-            binding(restarted(&held, 4, 3, 6)),
+            binding(restarted(&held, 4, 3, 3, 6)),
             Some(DissolveBinding {
                 read_epoch: 4,
                 restart_floor: 4,
@@ -757,12 +947,75 @@ mod tests {
             }),
             "a read rise and a write rise in one write"
         );
-        for (epoch, cut_epoch, write_epoch) in [(2, 2, 5), (3, 1, 5), (3, 2, 4)] {
+        for (epoch, cut_epoch, vouched, write_epoch) in
+            [(2, 2, 2, 5), (3, 1, 3, 5), (3, 2, 3, 4), (3, 2, 4, 5)]
+        {
             assert!(
-                restarted(&held, epoch, cut_epoch, write_epoch).is_none(),
-                "a read that lags the header waits"
+                restarted(&held, epoch, cut_epoch, vouched, write_epoch).is_none(),
+                "a read that lags the header or the pointer waits"
             );
         }
+    }
+
+    /// An owner revoke with the pointer left as it was, then a grantee rise:
+    /// the revoke moves the restart floor, and the grantee rise keeps it, so
+    /// each copy sealed after the revoke stays.
+    #[test]
+    fn a_grantee_rise_after_a_revoke_with_an_old_pointer_keeps_the_floor() {
+        let revoked = restarted(&header(), 4, 3, 3, 5).expect("the revoke reads");
+        let risen = restarted(&revoked, 5, 3, 3, 5).expect("the grantee rise reads");
+
+        assert_eq!(
+            (risen.binding.read_epoch, risen.binding.restart_floor),
+            (5, 4)
+        );
+    }
+
+    /// A rebind keeps the former binding. A new read scope starts its
+    /// epochs at zero for the D4 check to read, a new write scope alone keeps
+    /// the read binding, and a rebind past the cap waits.
+    #[test]
+    fn a_rebind_keeps_the_former_binding_and_waits_past_the_cap() {
+        let held = header();
+        let was = held.binding;
+        let other = NodeId([0x02; 16]);
+        let former = PriorBinding {
+            read_scope: was.read_scope,
+            read_root: was.read_scope,
+            read_epoch: was.read_epoch,
+            restart_floor: was.restart_floor,
+            write_scope: was.write_scope,
+            write_epoch: was.write_epoch,
+        };
+
+        let read = rebound(&held, other, was.write_scope).expect("a first rebind");
+        assert_eq!(read.prior_bindings, vec![former]);
+        assert_eq!(
+            read.binding,
+            DissolveBinding {
+                read_scope: other,
+                read_epoch: 0,
+                restart_floor: 0,
+                base_cut: 0,
+                write_scope: was.write_scope,
+                write_epoch: 0,
+            }
+        );
+        let write = rebound(&held, was.read_scope, other).expect("a write rebind");
+        assert_eq!(
+            write.binding,
+            DissolveBinding {
+                write_scope: other,
+                write_epoch: 0,
+                ..was
+            }
+        );
+        let mut full = held;
+        full.prior_bindings = vec![former; MAX_PRIOR_BINDINGS];
+        assert!(
+            rebound(&full, other, other).is_none(),
+            "a fifth rebind waits"
+        );
     }
 
     #[test]
