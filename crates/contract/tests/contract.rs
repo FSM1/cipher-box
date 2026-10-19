@@ -1730,6 +1730,14 @@ impl SweepPublisher for LocalNet {
     ) -> Result<(), RotationPublishError> {
         Ok(())
     }
+
+    async fn reseal_child_ascent(
+        &self,
+        _scope: &ChildScopeRef,
+        _child: &ChildScopeRef,
+    ) -> Result<(), RotationPublishError> {
+        Ok(())
+    }
 }
 
 impl CascadeResealResolver for LocalNet {
