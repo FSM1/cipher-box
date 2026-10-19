@@ -2455,8 +2455,8 @@ mod tests {
             &self,
             _scope: &ChildScopeRef,
             child: &ChildScopeRef,
-        ) -> Result<crate::rotation::AscentRepair, crate::rotation::AscentResidual> {
-            Ok(crate::rotation::AscentRepair::Current(child.clone()))
+        ) -> Result<ChildScopeRef, crate::rotation::AscentResidual> {
+            Ok(child.clone())
         }
     }
 

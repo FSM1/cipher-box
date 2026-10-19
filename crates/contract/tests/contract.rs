@@ -1735,11 +1735,8 @@ impl SweepPublisher for LocalNet {
         &self,
         _scope: &ChildScopeRef,
         child: &ChildScopeRef,
-    ) -> Result<cipherbox_engine::rotation::AscentRepair, cipherbox_engine::rotation::AscentResidual>
-    {
-        Ok(cipherbox_engine::rotation::AscentRepair::Current(
-            child.clone(),
-        ))
+    ) -> Result<ChildScopeRef, cipherbox_engine::rotation::AscentResidual> {
+        Ok(child.clone())
     }
 }
 

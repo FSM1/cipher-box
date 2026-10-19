@@ -451,12 +451,13 @@ impl SweepPublisher for FakeNet {
         &self,
         _scope: &ChildScopeRef,
         child: &ChildScopeRef,
-    ) -> Result<crate::rotation::AscentRepair, crate::rotation::AscentResidual> {
-        let at = match self.state.borrow().ascent_moves.get(&child.scope_id) {
-            Some(name) => ChildScopeRef::new(child.scope_id, name.clone()),
-            None => child.clone(),
-        };
-        Ok(crate::rotation::AscentRepair::Current(at))
+    ) -> Result<ChildScopeRef, crate::rotation::AscentResidual> {
+        Ok(
+            match self.state.borrow().ascent_moves.get(&child.scope_id) {
+                Some(name) => ChildScopeRef::new(child.scope_id, name.clone()),
+                None => child.clone(),
+            },
+        )
     }
 }
 

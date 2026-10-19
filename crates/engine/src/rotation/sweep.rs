@@ -343,30 +343,13 @@ pub trait SweepPublisher {
     /// sealed under the current seed of `scope` where the published link opens
     /// only under an earlier seed on the ratchet of `scope` (ADR 0080).
     /// Metadata-only: the existing seed of `child` at its current epoch.
+    /// Answers the name the child gated current at, which the index must
+    /// carry.
     async fn reseal_child_ascent(
         &self,
         scope: &ChildScopeRef,
         child: &ChildScopeRef,
-    ) -> Result<AscentRepair, AscentResidual>;
-}
-
-/// An indexed child whose ascent link opens under the current seed of its
-/// scope, at the name it is current at.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AscentRepair {
-    /// The link already opened under the current seed.
-    Current(ChildScopeRef),
-    /// The link opened under an earlier seed, and this re-sealed it.
-    Resealed(ChildScopeRef),
-}
-
-impl AscentRepair {
-    /// The name the child gated current at, which the index must carry.
-    fn at(&self) -> &ChildScopeRef {
-        match self {
-            Self::Current(at) | Self::Resealed(at) => at,
-        }
-    }
+    ) -> Result<ChildScopeRef, AscentResidual>;
 }
 
 /// Why an indexed child does not open under the current seed of its scope.
@@ -822,7 +805,7 @@ where
                 publisher,
                 scope_ref,
                 &swept.direct_child_scope_index,
-                &mut outcome,
+                &mut outcome.unrepaired_ascents,
             )
             .await,
         );
@@ -887,14 +870,14 @@ async fn reseal_child_ascents<P: SweepPublisher>(
     publisher: &P,
     scope_ref: &ChildScopeRef,
     index: &[ChildScopeRef],
-    outcome: &mut SweepOutcome,
+    residuals: &mut Vec<([u8; 16], AscentResidual)>,
 ) -> Vec<ChildScopeRef> {
     let mut moved = Vec::new();
     for child in canonicalize(index).iter() {
         match publisher.reseal_child_ascent(scope_ref, child).await {
-            Ok(repair) if repair.at() != child => moved.push(repair.at().clone()),
+            Ok(at) if &at != child => moved.push(at),
             Ok(_) => {}
-            Err(residual) => outcome.unrepaired_ascents.push((child.scope_id, residual)),
+            Err(residual) => residuals.push((child.scope_id, residual)),
         }
     }
     moved
@@ -904,25 +887,20 @@ async fn reseal_child_ascents<P: SweepPublisher>(
 /// pass: what a flat cut runs on each side of its publish. Answers the read
 /// epoch of `scope` and what the re-seal left, or `None` where `scope` did not
 /// resolve.
-pub(crate) async fn reseal_child_ascents_of<R, P>(
-    resolver: &R,
-    publisher: &P,
+pub(crate) async fn reseal_child_ascents_of<N: SweepResolver + SweepPublisher>(
+    net: &N,
     scope: &ChildScopeRef,
-) -> Option<(u64, Vec<([u8; 16], AscentResidual)>)>
-where
-    R: SweepResolver,
-    P: SweepPublisher,
-{
-    let (scope_ref, swept) = resolve_scope_current(resolver, scope).await.ok()?;
-    let mut outcome = SweepOutcome::default();
+) -> Option<(u64, Vec<([u8; 16], AscentResidual)>)> {
+    let (scope_ref, swept) = resolve_scope_current(net, scope).await.ok()?;
+    let mut residuals = Vec::new();
     reseal_child_ascents(
-        publisher,
+        net,
         &scope_ref,
         &swept.direct_child_scope_index,
-        &mut outcome,
+        &mut residuals,
     )
     .await;
-    Some((swept.current_read_epoch, outcome.unrepaired_ascents))
+    Some((swept.current_read_epoch, residuals))
 }
 
 /// Bind each ref's `node_id -> ipnsName` into `labels`, aborting on the C2
@@ -1032,9 +1010,10 @@ impl Cumulative {
 ///
 /// An `Ok` outcome is convergence-complete **only when
 /// [`SweepOutcome::dropped_lost_race`], [`SweepOutcome::unreachable`] and
-/// [`SweepOutcome::unrepaired_ascents`] are empty**. The buckets aggregate across passes per [`Cumulative`]. An `Err`
-/// reports no outcome at all: earlier passes' work is durable on the network,
-/// but the run makes no convergence claim over it.
+/// [`SweepOutcome::unrepaired_ascents`] are empty**. The buckets aggregate
+/// across passes per [`Cumulative`]. An `Err` reports no outcome at all:
+/// earlier passes' work is durable on the network, but the run makes no
+/// convergence claim over it.
 pub async fn run_sweep<S, R, P>(
     scheduler: &S,
     resolver: &R,

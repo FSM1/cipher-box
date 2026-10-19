@@ -209,7 +209,7 @@ where
                 make_sweep,
             )
             .await?;
-            reseal_child_ascents_of(net, net, scope).await;
+            reseal_child_ascents_of(net, scope).await;
             return Ok(outcome);
         }
     }
@@ -221,7 +221,7 @@ where
         // parked slot. The cut publishes over the base of its own read, so a
         // cut of P between the two reads makes it lose the CAS.
         let own_read = net.gated.hold();
-        let owed = reseal_child_ascents_of(net, net, scope)
+        let owed = reseal_child_ascents_of(net, scope)
             .await
             .and_then(|(epoch, residuals)| {
                 residuals
@@ -276,7 +276,7 @@ where
         make_sweep,
     )
     .await?;
-    reseal_child_ascents_of(net, net, scope).await;
+    reseal_child_ascents_of(net, scope).await;
     Ok(outcome)
 }
 
