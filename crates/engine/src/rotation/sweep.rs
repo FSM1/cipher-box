@@ -338,6 +338,27 @@ pub trait SweepPublisher {
         scope: &ChildScopeRef,
         index: &[ChildScopeRef],
     ) -> Result<(), RotationPublishError>;
+
+    /// Republish `child`, a scope root `scope` indexes, with its ascent link
+    /// sealed under the current seed of `scope` where the published link opens
+    /// only under an earlier seed on the ratchet of `scope`. A flat cut mints a
+    /// new seed and re-seals no descendant root, so this is what keeps them
+    /// provable. Metadata-only: the existing seed of `child` at its current
+    /// epoch.
+    async fn reseal_child_ascent(
+        &self,
+        scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Result<AscentRepair, RotationPublishError>;
+}
+
+/// What [`SweepPublisher::reseal_child_ascent`] found at one indexed child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AscentRepair {
+    /// The ascent link opens under the current seed of the scope.
+    Current,
+    /// The link opened under an earlier seed, and now opens under the current one.
+    Resealed,
 }
 
 /// A completed sweep pass. Every node the walk reached is accounted for in
@@ -376,6 +397,11 @@ pub struct SweepOutcome {
     /// The index repair re-seals the scope root over its grant section budget
     /// ([`RotationPublishError::NotResealable`]), so the root keeps its index.
     pub index_repair_not_resealable: bool,
+    /// Indexed scope roots whose ascent link this pass re-sealed under the
+    /// current seed of the scope ([`AscentRepair::Resealed`]).
+    pub resealed_ascents: Vec<[u8; 16]>,
+    /// Indexed scope roots whose ascent check or re-seal did not complete.
+    pub unrepaired_ascents: Vec<([u8; 16], RotationPublishError)>,
 }
 
 impl SweepOutcome {
@@ -387,6 +413,10 @@ impl SweepOutcome {
     pub(crate) fn worth_another_pass(&self) -> bool {
         self.index_repair_lost_race
             || !self.dropped_lost_race.is_empty()
+            || self
+                .unrepaired_ascents
+                .iter()
+                .any(|(_, error)| error.is_retryable())
             || self
                 .unreachable
                 .iter()
@@ -772,6 +802,16 @@ where
         }
     }
 
+    if from.is_none() {
+        reseal_child_ascents(
+            publisher,
+            scope_ref,
+            &swept.direct_child_scope_index,
+            &mut outcome,
+        )
+        .await;
+    }
+
     for (node, swept_node) in &lagging {
         let lagging_node = LaggingNode {
             node_id: node.node_id,
@@ -798,6 +838,44 @@ where
     }
 
     Ok(outcome)
+}
+
+/// Run [`SweepPublisher::reseal_child_ascent`] over every root `index` names.
+/// A child that fails is recorded and does not stop the others.
+async fn reseal_child_ascents<P: SweepPublisher>(
+    publisher: &P,
+    scope_ref: &ChildScopeRef,
+    index: &[ChildScopeRef],
+    outcome: &mut SweepOutcome,
+) {
+    for child in canonicalize(index).iter() {
+        match publisher.reseal_child_ascent(scope_ref, child).await {
+            Ok(AscentRepair::Current) => {}
+            Ok(AscentRepair::Resealed) => outcome.resealed_ascents.push(child.scope_id),
+            Err(error) => outcome.unrepaired_ascents.push((child.scope_id, error)),
+        }
+    }
+}
+
+/// Re-seal the ascent links of the roots `scope` indexes, after a flat cut of
+/// `scope` landed. The sweep the cut enqueues re-runs what this leaves.
+pub(crate) async fn reseal_ascents_after_cut<R, P>(
+    resolver: &R,
+    publisher: &P,
+    scope: &ChildScopeRef,
+) where
+    R: SweepResolver,
+    P: SweepPublisher,
+{
+    if let Ok((scope_ref, swept)) = resolve_scope_current(resolver, scope).await {
+        reseal_child_ascents(
+            publisher,
+            &scope_ref,
+            &swept.direct_child_scope_index,
+            &mut SweepOutcome::default(),
+        )
+        .await;
+    }
 }
 
 /// Bind each ref's `node_id -> ipnsName` into `labels`, aborting on the C2
@@ -841,6 +919,7 @@ fn conflict(node_id: [u8; 16]) -> SweepError {
 struct Cumulative {
     converged: BTreeSet<[u8; 16]>,
     flagged_indexes: BTreeSet<[u8; 16]>,
+    resealed_ascents: BTreeSet<[u8; 16]>,
     last: SweepOutcome,
 }
 
@@ -849,6 +928,8 @@ impl Cumulative {
         self.converged.extend(pass.converged.iter().copied());
         self.flagged_indexes
             .extend(pass.flagged_indexes.iter().copied());
+        self.resealed_ascents
+            .extend(pass.resealed_ascents.iter().copied());
         self.last = pass;
     }
 
@@ -856,6 +937,7 @@ impl Cumulative {
         let Self {
             mut converged,
             flagged_indexes,
+            resealed_ascents,
             last,
         } = self;
         let final_verdicts: BTreeSet<[u8; 16]> = last
@@ -884,6 +966,8 @@ impl Cumulative {
             unreachable: last.unreachable,
             index_repair_lost_race: last.index_repair_lost_race,
             index_repair_not_resealable: last.index_repair_not_resealable,
+            resealed_ascents: resealed_ascents.into_iter().collect(),
+            unrepaired_ascents: last.unrepaired_ascents,
         }
     }
 }

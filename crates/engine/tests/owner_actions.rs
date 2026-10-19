@@ -1065,9 +1065,90 @@ fn a_second_manual_rotation_cuts_again_rather_than_refusing_a_current_scope() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Grant
-// ---------------------------------------------------------------------------
+/// Create `name` under `parent`, give the drain `passes` passes, and answer
+/// whether the record of `parent` names the new folder.
+fn publishes_under(fx: &mut GrantScenario, parent: NodeId, name: &str, passes: usize) -> bool {
+    let child = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, name);
+    for _ in 0..passes {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let (seed, _) = scope_material_of(&fx.world, &fx.blocks, parent);
+    names_child(
+        &published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(parent),
+            &node_read_key(&seed, parent),
+        )
+        .2,
+        child,
+    )
+}
+
+/// A flat cut of the vault root re-seals no nested scope root, but each nested
+/// root's ascent link derives from the root's override seed. The walk after
+/// the cut must still prove the granted folder, so a write under it publishes.
+#[test]
+fn a_manual_rotation_of_the_vault_root_keeps_a_granted_folder_writable() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (seed_before, epoch_before) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (seed_after, epoch_after) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    assert_eq!(epoch_after, epoch_before, "the folder keeps its read epoch");
+    assert!(
+        ct_eq(&seed_after, &seed_before),
+        "and the folder keeps its override seed"
+    );
+    let folder = fx.folder;
+    assert!(
+        publishes_under(&mut fx, folder, "after the cut", 4),
+        "a write under the granted folder publishes after the vault root cut"
+    );
+}
+
+/// A cut that lands while the re-seal of a nested root fails leaves that root
+/// behind. After a restart, the idle sweep re-seals it from the published
+/// records alone, so a write under it publishes.
+#[test]
+fn after_a_restart_the_sweep_reseals_a_nested_root_a_cut_left_behind() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder_name = write_name(fx.folder);
+    let sequence_before = sequence_at(&fx.world, &folder_name);
+
+    fx.world.record_store.fail_put_for(folder_name.as_str());
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done),
+        "the cut lands and only the re-seal of the nested root fails"
+    );
+    // The crash comes before the sweep the cut enqueued runs.
+    drop(fx.world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        sequence_at(&fx.world, &folder_name),
+        sequence_before,
+        "the nested root kept the record the cut left behind"
+    );
+    fx.world.record_store.heal_put_for(folder_name.as_str());
+
+    restart_owner(&mut fx);
+    let profile = fx.engine.profile();
+    let passes = 2 * profile.sweep_cadence.as_millis() / profile.poll_cadence.as_millis();
+    let folder = fx.folder;
+    assert!(
+        publishes_under(&mut fx, folder, "after the restart", passes as usize),
+        "a write under the granted folder publishes after the sweep re-seals it"
+    );
+}
 
 /// The refusal the grant arm owes is decided before any key material is
 /// wrapped: an unimported recipient has no verified subkey to seal to. Both
@@ -10517,6 +10598,41 @@ fn a_move_out_of_a_granted_folder_cuts_the_scope_it_left_once() {
         )),
         Ok(Some(before + 1)),
         "and the cut raised the durable read-epoch floor of the scope it left"
+    );
+}
+
+/// An owned scope exit is a flat cut of the scope the move left. A scope root
+/// nested in that scope must stay provable after the cut, so a write under it
+/// publishes.
+#[test]
+fn a_scope_exit_cut_keeps_a_nested_granted_folder_writable() {
+    let mut fx = GrantScenario::new();
+    let one = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "one");
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    let inner = fx.grant_nested_folder("inner");
+    converge_into_granted_scope(&fx, one);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        publishes_under(&mut fx, inner, "before the exit", 2),
+        "a write under the nested folder publishes before the exit"
+    );
+
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    block_on(fx.engine.command(Command::Relink {
+        node: one,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "the exit cut the scope it left"
+    );
+
+    assert!(
+        publishes_under(&mut fx, inner, "after the exit", 4),
+        "a write under the nested folder publishes after the scope-exit cut"
     );
 }
 

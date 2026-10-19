@@ -9,7 +9,7 @@ use cipherbox_core::seal::ChildScopeRef;
 use futures_channel::mpsc;
 
 use super::rotate::{RotateError, RotationOutcome, complete_cut, rotate_scope};
-use super::sweep::{SweepKeys, SweepTaskFactory};
+use super::sweep::{SweepKeys, SweepTaskFactory, reseal_ascents_after_cut};
 use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, ScopeRootIdentity};
 use crate::api::ApiClient;
 use crate::content::read::Gateway;
@@ -196,17 +196,19 @@ where
                 .vouch_over(vouched, current.current_read_epoch)
                 .await
                 .map_err(RotateError::Publish)?;
-            return complete_cut(
+            let outcome = complete_cut(
                 net.floors,
                 net.scheduler,
                 &scope.scope_id,
                 current.current_read_epoch,
                 make_sweep,
             )
-            .await;
+            .await?;
+            reseal_ascents_after_cut(net, net, scope).await;
+            return Ok(outcome);
         }
     }
-    rotate_scope(
+    let outcome = rotate_scope(
         &mut SharedEntropy(net.entropy),
         net.floors,
         net.scheduler,
@@ -239,7 +241,11 @@ where
         },
         make_sweep,
     )
-    .await
+    .await?;
+    // The cut is landed, so a nested root this leaves unsealed is the sweep's
+    // to retry rather than a reason to cut again.
+    reseal_ascents_after_cut(net, net, scope).await;
+    Ok(outcome)
 }
 
 /// What one flat root cut acts on: the scope it gates, the ascent authority that

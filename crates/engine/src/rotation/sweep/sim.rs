@@ -435,6 +435,14 @@ impl SweepPublisher for FakeNet {
         state.repaired_index = Some(index.to_vec());
         Ok(())
     }
+
+    async fn reseal_child_ascent(
+        &self,
+        _scope: &ChildScopeRef,
+        _child: &ChildScopeRef,
+    ) -> Result<crate::rotation::AscentRepair, RotationPublishError> {
+        Ok(crate::rotation::AscentRepair::Current)
+    }
 }
 
 /// One sweep scenario, described once and run twice: over [`FakeNet`] and over

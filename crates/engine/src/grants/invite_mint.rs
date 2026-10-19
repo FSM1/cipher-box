@@ -440,6 +440,14 @@ mod tests {
         ) -> Result<(), RotationPublishError> {
             Ok(())
         }
+
+        async fn reseal_child_ascent(
+            &self,
+            _scope: &ChildScopeRef,
+            _child: &ChildScopeRef,
+        ) -> Result<crate::rotation::AscentRepair, RotationPublishError> {
+            Ok(crate::rotation::AscentRepair::Current)
+        }
     }
 
     impl CascadeResealResolver for FakeNet {
