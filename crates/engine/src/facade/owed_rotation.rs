@@ -812,7 +812,7 @@ where
             .map_err(cut_stop)?;
         if let Some(write) = report.write {
             waved.set(true);
-            floor::advance_write_epoch_on_sight(self.floors, &scope.0, write.new_write_epoch)
+            floor::advance_write_epoch_after_wave(self.floors, &scope.0, write.new_write_epoch)
                 .await
                 .map_err(|e| stop(EngineError::from_seam(e)))?;
             if indexed.as_deref() != Some(write.new_root_name.as_str().as_bytes()) {
@@ -1091,7 +1091,7 @@ where
         } else {
             return Err(OwedStop::refused(OWED_WAVE_AT_ANOTHER_EPOCH));
         };
-        floor::advance_write_epoch_on_sight(self.floors, &node.0, landed_epoch)
+        floor::advance_write_epoch_after_wave(self.floors, &node.0, landed_epoch)
             .await
             .map_err(|e| stop(EngineError::from_seam(e)))?;
         if indexed.as_deref() != Some(root_name.as_str().as_bytes()) {

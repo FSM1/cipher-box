@@ -9026,9 +9026,9 @@ where {
             // `writeEpoch`, and the root it signed binds the same value as its
             // owner-write blob's AAD — so the floor follows it here, exactly as
             // a later consult of the pointer this wave just wrote would move it.
-            // Monotonic-max, so it can never roll one back. The wave holds no
-            // lease by the time it returns, so the raise is never deferred.
-            floor::advance_write_epoch_on_sight(
+            // Monotonic-max, so it can never roll one back. A raise that
+            // another lease holder defers fails, so the owed step retries it.
+            floor::advance_write_epoch_after_wave(
                 &self.seams.floor_store,
                 &target.scope.scope_id,
                 write.new_write_epoch,

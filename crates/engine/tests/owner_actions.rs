@@ -26,9 +26,9 @@ use cipherbox_core::seal::{
     open_grant_blob, open_owner_history_link, open_read_body, unseal,
 };
 use cipherbox_core::seal::{
-    ChildScopeRef, STRUCT_TAG_OWNER_WRITE_BLOB, SignedSealed, StructureSigInput, encode_envelope,
-    encode_grant_section, encode_write_body, open_owner_write_blob, seal, set_grant_section,
-    sign_structure,
+    ChildScopeRef, Envelope, STRUCT_TAG_OWNER_WRITE_BLOB, SignedSealed, StructureSigInput,
+    encode_envelope, encode_grant_section, encode_write_body, open_owner_write_blob, seal,
+    set_grant_section, sign_structure,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
@@ -27292,13 +27292,23 @@ impl GrantScenario {
     /// Start, or drive again, the dissolve of the folder, moving virtual time
     /// on by one poll cadence each time it sleeps between attempts.
     fn dissolve(&mut self) -> Result<Option<DissolveStep>, EngineError> {
+        self.dissolve_into(self.folder, ROOT, dissolve_binding())
+    }
+
+    /// [`Self::dissolve`] of the scope root `root`, named by `relink_parent`,
+    /// into `binding`.
+    fn dissolve_into(
+        &mut self,
+        root: NodeId,
+        relink_parent: NodeId,
+        binding: DissolveBinding,
+    ) -> Result<Option<DissolveStep>, EngineError> {
         let cadence = self.engine.profile().poll_cadence;
         let scheduler = self.world.scheduler.clone();
-        let mut future = pin!(self.engine.dissolve_cut_for_test(
-            self.folder,
-            ROOT,
-            dissolve_binding()
-        ));
+        let mut future = pin!(
+            self.engine
+                .dissolve_cut_for_test(root, relink_parent, binding)
+        );
         let mut cx = Context::from_waker(Waker::noop());
         for _ in 0..64 {
             if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
@@ -28444,7 +28454,12 @@ fn with_dissolve_journal<R>(
 
 /// The rows of the live map of `header`, the entry at the folder.
 fn dissolve_rows(fx: &GrantScenario, header: &DissolveHeader) -> Vec<MapRow> {
-    with_dissolve_journal(fx, async |journal| journal.map(fx.folder, header).await)
+    rows_of(fx, fx.folder, header)
+}
+
+/// The rows of the live map of `header`, the entry at `root`.
+fn rows_of(fx: &GrantScenario, root: NodeId, header: &DissolveHeader) -> Vec<MapRow> {
+    with_dissolve_journal(fx, async |journal| journal.map(root, header).await)
         .expect("the live map reads")
         .into_iter()
         .flat_map(|page| page.rows)
@@ -28453,17 +28468,27 @@ fn dissolve_rows(fx: &GrantScenario, header: &DissolveHeader) -> Vec<MapRow> {
 
 /// The staging key prefix of the dissolve entry at the folder.
 fn dissolve_prefix(fx: &GrantScenario) -> Vec<u8> {
+    prefix_of(fx.folder)
+}
+
+/// The staging key prefix of the dissolve entry at `root`.
+fn prefix_of(root: NodeId) -> Vec<u8> {
     [
         RESEAL_JOURNAL_PREFIX,
         owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
-        fx.folder.0.as_slice(),
+        root.0.as_slice(),
     ]
     .concat()
 }
 
 /// The journal parts of the entry at the folder.
 fn dissolve_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
-    let prefix = dissolve_prefix(fx);
+    parts_of(fx, fx.folder)
+}
+
+/// The journal parts of the entry at `root`.
+fn parts_of(fx: &GrantScenario, root: NodeId) -> BTreeSet<Vec<u8>> {
+    let prefix = prefix_of(root);
     block_on(fx.owner_device.staging_store.staged_keys())
         .expect("the store lists")
         .into_iter()
@@ -28554,9 +28579,18 @@ fn the_dissolve_map_gives_each_node_of_the_cut_subtree_one_new_id() {
         "a row below a nested root names its node under that scope"
     );
     assert_eq!(
-        dissolve_parts(&fx),
-        BTreeSet::from([b"h".to_vec(), map_part(1, 0)])
+        map_parts(&fx),
+        BTreeSet::from([map_part(1, 0)]),
+        "one live generation"
     );
+}
+
+/// The map parts of the entry at the folder.
+fn map_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
+    dissolve_parts(fx)
+        .into_iter()
+        .filter(|part| part.first() == Some(&b'm'))
+        .collect()
 }
 
 /// Under a write cut, a plain row names its node under the post-cut write
@@ -28642,10 +28676,7 @@ fn a_map_whose_header_commit_stops_maps_again_into_one_generation() {
     assert_eq!(header.step, DissolveStep::Seal);
     assert_eq!((header.map_gen, header.map_pages, header.rows), (1, 1, 4));
     assert_eq!(dissolve_rows(&fx, &header).len(), 4);
-    assert_eq!(
-        dissolve_parts(&fx),
-        BTreeSet::from([b"h".to_vec(), map_part(1, 0)])
-    );
+    assert_eq!(map_parts(&fx), BTreeSet::from([map_part(1, 0)]));
 }
 
 /// The map reads a subtree that no queued op still writes: an op under the
@@ -29572,4 +29603,1042 @@ fn a_vault_head_at_a_cut_name_holds_the_walk() {
     assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
     assert_eq!(tick_reads(&mut fx, &plain_name), 0, "the walk holds");
     assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+}
+
+// ---------------------------------------------------------------------------
+// Dissolve: the seal (ADR 0077 D3, D4)
+// ---------------------------------------------------------------------------
+
+/// The copy record at the name that the vault root derives for `node`, a new
+/// id, opened under the vault root's read key: its envelope and its body.
+fn copy_at(fx: &GrantScenario, node: NodeId) -> Option<(Envelope, ReadBody)> {
+    let head = published_head(&fx.world, &fx.blocks, &write_name(node))?;
+    let envelope = decode_envelope(&head).expect("the copy head decodes");
+    let body = open_read_body(&envelope, &read_key_of(node)).expect("the copy opens");
+    Some((envelope, body))
+}
+
+/// The names of the name log of the entry at the folder, by node id.
+fn logged_names(fx: &GrantScenario) -> Vec<(NodeId, Vec<u8>)> {
+    logged_of(fx, fx.folder)
+}
+
+/// The names of the name log of the entry at `root`, by node id.
+fn logged_of(fx: &GrantScenario, root: NodeId) -> Vec<(NodeId, Vec<u8>)> {
+    with_dissolve_journal(fx, async |journal| journal.name_log(root).await)
+        .expect("the name log reads")
+        .into_iter()
+        .flat_map(|page| page.entries)
+        .map(|entry| (entry.id, entry.name))
+        .collect()
+}
+
+/// The child ids and labels of a copy folder body.
+fn copy_children(body: &ReadBody) -> Vec<(NodeId, String, Vec<u8>)> {
+    let ReadBody::Folder { children, .. } = body else {
+        panic!("a copy folder");
+    };
+    children
+        .iter()
+        .map(|child| {
+            (
+                NodeId(child.id),
+                child.name.clone(),
+                child.ipns_name.clone(),
+            )
+        })
+        .collect()
+}
+
+/// ADR 0077 D3: the seal publishes each row at its new id under the
+/// destination, a plain folder for each scope root (ADR 0077 D1), with
+/// each child at its new id and at the name the destination derives. Each
+/// name is in the name log, and the copy is marked as started.
+#[test]
+fn the_dissolve_seal_copies_each_row_under_its_new_id() {
+    let mut fx = GrantScenario::new();
+    let (inner, plain, below) = cut_dissolve_subtree(&mut fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.copy_started, "the copy is marked as started");
+    let rows = dissolve_rows(&fx, &header);
+    let new_of = |old: NodeId| rows.iter().find(|row| row.old == old).unwrap().new;
+    let named = |old: NodeId, label: &str| {
+        let new = new_of(old);
+        (
+            new,
+            label.to_owned(),
+            write_name(new).as_str().as_bytes().to_vec(),
+        )
+    };
+    let (envelope, root) = copy_at(&fx, header.new_root).expect("the copy root stands");
+    assert_eq!(
+        (envelope.scope, envelope.epoch),
+        (ROOT.0, EPOCH),
+        "the copy seals under the destination"
+    );
+    assert!(
+        grant_section_bytes(&envelope).is_none(),
+        "the copy root is a plain folder"
+    );
+    let mut children = copy_children(&root);
+    children.sort();
+    let mut expected = vec![named(inner, "inner"), named(plain, "plain")];
+    expected.sort();
+    assert_eq!(children, expected);
+    let (envelope, nested) = copy_at(&fx, new_of(inner)).expect("the nested copy stands");
+    assert!(
+        grant_section_bytes(&envelope).is_none(),
+        "the nested copy is a plain folder (ADR 0077 D1)"
+    );
+    assert_eq!(copy_children(&nested), vec![named(below, "below")]);
+    assert_eq!(
+        copy_children(&copy_at(&fx, new_of(below)).unwrap().1),
+        vec![]
+    );
+    assert_eq!(
+        copy_children(&copy_at(&fx, new_of(plain)).unwrap().1),
+        vec![]
+    );
+    let mut logged = logged_names(&fx);
+    logged.sort();
+    let mut names: Vec<(NodeId, Vec<u8>)> = rows
+        .iter()
+        .map(|row| (row.new, write_name(row.new).as_str().as_bytes().to_vec()))
+        .collect();
+    names.sort();
+    assert_eq!(logged, names, "each copy name is in the log");
+}
+
+/// The name log parts of the entry at the folder.
+fn log_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
+    dissolve_parts(fx)
+        .into_iter()
+        .filter(|part| part.first() == Some(&b'n'))
+        .collect()
+}
+
+/// The new id of `old` in the live map of the entry at the folder.
+fn new_id_of(fx: &GrantScenario, old: NodeId) -> NodeId {
+    let header = fx.standing_dissolve();
+    dissolve_rows(fx, &header)
+        .iter()
+        .find(|row| row.old == old)
+        .expect("a row")
+        .new
+}
+
+/// One unsigned field that this build's schema does not type.
+fn future_field() -> PreservedFields {
+    PreservedFields::from_iter([("zzFuture".to_owned(), Value::Unsigned(7))])
+}
+
+/// Fail every PUT to the record plane.
+fn fail_every_put(fx: &GrantScenario) {
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world.record_store.fail_put_endpoint(&endpoint);
+    }
+}
+
+/// Heal every PUT to the record plane.
+fn heal_every_put(fx: &GrantScenario) {
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world.record_store.heal_put_endpoint(&endpoint);
+    }
+}
+
+/// ADR 0077 D3: the copy carries no field the source carried and this build
+/// does not type, at the envelope, the epoch tag, the body and each child
+/// ref.
+#[test]
+fn the_dissolve_seal_sheds_each_unknown_field() {
+    let mut fx = GrantScenario::new();
+    let plain = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "plain",
+    );
+    let leaf = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "leaf");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    // The source `plain`, published again under the cut scope with an unknown
+    // field at each layer.
+    let root = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &root).expect("the cut root");
+    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
+    let seed = owner_write_seed(&fx, fx.folder);
+    let mut child = named_child(leaf, "leaf", &derive_write_name(&seed, &leaf.0));
+    child.unknown = future_field();
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: plain.0,
+        scope_id: fx.folder.0,
+        epoch,
+        read_key: &read_key_under(&granted_override_seed(&fx, epoch), plain),
+        nonce: &[0x6d; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: vec![child],
+            unknown: future_field(),
+        },
+        carried_unknown: future_field(),
+        carried_epoch_tag_unknown: future_field(),
+    })
+    .expect("the source seals with its unknown fields");
+    fx.blocks.put(planted.block.clone());
+    let name = derive_write_name(&seed, &plain.0);
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&seed, &plain.0).as_bytes()),
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence_at(&fx.world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (envelope, body) = copy_at(&fx, new_id_of(&fx, plain)).expect("the copy stands");
+    assert!(envelope.unknown.is_empty(), "no envelope field");
+    assert!(envelope.epoch_tag_unknown.is_empty(), "no epoch tag field");
+    let ReadBody::Folder {
+        children, unknown, ..
+    } = body
+    else {
+        panic!("a copy folder");
+    };
+    assert!(unknown.is_empty(), "no body field");
+    assert_eq!(children.len(), 1);
+    assert_eq!(NodeId(children[0].id), new_id_of(&fx, leaf));
+    assert!(children[0].unknown.is_empty(), "no child ref field");
+}
+
+/// ADR 0077 D3: each name is in the log before its first publish. A stop
+/// after the log page and before the publish, then a restart, publishes the
+/// copy at the logged names and writes no second page.
+#[test]
+fn a_seal_that_stops_after_its_log_page_publishes_at_the_logged_names() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(
+        header.copy_started,
+        "the copy is marked before the first publish"
+    );
+    assert_eq!(log_parts(&fx).len(), 1, "one log page");
+    assert_eq!(logged_names(&fx).len(), 4, "with each copy name");
+    assert!(copy_at(&fx, header.new_root).is_none(), "no copy landed");
+
+    heal_every_put(&fx);
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &engine, &mut tasks);
+
+    for row in dissolve_rows(&fx, &header) {
+        assert!(copy_at(&fx, row.new).is_some(), "each copy stands");
+    }
+    assert_eq!(log_parts(&fx).len(), 1, "no second page");
+}
+
+/// After a restart, the seal reads each copy name and finds the copy, so it
+/// publishes nothing again.
+#[test]
+fn a_seal_after_a_restart_finds_each_copy_and_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = fx.standing_dissolve();
+    let rows = dissolve_rows(&fx, &header);
+    let puts = |fx: &GrantScenario| -> Vec<usize> {
+        rows.iter()
+            .map(|row| {
+                fx.world
+                    .record_store
+                    .put_count(write_name(row.new).as_str())
+            })
+            .collect()
+    };
+    let before = puts(&fx);
+    assert!(before.iter().all(|count| *count > 0), "each copy published");
+
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(puts(&fx), before, "no copy publishes again");
+    assert_eq!(fx.standing_dissolve(), header);
+    assert_eq!(log_parts(&fx).len(), 1);
+}
+
+/// A destination root that does not read pauses the seal, with no trust
+/// violation. The seal runs once the root reads.
+#[test]
+fn a_destination_root_that_does_not_read_pauses_the_seal() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    let root = write_name(ROOT);
+    fx.world.record_store.fail_get_for(root.as_str());
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(!header.copy_started, "the seal published nothing");
+    assert!(log_parts(&fx).is_empty());
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust violation");
+
+    fx.world.record_store.heal_get_for(root.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(copy_at(&fx, header.new_root).is_some(), "the copy stands");
+}
+
+/// A record at a copy name that the gate refuses is one trust violation, and
+/// the seal holds.
+#[test]
+fn a_refused_record_at_a_copy_name_holds_the_seal() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(&fx);
+    let copy = new_id_of(&fx, plain);
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &copy.0).as_bytes()),
+        &published_value(&fx.world, &write_name(ROOT)),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, write_name(copy).as_str(), record.clone());
+    }
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(tick_reads(&mut fx, &write_name(copy)), 0, "the seal holds");
+    assert_eq!(abuse_events(&mut fx._events), 0);
+}
+
+/// A refused record at the copy name of one row holds the whole batch: the
+/// rows probed before it publish nothing, so a failed PUT there cannot hide
+/// the refusal, and a later tick sends no second trust violation.
+#[test]
+fn a_refused_copy_holds_the_rows_probed_before_it() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = fx.standing_dissolve();
+    let rows = dissolve_rows(&fx, &header);
+    let refused = rows[1].new;
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &refused.0).as_bytes()),
+        &published_value(&fx.world, &write_name(ROOT)),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, write_name(refused).as_str(), record.clone());
+    }
+    events_so_far(&mut fx._events);
+    let copy_puts = |fx: &GrantScenario| -> Vec<usize> {
+        rows.iter()
+            .map(|row| {
+                fx.world
+                    .record_store
+                    .put_count(write_name(row.new).as_str())
+            })
+            .collect()
+    };
+    let before = copy_puts(&fx);
+
+    ticks(&mut fx, 2);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(copy_puts(&fx), before, "no PUT at a copy name");
+}
+
+/// The folder as a destination: its read scope and its write scope, at the
+/// epochs and the cut that its root holds now.
+fn folder_binding(fx: &GrantScenario) -> DissolveBinding {
+    let repoint = fx.granted_scope_repoint();
+    DissolveBinding {
+        read_scope: fx.folder,
+        read_epoch: folder_read_epoch(fx),
+        restart_floor: folder_read_epoch(fx),
+        base_cut: fx.folder_section().commitment.cut_epoch,
+        write_scope: fx.folder,
+        write_epoch: repoint.write_epoch,
+    }
+}
+
+/// The read epoch of the folder's live root.
+fn folder_read_epoch(fx: &GrantScenario) -> u64 {
+    let root = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &root).expect("the folder root");
+    decode_envelope(&head).expect("the head decodes").epoch
+}
+
+/// The dissolve header that stands at `root`.
+fn header_at(fx: &GrantScenario, root: NodeId) -> DissolveHeader {
+    block_on(fx.engine.dissolve_header_for_test(root))
+        .expect("the journal reads")
+        .expect("the entry stands")
+}
+
+/// `inner`, a scope root in the folder with the folder `below` in it,
+/// dissolved into the folder and sealed there. Answers `inner` and `below`.
+fn seal_inner_into_the_folder(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let inner = fx.grant_nested_folder("inner");
+    let below = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = folder_binding(fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(header_at(fx, inner).copy_started, "the seal ran");
+    (inner, below)
+}
+
+/// The name of the copy `node` in the folder scope, under the folder's live
+/// write seed.
+fn folder_copy_name(fx: &GrantScenario, node: NodeId) -> IpnsName {
+    derive_write_name(&owner_write_seed(fx, fx.folder), &node.0)
+}
+
+/// The name of each copy of the entry at `root` that the folder's live write
+/// seed derives.
+fn folder_copy_names(fx: &GrantScenario, root: NodeId) -> Vec<IpnsName> {
+    let header = header_at(fx, root);
+    rows_of(fx, root, &header)
+        .iter()
+        .map(|row| folder_copy_name(fx, row.new))
+        .collect()
+}
+
+/// The read epoch of each copy of the entry at `root`. `None` for a copy that
+/// does not stand.
+fn folder_copy_epochs(fx: &GrantScenario, root: NodeId) -> Vec<Option<u64>> {
+    folder_copy_names(fx, root)
+        .iter()
+        .map(|name| {
+            published_head(&fx.world, &fx.blocks, name)
+                .map(|head| decode_envelope(&head).expect("the head decodes").epoch)
+        })
+        .collect()
+}
+
+/// The PUTs at each copy name of the entry at `root`.
+fn folder_copy_puts(fx: &GrantScenario, root: NodeId) -> Vec<usize> {
+    folder_copy_names(fx, root)
+        .iter()
+        .map(|name| fx.world.record_store.put_count(name.as_str()))
+        .collect()
+}
+
+/// ADR 0077 D3: a dissolve into a granted folder seals each copy under the
+/// folder scope, opened by the folder's read seed at its epoch.
+#[test]
+fn a_dissolve_into_a_granted_folder_seals_under_its_scope() {
+    let mut fx = GrantScenario::new();
+    let (inner, below) = seal_inner_into_the_folder(&mut fx);
+
+    let epoch = folder_read_epoch(&fx);
+    assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
+    let header = header_at(&fx, inner);
+    let copy = rows_of(&fx, inner, &header)
+        .iter()
+        .find(|row| row.old == below)
+        .expect("a row")
+        .new;
+    let head = published_head(&fx.world, &fx.blocks, &folder_copy_name(&fx, copy)).unwrap();
+    let envelope = decode_envelope(&head).unwrap();
+    assert_eq!(
+        envelope.scope, fx.folder.0,
+        "the copy binds the folder scope"
+    );
+    open_read_body(
+        &envelope,
+        &read_key_under(&granted_override_seed(&fx, epoch), copy),
+    )
+    .expect("the folder's read seed opens the copy");
+}
+
+/// D4: an owner revoke on the destination raises its cut epoch and its read
+/// epoch, and the scope pointer stays where it was. The restart floor moves to
+/// the read epoch that the gated root shows, each copy seals again at it, and
+/// a later tick keeps each sealed copy.
+#[test]
+fn an_owner_revoke_on_the_destination_seals_each_copy_again() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let before = header_at(&fx, inner).binding;
+    let pointer = fx.granted_scope_repoint().min_read_epoch;
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().min_read_epoch,
+        pointer,
+        "the revoke leaves the pointer"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let epoch = folder_read_epoch(&fx);
+    assert!(
+        epoch > before.read_epoch,
+        "the revoke raised the read epoch"
+    );
+    let revoked = header_at(&fx, inner).binding;
+    assert_eq!(
+        (revoked.read_epoch, revoked.restart_floor, revoked.base_cut),
+        (epoch, epoch, fx.folder_section().commitment.cut_epoch)
+    );
+    assert!(revoked.base_cut > before.base_cut);
+    assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
+    let puts = folder_copy_puts(&fx, inner);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(folder_copy_puts(&fx, inner), puts, "a sealed copy stays");
+}
+
+/// D4: a write rise of the destination moves each copy name. Each copy
+/// publishes again at the name the new write seed derives, and the log
+/// holds both names of each copy.
+#[test]
+fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let before = header_at(&fx, inner).binding;
+    let old_seed = owner_write_seed(&fx, fx.folder);
+
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let new_seed = owner_write_seed(&fx, fx.folder);
+    assert!(new_seed != old_seed, "the write cut moved the seed");
+    let header = header_at(&fx, inner);
+    assert!(header.binding.write_epoch > before.write_epoch);
+    let epoch = folder_read_epoch(&fx);
+    assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
+    let mut logged = logged_of(&fx, inner);
+    logged.sort();
+    let mut names: Vec<(NodeId, Vec<u8>)> = rows_of(&fx, inner, &header)
+        .iter()
+        .flat_map(|row| {
+            [&old_seed, &new_seed].map(|seed| {
+                (
+                    row.new,
+                    derive_write_name(seed, &row.new.0)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec(),
+                )
+            })
+        })
+        .collect();
+    names.sort();
+    assert_eq!(logged, names, "the log holds both names of each copy");
+}
+
+/// A destination binding that does not name the scope of the relink parent
+/// is a rebind (ADR 0077 D4) that this step does not drive:
+/// the seal publishes nothing.
+#[test]
+fn a_binding_off_the_scope_of_the_relink_parent_pauses_the_seal() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    // The folder is the relink parent, so the copy belongs in its scope, and
+    // the binding names the vault root.
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, dissolve_binding()),
+        Ok(Some(DissolveStep::Map))
+    );
+
+    ticks(&mut fx, 2);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal, "the map committed");
+    assert!(!header.copy_started, "the seal published nothing");
+    assert!(
+        parts_of(&fx, inner)
+            .iter()
+            .all(|part| part.first() != Some(&b'n')),
+        "no log page"
+    );
+}
+
+/// ADR 0077 D4: no copy publishes at a name of an old write seed. A write
+/// epoch floor that rises after the tick's first read, before a publish,
+/// stops the tick with no PUT.
+#[test]
+fn a_write_floor_that_rises_inside_a_seal_tick_stops_each_publish() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let below = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    // The map reads `below` in both sweeps. The eighth sequence read of its
+    // name is the seal's source read, after the first floor read of the tick.
+    let raised = binding.write_epoch + 100;
+    let source = derive_write_name(&owner_write_seed(&fx, inner), &below.0);
+    fx.owner_device
+        .floor_store
+        .raise_epoch_floor_on_sequence_read_after(
+            &floor_label(source.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            raised,
+            7,
+        );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.copy_started);
+    assert!(
+        header.binding.write_epoch < raised,
+        "the tick read the floor before the rise"
+    );
+    assert_eq!(
+        folder_copy_puts(&fx, inner),
+        vec![0, 0],
+        "no publish after the rise"
+    );
+}
+
+/// The probe opens a copy name under the destination scope alone. A record
+/// there with the exact copy body, sealed under another scope, is one trust
+/// violation, and the seal keeps no copy of it.
+#[test]
+fn a_copy_sealed_under_another_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let copy = new_id_of(&fx, plain);
+    let (_, body) = copy_at(&fx, copy).expect("the copy stands");
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: copy.0,
+        scope_id: fx.folder.0,
+        epoch: EPOCH,
+        read_key: &read_key_of(copy),
+        nonce: &[0x6e; 24],
+        body: &body,
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the record seals");
+    let cid = fx.blocks.put(planted.block.clone());
+    publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
+    let puts = fx.world.record_store.put_count(write_name(copy).as_str());
+    let (engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(abuse_events(&mut events), 1, "one trust violation");
+    assert_eq!(
+        fx.world.record_store.put_count(write_name(copy).as_str()),
+        puts,
+        "the seal holds"
+    );
+}
+
+/// Each outer unknown field alone keeps no copy: a copy with only an envelope
+/// field, or only an epoch tag field, seals again.
+#[test]
+fn a_copy_with_one_carried_field_seals_again() {
+    for (envelope_field, tag_field) in [(true, false), (false, true)] {
+        let mut fx = GrantScenario::new();
+        let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let copy = new_id_of(&fx, plain);
+        let (mut envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+        if envelope_field {
+            envelope.unknown = future_field();
+        }
+        if tag_field {
+            envelope.epoch_tag_unknown = future_field();
+        }
+        let cid = fx
+            .blocks
+            .put(encode_envelope(&envelope).expect("the envelope encodes"));
+        publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
+        let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+        tick(&fx.world, &engine, &mut tasks);
+
+        let (envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+        assert!(
+            envelope.unknown.is_empty() && envelope.epoch_tag_unknown.is_empty(),
+            "the copy seals again: envelope field {envelope_field}, tag field {tag_field}"
+        );
+    }
+}
+
+/// A stop between two row publishes, then a restart: the seal publishes the
+/// rows left, and each copy that stands publishes no second time.
+#[test]
+fn a_seal_that_stops_between_two_publishes_finishes_after_a_restart() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(&fx);
+    let header = fx.standing_dissolve();
+    let root = write_name(header.new_root);
+    fx.world.record_store.fail_put_for(root.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let rows = dissolve_rows(&fx, &header);
+    assert!(copy_at(&fx, header.new_root).is_none(), "the root waits");
+    let puts: Vec<usize> = rows[1..]
+        .iter()
+        .map(|row| {
+            fx.world
+                .record_store
+                .put_count(write_name(row.new).as_str())
+        })
+        .collect();
+    assert!(puts.iter().all(|count| *count > 0), "each child stands");
+
+    fx.world.record_store.heal_put_for(root.as_str());
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert!(copy_at(&fx, header.new_root).is_some(), "the root stands");
+    let after: Vec<usize> = rows[1..]
+        .iter()
+        .map(|row| {
+            fx.world
+                .record_store
+                .put_count(write_name(row.new).as_str())
+        })
+        .collect();
+    assert_eq!(after, puts, "no child publishes again");
+}
+
+/// A tie at a copy name that opens under the destination is a fork: one fork
+/// event, and the seal holds.
+#[test]
+fn a_fork_at_a_copy_name_holds_the_seal() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let copy = new_id_of(&fx, plain);
+    let name = write_name(copy);
+    let (_, body) = copy_at(&fx, copy).expect("the copy stands");
+    let tie = author_child_envelope(EnvelopeAuthoring {
+        node_id: copy.0,
+        scope_id: ROOT.0,
+        epoch: EPOCH,
+        read_key: &read_key_of(copy),
+        nonce: &[0x6f; 24],
+        body: &body,
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the tie seals");
+    let cid = fx.blocks.put(tie.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &copy.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, &name),
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoint = fx.world.record_store.endpoints()[1].clone();
+    fx.world
+        .record_store
+        .seed_record(&endpoint, name.as_str(), record);
+    let puts = fx.world.record_store.put_count(name.as_str());
+    let (engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(fork_events(&mut events), 1, "one fork event");
+    assert_eq!(
+        fx.world.record_store.put_count(name.as_str()),
+        puts,
+        "the seal holds"
+    );
+}
+
+/// The write epoch floor of the vault root.
+fn root_write_floor(fx: &GrantScenario) -> u64 {
+    block_on(floor::write_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &ROOT.0,
+    ))
+    .expect("the floor store answers")
+    .expect("the vault root has a write floor")
+}
+
+/// The folder binding with the vault root as the write scope: a read grant
+/// cuts no write scope, so the folder names its nodes under the vault write
+/// seed.
+fn vault_write_binding(fx: &GrantScenario) -> DissolveBinding {
+    DissolveBinding {
+        write_scope: ROOT,
+        write_epoch: root_write_floor(fx),
+        ..folder_binding(fx)
+    }
+}
+
+/// A dissolve of `inner` into the folder with the vault root as the write
+/// scope, mapped and logged in one tick with every PUT failing, so no copy
+/// stands.
+fn log_inner_into_the_folder(fx: &mut GrantScenario) -> (NodeId, DissolveBinding) {
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = vault_write_binding(fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    fail_every_put(fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(fx);
+    assert!(header_at(fx, inner).copy_started, "the seal ran");
+    (inner, binding)
+}
+
+/// ADR 0077 D4 with the write scope not the destination: a sighting raise of
+/// the write epoch floor during a copy publish finds the lease of the seal and
+/// is dropped, so no copy signs below the floor in force.
+#[test]
+fn a_write_sighting_inside_a_copy_publish_is_dropped_under_the_seal_lease() {
+    let mut fx = GrantScenario::new();
+    let (inner, binding) = log_inner_into_the_folder(&mut fx);
+    // The first sequence read of the root copy name is in its publish.
+    let root_copy = folder_copy_name(&fx, header_at(&fx, inner).new_root);
+    fx.owner_device
+        .floor_store
+        .raise_write_epoch_floor_on_sequence_read_after(
+            &floor_label(root_copy.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            binding.write_epoch + 100,
+            0,
+        );
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        root_write_floor(&fx),
+        binding.write_epoch,
+        "the lease drops the raise"
+    );
+    let after = folder_copy_puts(&fx, inner);
+    assert!(
+        after.iter().zip(&before).all(|(now, was)| now > was),
+        "each copy publishes"
+    );
+}
+
+/// ADR 0077 D4: a write epoch floor that rises after the tick read the ends
+/// and before the floor read of the seal leaves the copy names on the old
+/// seed, and the seal publishes no copy.
+#[test]
+fn a_write_raise_before_the_floor_read_of_the_seal_publishes_no_copy() {
+    let mut fx = GrantScenario::new();
+    let (inner, binding) = log_inner_into_the_folder(&mut fx);
+    let raised = binding.write_epoch + 100;
+    // The fifth sequence read of the folder root name in the tick is the root
+    // walk of the seal, after the pass read the ends.
+    let folder_root = fx.granted_scope_repoint().current_root;
+    fx.owner_device
+        .floor_store
+        .raise_write_epoch_floor_on_sequence_read_after(
+            &floor_label(folder_root.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            raised,
+            4,
+        );
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(root_write_floor(&fx), raised, "the raise landed");
+    assert_eq!(
+        folder_copy_puts(&fx, inner),
+        before,
+        "no copy at a name of the old seed"
+    );
+}
+
+/// A write epoch floor read that fails before a later publish pauses the
+/// tick: the child copy stands, and the root copy waits.
+#[test]
+fn a_write_floor_read_that_fails_before_a_later_publish_pauses() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = log_inner_into_the_folder(&mut fx);
+    // The ninth read of the floor in the tick is the one before the root
+    // publish, after the child publish.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&write_epoch_floor_key(&ROOT.0)), 8);
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let after = folder_copy_puts(&fx, inner);
+    assert_eq!(after[0], before[0], "the root copy waits");
+    assert!(after[1] > before[1], "the child copy publishes");
+}
+
+/// The write epoch floor of the folder.
+fn folder_write_floor(fx: &GrantScenario) -> u64 {
+    block_on(floor::write_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+    ))
+    .expect("the floor store answers")
+    .unwrap_or(0)
+}
+
+/// A write wave whose floor raise finds the write lease held, as a copy
+/// publish of the seal holds it, owes the raise: the next tick raises the
+/// floor to the epoch of the wave.
+#[test]
+fn a_write_wave_raise_that_finds_the_lease_held_lands_on_the_next_tick() {
+    let mut fx = GrantScenario::new();
+    // The fourteenth read of the write floor of the folder is the first after
+    // the root publish of the wave, and it takes the lease.
+    let held = fx
+        .owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            fx.folder.0,
+            13,
+        );
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let landed = fx.granted_scope_repoint().write_epoch;
+    assert!(
+        folder_write_floor(&fx) < landed,
+        "the held lease defers the raise"
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
+    drop(held);
+    fx.owner_device.floor_store.heal_floors();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        folder_write_floor(&fx),
+        landed,
+        "the owed step raises the floor"
+    );
+}
+
+/// ADR 0077 D4: a write wave on the destination whose floor raise finds the
+/// lease held, as a copy publish holds it, moves each copy name. The next
+/// tick raises the floor, and no copy publishes at a name of the old seed.
+#[test]
+fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(&fx);
+    let header = header_at(&fx, inner);
+    let old_names: Vec<IpnsName> = rows_of(&fx, inner, &header)
+        .iter()
+        .map(|row| folder_copy_name(&fx, row.new))
+        .collect();
+    let held = fx
+        .owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            fx.folder.0,
+            10,
+        );
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Err(EngineError::Seam {
+            message: "rotation-work-owed".to_owned()
+        }),
+        "the upgrade waits for the owed raise"
+    );
+    let landed = fx.granted_scope_repoint().write_epoch;
+    assert!(
+        folder_write_floor(&fx) < landed,
+        "the held lease defers the raise"
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
+    drop(held);
+    fx.owner_device.floor_store.heal_floors();
+    let old_puts = |fx: &GrantScenario| -> Vec<usize> {
+        old_names
+            .iter()
+            .map(|name| fx.world.record_store.put_count(name.as_str()))
+            .collect()
+    };
+    let before = old_puts(&fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        folder_write_floor(&fx),
+        landed,
+        "the owed step raises the floor"
+    );
+    assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
+    assert!(
+        folder_copy_puts(&fx, inner).iter().all(|puts| *puts > 0),
+        "each copy publishes at its new name"
+    );
 }
