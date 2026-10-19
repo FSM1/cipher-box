@@ -144,7 +144,9 @@ where
             }
         }
         let forgot = match reached {
-            Ok(ScopeCut::Concurrent) => self.forget_landed(sites, &header).await,
+            Ok(ScopeCut::Concurrent) if !header.copy_started => {
+                self.forget_landed(sites, &header).await
+            }
             _ => Ok(true),
         };
         // A failed write leaves the entries for the next hold to retire.

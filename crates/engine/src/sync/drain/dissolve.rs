@@ -859,9 +859,9 @@ where
     }
 
     /// The root of `end` and its head envelope, read through its own gate as
-    /// [`Self::walk_root`] reads it. A tie holds the read only when the gate
-    /// passes it (ADR 0066 D1): one fork event, and the read is untrusted. The
-    /// root gate refuses a tie below the epoch floor.
+    /// [`Self::walk_root`] reads it. A fork holds the read, and a tie is a fork
+    /// only when the gate passes it (ADR 0066 D1): one fork event, and the read
+    /// is untrusted. The root gate refuses a tie below the epoch floor.
     pub(super) async fn dissolve_root<E>(
         &self,
         owner: &DrainScope<'_>,

@@ -75,7 +75,9 @@ use cipherbox_engine::sync::owed_rotation::{
     DROP_BOUND, DROP_BOUND_PASSES, OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep,
     ROTATION_WORK_OWED, open_owed_record, owed_rotation_key, seal_owed_record,
 };
-use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
+use cipherbox_engine::sync::pointer::{
+    SessionRole, open_repoint, scope_pointer_name, scope_pointer_signer, seal_repoint,
+};
 use cipherbox_engine::sync::reseal_journal::RESEAL_JOURNAL_PREFIX;
 use cipherbox_engine::sync::{
     BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, doomed_journal_key,
@@ -29982,17 +29984,17 @@ fn a_refused_copy_holds_the_rows_probed_before_it() {
     assert_eq!(copy_puts(&fx), before, "no PUT at a copy name");
 }
 
-/// The folder as a destination: its read scope and its write scope, at the
-/// epochs and the cut that its root holds now.
+/// The folder as a destination, at the epochs and the cut that its root holds
+/// now. A read grant takes its names from the vault write seed, so the write
+/// scope is the vault root.
 fn folder_binding(fx: &GrantScenario) -> DissolveBinding {
-    let repoint = fx.granted_scope_repoint();
     DissolveBinding {
         read_scope: fx.folder,
         read_epoch: folder_read_epoch(fx),
         restart_floor: folder_read_epoch(fx),
         base_cut: fx.folder_section().commitment.cut_epoch,
-        write_scope: fx.folder,
-        write_epoch: repoint.write_epoch,
+        write_scope: ROOT,
+        write_epoch: 0,
     }
 }
 
@@ -30128,14 +30130,14 @@ fn an_owner_revoke_on_the_destination_seals_each_copy_again() {
     assert_eq!(folder_copy_puts(&fx, inner), puts, "a sealed copy stays");
 }
 
-/// D4: a write rise of the destination moves each copy name. Each copy
-/// publishes again at the name the new write seed derives, and the log
-/// holds both names of each copy.
+/// D4: a write cut that gives the destination a write seed of its own moves
+/// each copy name. The second tick that computes the new write scope rebinds
+/// to it, each copy publishes again at the name the new write seed derives,
+/// and the log holds both names of each copy.
 #[test]
 fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
     let mut fx = GrantScenario::new();
     let (inner, _) = seal_inner_into_the_folder(&mut fx);
-    let before = header_at(&fx, inner).binding;
     let old_seed = owner_write_seed(&fx, fx.folder);
 
     let folder = fx.folder;
@@ -30144,11 +30146,21 @@ fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
         Ok(CommandOutcome::Done)
     );
     tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        header_at(&fx, inner).binding.write_scope,
+        ROOT,
+        "one tick does not rebind"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     let new_seed = owner_write_seed(&fx, fx.folder);
     assert!(new_seed != old_seed, "the write cut moved the seed");
     let header = header_at(&fx, inner);
-    assert!(header.binding.write_epoch > before.write_epoch);
+    assert_eq!(
+        (header.binding.write_scope, header.binding.write_epoch),
+        (fx.folder, folder_write_floor(&fx)),
+        "the folder is the write scope"
+    );
     let epoch = folder_read_epoch(&fx);
     assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
     let mut logged = logged_of(&fx, inner);
@@ -30171,38 +30183,21 @@ fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
     assert_eq!(logged, names, "the log holds both names of each copy");
 }
 
-/// ADR 0077 D4, owner ruling Q2 (a): a binding that does not name the
-/// scope of the relink parent rebinds the destination. The former binding
-/// goes to `prior_bindings`, and each copy seals under the new scope. A
-/// record at a copy name that the former destination scope seals is a copy
-/// from before the rebind: the copy publishes over it, with no trust
-/// violation.
-#[test]
-fn a_binding_off_the_scope_of_the_relink_parent_rebinds_the_destination() {
-    let mut fx = GrantScenario::new();
-    let inner = fx.grant_nested_folder("inner");
-    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
-    // The folder is the relink parent, so the copy belongs in its scope, and
-    // the binding names the vault root.
-    assert_eq!(
-        fx.dissolve_into(inner, fx.folder, dissolve_binding()),
-        Ok(Some(DissolveStep::Map))
-    );
-    fail_every_put(&fx);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    heal_every_put(&fx);
-    // A record sealed under the vault root, the former destination, at the
-    // copy name of the root. The folder takes its names from the vault write
-    // seed, so the name does not move.
-    let header = header_at(&fx, inner);
-    let copy = header.new_root;
-    assert_eq!(folder_copy_name(&fx, copy), write_name(copy));
+/// The record at the copy name of `copy` at `sequence`, whose tag names the
+/// vault root: an empty folder sealed under `read_key` with `nonce`.
+fn root_tagged_copy(
+    fx: &GrantScenario,
+    copy: NodeId,
+    read_key: &[u8; 32],
+    nonce: u8,
+    sequence: u64,
+) -> Vec<u8> {
     let planted = author_child_envelope(EnvelopeAuthoring {
         node_id: copy.0,
         scope_id: ROOT.0,
         epoch: EPOCH,
-        read_key: &read_key_of(copy),
-        nonce: &[0x6f; 24],
+        read_key,
+        nonce: &[nonce; 24],
         body: &ReadBody::Folder {
             created_at: 0,
             modified_at: 0,
@@ -30214,19 +30209,56 @@ fn a_binding_off_the_scope_of_the_relink_parent_rebinds_the_destination() {
     })
     .expect("the record seals");
     let cid = fx.blocks.put(planted.block.clone());
-    let record = IpnsRecord::create_v2(
+    IpnsRecord::create_v2(
         &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &copy.0).as_bytes()),
         format!("/ipfs/{cid}").as_bytes(),
-        1,
+        sequence,
         TTL_NANOS,
         EOL,
     )
-    .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
+    .marshal()
+}
+
+/// Seed `record` at `name` on each endpoint from `from` on.
+fn seed_from(fx: &GrantScenario, from: usize, name: &IpnsName, record: &[u8]) {
+    for endpoint in &fx.world.record_store.endpoints()[from..] {
         fx.world
             .record_store
-            .seed_record(&endpoint, write_name(copy).as_str(), record.clone());
+            .seed_record(endpoint, name.as_str(), record.to_vec());
     }
+}
+
+/// `inner` with the folder `below` in it, dissolved into the folder with a
+/// binding that names the vault root, and rebound with every PUT failing.
+/// The folder takes its names from the vault write seed, so the copy name of
+/// the root does not move. Answers `inner` and the copy of its root.
+fn rebind_off_the_vault_root(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, dissolve_binding()),
+        Ok(Some(DissolveStep::Map))
+    );
+    fail_every_put(fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(fx);
+    let copy = header_at(fx, inner).new_root;
+    assert_eq!(folder_copy_name(fx, copy), write_name(copy));
+    (inner, copy)
+}
+
+/// ADR 0077 D4, owner ruling Q2 (a): a binding that does not name the
+/// scope of the relink parent rebinds the destination. The former binding
+/// goes to `prior_bindings`, and each copy seals under the new scope. A
+/// record at a copy name that passes the gate of the former destination
+/// scope is a copy from before the rebind: the copy publishes over it, with
+/// no trust violation.
+#[test]
+fn a_binding_off_the_scope_of_the_relink_parent_rebinds_the_destination() {
+    let mut fx = GrantScenario::new();
+    let (inner, copy) = rebind_off_the_vault_root(&mut fx);
+    let record = root_tagged_copy(&fx, copy, &read_key_of(copy), 0x6f, 1);
+    seed_from(&fx, 0, &write_name(copy), &record);
     events_so_far(&mut fx._events);
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -30254,6 +30286,83 @@ fn a_binding_off_the_scope_of_the_relink_parent_rebinds_the_destination() {
         decode_envelope(&head).unwrap().scope,
         fx.folder.0,
         "the copy binds the folder scope"
+    );
+}
+
+/// Rule 6: a record at a copy name whose tag names a former destination
+/// scope, and that does not open under that scope, is one trust violation.
+/// The seal publishes nothing over it.
+#[test]
+fn a_record_that_names_a_former_destination_and_does_not_open_there_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (_, copy) = rebind_off_the_vault_root(&mut fx);
+    let name = write_name(copy);
+    let record = root_tagged_copy(&fx, copy, &[0x55; 32], 0x6f, 1);
+    seed_from(&fx, 0, &name, &record);
+    let puts = fx.world.record_store.put_count(name.as_str());
+    events_so_far(&mut fx._events);
+
+    ticks(&mut fx, 2);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(
+        fx.world.record_store.put_count(name.as_str()),
+        puts,
+        "no PUT at the copy name"
+    );
+}
+
+/// Rule 6: a replay below the sequence floor of a copy name, whose tag names
+/// a former destination scope, is one trust violation while every endpoint
+/// answers. The seal publishes nothing over it.
+#[test]
+fn a_replay_below_the_floor_that_names_a_former_destination_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (_, copy) = rebind_off_the_vault_root(&mut fx);
+    let name = write_name(copy);
+    let record = root_tagged_copy(&fx, copy, &read_key_of(copy), 0x6f, 1);
+    seed_from(&fx, 0, &name, &record);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        sequence_at(&fx.world, &name) > 1,
+        "the copy publishes over it"
+    );
+    seed_from(&fx, 0, &name, &record);
+    let puts = fx.world.record_store.put_count(name.as_str());
+    let (engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(abuse_events(&mut events), 1, "one trust violation");
+    assert_eq!(
+        fx.world.record_store.put_count(name.as_str()),
+        puts,
+        "no PUT at the copy name"
+    );
+}
+
+/// ADR 0066 D1: two records at one sequence of a copy name that both pass the
+/// gate of a former destination scope are a same-sequence fork. One fork
+/// event goes out, and the seal publishes nothing more.
+#[test]
+fn a_fork_that_names_a_former_destination_holds_the_seal() {
+    let mut fx = GrantScenario::new();
+    let (_, copy) = rebind_off_the_vault_root(&mut fx);
+    let name = write_name(copy);
+    let one = root_tagged_copy(&fx, copy, &read_key_of(copy), 0x6f, 1);
+    let other = root_tagged_copy(&fx, copy, &read_key_of(copy), 0x70, 1);
+    seed_from(&fx, 0, &name, &one);
+    seed_from(&fx, 1, &name, &other);
+    let puts = fx.world.record_store.put_count(name.as_str());
+    events_so_far(&mut fx._events);
+
+    ticks(&mut fx, 2);
+
+    assert_eq!(fork_events(&mut fx._events), 1, "one fork event");
+    assert_eq!(
+        fx.world.record_store.put_count(name.as_str()),
+        puts,
+        "no PUT at the copy name"
     );
 }
 
@@ -30635,6 +30744,8 @@ fn a_write_wave_raise_that_finds_the_lease_held_lands_on_the_next_tick() {
 /// ADR 0077 D4: a write wave on the destination whose floor raise finds the
 /// lease held, as a copy publish holds it, moves each copy name. The next
 /// tick raises the floor, and no copy publishes at a name of the old seed.
+/// While the raise is owed, no rebind spends a prior-binding slot, and the
+/// wave spends one.
 #[test]
 fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
     let mut fx = GrantScenario::new();
@@ -30692,14 +30803,30 @@ fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
         "the owed step raises the floor"
     );
     assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
+    assert!(
+        header_at(&fx, inner).prior_bindings.is_empty(),
+        "no slot while the raise is owed"
+    );
 
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The second tick that computes the folder as the write scope rebinds.
+    ticks(&mut fx, 2);
 
     assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
     assert!(
         folder_copy_puts(&fx, inner).iter().all(|puts| *puts > 0),
         "each copy publishes at its new name"
     );
+    let header = header_at(&fx, inner);
+    assert_eq!(
+        header
+            .prior_bindings
+            .iter()
+            .map(|prior| (prior.read_scope, prior.write_scope))
+            .collect::<Vec<_>>(),
+        vec![(fx.folder, ROOT)],
+        "the wave spends one slot"
+    );
+    assert_eq!(header.binding.write_scope, fx.folder);
 }
 
 // ---------------------------------------------------------------------------
@@ -31074,4 +31201,141 @@ fn a_fork_at_a_cut_scope_root_holds_the_walk() {
         DissolveStep::Map,
         "the walk holds"
     );
+}
+
+/// ADR 0066 D1: a tie at a cut scope root that is a record of that scope from
+/// below its epoch floor fails the root gate, so it is no fork. No event goes
+/// out, and the map commits.
+#[test]
+fn a_lagging_tie_at_a_cut_scope_root_is_no_fork() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let lagging = published_value(&fx.world, &fx.granted_scope_repoint().current_root);
+    let epoch = folder_read_epoch(&fx);
+    cut_dissolve_subtree(&mut fx);
+    assert!(
+        folder_read_epoch(&fx) > epoch,
+        "the cut raised the read epoch"
+    );
+    // An earlier EOL ranks the tie below the live record.
+    seed_root_tie(&fx, &lagging, "1970-01-10T00:00:00Z");
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(abuse_events_in(&events), 0, "no trust violation");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::SameSequenceFork { .. })),
+        "no fork event"
+    );
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Seal);
+}
+
+/// Publish `repoint` at the folder's scope pointer at `sequence`, on each
+/// endpoint.
+fn republish_folder_pointer(fx: &GrantScenario, repoint: &RepointObject, sequence: u64) {
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    let block = seal_repoint(
+        SessionRole::Owner,
+        &mut SeededEntropy::new(99),
+        kdf::pointer_read_key(seed.as_bytes(), &fx.folder.0).as_bytes(),
+        POINTER_PAYLOAD_VERSION,
+        &owner_identity(),
+        repoint,
+    )
+    .expect("the re-point seals");
+    let record = IpnsRecord::create_v2(
+        &scope_pointer_signer(seed.as_bytes(), &fx.folder.0),
+        &block,
+        sequence,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    seed_from(fx, 0, &folder_pointer(fx), &record);
+}
+
+/// ADR 0077 D4: the seal reads the restart floor off the owner's scope
+/// pointer of the destination. The pointer moves the restart floor up to the
+/// read epoch that it vouches, and a later pointer that vouches less does not
+/// move it back.
+#[test]
+fn the_scope_pointer_moves_the_restart_floor_up_and_never_down() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let live = fx.granted_scope_repoint();
+    assert!(live.min_read_epoch > 0);
+    assert_eq!(live.min_read_epoch, folder_read_epoch(&fx));
+    let binding = DissolveBinding {
+        restart_floor: 0,
+        ..folder_binding(&fx)
+    };
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        header_at(&fx, inner).binding.restart_floor,
+        live.min_read_epoch,
+        "the pointer moves the restart floor"
+    );
+    let pointer = folder_pointer(&fx);
+    let sequence = sequence_at(&fx.world, &pointer) + 1;
+    republish_folder_pointer(
+        &fx,
+        &RepointObject {
+            min_read_epoch: 0,
+            ..live.clone()
+        },
+        sequence,
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        header_at(&fx, inner).binding.restart_floor,
+        live.min_read_epoch,
+        "a pointer that vouches less does not move it back"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0);
+}
+
+/// After the copy started, a concurrent stop keeps the entry at its cut step
+/// and runs no forget, so no read of a cut scope there can drop the fault of
+/// its gate. The link grant of the folder stays.
+#[test]
+fn a_concurrent_stop_after_the_copy_started_runs_no_forget() {
+    let mut fx = GrantScenario::new();
+    let (plain, _) = log_the_cut_subtree(&mut fx);
+    let identity = plant_link_contact(&fx);
+    let inner = fx.standing_dissolve().scopes[1].scope_id;
+    let grant = |fx: &mut GrantScenario, node: NodeId| {
+        block_on(fx.engine.command(Command::Grant {
+            node,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        }))
+    };
+    assert_eq!(grant(&mut fx, plain), Ok(CommandOutcome::Done));
+    let plain_pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &plain.0);
+    fx.world.record_store.fail_put_for(plain_pointer.as_str());
+    ticks(&mut fx, 6);
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Cut, "the shared folder joins");
+    assert!(header.scopes.iter().any(|scope| scope.scope_id == plain));
+    assert_eq!(grant(&mut fx, inner), Ok(CommandOutcome::Done));
+    fx.world.record_store.heal_put_for(plain_pointer.as_str());
+    assert!(book_holds(&fx, &identity));
+
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)));
+
+    assert!(book_holds(&fx, &identity), "no forget runs");
+    assert!(fx.standing_dissolve().copy_started);
 }

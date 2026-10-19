@@ -24,7 +24,7 @@ use super::{EndMark, cut_epoch_of, cut_overtaken};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::gated_read::{LeafRead, Unserved};
-use crate::net::{ChildAdopter, FanoutRecord, Observed, fanout_get_classified};
+use crate::net::{ChildAdopter, Observed, PointerConsult, PointerConsultError};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SharerScopedFloorStore,
     SnapshotCache, StagingStore,
@@ -35,7 +35,7 @@ use crate::sync::dissolve_journal::{
     PriorBinding,
 };
 use crate::sync::drain::walker::ReadFault;
-use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, open_repoint};
+use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::tick::scope_root_of;
 
 /// The seal of one dissolve entry, carried across ticks.
@@ -50,6 +50,9 @@ pub(crate) struct DissolveSeal {
     /// A gate refused a record, or the endpoints served a fork. The run
     /// publishes nothing more.
     refused: bool,
+    /// The read scope and the write scope that the last tick computed for a
+    /// rebind that waits.
+    rebind: Option<(NodeId, NodeId)>,
 }
 
 impl DissolveSeal {
@@ -60,6 +63,7 @@ impl DissolveSeal {
             mark,
             done: BTreeSet::new(),
             refused: false,
+            rebind: None,
         }
     }
 
@@ -93,6 +97,16 @@ impl<E> From<ReadFault<E>> for SealFault {
             ReadFault::Unanswered | ReadFault::Fatal(_) => Self::Unanswered,
         }
     }
+}
+
+/// The destination of a seal tick, from the ends of the tick.
+struct Destination<'t, 'e> {
+    ends: &'t [ScopeEnd<'e>],
+    /// The end of each scope root from the destination up to the vault root.
+    /// Each copy name derives from the seed that the destination shares with
+    /// each scope up to `write`.
+    chain: Vec<&'t ScopeEnd<'e>>,
+    write: &'t ScopeEnd<'e>,
 }
 
 /// The header that the gated destination root at `epoch` and `cut_epoch`,
@@ -302,42 +316,73 @@ where
         let Some(hold) = self.cells.dissolve.hold(root) else {
             return;
         };
-        let Some((read_scope, write_scope)) =
-            self.destination_of(owner, ends, header.relink_parent)
-        else {
+        let Some(target) = self.destination_of(owner, ends, header.relink_parent) else {
             return;
         };
-        let binding = header.binding;
-        let header = if (read_scope, write_scope) == (binding.read_scope, binding.write_scope) {
-            header
-        } else {
-            let Some(next) = rebound(&header, read_scope, write_scope) else {
-                return;
-            };
-            if journal.commit(&hold, Some(&header), &next).await.is_err() {
-                return;
-            }
-            next
-        };
-        let Some(dest) = ends
-            .iter()
-            .find(|end| end.root == header.binding.read_scope)
-        else {
+        let Some(held_floors) = self.guards_hold(&target).await else {
             return;
         };
+        let dest = target.chain[0];
         let mark = EndMark::of(dest);
         let carried = self.cells.dissolve_seals.borrow_mut().remove(&root);
         let mut run = carried
             .filter(|run| run.seals(&header, &mark))
             .unwrap_or_else(|| DissolveSeal::new(&header, mark.clone()));
+        let binding = header.binding;
+        let candidate = (dest.root, target.write.root);
+        let header = if candidate == (binding.read_scope, binding.write_scope) {
+            run.rebind = None;
+            header
+        } else {
+            // The write scope comes from the seeds of the ends, which can
+            // differ for one tick, so a change of it alone commits only when
+            // two ticks in a row compute it.
+            let confirmed = dest.root != binding.read_scope || run.rebind == Some(candidate);
+            run.rebind = Some(candidate);
+            let next = rebound(&header, dest.root, target.write.root).filter(|_| confirmed);
+            let Some(next) = next else {
+                self.cells.dissolve_seals.borrow_mut().insert(root, run);
+                return;
+            };
+            if journal.commit(&hold, Some(&header), &next).await.is_err() {
+                self.cells.dissolve_seals.borrow_mut().insert(root, run);
+                return;
+            }
+            run = DissolveSeal::new(&next, mark);
+            next
+        };
         if !run.refused
             && let Err(SealFault::Refused) = self
-                .seal_tick(owner, ends, journal, &hold, header, dest, &mut run, left)
+                .seal_tick(
+                    owner,
+                    &target,
+                    &held_floors,
+                    journal,
+                    &hold,
+                    header,
+                    &mut run,
+                    left,
+                )
                 .await
         {
             run.refused = true;
         }
         self.cells.dissolve_seals.borrow_mut().insert(root, run);
+    }
+
+    /// The write epoch floor of each end of `target`'s chain, or `None` when a
+    /// write cut is owed at one of them or a floor does not hold its seed. A
+    /// write cut anywhere up to the vault root can move the copy names, so no
+    /// rebind commits and no copy publishes while one runs (ADR 0077 D4).
+    async fn guards_hold(&self, target: &Destination<'_, '_>) -> Option<Vec<u64>> {
+        let mut floors = Vec::with_capacity(target.chain.len());
+        for end in &target.chain {
+            if owes_write_cut(self.inputs.owed_write_cuts, end.root) {
+                return None;
+            }
+            floors.push(self.write_floor(end).await.ok()?);
+        }
+        Some(floors)
     }
 
     /// One tick of the seal: the D4 check, then each row left, children
@@ -346,33 +391,23 @@ where
     async fn seal_tick(
         &self,
         owner: &DrainScope<'_>,
-        ends: &[ScopeEnd<'_>],
+        target: &Destination<'_, '_>,
+        held_floors: &[u64],
         journal: &DissolveJournal<'_, St>,
         hold: &DissolveHold<'_>,
         header: DissolveHeader,
-        dest: &ScopeEnd<'_>,
         run: &mut DissolveSeal,
         left: &Cell<usize>,
     ) -> Result<(), SealFault> {
         let root = header.scopes[0].scope_id;
+        let (ends, dest) = (target.ends, target.chain[0]);
         let end_of = |scope: NodeId| ends.iter().find(|end| end.root == scope);
-        let write = end_of(header.binding.write_scope).ok_or(SealFault::Unanswered)?;
-        // A write cut of the write scope moves each copy name, and so does one
-        // that gives the destination a write seed of its own.
-        let guards: Vec<&ScopeEnd<'_>> = core::iter::once(write)
-            .chain((dest.root != write.root).then_some(dest))
-            .collect();
-        if guards
+        let write_floor = target
+            .chain
             .iter()
-            .any(|end| owes_write_cut(self.inputs.owed_write_cuts, end.root))
-        {
-            return Err(SealFault::Unanswered);
-        }
-        // Each copy name derives from the write scope's seed, which the
-        // destination end publishes under.
-        if !ct_eq(dest.write_scope_seed, write.write_scope_seed) {
-            return Err(SealFault::Unanswered);
-        }
+            .zip(held_floors)
+            .find_map(|(end, floor)| (end.root == target.write.root).then_some(*floor))
+            .ok_or(SealFault::Unanswered)?;
         if !take_tick_read(left) {
             return Ok(());
         }
@@ -382,12 +417,8 @@ where
             .commitment
             .as_ref()
             .map_or(0, |commitment| commitment.cut_epoch);
-        let vouched = self.vouched_read_epoch(owner, dest).await?;
-        let mut held_floors = Vec::with_capacity(guards.len());
-        for end in &guards {
-            held_floors.push(self.write_floor(end).await?);
-        }
-        let next = restarted(&header, dest_root.epoch, cut_epoch, vouched, held_floors[0])
+        let vouched = self.vouched_read_epoch(owner, dest, left).await?;
+        let next = restarted(&header, dest_root.epoch, cut_epoch, vouched, write_floor)
             .ok_or(SealFault::Unanswered)?;
         if next != header {
             journal.commit(hold, Some(&header), &next).await?;
@@ -444,8 +475,8 @@ where
                     row.new,
                     &name,
                     &body,
-                    header.binding.restart_floor,
-                    &header.prior_bindings,
+                    &header,
+                    ends,
                 )
                 .await
             {
@@ -481,13 +512,13 @@ where
         for job in jobs {
             // A write cut moves each copy name: no publish lands at a name of
             // the old write seed (ADR 0077 D4).
-            let mut leases = Vec::with_capacity(guards.len());
-            for end in &guards {
+            let mut leases = Vec::with_capacity(target.chain.len());
+            for end in &target.chain {
                 leases.push(
                     floor::acquire_write_epoch_lease(&end.root.0).ok_or(SealFault::Unanswered)?,
                 );
             }
-            for (end, held) in guards.iter().zip(&held_floors) {
+            for (end, held) in target.chain.iter().zip(held_floors) {
                 let current = self.write_floor(end).await?;
                 let deferred =
                     floor::owed_write_raise(&end.floors(&self.seams.floors), &end.root.0)
@@ -526,35 +557,32 @@ where
         fault.map_or(Ok(()), Err)
     }
 
-    /// The read scope and the write scope of the relink parent `node` now: its
-    /// nearest scope root, and the nearest scope root from there up whose
-    /// write seed is not its parent scope's, or the vault root. `None` when the
-    /// tick holds no end for a scope on that path.
-    fn destination_of(
+    /// The destination of the relink parent `node` now: its nearest scope
+    /// root, and the nearest scope root from there up whose write seed is not
+    /// its parent scope's, or the vault root. `None` when the tick holds no end
+    /// for a scope on the path to the vault root.
+    fn destination_of<'t, 'e>(
         &self,
         owner: &DrainScope<'_>,
-        ends: &[ScopeEnd<'_>],
+        ends: &'t [ScopeEnd<'e>],
         node: NodeId,
-    ) -> Option<(NodeId, NodeId)> {
+    ) -> Option<Destination<'t, 'e>> {
         let base = self.cells.base.borrow();
         let roots: BTreeSet<NodeId> = owner.scope_roots.iter().copied().collect();
         let read = scope_root_of(&base, node, &roots);
-        let end_of = |scope: NodeId| ends.iter().find(|end| end.root == scope);
-        end_of(read)?;
-        let chain: Vec<NodeId> = core::iter::once(read)
+        let chain = core::iter::once(read)
             .chain(
                 base.ancestors(read)
                     .into_iter()
                     .filter(|scope| roots.contains(scope) || *scope == base.root),
             )
-            .collect();
-        for pair in chain.windows(2) {
-            let (scope, parent) = (end_of(pair[0])?, end_of(pair[1])?);
-            if !ct_eq(scope.write_scope_seed, parent.write_scope_seed) {
-                return Some((read, scope.root));
-            }
-        }
-        Some((read, *chain.last()?))
+            .map(|scope| ends.iter().find(|end| end.root == scope))
+            .collect::<Option<Vec<_>>>()?;
+        let write = chain
+            .windows(2)
+            .find(|pair| !ct_eq(pair[0].write_scope_seed, pair[1].write_scope_seed))
+            .map_or(chain.last().copied(), |pair| Some(pair[0]))?;
+        Some(Destination { ends, chain, write })
     }
 
     /// The source body of the row at `node` under `end`, its scope. A scope
@@ -619,9 +647,8 @@ where
 
     /// The basis to publish the copy `body` of `node` over at `name` under
     /// `plane`, or `None` when the record there holds that body, sealed at an
-    /// epoch from `restart_floor` to the plane's. A record that a destination
-    /// of `prior` seals is a copy from before a rebind, and the copy publishes
-    /// over it. The open commits nothing.
+    /// epoch from the restart floor of `header` to the plane's. The open
+    /// commits nothing.
     #[expect(clippy::too_many_arguments, reason = "one probe of one copy name")]
     async fn probe_copy(
         &self,
@@ -630,8 +657,8 @@ where
         node: NodeId,
         name: &IpnsName,
         body: &ReadBody,
-        restart_floor: u64,
-        prior: &[PriorBinding],
+        header: &DissolveHeader,
+        ends: &[ScopeEnd<'_>],
     ) -> Result<Option<Observed>, SealFault> {
         let read = match LeafRead::fetch(&self.seams.transport, name).await {
             Ok(read) => read,
@@ -654,15 +681,21 @@ where
             .await
         {
             Ok(opened) => opened,
-            Err(Some(rejection))
-                if seal_open_failed(&rejection)
-                    && adopter
-                        .unbound_scope()
-                        .is_some_and(|scope| prior.iter().any(|was| was.read_scope.0 == scope)) =>
-            {
-                return Ok(Some(Observed::record(name, read.pick.sequence)));
-            }
             Err(Some(rejection)) => {
+                let former = adopter
+                    .unbound_scope()
+                    .filter(|_| seal_open_failed(&rejection))
+                    .and_then(|scope| {
+                        header
+                            .prior_bindings
+                            .iter()
+                            .find(|was| was.read_scope.0 == scope)
+                    });
+                if let Some(was) = former {
+                    return self
+                        .former_copy(ends, was.read_scope, node, name, &read)
+                        .await;
+                }
                 refuse_record(&self.seams.events, name, &rejection);
                 return Err(SealFault::Refused);
             }
@@ -688,20 +721,68 @@ where
         let sealed = bound
             && envelope.unknown.is_empty()
             && envelope.epoch_tag_unknown.is_empty()
-            && (restart_floor..=plane.epoch).contains(&adopted.epoch)
+            && (header.binding.restart_floor..=plane.epoch).contains(&adopted.epoch)
             && adopted.read_body == *body;
         Ok((!sealed).then(|| Observed::record(name, read.pick.sequence)))
     }
 
-    /// The read epoch that the owner vouches for the destination `dest`: the
-    /// `min_read_epoch` of its scope pointer, or the vouched floor of the vault
-    /// root. A pointer that does not open, or that rolls back the write epoch
-    /// floor, is a trust violation. A pointer that does not read pauses the
-    /// tick.
+    /// The basis to publish over `read`, the record at the copy `name` of
+    /// `node` whose tag names `scope`, a former destination (owner ruling Q2
+    /// (a)). The record passes the gate of that scope with no commit, as a copy
+    /// from before the rebind does, or it is refused there.
+    async fn former_copy(
+        &self,
+        ends: &[ScopeEnd<'_>],
+        scope: NodeId,
+        node: NodeId,
+        name: &IpnsName,
+        read: &LeafRead,
+    ) -> Result<Option<Observed>, SealFault> {
+        let end = *ends
+            .iter()
+            .find(|end| end.root == scope)
+            .ok_or(SealFault::Unanswered)?;
+        let (plane, root) = self.ledger_plane(end).await.ok_or(SealFault::Unanswered)?;
+        let floors = end.floors(&self.seams.floors);
+        let adopter = self.copy_adopter(&plane, &floors, node);
+        let (bytes, failed) = (&read.bytes, read.endpoint_failed);
+        let sequence = match self
+            .open_held(&end, root.anchor(), &adopter, name, bytes, failed)
+            .await
+        {
+            Ok((adopted, _)) => adopted.sequence,
+            Err(Some(rejection)) => {
+                refuse_record(&self.seams.events, name, &rejection);
+                return Err(SealFault::Refused);
+            }
+            Err(None) => return Err(SealFault::Unanswered),
+        };
+        if self
+            .held_fork(
+                &end,
+                root.anchor(),
+                &adopter,
+                name,
+                bytes,
+                &read.tied,
+                failed,
+            )
+            .await
+        {
+            return Err(self.fork_at::<()>(name, sequence).into());
+        }
+        Ok(Some(Observed::record(name, read.pick.sequence)))
+    }
+
+    /// The read epoch that the owner vouches for the destination `dest`:
+    /// the `min_read_epoch` of its scope pointer, read under the trust rules
+    /// of [`PointerConsult`], 0 for a scope never re-pointed, or the vouched
+    /// floor of the vault root. A pointer that does not read pauses the tick.
     async fn vouched_read_epoch(
         &self,
         owner: &DrainScope<'_>,
         dest: &ScopeEnd<'_>,
+        left: &Cell<usize>,
     ) -> Result<u64, SealFault> {
         let scope = dest.root.0;
         let floors = dest.floors(&self.seams.floors);
@@ -711,33 +792,28 @@ where
                 .map(Option::unwrap_or_default)
                 .map_err(|_| SealFault::Unanswered);
         }
-        let keys = self.inputs.owner_pointers.ok_or(SealFault::Unanswered)?;
-        let name = keys.pointer_name(&scope);
-        let FanoutRecord::Found(verified, _) =
-            fanout_get_classified(&self.seams.transport, &name).await
-        else {
+        let scope_keys = self.inputs.owner_pointers.ok_or(SealFault::Unanswered)?;
+        if !take_tick_read(left) {
             return Err(SealFault::Unanswered);
-        };
-        let refused = |check: &str| {
-            emit_trust_violation(&self.seams.events, name.as_str(), check);
-            SealFault::Refused
-        };
-        let repoint = open_repoint(
-            &keys.pointer_read_key(&scope),
-            POINTER_PAYLOAD_VERSION,
-            &scope,
-            owner.owner_identity,
-            &verified.value,
-        )
-        .map_err(|_| refused("dissolve-scope-pointer-refused"))?;
-        if floor::write_epoch_regression(&floors, &scope, repoint.write_epoch)
-            .await
-            .map_err(|_| SealFault::Unanswered)?
-            .is_some()
-        {
-            return Err(refused("dissolve-scope-pointer-write-epoch-regressed"));
         }
-        Ok(repoint.min_read_epoch)
+        let consult = PointerConsult {
+            scope_keys,
+            owner_identity: owner.owner_identity,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        };
+        match consult.read(&self.seams.transport, &floors, &scope).await {
+            Ok(read) => Ok(read.map_or(0, |read| read.repoint.min_read_epoch)),
+            Err(PointerConsultError::Unavailable) => Err(SealFault::Unanswered),
+            Err(PointerConsultError::Rejected) => {
+                let name = scope_keys.pointer_name(&scope);
+                emit_trust_violation(
+                    &self.seams.events,
+                    name.as_str(),
+                    "dissolve-scope-pointer-refused",
+                );
+                Err(SealFault::Refused)
+            }
+        }
     }
 
     /// The write epoch floor of `write`. A floor that does not read, or one
