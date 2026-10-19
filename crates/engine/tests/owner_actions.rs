@@ -28451,14 +28451,19 @@ fn dissolve_rows(fx: &GrantScenario, header: &DissolveHeader) -> Vec<MapRow> {
         .collect()
 }
 
-/// The journal parts of the entry at the folder.
-fn dissolve_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
-    let prefix = [
+/// The staging key prefix of the dissolve entry at the folder.
+fn dissolve_prefix(fx: &GrantScenario) -> Vec<u8> {
+    [
         RESEAL_JOURNAL_PREFIX,
         owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
         fx.folder.0.as_slice(),
     ]
-    .concat();
+    .concat()
+}
+
+/// The journal parts of the entry at the folder.
+fn dissolve_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
+    let prefix = dissolve_prefix(fx);
     block_on(fx.owner_device.staging_store.staged_keys())
         .expect("the store lists")
         .into_iter()
@@ -28592,13 +28597,7 @@ fn a_plain_row_under_a_write_cut_names_its_node_under_the_new_seed() {
 
 /// The staging key of the dissolve header at the folder.
 fn dissolve_header_key(fx: &GrantScenario) -> Vec<u8> {
-    [
-        RESEAL_JOURNAL_PREFIX,
-        owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
-        fx.folder.0.as_slice(),
-        b"h",
-    ]
-    .concat()
+    [dissolve_prefix(fx).as_slice(), b"h"].concat()
 }
 
 /// A tick after the map commits mints nothing: the header and the map stay.
@@ -29414,6 +29413,7 @@ fn a_fork_below_the_epoch_floor_holds_the_walk() {
             let value = published_value(&fx.world, &name);
             publish_value_under(&fx.world, &owner_write_seed(&fx, fx.folder), plain, &value);
         }
+        assert_lags_the_epoch_floor(&fx, &name);
         let value = other_side(&fx, &name);
         seed_tie(&fx, plain, &value, EOL);
         events_so_far(&mut fx._events);
@@ -29430,7 +29430,54 @@ fn a_fork_below_the_epoch_floor_holds_the_walk() {
             DissolveStep::Map,
             "the walk holds, above {above}"
         );
+        assert_eq!(
+            tick_reads(&mut fx, &name),
+            0,
+            "the walk reads no more, above {above}"
+        );
     }
+}
+
+/// Assert that the head at `name` lags the read-epoch floor of the cut scope.
+fn assert_lags_the_epoch_floor(fx: &GrantScenario, name: &IpnsName) {
+    let head = published_head(&fx.world, &fx.blocks, name).expect("the record");
+    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
+    let floor = block_on(floor::read_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+    ))
+    .expect("the floor reads")
+    .expect("the cut raised the read-epoch floor");
+    assert!(epoch < floor, "the head lags the read-epoch floor");
+}
+
+/// ADR 0066 D1: a lagging tie at `plain` whose read body does not open is no
+/// fork. No fork event goes out, and the map commits.
+#[test]
+fn a_lagging_tie_that_does_not_open_is_no_fork() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    let name = cut_name(&fx, plain);
+    assert_lags_the_epoch_floor(&fx, &name);
+    let head = published_head(&fx.world, &fx.blocks, &name).expect("the plain record");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let last = envelope.read_sealed.len() - 1;
+    envelope.read_sealed[last] ^= 1;
+    let cid = fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    seed_tie(
+        &fx,
+        plain,
+        format!("/ipfs/{cid}").as_bytes(),
+        "1970-01-10T00:00:00Z",
+    );
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fork_events(&mut fx._events), 0, "no fork event");
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Seal);
 }
 
 /// ADR 0071 D4 at the outside name: every endpoint answers with the record
@@ -29515,19 +29562,8 @@ fn a_vault_head_at_a_cut_name_holds_the_walk() {
     let (carried, derived) = plant_outside_ref(&fx, plain, outside);
     assert_ne!(derived, carried, "the write cut made the names fresh");
     let seed = owner_write_seed(&fx, fx.folder);
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&seed, &outside.0).as_bytes()),
-        &published_value(&fx.world, &carried),
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world
-            .record_store
-            .seed_record(&endpoint, derived.as_str(), record.clone());
-    }
+    let value = published_value(&fx.world, &carried);
+    assert_eq!(sign_at(&fx, &seed, outside, &value, 1), derived);
     let plain_name = cut_name(&fx, plain);
     events_so_far(&mut fx._events);
 

@@ -11,7 +11,6 @@
 //! "Owner capture").
 
 use core::cell::Cell;
-use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -25,8 +24,8 @@ use zeroize::Zeroizing;
 
 use super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 use super::{
-    Anchor, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor, published_op_mark,
-    refuse_record, seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
+    Anchor, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor, refuse_record,
+    seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
 use crate::facade::{NodeId, emit_trust_violation};
@@ -35,8 +34,7 @@ use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::unseal_write_body;
 use crate::net::{
-    Adopter, ChildAdopter, GatedResolve, ResolveOutcome, RootAdopter, assemble_head_envelope,
-    resolve_gated,
+    Adopter, ChildAdopter, ResolveOutcome, RootAdopter, assemble_head_envelope, resolve_gated,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SharerScopedFloorStore,
@@ -46,7 +44,7 @@ use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
     MAX_PAGE_ENTRIES, MapPage, MapRow,
 };
-use crate::sync::kept_op::is_kept;
+use crate::sync::kept_op::retain_pending;
 use crate::sync::model::Snapshot;
 use crate::sync::op::Op;
 use crate::sync::rebase::decode_queue;
@@ -185,13 +183,14 @@ fn ascends_from(parent: &ScopeEnd<'_>, child: &ScopeEnd<'_>) -> bool {
     })
 }
 
-/// A walk fault of the shared root read.
-fn widen(fault: ReadFault<Infallible>) -> ReadFault<Unmapped> {
-    match fault {
-        ReadFault::Unanswered => ReadFault::Unanswered,
-        ReadFault::Untrusted => ReadFault::Untrusted,
-        ReadFault::Fatal(never) => match never {},
-    }
+/// The cut epoch at which `header` cuts `scope`, `None` when it does not cut
+/// it.
+fn cut_epoch_of(header: &DissolveHeader, scope: NodeId) -> Option<u64> {
+    header
+        .scopes
+        .iter()
+        .find(|cut| cut.scope_id == scope)
+        .map(|cut| cut.cut_epoch)
 }
 
 impl DissolveWalk {
@@ -542,21 +541,22 @@ where
     /// to publish. A kept op already published its record.
     async fn queue_writes_under(&self, owner: &DrainScope<'_>, root: NodeId) -> Result<bool, Halt> {
         let raw = self.seams.staging.queued_ops().await.map_err(seam)?;
-        let scan = decode_queue(&RecordReader::new(owner.enc_secret), &raw);
-        if scan.mine.is_empty() {
+        let mut mine = decode_queue(&RecordReader::new(owner.enc_secret), &raw).mine;
+        if mine.is_empty() {
             return Ok(false);
         }
         let drained = self.drained_mark(owner).await?;
-        let published = published_op_mark(&self.seams.staging, owner.enc_secret)
-            .await
-            .map_err(seam)?;
-        let notes = self.kept_notes(owner).await?;
+        mine.retain(|(op_id, _)| drained.is_none_or(|mark| op_id.0 > mark));
+        retain_pending(
+            &self.seams.staging,
+            self.bookkeeping_seal(owner),
+            owner.enc_secret,
+            &mut mine,
+        )
+        .await
+        .map_err(seam)?;
         let base = self.cells.base.borrow();
-        Ok(scan.mine.iter().any(|(op_id, op)| {
-            drained.is_none_or(|mark| op_id.0 > mark)
-                && !is_kept(*op_id, published, &notes)
-                && op_under(&base, root, op)
-        }))
+        Ok(mine.iter().any(|(_, op)| op_under(&base, root, op)))
     }
 
     /// Write the map of a complete walk as a new generation, then commit the
@@ -623,21 +623,12 @@ where
             .ok_or(ReadFault::Unanswered)?;
         if key.node != end.root {
             let anchor = anchor.ok_or(ReadFault::Unanswered)?;
-            let outside = |scope: NodeId| {
-                ends.iter().find(|end| {
-                    end.root == scope && header.scopes.iter().all(|cut| cut.scope_id != scope)
-                })
-            };
             return self
-                .dissolve_child(owner, end, anchor, key.node, &outside)
+                .dissolve_child(owner, ends, header, end, anchor, key.node)
                 .await;
         }
-        let cut_epoch = header
-            .scopes
-            .iter()
-            .find(|scope| scope.scope_id == key.node)
-            .map(|scope| scope.cut_epoch);
-        let (record, root, envelope) = self.walk_root(owner, end, true).await.map_err(widen)?;
+        let cut_epoch = cut_epoch_of(header, key.node);
+        let (root, envelope) = self.walk_root(owner, end, true).await?;
         let commitment = root.state.commitment.as_ref().ok_or(ReadFault::Untrusted)?;
         let rows = !commitment.entries.is_empty();
         let cut = commitment.cut_epoch;
@@ -649,7 +640,7 @@ where
         Ok(DissolveRead {
             mark: RecordMark {
                 sequence: root.state.observed.sequence(),
-                digest: cipherbox_core::suite::hash::hash(&record),
+                digest: cipherbox_core::suite::hash::hash(&root.state.record),
             },
             children: root.state.children,
             root: Some(RootFacts {
@@ -705,19 +696,20 @@ where
 
     /// One non-root node under `end`, read through the child gate at the name
     /// the end derives. A file body names no children.
-    async fn dissolve_child<'e>(
+    async fn dissolve_child(
         &self,
         owner: &DrainScope<'_>,
+        ends: &[ScopeEnd<'_>],
+        header: &DissolveHeader,
         end: &ScopeEnd<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
-        outside: &dyn Fn(NodeId) -> Option<&'e ScopeEnd<'e>>,
     ) -> Result<DissolveRead, ReadFault<Unmapped>> {
         let plane = end.at(anchor.epoch);
         let name = end.write_name(&node.0);
         let floors = end.floors(&self.seams.floors);
         let adopter = self.child_adopter(&plane, &floors, node);
-        let resolved = resolve_gated(
+        let mut resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
             &adopter,
@@ -734,27 +726,32 @@ where
             }
             let other = adopter
                 .unbound_scope()
-                .and_then(|scope| outside(NodeId(scope)))
+                .map(NodeId)
+                .filter(|scope| cut_epoch_of(header, *scope).is_none())
+                .and_then(|scope| ends.iter().find(|end| end.root == scope))
                 .filter(|other| other.write_name(&node.0) == name);
             if seal_open_failed(rejection)
                 && let Some((other, bytes)) = other.zip(adopter.unbound_record())
             {
                 return Err(self
-                    .outside_read(*other, node, &name, &bytes, &resolved)
+                    .outside_read(
+                        *other,
+                        node,
+                        &name,
+                        &bytes,
+                        &resolved.tied,
+                        resolved.endpoint_failed,
+                    )
                     .await);
             }
         }
-        // The resolve gates a tie at the epoch floor only, so a tie of a
-        // lagging pick is judged here under the seed of its own epoch.
-        let (endpoint_failed, forked) =
-            (resolved.endpoint_failed, resolved.resolved.fork.is_some());
-        let tied = if forked {
-            Vec::new()
-        } else {
-            resolved.tied.clone()
-        };
+        // The resolve gates a tie at the epoch floor only, so a tie that lags
+        // the epoch floor is judged here under the seed of its own epoch.
+        let endpoint_failed = resolved.endpoint_failed;
+        let forked = resolved.resolved.fork.is_some();
+        let tied = std::mem::take(&mut resolved.tied);
         let loaded = self
-            .open_resolved_child(&plane, anchor, &adopter, name.clone(), resolved, false)
+            .open_resolved_child(&plane, anchor, &adopter, name.clone(), resolved)
             .await
             .map_err(|fault| walk_fault(self.report_fault(&name, fault)))?;
         let forked = forked
@@ -873,25 +870,23 @@ where
     /// end refused, under `other`, the end its tag names and that derives the
     /// same name. A scope whose parent shares its write seed derives the
     /// parent's names, so the record of an outside node can stand at a name of
-    /// the walked scope. A record that opens under `other` is outside the
-    /// subtree, and the walk starts again. The AAD binds the scope, so a
-    /// hostile record does not open there. The check fetches nothing at
-    /// `name` and commits nothing, and a tie counts as a fork only when it
-    /// opens too (ADR 0066 D1).
+    /// the walked scope. The AAD binds the scope, so a hostile record does not
+    /// open there. A tie counts as a fork only when it opens too (ADR 0066
+    /// D1).
     async fn outside_read(
         &self,
         other: ScopeEnd<'_>,
         node: NodeId,
         name: &IpnsName,
         bytes: &[u8],
-        resolved: &GatedResolve,
+        tied: &[Vec<u8>],
+        endpoint_failed: bool,
     ) -> ReadFault<Unmapped> {
         let Some((plane, root)) = self.ledger_plane(other).await else {
             return ReadFault::Unanswered;
         };
         let floors = other.floors(&self.seams.floors);
         let adopter = self.child_adopter(&plane, &floors, node);
-        let endpoint_failed = resolved.endpoint_failed;
         let opened = self
             .open_held(
                 &other,
@@ -917,7 +912,7 @@ where
                 &adopter,
                 name,
                 bytes,
-                &resolved.tied,
+                tied,
                 endpoint_failed,
             )
             .await;
@@ -974,6 +969,9 @@ where
         tied: &[Vec<u8>],
         endpoint_failed: bool,
     ) -> bool {
+        if tied.is_empty() {
+            return false;
+        }
         let Ok(pick) = IpnsRecord::unmarshal(pick).and_then(|record| record.verify(name)) else {
             return false;
         };

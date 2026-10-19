@@ -4807,8 +4807,7 @@ where
         )
         .await
         .map_err(seam)?;
-        let tied = !resolved.tied.is_empty();
-        self.open_resolved_child(plane, anchor, adopter, name, resolved, tied)
+        self.open_resolved_child(plane, anchor, adopter, name, resolved)
             .await
     }
 
@@ -4820,8 +4819,8 @@ where
         adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
         name: IpnsName,
         resolved: GatedResolve,
-        tied: bool,
     ) -> Result<LoadedNode, ChildFault> {
+        let tied = !resolved.tied.is_empty();
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
@@ -7127,11 +7126,11 @@ where
         report: bool,
     ) -> Result<WalkRead, ReadFault<Infallible>> {
         if node == end.root {
-            let (record, root, _) = self.walk_root(scope, end, report).await?;
+            let (root, _) = self.walk_root(scope, end, report).await?;
             return Ok(WalkRead {
                 mark: RecordMark {
                     sequence: root.state.observed.sequence(),
-                    digest: cipherbox_core::suite::hash::hash(&record),
+                    digest: cipherbox_core::suite::hash::hash(&root.state.record),
                 },
                 children: root.state.children,
                 anchor: Some(WalkAnchor {
@@ -7171,14 +7170,13 @@ where
     }
 
     /// One end's scope root for a walk, read through its own gate from the
-    /// record plane and never from the cache: the record, the root, and its
-    /// head envelope.
-    async fn walk_root(
+    /// record plane and never from the cache: the root and its head envelope.
+    async fn walk_root<E>(
         &self,
         scope: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
         report: bool,
-    ) -> Result<(Vec<u8>, LoadedRoot, Envelope), ReadFault<Infallible>> {
+    ) -> Result<(LoadedRoot, Envelope), ReadFault<E>> {
         let resolved = self
             .gated_scope_root(scope, end, ResolveMode::NoCache)
             .await
@@ -7203,7 +7201,7 @@ where
             .open_root_envelope(Some(scope), end, &record, sequence, &envelope)
             .await
             .map_err(walk_fault)?;
-        Ok((record, root, envelope))
+        Ok((root, envelope))
     }
 
     /// Put back the captures this pass did not settle, up to the frozen bound
