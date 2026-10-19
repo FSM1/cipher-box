@@ -386,13 +386,17 @@ pub(crate) struct HeldBase(Option<RepublishBase>);
 
 impl GatedRoots {
     fn park(&self, base: RepublishBase) {
-        let sequence = base.observed.sequence();
+        self.spend(base.observed.name(), base.observed.sequence());
+        *self.inner.borrow_mut() = Some(base);
+    }
+
+    /// Raise the highest sequence this pass spent at `name` to `sequence`.
+    fn spend(&self, name: &IpnsName, sequence: u64) {
         self.spent
             .borrow_mut()
-            .entry(base.observed.name().as_str().to_owned())
+            .entry(name.as_str().to_owned())
             .and_modify(|spent| *spent = (*spent).max(sequence))
             .or_insert(sequence);
-        *self.inner.borrow_mut() = Some(base);
     }
 
     /// Take the parked base out, so that reads in between cannot replace it.
@@ -2839,6 +2843,8 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     owner_identity: &'a EcdsaVerifier,
     /// The scope root whose PUT raises the flag ([`RootFallback`]).
     put_sent: Option<([u8; 16], &'a Cell<bool>)>,
+    /// Takes the sequence of every other signed record, landed or not.
+    signed: Option<&'a Cell<Option<u64>>>,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
@@ -2922,7 +2928,8 @@ where
         let mark = self
             .put_sent
             .filter(|(scope_id, _)| *scope_id == record.scope_id)
-            .map(|(_, sent)| PutMark::Sent(sent));
+            .map(|(_, sent)| PutMark::Sent(sent))
+            .or(self.signed.map(PutMark::Signed));
         let receipt = publish_record(
             self.transport,
             self.api,
@@ -2989,6 +2996,7 @@ where
                 .root_fallback
                 .as_ref()
                 .and_then(|fallback| fallback.put_sent.map(|sent| (fallback.scope_id, sent))),
+            signed: None,
         }
     }
 }
@@ -3035,10 +3043,18 @@ where
             .map_err(|_| RotationPublishError::Rejected)?,
         };
         let current = self.gated.above_spent(current);
-        let (published, record_bytes, root) = self
-            .root_publish()
-            .run(record, &override_seed, current)
-            .await?;
+        // A PUT that does not confirm can still land, so its sequence is spent.
+        let signed = Cell::new(None);
+        let published = RootPublish {
+            signed: Some(&signed),
+            ..self.root_publish()
+        }
+        .run(record, &override_seed, current)
+        .await;
+        if let Some(sequence) = signed.get() {
+            self.gated.spend(&name, sequence);
+        }
+        let (published, record_bytes, root) = published?;
         self.keep_own_publish(&name, &record_bytes).await;
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
@@ -3463,6 +3479,7 @@ where
             events: self.events,
             owner_identity: self.keys.owner_identity,
             put_sent: None,
+            signed: None,
         }
     }
 }
@@ -11540,6 +11557,48 @@ mod tests {
             })
             .count();
         assert_eq!(reports, 1);
+    }
+
+    /// A child re-seal whose PUT lands but does not confirm spends its
+    /// sequence, so the next re-seal in the pass signs above it and not again
+    /// at it with other bytes.
+    #[test]
+    fn an_unconfirmed_child_reseal_spends_its_sequence() {
+        let (_, child, child_ref) = owner_tree();
+        let root = owner_scope_root_at(
+            ENVELOPE_V,
+            SCOPE,
+            &FRESH_SEED,
+            OWNER_ROOT_EPOCH + 1,
+            None,
+            core::slice::from_ref(&child_ref),
+            Vec::new(),
+            Some(PrevEpochSeed {
+                seed: &OWNER_ROOT_SCOPE_SEED,
+                epoch: OWNER_ROOT_EPOCH,
+            }),
+        );
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let first = harness.store.endpoints()[0].clone();
+        let key = child.name.as_str();
+        // Each PUT lands, and every read after it serves the staged record.
+        let staged = harness.store.record_at(&first, key);
+        harness.store.serve_after_put(key, 0, staged);
+        let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
+        let net = harness.net(core::slice::from_ref(&child_ref));
+        block_on(net.resolve_scope(&scope)).expect("the parent resolves");
+
+        let mut landed = Vec::new();
+        for _ in 0..2 {
+            assert!(matches!(
+                block_on(net.reseal_child_ascent(&scope, &child_ref)),
+                Err(AscentResidual::Owed { .. })
+            ));
+            landed.push(sequence_at(&harness, &child.name).expect("the PUT landed"));
+        }
+        assert!(landed[1] > landed[0], "{landed:?}");
     }
 
     /// The index repair of P publishes over the base its own resolve parked.
