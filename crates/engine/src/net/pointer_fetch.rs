@@ -16,6 +16,7 @@ use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
 use crate::sync::pointer::{PointerFetch, PointerRecord, open_repoint};
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::payload::RepointObject;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
 /// The record-plane [`PointerFetch`]: resolves pointer names over the borrowed
@@ -107,6 +108,18 @@ pub(crate) struct ConsultedPointer {
     pub(crate) endpoint_failed: bool,
 }
 
+/// One authenticated re-point that moved no floor.
+pub(crate) struct ReadPointer {
+    /// The re-point object, as the owner signed it.
+    pub(crate) repoint: RepointObject,
+    /// The record that carried it.
+    pub(crate) record_bytes: Vec<u8>,
+    /// That record's authenticated inline value, the sealed re-point block.
+    pub(crate) value: Vec<u8>,
+    /// An endpoint gave no answer, so it can hold a newer record.
+    pub(crate) endpoint_failed: bool,
+}
+
 impl PointerConsult<'_> {
     /// The scope's current owner-vouched root, or `None` when the scope was
     /// never re-pointed. A pointer plane no endpoint could answer for is
@@ -117,9 +130,35 @@ impl PointerConsult<'_> {
         floors: &F,
         scope_id: &[u8; 16],
     ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
+        let Some(read) = self.read(transport, floors, scope_id).await? else {
+            return Ok(None);
+        };
+        let write_epoch = read.repoint.write_epoch;
+        let write_floor = floor::advance_write_epoch_on_sight(floors, scope_id, write_epoch)
+            .await
+            .map_err(|_| PointerConsultError::Unavailable)?;
+        Ok(Some(ConsultedPointer {
+            current_root: read.repoint.current_root,
+            prev_root: read.repoint.prev_root,
+            write_floor,
+            deferred: write_floor < write_epoch,
+            record_bytes: read.record_bytes,
+            value: read.value,
+            endpoint_failed: read.endpoint_failed,
+        }))
+    }
+
+    /// [`Self::run`] with no floor advance: the same trust rules, for a
+    /// caller that reads the re-point and moves no floor.
+    pub(crate) async fn read<T: RecordTransport, F: FloorStore>(
+        &self,
+        transport: &T,
+        floors: &F,
+        scope_id: &[u8; 16],
+    ) -> Result<Option<ReadPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
         let fetch = fanout_get_answered(transport, &pointer).await;
-        let (block, record_bytes) = match fetch.record {
+        let (value, record_bytes) = match fetch.record {
             FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
             FanoutRecord::Absent => return Ok(None),
             FanoutRecord::Unavailable(_) => return Err(PointerConsultError::Unavailable),
@@ -130,7 +169,7 @@ impl PointerConsult<'_> {
             self.payload_version,
             scope_id,
             self.owner_identity,
-            &block,
+            &value,
         )
         .map_err(|_| PointerConsultError::Rejected)?;
         // This plane is the write epoch's only owner-vouched clock, so an epoch
@@ -143,17 +182,10 @@ impl PointerConsult<'_> {
         {
             return Err(PointerConsultError::Rejected);
         }
-        let write_floor =
-            floor::advance_write_epoch_on_sight(floors, scope_id, repoint.write_epoch)
-                .await
-                .map_err(|_| PointerConsultError::Unavailable)?;
-        Ok(Some(ConsultedPointer {
-            current_root: repoint.current_root,
-            prev_root: repoint.prev_root,
-            write_floor,
-            deferred: write_floor < repoint.write_epoch,
+        Ok(Some(ReadPointer {
+            repoint,
             record_bytes,
-            value: block,
+            value,
             endpoint_failed: fetch.endpoint_failed,
         }))
     }

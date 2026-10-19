@@ -744,6 +744,49 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
     );
 }
 
+/// A scope joins a dissolve only as an uncut scope, in a commit that returns
+/// to the cut step after the copy started (ADR 0077 D4). The writer refuses
+/// each other append, and the codec refuses an uncut scope off the cut step,
+/// as the reader does.
+#[test]
+fn the_dissolve_journal_writer_admits_a_scope_only_at_a_return_to_the_cut() {
+    let seal = dissolve_header_at(DissolveStep::Seal);
+    let joined = |held: &DissolveHeader, change: &dyn Fn(&mut DissolveHeader)| {
+        let mut header = held.clone();
+        header.step = DissolveStep::Cut;
+        header
+            .scopes
+            .push(DissolvedScope::uncut(NodeId([0x54; 16])));
+        change(&mut header);
+        header
+    };
+    assert_eq!(
+        dissolve_commit(&seal, &[], &joined(&seal, &|_| {})),
+        Ok(()),
+        "a scope joins at a return to the cut"
+    );
+    let appended = "dissolve-journal-scope-appended";
+    for (held, new, check) in [
+        (
+            dissolve_header_at(DissolveStep::Map),
+            joined(&dissolve_header_at(DissolveStep::Map), &|_| {}),
+            appended,
+        ),
+        (
+            seal.clone(),
+            joined(&seal, &|h| h.scopes[2].cut_time = 1_000),
+            appended,
+        ),
+        (
+            seal.clone(),
+            joined(&seal, &|h| h.step = DissolveStep::Seal),
+            DissolveCodecError::UncutPastCut.check(),
+        ),
+    ] {
+        assert_eq!(dissolve_commit(&held, &[], &new), Err(check.to_owned()));
+    }
+}
+
 /// Before Relink, a re-cut raises the cut epoch of a landed scope, and only
 /// the commit that raises it clears the landed mark.
 #[test]

@@ -38,7 +38,7 @@ use crate::grants::link_read::repost_held_claims;
 use crate::grants::received_status::{PointerFollow, ReceivedShareStatus, ScopeRender};
 use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
-use crate::net::rotation::ScopeWritePlane;
+use crate::net::rotation::{OwnerPointerRead, ScopeWritePlane};
 use crate::net::{
     DescendantScopeRoot, FolderRefresh, FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial,
     HeldRecords, OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved,
@@ -102,7 +102,8 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
     pass_events: Option<PassEventSink>,
-    /// Passes run under `pass_events`, so each event names its pass.
+    /// The passes this session ran. Each event under `pass_events` names its
+    /// pass, and the drain counts its ticks by it.
     passes: Cell<u64>,
 }
 
@@ -405,10 +406,11 @@ where
             return PassReport::STOPPED;
         };
         let scheduler = &self.seams.scheduler;
-        let mut clock = self.pass_events.as_ref().map(|sink| {
-            self.passes.set(self.passes.get() + 1);
-            LegClock::start(sink, self.passes.get(), cause, scheduler.now())
-        });
+        self.passes.set(self.passes.get() + 1);
+        let mut clock = self
+            .pass_events
+            .as_ref()
+            .map(|sink| LegClock::start(sink, self.passes.get(), cause, scheduler.now()));
         // One lap per entry of `PASS_LEGS`, in that order.
         let mut lap = || {
             if let Some(clock) = clock.as_mut() {
@@ -1498,6 +1500,7 @@ where
                 })
             && self.rotation_idle(state, pass).await;
         let owed_write_cuts = self.owed_write_cuts(state, pass).await;
+        let pointer_keys = self.secrets.sweep_keys.borrow().clone();
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1511,6 +1514,12 @@ where
                 owed_write_cuts: owed_write_cuts.as_deref(),
                 deferred_raises: &deferred_raises,
                 every_scope_reached,
+                owner_pointers: pointer_keys
+                    .as_deref()
+                    .map(|keys| &keys.scope_keys as &dyn OwnerPointerRead),
+                tick: self.passes.get(),
+                walk_complete,
+                unproved_scope_roots: &scopes.unproved,
             },
         );
         drain
