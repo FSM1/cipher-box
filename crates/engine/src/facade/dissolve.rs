@@ -451,7 +451,7 @@ where
         indexed: Option<&[u8]>,
         write: &WriteRotationOutcome,
     ) -> Result<(), EngineError> {
-        floor::advance_write_epoch_on_sight(self.floors, &scope.0, write.new_write_epoch)
+        floor::advance_write_epoch_after_wave(self.floors, &scope.0, write.new_write_epoch)
             .await
             .map_err(EngineError::from_seam)?;
         if indexed != Some(write.new_root_name.as_str().as_bytes()) {

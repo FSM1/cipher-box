@@ -63,6 +63,8 @@ The read moves no floor. The sequence bar is the replay bar. The epoch is one th
 own ratchet reaches. A third path needs its own decision.
 Amended by ADR 0064 D1 on 2026-10-01: the name wave's read of a lagging interior node is the
 fourth sanctioned path, after the child resolve's lagging read (ADR 0021 D2).
+Amended by ADR 0077 D3 on 2026-10-17: the subtree re-seal's open of a lagging source node is the
+fifth sanctioned path, under the same four conditions.
 
 **D3 — The relaxation is the epoch stage alone, and it relaxes downward alone.** No other gate
 stage is weakened for this read, and a record above the pass epoch is refused.
