@@ -455,8 +455,10 @@ impl<F: FloorStore> FloorStore for NoPersistFloorStore<'_, F> {
         self.inner.epoch_floor(scope_id).await
     }
 
-    fn epoch_floor_key(&self, scope_id: &[u8]) -> SeamResult<Vec<u8>> {
-        self.inner.epoch_floor_key(scope_id)
+    /// A raise here moves no floor, so it must not settle a deferred raise
+    /// that the backing namespace owes.
+    fn epoch_floor_key(&self, _: &[u8]) -> SeamResult<Vec<u8>> {
+        Err(SeamError::new("floor_store: a preview view keeps no floor"))
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {

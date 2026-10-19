@@ -981,7 +981,7 @@ mod tests {
 
     /// A deferred raise belongs to the owner of its store: two owners on one
     /// thread keep apart entries for the same scope id, and an unbound view
-    /// derives no key, so it pauses.
+    /// derives no key.
     #[test]
     fn a_deferred_post_wave_raise_stays_with_its_owner() {
         use crate::seams::OwnerScopedFloorStore;
@@ -1021,6 +1021,39 @@ mod tests {
         });
         let unbound = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
         assert!(owed_write_raise(&unbound, &ROOT_SCOPE).is_err());
+    }
+
+    /// A sighting through a view that persists nothing returns its floor and
+    /// leaves a deferred raise of the backing store owed.
+    #[test]
+    fn a_preview_sighting_leaves_a_deferred_raise_owed() {
+        use crate::seams::NoPersistFloorStore;
+
+        const PREVIEW_SCOPE: [u8; 16] = [0x0D; 16];
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            let lease = acquire_write_epoch_lease(&PREVIEW_SCOPE).expect("the scope starts free");
+            assert!(
+                advance_write_epoch_after_wave(&floors, &PREVIEW_SCOPE, 5)
+                    .await
+                    .is_err()
+            );
+            drop(lease);
+
+            let preview = NoPersistFloorStore::over(&floors);
+            assert_eq!(
+                advance_write_epoch_on_sight(&preview, &PREVIEW_SCOPE, 8)
+                    .await
+                    .unwrap(),
+                8
+            );
+
+            assert_eq!(
+                owed_write_raise(&floors, &PREVIEW_SCOPE).unwrap(),
+                Some(5),
+                "the preview settles nothing"
+            );
+        });
     }
 
     #[test]
