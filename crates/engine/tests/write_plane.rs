@@ -17228,6 +17228,8 @@ struct ReplayedRoot {
     events_b: EventStream,
     tasks_b: Vec<BoxedTask>,
     row: NodeId,
+    /// The root's record that device B published, before the replay.
+    current: Vec<u8>,
 }
 
 /// Where the root's previous record is served again.
@@ -17258,6 +17260,7 @@ fn root_replayed_below_the_floor(replay: Replay) -> ReplayedRoot {
         "device B published the root over the record it walked"
     );
     let row = child_id(&engine_b, ROOT, "unwritten.bin");
+    let current = root_record(&world, 0);
     let root_name = write_name(ROOT);
     let endpoints = world.record_store.endpoints();
     match replay {
@@ -17285,6 +17288,7 @@ fn root_replayed_below_the_floor(replay: Replay) -> ReplayedRoot {
         events_b,
         tasks_b,
         row,
+        current,
     }
 }
 
@@ -17335,6 +17339,147 @@ fn a_root_replayed_at_every_endpoint_waits_for_the_walk_to_refuse_it() {
         "the walk sends the trust event"
     );
     assert_the_row_is_still_listed(&fx);
+}
+
+/// The abuse events of one walk over a root replayed at every endpoint, and
+/// the GETs of the vault root name that the walk sends.
+fn abuse_on_one_walk(sweep_due: bool) -> (Vec<String>, usize) {
+    let mut fx = root_replayed_below_the_floor(Replay::AtEveryEndpoint);
+    if sweep_due {
+        fx.world
+            .scheduler
+            .advance(SyncTimingProfile::CI.link_sweep_cadence);
+    }
+    let root_name = write_name(ROOT);
+    let before = fx.world.record_store.get_count(root_name.as_str());
+    let refreshed =
+        command_while_ticking(&mut fx.engine_b, Command::ManualRefresh, &mut fx.tasks_b);
+    assert!(
+        matches!(refreshed, Err(EngineError::TrustViolation { .. })),
+        "{refreshed:?}"
+    );
+    let abuse = events_so_far(&mut fx.events_b)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect();
+    (
+        abuse,
+        fx.world.record_store.get_count(root_name.as_str()) - before,
+    )
+}
+
+/// One replayed root sends one abuse event, also on a pass where the link
+/// sweep is due: the sweep does not read the refused root again.
+#[test]
+fn a_root_replayed_at_every_endpoint_sends_one_abuse_event_when_the_sweep_is_due() {
+    let (idle, idle_reads) = abuse_on_one_walk(false);
+    let (swept, swept_reads) = abuse_on_one_walk(true);
+    assert_eq!(idle.len(), 1, "{idle:#?}");
+    assert!(idle[0].contains("[sequence-not-newer]"));
+    assert_eq!(swept, idle);
+    assert_eq!(swept_reads, idle_reads, "the sweep did not read the root");
+}
+
+/// The root GETs of the two passes after a manual refresh that found the link
+/// sweep due, over the replayed root or, with `replayed` false, over the
+/// healed root.
+fn root_gets_after_a_due_refresh(replayed: bool) -> (usize, usize) {
+    let mut fx = root_replayed_below_the_floor(Replay::AtEveryEndpoint);
+    let root_name = write_name(ROOT);
+    let heal = |fx: &ReplayedRoot| {
+        for endpoint in fx.world.record_store.endpoints() {
+            fx.world
+                .record_store
+                .seed_record(&endpoint, root_name.as_str(), fx.current.clone());
+        }
+    };
+    if !replayed {
+        heal(&fx);
+    }
+    fx.world
+        .scheduler
+        .advance(SyncTimingProfile::CI.link_sweep_cadence);
+    let refreshed =
+        command_while_ticking(&mut fx.engine_b, Command::ManualRefresh, &mut fx.tasks_b);
+    if replayed {
+        assert!(
+            matches!(refreshed, Err(EngineError::TrustViolation { .. })),
+            "{refreshed:?}"
+        );
+    } else {
+        assert!(refreshed.is_ok(), "{refreshed:?}");
+    }
+    heal(&fx);
+    let mut root_gets = || {
+        let before = fx.world.record_store.get_count(root_name.as_str());
+        tick(&fx.world, &fx.engine_b, &mut fx.tasks_b);
+        fx.world.record_store.get_count(root_name.as_str()) - before
+    };
+    (root_gets(), root_gets())
+}
+
+/// A sweep that a refused root skipped stays due, so the first pass that
+/// reconciles the root runs it, inside the cadence. Over a healed root, the
+/// refresh runs the sweep itself, and the next passes run none.
+#[test]
+fn a_sweep_a_refused_root_skipped_runs_on_the_next_reconciled_pass() {
+    assert!(
+        SyncTimingProfile::CI.poll_cadence * 2 < SyncTimingProfile::CI.link_sweep_cadence,
+        "both passes run inside one cadence"
+    );
+    let (healed, after) = root_gets_after_a_due_refresh(true);
+    assert_eq!(
+        healed,
+        after + FakeWorld::new().record_store.endpoints().len(),
+        "the healed pass ran the skipped sweep"
+    );
+    let (healed, after) = root_gets_after_a_due_refresh(false);
+    assert_eq!(healed, after, "the refresh ran the sweep");
+}
+
+/// A pass that reads the root it holds still runs a due link sweep, and the
+/// sweep waits out its cadence after that.
+#[test]
+fn a_pass_over_the_held_root_sweeps_once_per_cadence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick(&world, &engine, &mut tasks);
+    let root_name = write_name(ROOT);
+    let root_gets = |tasks: &mut Vec<BoxedTask>| {
+        let before = world.record_store.get_count(root_name.as_str());
+        tick(&world, &engine, tasks);
+        world.record_store.get_count(root_name.as_str()) - before
+    };
+
+    // The sweep's fan-out at the root name shows on one pass a cadence.
+    let profile = engine.profile();
+    let per_cadence =
+        (profile.link_sweep_cadence.as_millis() / profile.poll_cadence.as_millis()) as usize;
+    for _ in 0..per_cadence {
+        root_gets(&mut tasks);
+    }
+    let polls: Vec<usize> = (0..2 * per_cadence)
+        .map(|_| root_gets(&mut tasks))
+        .collect();
+    let unswept = *polls.iter().min().unwrap();
+    let swept = unswept + world.record_store.endpoints().len();
+    assert_eq!(
+        polls.iter().filter(|gets| **gets == swept).count(),
+        2,
+        "{polls:?}"
+    );
+    assert_eq!(
+        polls.iter().filter(|gets| **gets == unswept).count(),
+        2 * per_cadence - 2,
+        "{polls:?}"
+    );
+    assert!(accused_nobody(&mut events));
 }
 
 /// ADR 0071 D1: an endpoint failed, so the walk reads the replay as

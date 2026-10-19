@@ -27,6 +27,7 @@ use crate::net::rotation::RootReports;
 use crate::rotation::NodeBound;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
+use crate::sync::dissolve_journal::DissolveCell;
 use crate::sync::drain::owner_scoped_key;
 
 /// The staging-key prefix the owed rotation record is journaled under.
@@ -201,9 +202,13 @@ pub struct OwedCell {
     /// The scopes and cut epochs whose dropped rows this session already told
     /// the host of (ADR 0068 D5).
     rows_dropped: RefCell<BTreeSet<(NodeId, u64)>>,
+    /// The dissolve roots whose unreadable header this session told the host of.
+    unreadable_dissolves: RefCell<BTreeSet<NodeId>>,
     /// This session's [`RootReports`].
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
+    /// The session's dissolve drivers and journal writer.
+    dissolve: DissolveCell,
 }
 
 /// A count of passes, each counted once.
@@ -255,6 +260,7 @@ impl OwedCell {
         if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
             reports.clear();
         }
+        self.dissolve.forget();
     }
 
     /// This session's [`RootReports`].
@@ -262,10 +268,21 @@ impl OwedCell {
         &self.root_reports
     }
 
+    /// This session's [`DissolveCell`].
+    pub(crate) fn dissolve(&self) -> &DissolveCell {
+        &self.dissolve
+    }
+
     /// Note that the host hears of the rows a cut at `scope` and `cut_epoch`
     /// dropped. Answers whether it is the first time this session.
     pub(crate) fn note_rows_dropped(&self, scope: NodeId, cut_epoch: u64) -> bool {
         self.rows_dropped.borrow_mut().insert((scope, cut_epoch))
+    }
+
+    /// Note that the host hears of the unreadable dissolve header at `root`.
+    /// Answers whether it is the first time this session.
+    pub(crate) fn note_unreadable_dissolve(&self, root: NodeId) -> bool {
+        self.unreadable_dissolves.borrow_mut().insert(root)
     }
 
     fn reset_held(&self, scope: NodeId) {
@@ -417,6 +434,18 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             record
                 .iter()
                 .filter_map(|(scope, entry)| Some((*scope, entry.interior_move_source()?)))
+                .collect()
+        })
+        .await
+    }
+
+    /// The scopes whose entry owes a write cut.
+    pub async fn write_cuts(&self) -> SeamResult<Vec<NodeId>> {
+        self.read(|record| {
+            record
+                .iter()
+                .filter(|(_, entry)| owes_write_cut(&entry.steps))
+                .map(|(scope, _)| *scope)
                 .collect()
         })
         .await

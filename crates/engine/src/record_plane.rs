@@ -22,10 +22,10 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use crate::content::Gateway;
 use crate::gate::floor;
 use crate::net::eol::is_expired;
-use crate::net::gated_read::{BelowFloor, below_floor};
+use crate::net::fetch_head_block;
+use crate::net::gated_read::{BelowFloor, LeafRead, below_floor};
 use crate::net::liveness::{HeldRecord, HeldValue};
 use crate::net::publish::head_cid_from_value;
-use crate::net::{fanout_get_verify_failed, fetch_head_block};
 use crate::seams::{FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, UnixMillis};
 
 /// Why a load did not use the published record, carried by both degraded
@@ -458,8 +458,12 @@ where
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
-    let Some((verified, record_bytes, endpoint_failed)) =
-        fanout_get_verify_failed(transport, name).await
+    let Ok(LeafRead {
+        pick: verified,
+        bytes: record_bytes,
+        endpoint_failed,
+        ..
+    }) = LeafRead::fetch(transport, name).await
     else {
         // The other two marks join the sequence floor only here, because only
         // here does their absence still authorise a write, and each is raised

@@ -22,11 +22,16 @@ use crate::content::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::{Event, NodeId, saturating_count};
 use crate::gate::floor;
+use crate::net::fork::verified;
+use crate::net::gated_read::{BelowFloor, below_floor};
 use crate::net::liveness::HeldRecords;
+use crate::net::pointer_fetch::{PointerConsult, PointerConsultError};
+use crate::net::publish::Observed;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, RootFallback, RootReports, RootWait, RotationAncestry,
-    SweptScopeState, WaveSubtree, WriteWaveNet,
+    OwnerRotationNet, PointerConsultArm, PointerPipeline, RefusedRoot, RootFallback, RootReports,
+    RootWait, RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet, hold_scope_pointer,
+    publish_pointer_over,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -40,6 +45,7 @@ use crate::rotation::{
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
 };
+use crate::sync::pointer::{scope_pointer_name, scope_pointer_signer};
 
 /// The owner arm's committed-set cut over the live net plane.
 ///
@@ -201,6 +207,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            refused: RefusedRoot::default(),
             root_fallback: Some(
                 RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
                     .noting_root_puts(&self.root_reads.put_sent),
@@ -266,70 +273,21 @@ where
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
             }
-            // The publisher derives this record's IPNS signer from the seed the
-            // root's own owner-write blob carries, so a root whose seed does not
-            // derive the name it sits at cannot be republished here — it would
-            // sign under a key the name does not answer to. Only the grant
-            // mint's interim state is shaped that way, and the comparison above
-            // leaves it alone. Release-active (AGENTS.md rule 8).
-            if derive_write_name(&current.write_scope_seed, &scope_root.0) != *self.scope_root_name
-            {
-                return Err(CascadeError::Publish {
-                    scope_id: scope_root.0,
-                    error: RotationPublishError::Rejected,
-                });
-            }
-            // Metadata-only: the same override seed at the same read epoch, so
-            // `prev = None` mints no history link and the read-epoch floor never
-            // moves (blueprint/engine.md "rotateScopeWrite" — a write cut leaves
-            // the read plane's clock alone).
-            let section = reseal_scope_root(
-                &mut *self.entropy.borrow_mut(),
-                &ScopeRootIdentity {
-                    v: current.v,
-                    scope_id: scope_root.0,
-                    ipns_name: self.scope_root_name.as_str().as_bytes(),
-                    owner_enc_pub: &current.owner_enc_pub,
-                    owner_enc_secret: Some(self.keys.enc_secret),
-                    ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
-                    owes_ascent_link: current.carried_ascent_link,
-                    pseudonym_signer: &current.pseudonym_signer,
-                },
-                &ResealSeeds {
-                    override_seed: &current.override_seed,
-                    read_epoch: current.current_read_epoch,
-                    prev: None,
-                    write_scope_seed: &current.write_scope_seed,
-                    write_epoch: current.write_epoch,
-                    write_history: WriteHistory::Carried(&current.write_history_link),
-                    pointer_read_key: &current.pointer_read_key,
-                },
-                &CommittedSet {
+            reseal_root_in_place(
+                &net,
+                scope_root,
+                self.scope_root_name,
+                self.parent_node_seed,
+                &current,
+                CommittedSet {
                     commitment: &cut.commitment,
                     commitment_sig: &cut.commitment_sig,
                     grant_ledger: &cut.grant_ledger,
                     direct_child_scope_index: &current.direct_child_scope_index,
                     revoked_recipients: &cut.revoked_recipients,
                 },
-                &current.carried_history_links,
             )
-            .map_err(|error| CascadeError::Reseal {
-                scope_id: scope_root.0,
-                error,
-            })?;
-            net.publish_scope_root(&ResealedScopeRoot {
-                scope_id: scope_root.0,
-                ipns_name: self.scope_root_name.as_str().as_bytes().to_vec(),
-                read_epoch: current.current_read_epoch,
-                write_epoch: current.write_epoch,
-                section,
-            })
             .await
-            .map(drop)
-            .map_err(|error| CascadeError::Publish {
-                scope_id: scope_root.0,
-                error,
-            })
         })
         .await
     }
@@ -540,6 +498,146 @@ where
         });
         Ok(outcome)
     }
+}
+
+/// Re-seal the scope root at `name`, which `net` gated as `current`, at its
+/// own seed and read epoch with `set`, and publish it at the next sequence.
+pub(crate) async fn reseal_root_in_place<T, H, C, F, Sch, E, S>(
+    net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
+    scope_root: NodeId,
+    name: &IpnsName,
+    parent_node_seed: Option<&[u8; SECRET_LEN]>,
+    current: &CascadeTarget,
+    set: CommittedSet<'_>,
+) -> Result<(), CascadeError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+    S: SnapshotCache,
+{
+    // The publisher derives this record's IPNS signer from the seed the
+    // root's own owner-write blob carries, so a root whose seed does not
+    // derive the name it sits at would sign under a key the name does not
+    // answer to. Only the grant mint's interim state is shaped that way.
+    // Release-active (AGENTS.md rule 8).
+    if derive_write_name(&current.write_scope_seed, &scope_root.0) != *name {
+        return Err(CascadeError::Publish {
+            scope_id: scope_root.0,
+            error: RotationPublishError::Rejected,
+        });
+    }
+    // Metadata-only: the same override seed at the same read epoch, so
+    // `prev = None` mints no history link and the read-epoch floor never
+    // moves (blueprint/engine.md "rotateScopeWrite" — a write cut leaves
+    // the read plane's clock alone).
+    let section = reseal_scope_root(
+        &mut *net.entropy.borrow_mut(),
+        &ScopeRootIdentity {
+            v: current.v,
+            scope_id: scope_root.0,
+            ipns_name: name.as_str().as_bytes(),
+            owner_enc_pub: &current.owner_enc_pub,
+            owner_enc_secret: Some(net.keys.enc_secret),
+            ascent: parent_node_seed.map(AscentAuthority::ParentSeed),
+            owes_ascent_link: current.carried_ascent_link,
+            pseudonym_signer: &current.pseudonym_signer,
+        },
+        &ResealSeeds {
+            override_seed: &current.override_seed,
+            read_epoch: current.current_read_epoch,
+            prev: None,
+            write_scope_seed: &current.write_scope_seed,
+            write_epoch: current.write_epoch,
+            write_history: WriteHistory::Carried(&current.write_history_link),
+            pointer_read_key: &current.pointer_read_key,
+        },
+        &set,
+        &current.carried_history_links,
+    )
+    .map_err(|error| CascadeError::Reseal {
+        scope_id: scope_root.0,
+        error,
+    })?;
+    net.publish_scope_root(&ResealedScopeRoot {
+        scope_id: scope_root.0,
+        ipns_name: name.as_str().as_bytes().to_vec(),
+        read_epoch: current.current_read_epoch,
+        write_epoch: current.write_epoch,
+        section,
+    })
+    .await
+    .map(drop)
+    .map_err(|error| CascadeError::Publish {
+        scope_id: scope_root.0,
+        error,
+    })
+}
+
+/// Publish the scope pointer of `scope_id` again at the next sequence, with
+/// the re-point the consult authenticated and a fresh EOL, and hold it for
+/// renewal. An absent pointer has nothing to publish again. A record below
+/// this device's own last publish is stale bytes when an endpoint failed, and
+/// a rollback when every endpoint answered (ADR 0071 D4).
+pub(crate) async fn republish_scope_pointer<T, H, C, F, Sch, E, S>(
+    net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
+    owner_pointer_seed: &[u8; SECRET_LEN],
+    held: &RefCell<HeldRecords>,
+    scope_id: [u8; 16],
+) -> Result<(), RotationPublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let Some(consulted) = PointerConsult {
+        scope_keys: net.keys.scope_keys,
+        owner_identity: net.keys.identity,
+        payload_version: net.payload_version,
+    }
+    .run(net.transport, net.floors, &scope_id)
+    .await
+    .map_err(|error| match error {
+        PointerConsultError::Rejected => RotationPublishError::Rejected,
+        PointerConsultError::Unavailable => RotationPublishError::NotPublished,
+    })?
+    else {
+        return Ok(());
+    };
+    let name = scope_pointer_name(owner_pointer_seed, &scope_id);
+    let signer = scope_pointer_signer(owner_pointer_seed, &scope_id);
+    let sequence = verified(&name, &consulted.record_bytes)
+        .ok_or(RotationPublishError::Rejected)?
+        .sequence;
+    let floor = floor::sequence_floor(net.floors, name.as_str().as_bytes())
+        .await
+        .map_err(|_| RotationPublishError::NotPublished)?;
+    match floor.and_then(|floor| below_floor(sequence, floor, consulted.endpoint_failed)) {
+        None => {}
+        Some(BelowFloor::Unavailable) => return Err(RotationPublishError::NotPublished),
+        Some(BelowFloor::Rollback) => return Err(RotationPublishError::Rejected),
+    }
+    let record_bytes = publish_pointer_over(
+        PointerPipeline {
+            transport: net.transport,
+            api: net.api,
+            floors: net.floors,
+            scheduler: net.scheduler,
+            profile: net.profile,
+        },
+        &Observed::record(&name, sequence),
+        &signer,
+        &consulted.value,
+    )
+    .await
+    .map_err(RotationPublishError::from)?;
+    hold_scope_pointer(held, scope_id, &name, signer, consulted.value, record_bytes);
+    Ok(())
 }
 
 /// Whether `current` carries a set other than `cut`'s at `cut`'s cut epoch or

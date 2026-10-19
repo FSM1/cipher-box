@@ -1440,4 +1440,195 @@ mod tests {
             None
         );
     }
+
+    /// ADR 0069 D5 and D6: a kept op whose root another pass answers for,
+    /// after a cut raised the floor of that root to 3. Each case gives the
+    /// reads of the op and the fate that follows from what they showed.
+    #[test]
+    fn a_kept_op_another_pass_answers_for_reads_and_takes_its_fate() {
+        const UNPROVED: NodeId = NodeId([4; 16]);
+        struct Case {
+            name: &'static str,
+            op: Op,
+            note: KeptNote,
+            base: &'static [NodeId],
+            want_reads: ScanReads,
+            facts: ScanFacts,
+            after: Duration,
+            want_fate: ScanFate,
+        }
+        let noted = |scope, parent, result| KeptNote {
+            scope: Some(scope),
+            parent,
+            result,
+            ..note(2)
+        };
+        let rename = || {
+            op(OpKind::Rename {
+                new_name: "b".into(),
+            })
+        };
+        let unchecked = |root, unlinked| ScanReads::Unchecked { root, unlinked };
+        let none = ScanFacts::default();
+        let unanchored = ScanFacts {
+            unanchored: true,
+            ..none
+        };
+        let cases = [
+            Case {
+                name: "a delete of a node the base holds waits past the bound",
+                op: delete(),
+                note: noted(SCOPE, None, None),
+                base: &[TARGET],
+                want_reads: unchecked(SCOPE, None),
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Stay,
+            },
+            Case {
+                name: "a delete whose parent the base holds waits past the bound",
+                op: delete(),
+                note: noted(SCOPE, Some(PARENT), None),
+                base: &[PARENT],
+                want_reads: unchecked(SCOPE, None),
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Stay,
+            },
+            Case {
+                name: "a delete with no parent that a proved base lacks leaves at the bound",
+                op: delete(),
+                note: noted(SCOPE, None, None),
+                base: &[],
+                want_reads: ScanReads::None,
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Expire,
+            },
+            Case {
+                name: "a delete whose parent a proved base lacks waits before the bound",
+                op: delete(),
+                note: noted(SCOPE, Some(PARENT), None),
+                base: &[],
+                want_reads: ScanReads::Gone {
+                    root: SCOPE,
+                    folder: PARENT,
+                },
+                facts: none,
+                after: JUST_BEFORE,
+                want_fate: ScanFate::Stay,
+            },
+            Case {
+                name: "a delete whose parent a proved base lacks leaves at the bound",
+                op: delete(),
+                note: noted(SCOPE, Some(PARENT), None),
+                base: &[],
+                want_reads: ScanReads::Gone {
+                    root: SCOPE,
+                    folder: PARENT,
+                },
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Expire,
+            },
+            Case {
+                name: "a delete under an unproved root waits past the bound",
+                op: delete(),
+                note: noted(UNPROVED, None, None),
+                base: &[],
+                want_reads: unchecked(UNPROVED, None),
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Stay,
+            },
+            Case {
+                name: "a rename with its result waits past the bound after the cut",
+                op: rename(),
+                note: noted(UNPROVED, Some(PARENT), Some(rename_result())),
+                base: &[],
+                want_reads: unchecked(UNPROVED, None),
+                facts: none,
+                after: KEPT_OP_BOUND,
+                want_fate: ScanFate::Stay,
+            },
+            Case {
+                name: "a rename with no result leaves with no apply",
+                op: rename(),
+                note: noted(UNPROVED, Some(PARENT), None),
+                base: &[],
+                want_reads: unchecked(UNPROVED, None),
+                facts: none,
+                after: Duration::ZERO,
+                want_fate: ScanFate::Expire,
+            },
+            Case {
+                name: "an edit whose folder or file was seen unlinked dead-letters",
+                op: edit(&[1; 4]),
+                note: noted(SCOPE, Some(PARENT), None),
+                base: &[],
+                want_reads: unchecked(SCOPE, Some([PARENT, TARGET])),
+                facts: unanchored,
+                after: Duration::ZERO,
+                want_fate: ScanFate::TargetGone,
+            },
+            Case {
+                name: "an edit with no folder in its note checks its file",
+                op: edit(&[1; 4]),
+                note: noted(SCOPE, None, None),
+                base: &[],
+                want_reads: unchecked(SCOPE, Some([TARGET, TARGET])),
+                facts: unanchored,
+                after: Duration::ZERO,
+                want_fate: ScanFate::TargetGone,
+            },
+            Case {
+                name: "a version restore whose folder or file was seen unlinked dead-letters",
+                op: op(OpKind::RestoreVersion {
+                    content_cid: vec![2; 4],
+                }),
+                note: noted(
+                    SCOPE,
+                    Some(PARENT),
+                    Some(KeptResult::RestoreVersion {
+                        before: vec![1; 4],
+                        after: vec![2; 4],
+                    }),
+                ),
+                base: &[],
+                want_reads: unchecked(SCOPE, Some([PARENT, TARGET])),
+                facts: unanchored,
+                after: Duration::ZERO,
+                want_fate: ScanFate::TargetGone,
+            },
+        ];
+        let mut wrong = Vec::new();
+        for case in &cases {
+            let reads = scan_reads(
+                &case.op,
+                &case.note,
+                KeptPlace::Elsewhere,
+                &base_with(case.base),
+                &[SCOPE],
+            );
+            let place = match reads {
+                ScanReads::Unchecked { root, .. } => KeptPlace::Unchecked {
+                    root,
+                    live_write_epoch: 3,
+                },
+                _ => KeptPlace::Elsewhere,
+            };
+            let queue = [(OpId(1), case.op.clone())];
+            let fate = KeptJudge::new(&queue, &[], at(case.after)).scan(
+                OpId(1),
+                &case.op,
+                &case.note,
+                place,
+                case.facts,
+            );
+            if (reads, fate) != (case.want_reads, case.want_fate) {
+                wrong.push(format!("{}: {reads:?}, {fate:?}", case.name));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 }
