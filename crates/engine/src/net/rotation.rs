@@ -400,6 +400,11 @@ impl GatedRoots {
         HeldBase(self.inner.borrow_mut().take())
     }
 
+    /// Park again the base that [`Self::hold`] took out.
+    fn restore(&self, held: HeldBase) {
+        *self.inner.borrow_mut() = held.0;
+    }
+
     /// `base`, with its CAS bound raised to the highest sequence this pass
     /// parked at its name.
     fn above_spent(&self, base: RepublishBase) -> RepublishBase {
@@ -4187,7 +4192,10 @@ where
         if child.scope_id == source.scope_id {
             return Ok(child.clone());
         }
-        match self.probe_ascent(&source, child).await {
+        // A later publish of `scope` (the index repair) runs over the base its
+        // resolve parked, so a change of `scope` since then loses the race.
+        let own_read = self.gated.hold();
+        let probed = match self.probe_ascent(&source, child).await {
             // The route the sweep takes for a superseded root (ADR 0003).
             Err(AscentResidual::Superseded) => match self.consult_pointer(&child.scope_id).await {
                 Ok(Some(name)) => {
@@ -4200,7 +4208,9 @@ where
                 _ => Err(AscentResidual::Superseded),
             },
             probed => probed,
-        }
+        };
+        self.gated.restore(own_read);
+        probed
     }
 }
 
@@ -4398,7 +4408,7 @@ where
                 return Err(RotationPublishError::LostRace);
             }
         }
-        *self.gated.inner.borrow_mut() = held.0;
+        self.gated.restore(held);
         Ok(())
     }
 }
@@ -11530,6 +11540,64 @@ mod tests {
             })
             .count();
         assert_eq!(reports, 1);
+    }
+
+    /// The index repair of P publishes over the base its own resolve parked.
+    /// A child re-seal between the two does not replace that base, so a
+    /// change of P by another device makes the repair lose the race.
+    #[test]
+    fn a_child_reseal_keeps_the_base_the_index_repair_publishes_over() {
+        let (_, child, child_ref) = owner_tree();
+        let root = owner_scope_root_at(
+            ENVELOPE_V,
+            SCOPE,
+            &FRESH_SEED,
+            OWNER_ROOT_EPOCH + 1,
+            None,
+            core::slice::from_ref(&child_ref),
+            Vec::new(),
+            Some(PrevEpochSeed {
+                seed: &OWNER_ROOT_SCOPE_SEED,
+                epoch: OWNER_ROOT_EPOCH,
+            }),
+        );
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
+        let index = core::slice::from_ref(&child_ref);
+        let net = harness.net(index);
+        block_on(net.resolve_scope(&scope)).expect("the sweep reads P");
+
+        let other_floors = InMemoryFloorStore::default();
+        block_on(floor::advance_write_epoch_on_sight(
+            &other_floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH,
+        ))
+        .expect("write floor");
+        let other = harness.net_rooted_with_floors(
+            RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, index),
+            &other_floors,
+        );
+        block_on(other.resolve_scope(&scope)).expect("another device reads P");
+        block_on(other.repair_child_scope_index(&scope, &[]))
+            .expect("another device changes the index of P");
+        let first = harness.store.endpoints()[0].clone();
+        let changed = harness.store.record_at(&first, root.name.as_str());
+
+        assert_eq!(
+            block_on(net.reseal_child_ascent(&scope, &child_ref)),
+            Ok(child_ref.clone()),
+        );
+        // The other record stays at one endpoint, so a publish at its sequence
+        // reads back as a tie.
+        harness.store.fail_put_endpoint(&first);
+        assert_eq!(
+            block_on(net.repair_child_scope_index(&scope, index)),
+            Err(RotationPublishError::LostRace),
+        );
+        assert_eq!(harness.store.record_at(&first, root.name.as_str()), changed);
     }
 
     /// P at the epoch after the one that sealed the ascent link of its child,
