@@ -1,6 +1,6 @@
 # ADR 0080: A flat cut re-seals the ascent links of nested scope roots
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-19
 - **Date:** 2026-10-19
 - **Relates to:** [FSM1/cipher-box#2492](https://github.com/FSM1/cipher-box/issues/2492),
   [ADR 0003](./0003-sweep-population-and-below-floor-scope-roots.md),
