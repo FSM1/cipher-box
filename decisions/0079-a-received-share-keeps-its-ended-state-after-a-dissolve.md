@@ -11,7 +11,8 @@
   [ADR 0006](./0006-owner-local-sealed-store.md) (the received-shares list),
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) (a durable record reads the
   previous release)
-- **Implemented by:** not landed
+- **Implemented by:** [#2476](https://github.com/FSM1/cipher-box/pull/2476) (the reader of `ended`
+  and `grantCut`). The writer is not landed.
 - **Amends:** —
 
 ## Context
@@ -82,6 +83,8 @@ do not clear it.
   nothing; a forged blob and a failed open do not clear it; an opened re-grant clears it; no
   withheld-update escalation after the pointer retires; custody keys stay; both keys survive each
   writer; the reader decodes the bookmark list of the release before it.
+- The PR that writes `ended` and `grantCut` carries the `blueprint/engine.md` and
+  `blueprint/testing.md` rewords.
 - Accepted residual, the R1 scope: the owner ruled option (a) on 2026-10-18, a narrowing of the R1
   ruling of 2026-10-17. The mark works only for a share that this device opened at least once under
   the release that writes `grantCut`, before the owner cut it. A share cut before that open shows
