@@ -4,9 +4,9 @@
 //! A copy body is built new from the source body: the mapped ids, the same
 //! labels, kinds and link counters, the names that the destination write
 //! scope derives, and no carried field at any layer. Each tick first reads
-//! the gated destination root and the write epoch floor (the D4 table of the
-//! dissolve design), and each name goes into the name log before its first
-//! publish.
+//! the gated destination root and the write epoch floor (ADR 0077 D4), each
+//! publish reads the write epoch floor again, and each name goes into the
+//! name log before its first publish.
 
 use core::cell::Cell;
 use std::collections::btree_map::Entry;
@@ -20,13 +20,14 @@ use super::super::{
     Anchor, Drain, DrainScope, LoadedRoot, LostWinner, ScopeEnd, SealPlane, checked_content_cid,
     encode_content_cid_str, refuse_record, take_tick_read,
 };
-use super::{EndMark, cut_epoch_of};
+use super::{EndMark, cut_epoch_of, cut_overtaken};
 use crate::facade::NodeId;
 use crate::gate::floor;
-use crate::net::Observed;
 use crate::net::gated_read::{LeafRead, Unserved};
+use crate::net::{ChildAdopter, Observed};
 use crate::seams::{
-    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
+    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SharerScopedFloorStore,
+    SnapshotCache, StagingStore,
 };
 use crate::sync::dissolve_journal::{
     DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep,
@@ -289,12 +290,7 @@ where
             .commitment
             .as_ref()
             .map_or(0, |commitment| commitment.cut_epoch);
-        let write_epoch =
-            floor::write_epoch_floor(&write.floors(&self.seams.floors), &write.root.0)
-                .await
-                .ok()
-                .flatten()
-                .ok_or(SealFault::Unanswered)?;
+        let write_epoch = self.write_floor(write).await?;
         let next = restarted(&header, dest_root.epoch, cut_epoch, write_epoch)
             .ok_or(SealFault::Unanswered)?;
         if next != header {
@@ -374,10 +370,15 @@ where
                 }
             }
         }
-        // A later row of `jobs` is an ancestor of an earlier one, so each
-        // publish names only children that published before it.
+        // No row of `jobs` is an ancestor of an earlier one, so each publish
+        // names only children that published before it.
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
+            // A write cut moves each copy name: no publish lands at a name of
+            // the old write seed (ADR 0077 D4).
+            if self.write_floor(write).await? != header.binding.write_epoch {
+                return Err(SealFault::Unanswered);
+            }
             let content_cids = match &job.body {
                 ReadBody::File { versions, .. } => versions
                     .iter()
@@ -440,9 +441,11 @@ where
                     .commitment
                     .as_ref()
                     .ok_or(SealFault::Unanswered)?;
-                if !commitment.entries.is_empty()
-                    || Some(commitment.cut_epoch) != cut_epoch_of(header, end.root)
-                {
+                if cut_overtaken(
+                    !commitment.entries.is_empty(),
+                    commitment.cut_epoch,
+                    cut_epoch_of(header, end.root),
+                ) {
                     return Err(SealFault::Unanswered);
                 }
                 slot.insert(root)
@@ -488,8 +491,8 @@ where
             Err(_) => return Err(SealFault::Unanswered),
         };
         let floors = plane.end.floors(&self.seams.floors);
-        let adopter = self.child_adopter(plane, &floors, node);
-        let adopted = match self
+        let adopter = self.copy_adopter(plane, &floors, node);
+        let (adopted, envelope) = match self
             .open_held(
                 &plane.end,
                 anchor,
@@ -500,13 +503,14 @@ where
             )
             .await
         {
-            Ok(adopted) => adopted,
+            Ok(opened) => opened,
             Err(Some(rejection)) => {
                 refuse_record(&self.seams.events, name, &rejection);
                 return Err(SealFault::Refused);
             }
             Err(None) => return Err(SealFault::Unanswered),
         };
+        let bound = adopter.opened_scope() == Some(plane.end.root.0);
         if self
             .held_fork(
                 &plane.end,
@@ -522,9 +526,42 @@ where
             return Err(self.fork_at(name, adopted.sequence).into());
         }
 
-        let sealed =
-            (restart_floor..=plane.epoch).contains(&adopted.epoch) && adopted.read_body == *body;
+        // A kept copy carries no field at any layer, the envelope included.
+        let sealed = bound
+            && envelope.unknown.is_empty()
+            && envelope.epoch_tag_unknown.is_empty()
+            && (restart_floor..=plane.epoch).contains(&adopted.epoch)
+            && adopted.read_body == *body;
         Ok((!sealed).then(|| Observed::record(name, read.pick.sequence)))
+    }
+
+    /// The write epoch floor of `write`. A floor that does not read pauses
+    /// the tick.
+    async fn write_floor(&self, write: &ScopeEnd<'_>) -> Result<u64, SealFault> {
+        floor::write_epoch_floor(&write.floors(&self.seams.floors), &write.root.0)
+            .await
+            .ok()
+            .flatten()
+            .ok_or(SealFault::Unanswered)
+    }
+
+    /// The child adopter of a copy name: the destination scope alone. A copy
+    /// takes a new id, so no owed-move scope of the destination binds it.
+    fn copy_adopter<'e>(
+        &'e self,
+        plane: &SealPlane<'_>,
+        floors: &'e SharerScopedFloorStore<'e, F>,
+        node: NodeId,
+    ) -> ChildAdopter<'e, H, SharerScopedFloorStore<'e, F>> {
+        ChildAdopter::new(
+            &self.seams.gateway,
+            &self.seams.http,
+            floors,
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
+            node.0,
+        )
+        .with_seed_stamp(Some(plane.epoch))
     }
 
     /// Append one name log page with each name of `jobs` that the log of the
@@ -650,6 +687,11 @@ mod tests {
                 ..was
             }),
             "an owner cut moves the cut baseline too"
+        );
+        assert_eq!(
+            binding(restarted(&held, 3, 3, 5)),
+            Some(DissolveBinding { base_cut: 3, ..was }),
+            "a cut rise with no read rise keeps the read epoch and the floor"
         );
         assert_eq!(
             binding(restarted(&held, 3, 2, 6)),

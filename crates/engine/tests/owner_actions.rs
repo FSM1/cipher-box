@@ -4121,7 +4121,7 @@ fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
         block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
         Ok(CommandOutcome::Done)
     );
-    ticks(&mut fx, 4);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     let material = block_on(fx.engine.walked_scope_material(fx.folder))
         .expect("the walk resolved the scope the grant minted");
@@ -29651,7 +29651,7 @@ fn copy_children(body: &ReadBody) -> Vec<(NodeId, String, Vec<u8>)> {
 }
 
 /// ADR 0077 D3: the seal publishes each row at its new id under the
-/// destination, a plain folder for each scope root (owner ruling R2), with
+/// destination, a plain folder for each scope root (ADR 0077 D1), with
 /// each child at its new id and at the name the destination derives. Each
 /// name is in the name log, and the copy is marked as started.
 #[test]
@@ -30099,7 +30099,7 @@ fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     let new_seed = owner_write_seed(&fx, fx.folder);
-    assert_ne!(new_seed, old_seed, "the write cut moved the seed");
+    assert!(new_seed != old_seed, "the write cut moved the seed");
     let header = header_at(&fx, inner);
     assert!(header.binding.write_epoch > before.write_epoch);
     let epoch = folder_read_epoch(&fx);
@@ -30125,7 +30125,7 @@ fn a_write_rise_of_the_destination_publishes_each_copy_at_its_new_name() {
 }
 
 /// A destination binding that does not name the scope of the relink parent
-/// is a rebind (ADR 0077 D4, owner ruling Q2) that this step does not drive:
+/// is a rebind (ADR 0077 D4) that this step does not drive:
 /// the seal publishes nothing.
 #[test]
 fn a_binding_off_the_scope_of_the_relink_parent_pauses_the_seal() {
@@ -30148,5 +30148,197 @@ fn a_binding_off_the_scope_of_the_relink_parent_pauses_the_seal() {
             .iter()
             .all(|part| part.first() != Some(&b'n')),
         "no log page"
+    );
+}
+
+/// ADR 0077 D4: no copy publishes at a name of an old write seed. A write
+/// epoch floor that rises after the tick's first read, before a publish,
+/// stops the tick with no PUT.
+#[test]
+fn a_write_floor_that_rises_inside_a_seal_tick_stops_each_publish() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let below = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    // The map reads `below` in both sweeps. The eighth sequence read of its
+    // name is the seal's source read, after the first floor read of the tick.
+    let raised = binding.write_epoch + 100;
+    let source = derive_write_name(&owner_write_seed(&fx, inner), &below.0);
+    fx.owner_device
+        .floor_store
+        .raise_epoch_floor_on_sequence_read_after(
+            &floor_label(source.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            raised,
+            7,
+        );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.copy_started);
+    assert!(
+        header.binding.write_epoch < raised,
+        "the tick read the floor before the rise"
+    );
+    assert_eq!(
+        folder_copy_puts(&fx, inner),
+        vec![0, 0],
+        "no publish after the rise"
+    );
+}
+
+/// The probe opens a copy name under the destination scope alone. A record
+/// there with the exact copy body, sealed under another scope, is one trust
+/// violation, and the seal keeps no copy of it.
+#[test]
+fn a_copy_sealed_under_another_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let copy = new_id_of(&fx, plain);
+    let (_, body) = copy_at(&fx, copy).expect("the copy stands");
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: copy.0,
+        scope_id: fx.folder.0,
+        epoch: EPOCH,
+        read_key: &read_key_of(copy),
+        nonce: &[0x6e; 24],
+        body: &body,
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the record seals");
+    let cid = fx.blocks.put(planted.block.clone());
+    publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
+    let puts = fx.world.record_store.put_count(write_name(copy).as_str());
+    let (engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(abuse_events(&mut events), 1, "one trust violation");
+    assert_eq!(
+        fx.world.record_store.put_count(write_name(copy).as_str()),
+        puts,
+        "the seal holds"
+    );
+}
+
+/// A copy that holds the copy body with an unknown field at the envelope and
+/// the epoch tag is not kept: the seal publishes a copy with neither.
+#[test]
+fn a_copy_with_carried_fields_seals_again() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let copy = new_id_of(&fx, plain);
+    let (mut envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+    envelope.unknown = future_field();
+    envelope.epoch_tag_unknown = future_field();
+    let cid = fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    let (envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+    assert!(envelope.unknown.is_empty(), "no envelope field");
+    assert!(envelope.epoch_tag_unknown.is_empty(), "no epoch tag field");
+}
+
+/// A stop between two row publishes, then a restart: the seal publishes the
+/// rows left, and each copy that stands publishes no second time.
+#[test]
+fn a_seal_that_stops_between_two_publishes_finishes_after_a_restart() {
+    let mut fx = GrantScenario::new();
+    cut_dissolve_subtree(&mut fx);
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(&fx);
+    let header = fx.standing_dissolve();
+    let root = write_name(header.new_root);
+    fx.world.record_store.fail_put_for(root.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let rows = dissolve_rows(&fx, &header);
+    assert!(copy_at(&fx, header.new_root).is_none(), "the root waits");
+    let puts: Vec<usize> = rows[1..]
+        .iter()
+        .map(|row| {
+            fx.world
+                .record_store
+                .put_count(write_name(row.new).as_str())
+        })
+        .collect();
+    assert!(puts.iter().all(|count| *count > 0), "each child stands");
+
+    fx.world.record_store.heal_put_for(root.as_str());
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert!(copy_at(&fx, header.new_root).is_some(), "the root stands");
+    let after: Vec<usize> = rows[1..]
+        .iter()
+        .map(|row| {
+            fx.world
+                .record_store
+                .put_count(write_name(row.new).as_str())
+        })
+        .collect();
+    assert_eq!(after, puts, "no child publishes again");
+}
+
+/// A tie at a copy name that opens under the destination is a fork: one fork
+/// event, and the seal holds.
+#[test]
+fn a_fork_at_a_copy_name_holds_the_seal() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let copy = new_id_of(&fx, plain);
+    let name = write_name(copy);
+    let (_, body) = copy_at(&fx, copy).expect("the copy stands");
+    let tie = author_child_envelope(EnvelopeAuthoring {
+        node_id: copy.0,
+        scope_id: ROOT.0,
+        epoch: EPOCH,
+        read_key: &read_key_of(copy),
+        nonce: &[0x6f; 24],
+        body: &body,
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the tie seals");
+    let cid = fx.blocks.put(tie.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &copy.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, &name),
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoint = fx.world.record_store.endpoints()[1].clone();
+    fx.world
+        .record_store
+        .seed_record(&endpoint, name.as_str(), record);
+    let puts = fx.world.record_store.put_count(name.as_str());
+    let (engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert_eq!(fork_events(&mut events), 1, "one fork event");
+    assert_eq!(
+        fx.world.record_store.put_count(name.as_str()),
+        puts,
+        "the seal holds"
     );
 }

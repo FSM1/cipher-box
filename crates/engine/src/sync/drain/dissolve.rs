@@ -187,6 +187,12 @@ fn ascends_from(parent: &ScopeEnd<'_>, child: &ScopeEnd<'_>) -> bool {
     })
 }
 
+/// Whether a cut scope root that holds `rows` at `cut_epoch` shows work that
+/// the dissolve did not do, against `cut`, the cut epoch of the entry.
+fn cut_overtaken(rows: bool, cut_epoch: u64, cut: Option<u64>) -> bool {
+    rows || Some(cut_epoch) != cut
+}
+
 /// The cut epoch at which `header` cuts `scope`, `None` when it does not cut
 /// it.
 fn cut_epoch_of(header: &DissolveHeader, scope: NodeId) -> Option<u64> {
@@ -371,8 +377,7 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
     ) -> Result<(), Overflow> {
         let at = u32::try_from(sweep.read.len() - 1).map_err(|_| Overflow)?;
         if let Some(root) = read.root {
-            if root.rows
-                || Some(root.cut_epoch) != self.cuts(key.node)
+            if cut_overtaken(root.rows, root.cut_epoch, self.cuts(key.node))
                 || root.index.iter().any(|scope| self.cuts(*scope).is_none())
             {
                 return self.stop(MapHalt::Concurrent);
@@ -915,7 +920,7 @@ where
             )
             .await;
         let sequence = match opened {
-            Ok(adopted) => adopted.sequence,
+            Ok((adopted, _)) => adopted.sequence,
             Err(Some(rejection)) => {
                 refuse_record(&self.seams.events, name, &rejection);
                 return ReadFault::Untrusted;
@@ -951,7 +956,7 @@ where
         name: &IpnsName,
         bytes: &[u8],
         endpoint_failed: bool,
-    ) -> Result<Adopted, Option<GateRejection>> {
+    ) -> Result<(Adopted, Envelope), Option<GateRejection>> {
         let refused = |error: GateError| match LeafRefusal::of(error, endpoint_failed) {
             LeafRefusal::Seam(_) | LeafRefusal::Withheld => None,
             LeafRefusal::Rejected(rejection) => Some(rejection),
@@ -969,7 +974,6 @@ where
         adopter
             .open_interior_under(name, bytes, &seed)
             .await
-            .map(|(adopted, _)| adopted)
             .map_err(refused)
     }
 
