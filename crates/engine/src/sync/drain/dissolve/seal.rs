@@ -119,6 +119,19 @@ fn restarted(
     Some(next)
 }
 
+/// Whether a write cut is owed at `write`, or the owed record did not read.
+/// An owed write cut moves the names off the seed of the ends (ADR 0077 D4).
+fn owes_write_cut(owed: Option<&[NodeId]>, write: NodeId) -> bool {
+    owed.is_none_or(|owed| owed.contains(&write))
+}
+
+/// Whether a copy publish may sign at the write floor `current`: the floor of
+/// the header, and no raise that the lease deferred above it, which is a
+/// write cut with no floor yet.
+fn floor_holds(current: u64, header: u64, deferred: Option<u64>) -> bool {
+    current == header && deferred.is_none_or(|epoch| epoch <= current)
+}
+
 /// The scope root of each row: the row itself when it is a scope root that
 /// `header` cuts, else the scope of its parent row.
 fn row_scopes(header: &DissolveHeader, rows: &[MapRow]) -> Option<Vec<NodeId>> {
@@ -268,6 +281,9 @@ where
         let root = header.scopes[0].scope_id;
         let end_of = |scope: NodeId| ends.iter().find(|end| end.root == scope);
         let write = end_of(header.binding.write_scope).ok_or(SealFault::Unanswered)?;
+        if owes_write_cut(self.inputs.owed_write_cuts, write.root) {
+            return Err(SealFault::Unanswered);
+        }
         // Each copy name derives from the write scope's seed, which the
         // destination end publishes under.
         if !ct_eq(dest.write_scope_seed, write.write_scope_seed) {
@@ -379,7 +395,9 @@ where
             let Some(_lease) = floor::acquire_write_epoch_lease(&write.root.0) else {
                 return Err(SealFault::Unanswered);
             };
-            if self.write_floor(write).await? != header.binding.write_epoch {
+            let current = self.write_floor(write).await?;
+            let deferred = floor::owed_write_raise(&write.root.0);
+            if !floor_holds(current, header.binding.write_epoch, deferred) {
                 return Err(SealFault::Unanswered);
             }
             let content_cids = match &job.body {
@@ -662,6 +680,25 @@ mod tests {
             row(N, 0x72, Some(0)),
             row(B, 0x73, Some(2)),
         ]
+    }
+
+    /// Each guard against an owed write cut pauses the seal alone: the owed
+    /// record at the start of the tick, and a raise that the lease deferred.
+    #[test]
+    fn each_owed_write_cut_guard_pauses_alone() {
+        let write = NodeId([1; 16]);
+        assert!(!owes_write_cut(Some(&[]), write));
+        assert!(owes_write_cut(Some(&[write]), write), "the owed record");
+        assert!(
+            owes_write_cut(None, write),
+            "an owed record that does not read"
+        );
+        assert!(!owes_write_cut(Some(&[NodeId([2; 16])]), write));
+
+        assert!(floor_holds(5, 5, None));
+        assert!(!floor_holds(5, 5, Some(6)), "a deferred raise");
+        assert!(floor_holds(6, 6, Some(6)), "a raise that landed");
+        assert!(!floor_holds(6, 5, None), "a floor above the header");
     }
 
     /// The D4 rows that the gated destination root and write floor show.

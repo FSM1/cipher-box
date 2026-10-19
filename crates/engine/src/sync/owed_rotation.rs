@@ -439,6 +439,18 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
         .await
     }
 
+    /// The scopes whose entry owes a write cut.
+    pub async fn write_cuts(&self) -> SeamResult<Vec<NodeId>> {
+        self.read(|record| {
+            record
+                .iter()
+                .filter(|(_, entry)| owes_write_cut(&entry.steps))
+                .map(|(scope, _)| *scope)
+                .collect()
+        })
+        .await
+    }
+
     /// The scopes the record names.
     pub async fn scopes(&self) -> SeamResult<Vec<NodeId>> {
         self.read(|record| record.keys().copied().collect()).await

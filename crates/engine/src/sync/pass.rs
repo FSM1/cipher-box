@@ -1253,6 +1253,20 @@ where
         .ok()
     }
 
+    /// The scopes whose owed entry owes a write cut, or `None` when the owed
+    /// record does not read.
+    async fn owed_write_cuts(&self, state: &SessionState, pass: &Pass) -> Option<Vec<NodeId>> {
+        OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .write_cuts()
+        .await
+        .ok()
+    }
+
     /// The scope each owed interior move left, with its root, for the walk to
     /// descend into. A root this session minted holds its listing and seeds
     /// already. A root no listing holds is left out, as a soft delete re-keys
@@ -1483,6 +1497,7 @@ where
                         || grafted.iter().any(|pass| pass.root.0 == *scope_id)
                 })
             && self.rotation_idle(state, pass).await;
+        let owed_write_cuts = self.owed_write_cuts(state, pass).await;
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1493,6 +1508,7 @@ where
                 retention: owner_retention(&state.settings_summary),
                 owed_moves: owed_moves.as_deref(),
                 owed_move_reads: &owed_move_reads,
+                owed_write_cuts: owed_write_cuts.as_deref(),
                 deferred_raises: &deferred_raises,
                 every_scope_reached,
             },

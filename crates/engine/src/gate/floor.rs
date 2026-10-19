@@ -53,7 +53,7 @@
 
 use core::cell::RefCell;
 use core::marker::PhantomData;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::payload::RepointObject;
 
@@ -535,6 +535,7 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
             FloorRaise::epoch(write_epoch_key(&repoint.scope_id), repoint.write_epoch),
         ])
         .await?;
+    settle_owed_write_raise(&repoint.scope_id, repoint.write_epoch);
     Ok(())
 }
 
@@ -715,9 +716,47 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
     let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
         return Ok(write_epoch_floor(floors, scope_id).await?.unwrap_or(0));
     };
-    floors
+    let floor = floors
         .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
-        .await
+        .await?;
+    settle_owed_write_raise(scope_id, floor);
+    Ok(floor)
+}
+
+/// [`advance_write_epoch_on_sight`] for the epoch a name wave of this device
+/// landed. A raise that the lease defers is an error: no later consult is due
+/// to move the floor, so the caller's owed step must run it again.
+pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    write_epoch: u64,
+) -> SeamResult<u64> {
+    let floor = advance_write_epoch_on_sight(floors, scope_id, write_epoch).await?;
+    if floor < write_epoch {
+        OWED_WRITE_RAISES.with(|owed| {
+            let mut owed = owed.borrow_mut();
+            let epoch = owed.entry(*scope_id).or_insert(write_epoch);
+            *epoch = (*epoch).max(write_epoch);
+        });
+        return Err(SeamError::new("the write-epoch floor is leased"));
+    }
+    Ok(floor)
+}
+
+/// The highest epoch that [`advance_write_epoch_after_wave`] deferred at
+/// `scope_id`, until a raise of the floor reaches it.
+pub(crate) fn owed_write_raise(scope_id: &[u8; 16]) -> Option<u64> {
+    OWED_WRITE_RAISES.with(|owed| owed.borrow().get(scope_id).copied())
+}
+
+/// Drop the deferred raise at `scope_id` that `floor` reaches.
+fn settle_owed_write_raise(scope_id: &[u8; 16], floor: u64) {
+    OWED_WRITE_RAISES.with(|owed| {
+        let mut owed = owed.borrow_mut();
+        if owed.get(scope_id).is_some_and(|epoch| *epoch <= floor) {
+            owed.remove(scope_id);
+        }
+    });
 }
 
 /// Seed a scope root's write-epoch floor (ADR 0067 D1 (c)) — the anchor for a
@@ -772,6 +811,11 @@ pub(crate) struct WriteEpochLease {
 thread_local! {
     static WRITE_EPOCH_LEASES: RefCell<BTreeSet<[u8; 16]>> =
         const { RefCell::new(BTreeSet::new()) };
+    // In memory, keyed as the leases are: the entry is set with no await after
+    // the deferral, so the next row of a seal sees it. The owed record covers a
+    // restart.
+    static OWED_WRITE_RAISES: RefCell<BTreeMap<[u8; 16], u64>> =
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 /// Hold `scope_id`'s write-epoch floor still, or `None` when the scope is
@@ -808,6 +852,32 @@ mod tests {
     const SCOPE: [u8; 16] = [7u8; 16];
     const SHARED_SCOPE: [u8; 16] = [8u8; 16];
     const NAME: &[u8] = b"k51-scope-root-name";
+
+    /// A post-wave raise that the lease defers stays owed until a raise of
+    /// the floor reaches its epoch.
+    #[test]
+    fn a_deferred_post_wave_raise_stays_owed_until_the_floor_reaches_it() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            let lease = acquire_write_epoch_lease(&SCOPE).expect("the scope starts free");
+            assert!(
+                advance_write_epoch_after_wave(&floors, &SCOPE, 5)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(owed_write_raise(&SCOPE), Some(5));
+            drop(lease);
+
+            advance_write_epoch_on_sight(&floors, &SCOPE, 4)
+                .await
+                .unwrap();
+            assert_eq!(owed_write_raise(&SCOPE), Some(5), "a floor below the epoch");
+            advance_write_epoch_on_sight(&floors, &SCOPE, 5)
+                .await
+                .unwrap();
+            assert_eq!(owed_write_raise(&SCOPE), None);
+        });
+    }
 
     #[test]
     fn advance_on_unseal_raises_both_floors_monotonically() {

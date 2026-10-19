@@ -2260,6 +2260,9 @@ pub(crate) struct TickInputs<'a> {
     /// Each owed interior move's scope root, with the scope its folder left,
     /// which a child read under that root also binds (ADR 0072 D1).
     pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
+    /// The scopes this device owes a write cut at, or `None` when the owed
+    /// record did not read.
+    pub(crate) owed_write_cuts: Option<&'a [NodeId]>,
     /// The scope id of each bookmark in
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     pub(crate) deferred_raises: &'a [NodeId],
@@ -13018,6 +13021,7 @@ mod tests {
                     retention: RetentionPolicy::KeepAll,
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
+                    owed_write_cuts: Some(&[]),
                     deferred_raises: &self.deferred_raises,
                     every_scope_reached: true,
                 },
@@ -14474,6 +14478,7 @@ mod tests {
                 retention: RetentionPolicy::KeepAll,
                 owed_moves: Some(&[]),
                 owed_move_reads: &legs,
+                owed_write_cuts: Some(&[]),
                 deferred_raises: &harness.deferred_raises,
                 every_scope_reached: true,
             },
@@ -14488,14 +14493,23 @@ mod tests {
                 .child_adopter(&plane, &floors, NODE)
                 .open_held(&name, &record),
         );
-        let copied = block_on(
-            drain
-                .copy_adopter(&plane, &floors, NODE)
-                .open_held(&name, &record),
-        );
+        let copy = drain.copy_adopter(&plane, &floors, NODE);
+        let copied = block_on(copy.open_held(&name, &record));
 
         assert!(opened.is_ok(), "the owed-move scope opens the record");
-        assert!(copied.is_err(), "the copy adopter refuses it");
+        assert!(
+            copied
+                .err()
+                .as_ref()
+                .and_then(GateError::rejection)
+                .is_some_and(|rejection| rejection.stage == GateStage::Unseal),
+            "the copy adopter rejects the record at the unseal stage"
+        );
+        assert_eq!(
+            copy.unbound_scope(),
+            Some(OWED),
+            "for the scope it does not bind"
+        );
     }
 
     /// Link `node` below `parent` in the harness base.

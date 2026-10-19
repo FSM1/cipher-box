@@ -33,7 +33,9 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::ct_eq;
-use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
+use cipherbox_engine::testkit::fakes::{
+    InMemoryRecordStore, InMemoryStagingStore, release_held_write_epoch_lease,
+};
 
 use zeroize::Zeroizing;
 
@@ -30390,11 +30392,11 @@ fn log_inner_into_the_folder(fx: &mut GrantScenario) -> (NodeId, DissolveBinding
     (inner, binding)
 }
 
-/// ADR 0077 D4 with the write scope not the destination: a raise of the
-/// write epoch floor during a copy publish finds the lease of the seal and
-/// does not land, so no copy signs below the floor in force.
+/// ADR 0077 D4 with the write scope not the destination: a sighting raise of
+/// the write epoch floor during a copy publish finds the lease of the seal and
+/// is dropped, so no copy signs below the floor in force.
 #[test]
-fn a_write_raise_inside_a_copy_publish_waits_for_the_seal_lease() {
+fn a_write_sighting_inside_a_copy_publish_is_dropped_under_the_seal_lease() {
     let mut fx = GrantScenario::new();
     let (inner, binding) = log_inner_into_the_folder(&mut fx);
     // The first sequence read of the root copy name is in its publish.
@@ -30415,7 +30417,7 @@ fn a_write_raise_inside_a_copy_publish_waits_for_the_seal_lease() {
     assert_eq!(
         root_write_floor(&fx),
         binding.write_epoch,
-        "the raise waits for the lease"
+        "the lease drops the raise"
     );
     let after = folder_copy_puts(&fx, inner);
     assert!(
@@ -30474,4 +30476,109 @@ fn a_write_floor_read_that_fails_before_a_later_publish_pauses() {
     let after = folder_copy_puts(&fx, inner);
     assert_eq!(after[0], before[0], "the root copy waits");
     assert!(after[1] > before[1], "the child copy publishes");
+}
+
+/// The write epoch floor of the folder.
+fn folder_write_floor(fx: &GrantScenario) -> u64 {
+    block_on(floor::write_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+    ))
+    .expect("the floor store answers")
+    .unwrap_or(0)
+}
+
+/// A write wave whose floor raise finds the write lease held, as a copy
+/// publish of the seal holds it, owes the raise: the next tick raises the
+/// floor to the epoch of the wave.
+#[test]
+fn a_write_wave_raise_that_finds_the_lease_held_lands_on_the_next_tick() {
+    let mut fx = GrantScenario::new();
+    // The fourteenth read of the write floor of the folder is the first after
+    // the root publish of the wave, and it takes the lease.
+    fx.owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            fx.folder.0,
+            13,
+        );
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let landed = fx.granted_scope_repoint().write_epoch;
+    assert!(
+        folder_write_floor(&fx) < landed,
+        "the held lease defers the raise"
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
+    release_held_write_epoch_lease();
+    fx.owner_device.floor_store.heal_floors();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        folder_write_floor(&fx),
+        landed,
+        "the owed step raises the floor"
+    );
+}
+
+/// ADR 0077 D4: a write wave on the destination whose floor raise finds the
+/// lease held, as a copy publish holds it, moves each copy name. The next
+/// tick raises the floor, and no copy publishes at a name of the old seed.
+#[test]
+fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    fail_every_put(&fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(&fx);
+    let header = header_at(&fx, inner);
+    let old_names: Vec<IpnsName> = rows_of(&fx, inner, &header)
+        .iter()
+        .map(|row| folder_copy_name(&fx, row.new))
+        .collect();
+    fx.owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&fx.folder.0)),
+            fx.folder.0,
+            10,
+        );
+    // The upgrade waits for the owed raise.
+    assert!(fx.grant_folder_at(Permission::Write).is_err());
+    let landed = fx.granted_scope_repoint().write_epoch;
+    assert!(
+        folder_write_floor(&fx) < landed,
+        "the held lease defers the raise"
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
+    release_held_write_epoch_lease();
+    fx.owner_device.floor_store.heal_floors();
+    let old_puts = |fx: &GrantScenario| -> Vec<usize> {
+        old_names
+            .iter()
+            .map(|name| fx.world.record_store.put_count(name.as_str()))
+            .collect()
+    };
+    let before = old_puts(&fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        folder_write_floor(&fx),
+        landed,
+        "the owed step raises the floor"
+    );
+    assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
 }

@@ -1,5 +1,6 @@
 //! In-memory [`FloorStore`] fake.
 
+use core::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +40,21 @@ struct Inner {
     /// The scope whose write-epoch lease that raise takes, as a sighting
     /// raise does: a held lease drops the raise.
     raise_lease_scope: Option<[u8; 16]>,
+    /// A write-epoch lease the epoch floor reads of a key take once it is
+    /// free, after a number of reads: the key, the scope, the reads left.
+    lease_on_read: Option<(Vec<u8>, [u8; 16], u32)>,
+}
+
+thread_local! {
+    /// The lease [`InMemoryFloorStore::hold_write_epoch_lease_on_read_after`]
+    /// took, held until [`release_held_write_epoch_lease`].
+    static HELD_LEASE: RefCell<Option<crate::gate::floor::WriteEpochLease>> =
+        const { RefCell::new(None) };
+}
+
+/// Drop the lease that an epoch floor read took.
+pub fn release_held_write_epoch_lease() {
+    HELD_LEASE.with(|held| held.borrow_mut().take());
 }
 
 impl Inner {
@@ -212,6 +228,19 @@ impl InMemoryFloorStore {
         self.inner.lock().expect("lock").raise_lease_scope = Some(scope_id);
     }
 
+    /// Take the write-epoch lease of `scope_id` on an epoch floor read of
+    /// `key` after `skipped` of them, at the first such read that finds the
+    /// lease free, as a publish of another task holds it. The lease stays
+    /// until [`release_held_write_epoch_lease`].
+    pub fn hold_write_epoch_lease_on_read_after(
+        &self,
+        key: &[u8],
+        scope_id: [u8; 16],
+        skipped: u32,
+    ) {
+        self.inner.lock().expect("lock").lease_on_read = Some((key.to_vec(), scope_id, skipped));
+    }
+
     /// Restore every injected floor fault, the clear's and the commit's
     /// included — one heal for every injector this fake offers.
     pub fn heal_floors(&self) {
@@ -229,6 +258,7 @@ impl InMemoryFloorStore {
         inner.raise_report_skew = 0;
         inner.raise_on_sequence_read = None;
         inner.raise_lease_scope = None;
+        inner.lease_on_read = None;
     }
 
     /// Let `budget` raises through, on any key, and fail every raise after, so
@@ -332,6 +362,19 @@ fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {
 impl FloorStore for InMemoryFloorStore {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
         let mut inner = self.inner.lock().expect("lock");
+        if let Some((key, scope, skipped)) = inner.lease_on_read.take() {
+            let keys = HashSet::from([key.clone()]);
+            inner.lease_on_read = if !injected(&keys, scope_id) {
+                Some((key, scope, skipped))
+            } else if skipped > 0 {
+                Some((key, scope, skipped - 1))
+            } else if let Some(lease) = crate::gate::floor::acquire_write_epoch_lease(&scope) {
+                HELD_LEASE.with(|held| *held.borrow_mut() = Some(lease));
+                None
+            } else {
+                Some((key, scope, 0))
+            };
+        }
         if let Some(error) = inner.refuse_read(scope_id) {
             return Err(error);
         }
