@@ -146,10 +146,10 @@ fn restarted(
 }
 
 /// The header that a new destination, `read_scope` and `write_scope`, gives
-/// `header` (ADR 0077 D4, owner ruling Q2 (a)): the former binding goes to
-/// `prior_bindings`, and the D4 check of the tick reads the epochs of the new
-/// one. A new read scope restarts every copy. `None` at a rebind past
-/// [`MAX_PRIOR_BINDINGS`], which waits.
+/// `header` (ADR 0077 D4): the former binding goes to `prior_bindings`, and
+/// the D4 check of the tick reads the epochs of the new one. A new read scope
+/// restarts every copy. `None` at a rebind past [`MAX_PRIOR_BINDINGS`], which
+/// waits.
 fn rebound(
     header: &DissolveHeader,
     read_scope: NodeId,
@@ -519,7 +519,6 @@ where
         // A refusal holds the whole batch, so no later fault hides it.
         match fault {
             Some(SealFault::Refused) => return Err(SealFault::Refused),
-            // The map walks the subtree again and keeps each mapped id.
             Some(SealFault::Remap) => {
                 let mut remap = header.clone();
                 remap.step = DissolveStep::Map;
@@ -747,9 +746,9 @@ where
     }
 
     /// The basis to publish over `read`, the record at the copy `name` of
-    /// `node` whose tag names `scope`, a former destination (owner ruling Q2
-    /// (a)). The record passes the gate of that scope with no commit, as a copy
-    /// from before the rebind does, or it is refused there.
+    /// `node` whose tag names `scope`, a former destination. The record passes
+    /// the gate of that scope with no commit, as a copy from before the rebind
+    /// does, or it is refused there.
     async fn former_copy(
         &self,
         ends: &[ScopeEnd<'_>],

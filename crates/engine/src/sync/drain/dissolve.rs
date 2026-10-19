@@ -139,12 +139,12 @@ pub(crate) struct DissolveWalk {
     /// end, so that hold lasts until a new header.
     refused: bool,
     /// The copy started, so a scope that a gated index names and the
-    /// dissolve does not cut joins the dissolve, and no stop drops the entry.
+    /// dissolve does not cut joins the dissolve.
     joining: bool,
 }
 
 /// Why a first-sweep visit stopped the walk.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum MapHalt {
     /// A diamond, or a scope root that the gated index does not name yet:
     /// the next tick walks again.
@@ -153,9 +153,9 @@ enum MapHalt {
     Concurrent,
     /// The walk passed its node bound.
     TooLarge,
-    /// A gated index names scopes that the dissolve does not cut, after the
-    /// copy started.
-    Joined,
+    /// A gated index names these scopes, which the dissolve does not cut,
+    /// after the copy started.
+    Joined(BTreeSet<NodeId>),
 }
 
 /// Where one tick left a dissolve walk.
@@ -280,7 +280,6 @@ impl DissolveWalk {
             left,
             bound,
             joining: *joining,
-            joined: BTreeSet::new(),
             halt: None,
         };
         let swept = sweep
@@ -293,7 +292,7 @@ impl DissolveWalk {
                 },
             )
             .await;
-        let (halt, joined) = (policy.halt, policy.joined);
+        let halt = policy.halt;
         match swept {
             Swept::Complete => {
                 // Each scope the header cuts is a node of the walked tree.
@@ -306,9 +305,6 @@ impl DissolveWalk {
             Swept::Paused => MapStep::Unfinished,
             Swept::Moved => MapStep::Restart,
             Swept::Fault(ReadFault::Untrusted) => MapStep::Refused,
-            // After the copy started, a grant section waits for a gated index
-            // that names it.
-            Swept::Fault(ReadFault::Fatal(Unmapped::NewScopeRoot)) if *joining => MapStep::Restart,
             Swept::Fault(ReadFault::Fatal(Unmapped::NewScopeRoot)) => MapStep::Stop,
             Swept::Fault(ReadFault::Fatal(Unmapped::Outside)) => MapStep::Restart,
             Swept::Fault(ReadFault::Unanswered) => {
@@ -320,7 +316,7 @@ impl DissolveWalk {
             }
             Swept::Stopped(Overflow) => match halt {
                 Some(MapHalt::Restart) => MapStep::Restart,
-                Some(MapHalt::Joined) => MapStep::Join(joined.into_iter().collect()),
+                Some(MapHalt::Joined(scopes)) => MapStep::Join(scopes.into_iter().collect()),
                 Some(MapHalt::Concurrent | MapHalt::TooLarge) | None => MapStep::Stop,
             },
         }
@@ -360,8 +356,6 @@ struct DissolvePolicy<'p> {
     left: &'p Cell<usize>,
     bound: usize,
     joining: bool,
-    /// The scopes that join the dissolve, with [`MapHalt::Joined`].
-    joined: BTreeSet<NodeId>,
     halt: Option<MapHalt>,
 }
 
@@ -411,8 +405,7 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
                 if !self.joining {
                     return self.stop(MapHalt::Concurrent);
                 }
-                self.joined = uncut;
-                return self.stop(MapHalt::Joined);
+                return self.stop(MapHalt::Joined(uncut));
             }
             self.anchors.insert(key.node, root.anchor);
             self.indexes.insert(key.node, root.index);

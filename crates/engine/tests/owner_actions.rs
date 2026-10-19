@@ -30247,12 +30247,11 @@ fn rebind_off_the_vault_root(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     (inner, copy)
 }
 
-/// ADR 0077 D4, owner ruling Q2 (a): a binding that does not name the
-/// scope of the relink parent rebinds the destination. The former binding
-/// goes to `prior_bindings`, and each copy seals under the new scope. A
-/// record at a copy name that passes the gate of the former destination
-/// scope is a copy from before the rebind: the copy publishes over it, with
-/// no trust violation.
+/// ADR 0077 D4: a binding that does not name the scope of the relink parent
+/// rebinds the destination. The former binding goes to `prior_bindings`, and
+/// each copy seals under the new scope. A record at a copy name that passes
+/// the gate of the former destination scope is a copy from before the rebind:
+/// the copy publishes over it, with no trust violation.
 #[test]
 fn a_binding_off_the_scope_of_the_relink_parent_rebinds_the_destination() {
     let mut fx = GrantScenario::new();
@@ -31113,15 +31112,7 @@ fn a_remap_that_stops_after_its_header_commit_drops_the_old_pages_after_a_restar
 fn a_folder_shared_after_the_copy_started_joins_the_dissolve() {
     let mut fx = GrantScenario::new();
     let (plain, before) = log_the_cut_subtree(&mut fx);
-    assert_eq!(
-        block_on(fx.engine.command(Command::Grant {
-            node: plain,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
-            grantee_name: None,
-        })),
-        Ok(CommandOutcome::Done)
-    );
+    grant_to_recipient(&mut fx.engine, plain);
     events_so_far(&mut fx._events);
 
     ticks(&mut fx, 6);
@@ -31428,22 +31419,14 @@ fn a_concurrent_stop_after_the_copy_started_runs_no_forget() {
     let (plain, _) = log_the_cut_subtree(&mut fx);
     let identity = plant_link_contact(&fx);
     let inner = fx.standing_dissolve().scopes[1].scope_id;
-    let grant = |fx: &mut GrantScenario, node: NodeId| {
-        block_on(fx.engine.command(Command::Grant {
-            node,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
-            grantee_name: None,
-        }))
-    };
-    assert_eq!(grant(&mut fx, plain), Ok(CommandOutcome::Done));
+    grant_to_recipient(&mut fx.engine, plain);
     let plain_pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &plain.0);
     fx.world.record_store.fail_put_for(plain_pointer.as_str());
     ticks(&mut fx, 6);
     let header = fx.standing_dissolve();
     assert_eq!(header.step, DissolveStep::Cut, "the shared folder joins");
     assert!(header.scopes.iter().any(|scope| scope.scope_id == plain));
-    assert_eq!(grant(&mut fx, inner), Ok(CommandOutcome::Done));
+    grant_to_recipient(&mut fx.engine, inner);
     fx.world.record_store.heal_put_for(plain_pointer.as_str());
     assert!(book_holds(&fx, &identity));
 

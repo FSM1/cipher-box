@@ -143,10 +143,12 @@ where
                 break;
             }
         }
+        // After the copy started, the entry and each copy stay.
+        if header.copy_started && matches!(reached, Ok(ScopeCut::Concurrent)) {
+            reached = Ok(ScopeCut::Waiting);
+        }
         let forgot = match reached {
-            Ok(ScopeCut::Concurrent) if !header.copy_started => {
-                self.forget_landed(sites, &header).await
-            }
+            Ok(ScopeCut::Concurrent) => self.forget_landed(sites, &header).await,
             _ => Ok(true),
         };
         // A failed write leaves the entries for the next hold to retire.
@@ -160,8 +162,6 @@ where
                 Ok(Some(DissolveStep::Map))
             }
             ScopeCut::Waiting => Ok(Some(DissolveStep::Cut)),
-            // After the copy started, the entry and each copy stay.
-            ScopeCut::Concurrent if header.copy_started => Ok(Some(DissolveStep::Cut)),
             ScopeCut::Concurrent => {
                 if !forgot? {
                     return Ok(Some(DissolveStep::Cut));
