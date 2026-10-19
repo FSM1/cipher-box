@@ -936,8 +936,7 @@ fn a_one_device_owner_starts_after_a_vouch_that_ran_out_and_a_tick() {
 }
 
 /// GETs of the vault root a cut reads before the confirm of its root publish.
-/// The ascent check of its indexed roots makes the first.
-const ROOT_GETS_BEFORE_CONFIRM: usize = 3;
+const ROOT_GETS_BEFORE_CONFIRM: usize = 2;
 
 /// The root PUT lands, but every confirm and every retry reads no record
 /// there, so the cut reports the root unconfirmed and never vouches. The

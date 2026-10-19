@@ -394,7 +394,11 @@ pub enum AscentResidual {
 impl AscentResidual {
     /// Whether another pass could clear this.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Retry(_) | Self::Owed { .. } | Self::Superseded)
+        match self {
+            Self::Retry(_) | Self::Superseded => true,
+            Self::Owed { error, .. } => error.is_retryable(),
+            Self::OutOfReach | Self::NotResealable | Self::Rejected => false,
+        }
     }
 }
 
@@ -812,10 +816,6 @@ where
         frontier = canonicalize_frontier(next);
     }
 
-    // The self-heal runs on the walk result, before any epoch comparison is
-    // acted on, so it lands whether or not this pass re-seals a node (#38 D6,
-    // ADR 0003 D3). It repairs the whole invariant: the index the scope commits
-    // to is canonical and names every scope root the walk observed.
     if from.is_none() {
         omitted.extend(
             reseal_child_ascents(
@@ -827,6 +827,10 @@ where
             .await,
         );
     }
+    // The self-heal runs on the walk result, before any epoch comparison is
+    // acted on, so it lands whether or not this pass re-seals a node (#38 D6,
+    // ADR 0003 D3). It repairs the whole invariant: the index the scope commits
+    // to is canonical and names every scope root the walk observed.
     let mut index = canonicalize(&swept.direct_child_scope_index);
     for scope_root in &omitted {
         index = repair_observed(&index, scope_root.clone());

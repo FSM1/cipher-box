@@ -3206,6 +3206,9 @@ impl EngineError {
     fn from_rotate(err: RotateError) -> Self {
         match err {
             RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
+            owed @ RotateError::NestedRootOwed { .. } => EngineError::ContentUnavailable {
+                message: owed.detail(),
+            },
             other => EngineError::from_rotation(other),
         }
     }
@@ -7205,6 +7208,7 @@ where {
         let alive = self.alive.clone();
         let profile = self.profile;
         let on_access_misses = self.state.on_access_misses.clone();
+        let owed_rotation = self.state.owed_rotation.clone();
 
         Some(Rc::new(
             move |scope: ChildScopeRef,
@@ -7223,6 +7227,7 @@ where {
                 let staging = staging.clone();
                 let alive = alive.clone();
                 let on_access_misses = on_access_misses.clone();
+                let owed_rotation = owed_rotation.clone();
                 Box::pin(async move {
                     // The pass owns a copy for exactly its own duration; the
                     // engine emptied the cell if the session is already gone.
@@ -7257,6 +7262,7 @@ where {
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
+                        ascent_reports: owed_rotation.root_reports(),
                         refused: RefusedRoot::default(),
                         root_fallback: None,
                     };
@@ -8446,6 +8452,7 @@ where {
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            ascent_reports: self.state.owed_rotation.root_reports(),
             refused: RefusedRoot::default(),
             root_fallback: None,
         }

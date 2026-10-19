@@ -157,6 +157,20 @@ fn an_omitted_scope_root_is_repaired_and_flagged_with_no_node_resealed() {
 }
 
 #[test]
+fn an_ascent_repair_at_a_moved_name_repairs_the_index_to_that_name() {
+    let net = FakeNet::new(5, &[0x0a])
+        .scope_root(0x0a, true)
+        .ascent_moved_to(0x0a, b"moved");
+
+    let outcome = run(&net, 0x00).expect("sweep");
+    assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+    assert_eq!(
+        net.state.borrow().repaired_index.clone().expect("repaired"),
+        vec![ChildScopeRef::new(id(0x0a), b"moved".to_vec())]
+    );
+}
+
+#[test]
 fn a_non_canonical_index_is_republished_canonical_with_nothing_omitted() {
     // The other half of the #38 D6 invariant: crash residue in the stored
     // index is repaired on the walk result too, with no scope root missing.

@@ -381,6 +381,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            ascent_reports: self.owed.root_reports(),
             refused: RefusedRoot::default(),
             root_fallback: None,
         }

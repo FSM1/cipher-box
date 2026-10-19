@@ -9,7 +9,6 @@ use cipherbox_core::seal::ChildScopeRef;
 use futures_channel::mpsc;
 
 use super::reseal::MAX_RETAINED_HISTORY_LINKS;
-use super::rotate::RotationPublishError;
 use super::rotate::{RotateError, RotationOutcome, complete_cut, rotate_scope};
 use super::sweep::{AscentResidual, SweepKeys, SweepTaskFactory, reseal_child_ascents_of};
 use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, ScopeRootIdentity};
@@ -18,7 +17,8 @@ use crate::content::read::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::{Event, NodeId};
 use crate::net::rotation::{
-    GatedRoots, MovedScopeSeed, OnAccessMisses, RefusedRoot, RotationAncestry, SweptScopeState,
+    GatedRoots, MovedScopeSeed, OnAccessMisses, RefusedRoot, RootReports, RotationAncestry,
+    SweptScopeState,
 };
 use crate::net::{
     OwnerRotationKeys, OwnerRotationNet, PointerConsultArm, VaultPointerVoucher, VouchedRoot,
@@ -62,6 +62,8 @@ pub(crate) struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S>
     pub(crate) walked_epochs: &'a RefCell<WalkedReadEpochs>,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
+    /// The child records whose rejection this session already reported.
+    pub(crate) ascent_reports: &'a RootReports,
 }
 
 /// Run the flat [`RotationTrigger::ScopeExit`](super::RotationTrigger::ScopeExit) cut at one scope root this vault
@@ -123,6 +125,7 @@ where
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
+        ascent_reports: arm.ascent_reports,
         refused: RefusedRoot::default(),
         root_fallback: None,
     };
@@ -181,17 +184,6 @@ where
     if ascent.is_none() && anchor.is_none() {
         return Err(RotateError::Resolve(ResolveFailure::Unavailable));
     }
-    // Each cut adds a history link and the window drops the oldest, so a cut
-    // that would drop the seed an owed child still opens under waits for that
-    // re-seal (ADR 0080).
-    if let Some((epoch, residuals)) = reseal_child_ascents_of(net, net, scope).await
-        && residuals.iter().any(|(_, residual)| {
-            matches!(residual, AscentResidual::Owed { epoch: owed, .. }
-                if epoch.saturating_add(1) - owed >= MAX_RETAINED_HISTORY_LINKS as u64)
-        })
-    {
-        return Err(RotateError::Publish(RotationPublishError::NotPublished));
-    }
     let current = net
         .resolve_anchored(scope)
         .await
@@ -220,6 +212,20 @@ where
             reseal_child_ascents_of(net, net, scope).await;
             return Ok(outcome);
         }
+    }
+    // Each cut adds a history link and the window drops the oldest, so a cut
+    // that would drop the seed an owed child still opens under waits for that
+    // re-seal (ADR 0080).
+    if strands_owed_child(current.current_read_epoch, 0)
+        && let Some((epoch, residuals)) = reseal_child_ascents_of(net, net, scope).await
+        && let Some((child, _)) = residuals.iter().find(|(_, residual)| match residual {
+            AscentResidual::Owed { epoch: owed, .. } => {
+                residual.is_retryable() && strands_owed_child(epoch, *owed)
+            }
+            _ => false,
+        })
+    {
+        return Err(RotateError::NestedRootOwed { child: *child });
     }
     let outcome = rotate_scope(
         &mut SharedEntropy(net.entropy),
@@ -259,10 +265,38 @@ where
     Ok(outcome)
 }
 
+/// Whether a cut of a scope at `scope_epoch` drops the history link that a
+/// child whose ascent link opens under the seed of `owed_epoch` needs: the
+/// links the cut keeps reach back [`MAX_RETAINED_HISTORY_LINKS`] epochs from
+/// the new one.
+fn strands_owed_child(scope_epoch: u64, owed_epoch: u64) -> bool {
+    scope_epoch.saturating_add(1).saturating_sub(owed_epoch) > MAX_RETAINED_HISTORY_LINKS as u64
+}
+
 /// What one flat root cut acts on: the scope it gates, the ascent authority that
 /// scope's own record proves under, and the lazy wave the cut enqueues.
 pub(crate) struct FlatCut<'a, S: Fn() -> BoxedTask> {
     pub(crate) scope: &'a ChildScopeRef,
     pub(crate) ascent: Option<&'a [u8; 32]>,
     pub(crate) make_sweep: S,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The 64 links after a cut from epoch `E` reach back to `E - 63`, so a
+    /// child owed there still opens, and one owed below it does not.
+    #[test]
+    fn a_cut_strands_only_a_child_past_the_window_it_keeps() {
+        let scope_epoch = 100;
+        let edge = scope_epoch + 1 - MAX_RETAINED_HISTORY_LINKS as u64;
+        assert!(!strands_owed_child(scope_epoch, edge));
+        assert!(strands_owed_child(scope_epoch, edge - 1));
+        assert!(!strands_owed_child(
+            MAX_RETAINED_HISTORY_LINKS as u64 - 1,
+            0
+        ));
+        assert!(strands_owed_child(MAX_RETAINED_HISTORY_LINKS as u64, 0));
+    }
 }

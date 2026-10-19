@@ -74,6 +74,9 @@ enum SeamErrorKind {
     OverCap,
     /// Every content source answered that it holds no such block.
     BlockNotHeld,
+    /// An ascent link sealed to a keypair the reader's parent seed does not
+    /// derive.
+    AscentMismatch,
 }
 
 impl SeamError {
@@ -114,6 +117,20 @@ impl SeamError {
             status: None,
             kind: SeamErrorKind::BlockNotHeld,
         }
+    }
+
+    /// An ascent link that the reader's parent seed does not open.
+    pub(crate) fn ascent_mismatch(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: None,
+            kind: SeamErrorKind::AscentMismatch,
+        }
+    }
+
+    /// Whether the reader's parent seed does not open the ascent link.
+    pub(crate) fn is_ascent_mismatch(&self) -> bool {
+        self.kind == SeamErrorKind::AscentMismatch
     }
 
     /// The HTTP status the answer carried, when the seam got an answer.

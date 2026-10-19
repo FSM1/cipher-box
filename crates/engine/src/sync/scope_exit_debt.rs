@@ -66,7 +66,7 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
     exits: &R,
     session: &RefCell<BTreeSet<NodeId>>,
     vault_root: NodeId,
-) -> Vec<(NodeId, &'static str)> {
+) -> Vec<(NodeId, String)> {
     let read = adopt_owed_cuts(staging, seal, enc_secret, session).await;
     if session.borrow().is_empty() {
         return Vec::new();
@@ -100,9 +100,9 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
             (
                 *root,
                 if durable {
-                    error.check()
+                    error.detail()
                 } else {
-                    DEBT_NOT_DURABLE
+                    DEBT_NOT_DURABLE.to_owned()
                 },
             )
         })
@@ -416,7 +416,7 @@ mod tests {
         mine: &X25519Secret,
         exits: &Rotator,
         session: &RefCell<BTreeSet<NodeId>>,
-    ) -> Vec<(NodeId, &'static str)> {
+    ) -> Vec<(NodeId, String)> {
         block_on(settle_owed_cuts(
             staging,
             BookkeepingSeal::new(mine, entropy),
@@ -518,7 +518,7 @@ mod tests {
             &RefCell::new(BTreeSet::from([node(3), node(4)])),
         );
 
-        assert_eq!(owed, vec![(node(4), "rot-read-publish-failed")]);
+        assert_eq!(owed, vec![(node(4), "rot-read-publish-failed".to_owned())]);
     }
 
     /// A floor raise that failed leaves the cut published, so the debt settles
@@ -602,7 +602,7 @@ mod tests {
             &RefCell::new(BTreeSet::from([node(3)])),
         );
 
-        assert_eq!(owed, vec![(node(3), "debt-not-durable")]);
+        assert_eq!(owed, vec![(node(3), "debt-not-durable".to_owned())]);
         assert_eq!(stored(&staging, &entropy, &mine), None);
     }
 
