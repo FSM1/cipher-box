@@ -342,6 +342,9 @@ pub(crate) struct GatedResolve {
     /// The `NoUpdate` is a record below the sequence floor while an endpoint
     /// failed (ADR 0071 D1), not an outage.
     pub(crate) withheld: bool,
+    /// An endpoint failed at the fetch, so a record below the floor is
+    /// withheld (ADR 0071 D1).
+    pub(crate) endpoint_failed: bool,
     /// The sequence floor an `Adopted` commit left ([`Committed::floor`]).
     pub(crate) committed_floor: Option<u64>,
 }
@@ -576,6 +579,7 @@ where
         observed,
         envelope,
         withheld,
+        endpoint_failed,
         committed_floor,
     })
 }

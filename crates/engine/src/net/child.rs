@@ -74,6 +74,8 @@ pub struct ChildAdopter<'a, H, F> {
     /// The scope the last record's tag named when this read binds no such
     /// scope ([`Self::unbound_scope`]).
     unbound_scope: Cell<Option<[u8; 16]>>,
+    /// The record bytes that named [`Self::unbound_scope`].
+    unbound_record: RefCell<Option<Vec<u8>>>,
 }
 
 /// The other scope that an owed interior move binds to a read of an interior
@@ -119,6 +121,7 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
             owed_move: None,
             opened_scope: Cell::new(None),
             unbound_scope: Cell::new(None),
+            unbound_record: RefCell::new(None),
         }
     }
 
@@ -164,6 +167,12 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
     /// read refused it because it binds no such scope.
     pub(crate) fn unbound_scope(&self) -> Option<[u8; 16]> {
         self.unbound_scope.get()
+    }
+
+    /// The record bytes whose tag named [`Self::unbound_scope`], so a caller
+    /// judges that record under the named scope and never a second fetch.
+    pub(crate) fn unbound_record(&self) -> Option<Vec<u8>> {
+        self.unbound_record.borrow().clone()
     }
 
     /// The epoch tag of the head an adopt assembled, `None` before the head
@@ -222,6 +231,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         if envelope.id != self.expected_node || !self.binds(&envelope.scope) {
             if envelope.id == self.expected_node {
                 self.unbound_scope.set(Some(envelope.scope));
+                *self.unbound_record.borrow_mut() = Some(record_bytes.to_vec());
             }
             return Err(reject(
                 GateStage::Unseal,
@@ -314,6 +324,29 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<(Adopted, Envelope), GateError> {
+        self.open_carried(name, record_bytes, floor::Strictness::AtFloor)
+            .await
+    }
+
+    /// The full child pipeline over held `record_bytes` at or above the
+    /// durable sequence floor, with **no** floor advance: a caller that judges
+    /// a record it read before, and admits nothing.
+    pub(crate) async fn open_held(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Adopted, GateError> {
+        self.open_carried(name, record_bytes, floor::Strictness::AtOrAboveFloor)
+            .await
+            .map(|(adopted, _)| adopted)
+    }
+
+    async fn open_carried(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+        strictness: floor::Strictness,
+    ) -> Result<(Adopted, Envelope), GateError> {
         let (sequence, envelope) = self.assembled_head(name, record_bytes).await?;
         let epoch_floor = floor::check(
             self.floors,
@@ -321,7 +354,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             &envelope.scope,
             sequence,
             envelope.epoch,
-            floor::Strictness::AtFloor,
+            strictness,
         )
         .await?;
         let read_body = self.unseal(&envelope, epoch_floor)?;
