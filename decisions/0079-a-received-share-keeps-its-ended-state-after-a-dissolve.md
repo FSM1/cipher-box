@@ -1,6 +1,6 @@
 # ADR 0079: A received share keeps its ended state after a dissolve
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-19
 - **Date:** 2026-10-18
 - **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298),
   [#2469](https://github.com/FSM1/cipher-box/issues/2469),
