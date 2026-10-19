@@ -11336,6 +11336,98 @@ mod tests {
         assert_eq!(harness.store.record_at(&first, key), Some(after));
     }
 
+    /// P at read epoch 64 that indexes `children`, staged under the vault
+    /// root, and a flat cut of it over `net`.
+    fn p_at_the_window_edge(
+        children: &[ChildScopeRef],
+    ) -> (
+        Harness<InMemoryRecordStore>,
+        OwnerRootFixture,
+        ChildScopeRef,
+    ) {
+        const EPOCH: u64 = 64;
+        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let scope = owner_scope_root(
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            EPOCH,
+            Some(&parent_seed),
+            children,
+        );
+        let scope_ref = child_ref(CHILD_SCOPE, &scope);
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &scope, Some(OWNER_ROOT_EPOCH));
+        (harness, scope, scope_ref)
+    }
+
+    fn cut_at_the_window_edge(
+        harness: &Harness<InMemoryRecordStore>,
+        scope_ref: &ChildScopeRef,
+    ) -> Result<RotationOutcome, RotateError> {
+        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let net = harness.net_rooted(RotationAncestry::rooted_at(
+            SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            core::slice::from_ref(scope_ref),
+        ));
+        block_on(crate::rotation::flat_root_cut(
+            &net,
+            None,
+            crate::rotation::FlatCut {
+                scope: scope_ref,
+                ascent: Some(&parent_seed),
+                make_sweep: || Box::pin(async {}),
+            },
+        ))
+    }
+
+    /// At the window edge, a pre-cut read of P that fails stops the cut with
+    /// a retryable error, and the next try cuts.
+    #[test]
+    fn a_failed_pre_cut_read_at_the_window_edge_holds_the_cut() {
+        let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
+        let key = scope.name.as_str();
+        let first = harness.store.endpoints()[0].clone();
+        let before = harness.store.record_at(&first, key);
+        harness
+            .store
+            .fail_get_for_after(key, harness.store.endpoints().len());
+
+        let held = cut_at_the_window_edge(&harness, &scope_ref).expect_err("the cut holds");
+        assert!(held.is_retryable(), "{held:?}");
+        assert_eq!(harness.store.record_at(&first, key), before);
+
+        harness.store.heal_get_for(key);
+        cut_at_the_window_edge(&harness, &scope_ref).expect("the next try cuts");
+    }
+
+    /// At the window edge, a child that the probe cannot read holds the cut:
+    /// the seed it opens under can be the one the cut drops.
+    #[test]
+    fn an_unread_child_at_the_window_edge_holds_the_cut() {
+        const UNREAD: [u8; 16] = [0x7e; 16];
+        let unread = ChildScopeRef::new(
+            UNREAD,
+            vault_root(UNREAD, Vec::new())
+                .name
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+        );
+        let (harness, scope, scope_ref) = p_at_the_window_edge(core::slice::from_ref(&unread));
+        let first = harness.store.endpoints()[0].clone();
+        let before = harness.store.record_at(&first, scope.name.as_str());
+        harness
+            .store
+            .fail_get_for(core::str::from_utf8(&unread.ipns_name).expect("a name"));
+
+        assert_eq!(
+            cut_at_the_window_edge(&harness, &scope_ref).err(),
+            Some(RotateError::NestedRootOwed { child: UNREAD }),
+        );
+        assert_eq!(harness.store.record_at(&first, scope.name.as_str()), before);
+    }
+
     /// Under the seed whose ascent link opens, a read body that does not
     /// unseal is a fault of the child record: one trust event for the record,
     /// and no retry.

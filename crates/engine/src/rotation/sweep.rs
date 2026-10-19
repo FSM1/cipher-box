@@ -885,13 +885,12 @@ async fn reseal_child_ascents<P: SweepPublisher>(
 
 /// Re-seal the ascent links of the roots `scope` indexes, outside a sweep
 /// pass: what a flat cut runs on each side of its publish. Answers the read
-/// epoch of `scope` and what the re-seal left, or `None` where `scope` did not
-/// resolve.
+/// epoch of `scope` and what the re-seal left.
 pub(crate) async fn reseal_child_ascents_of<N: SweepResolver + SweepPublisher>(
     net: &N,
     scope: &ChildScopeRef,
-) -> Option<(u64, Vec<([u8; 16], AscentResidual)>)> {
-    let (scope_ref, swept) = resolve_scope_current(net, scope).await.ok()?;
+) -> Result<(u64, Vec<([u8; 16], AscentResidual)>), SweepResolveFailure> {
+    let (scope_ref, swept) = resolve_scope_current(net, scope).await?;
     let mut residuals = Vec::new();
     reseal_child_ascents(
         net,
@@ -900,7 +899,7 @@ pub(crate) async fn reseal_child_ascents_of<N: SweepResolver + SweepPublisher>(
         &mut residuals,
     )
     .await;
-    Some((swept.current_read_epoch, residuals))
+    Ok((swept.current_read_epoch, residuals))
 }
 
 /// Bind each ref's `node_id -> ipnsName` into `labels`, aborting on the C2

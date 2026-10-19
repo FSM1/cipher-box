@@ -10,7 +10,9 @@ use futures_channel::mpsc;
 
 use super::reseal::MAX_RETAINED_HISTORY_LINKS;
 use super::rotate::{RotateError, RotationOutcome, complete_cut, rotate_scope};
-use super::sweep::{AscentResidual, SweepKeys, SweepTaskFactory, reseal_child_ascents_of};
+use super::sweep::{
+    AscentResidual, SweepKeys, SweepResolveFailure, SweepTaskFactory, reseal_child_ascents_of,
+};
 use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, ScopeRootIdentity};
 use crate::api::ApiClient;
 use crate::content::read::Gateway;
@@ -209,7 +211,7 @@ where
                 make_sweep,
             )
             .await?;
-            reseal_child_ascents_of(net, scope).await;
+            let _ = reseal_child_ascents_of(net, scope).await;
             return Ok(outcome);
         }
     }
@@ -221,23 +223,22 @@ where
         // parked slot. The cut publishes over the base of its own read, so a
         // cut of P between the two reads makes it lose the CAS.
         let own_read = net.gated.hold();
-        let owed = reseal_child_ascents_of(net, scope)
-            .await
-            .and_then(|(epoch, residuals)| {
-                residuals
-                    .into_iter()
-                    .find_map(|(child, residual)| match residual {
-                        AscentResidual::Owed { epoch: owed, .. }
-                            if strands_owed_child(epoch, owed) =>
-                        {
-                            Some(child)
-                        }
-                        _ => None,
-                    })
-            });
+        let resealed = reseal_child_ascents_of(net, scope).await;
         net.put_back_unmoved(own_read)
             .await
             .map_err(RotateError::Publish)?;
+        let (epoch, residuals) = resealed.map_err(pre_cut_read_failure)?;
+        // A child the probe could not read may open only under the seed the
+        // cut drops.
+        let owed = residuals
+            .into_iter()
+            .find_map(|(child, residual)| match residual {
+                AscentResidual::Owed { epoch: owed, .. } if strands_owed_child(epoch, owed) => {
+                    Some(child)
+                }
+                AscentResidual::Retry(_) => Some(child),
+                _ => None,
+            });
         if let Some(child) = owed {
             return Err(RotateError::NestedRootOwed { child });
         }
@@ -276,8 +277,23 @@ where
         make_sweep,
     )
     .await?;
-    reseal_child_ascents_of(net, scope).await;
+    let _ = reseal_child_ascents_of(net, scope).await;
     Ok(outcome)
+}
+
+/// The cut error for a pre-cut read of the scope that did not finish: a
+/// rejection keeps its trust verdict.
+fn pre_cut_read_failure(failure: SweepResolveFailure) -> RotateError {
+    RotateError::Resolve(match failure {
+        SweepResolveFailure::Rejected => ResolveFailure::Rejected,
+        SweepResolveFailure::Unavailable | SweepResolveFailure::Superseded => {
+            ResolveFailure::Unavailable
+        }
+        SweepResolveFailure::ConflictingChildLabel => ResolveFailure::ConflictingChildLabel,
+        SweepResolveFailure::Unreadable | SweepResolveFailure::VersionSkew => {
+            ResolveFailure::Unreadable
+        }
+    })
 }
 
 /// Whether a cut of a scope at `scope_epoch` drops the history link that a
