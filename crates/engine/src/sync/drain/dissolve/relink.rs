@@ -22,7 +22,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::seal::{ChildRef, PreservedFields};
 
 use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_read};
-use super::seal::SealFault;
+use super::seal::{Destination, SealFault, restarted};
 use super::{NotDriven, cut_epoch_of, cut_overtaken};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
@@ -34,8 +34,8 @@ use crate::seams::{
     UnixMillis,
 };
 use crate::sync::dissolve_journal::{
-    DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolvedScope, HeaderSlot,
-    MAX_RELINK_NAMES, Manifest,
+    DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolvedScope,
+    HeaderSlot, MAX_RELINK_NAMES, Manifest,
 };
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
@@ -248,7 +248,7 @@ where
         if (target.chain[0].root, target.write.root) != (binding.read_scope, binding.write_scope) {
             return Err(NotDriven);
         }
-        self.guards_hold(&target).await.ok_or(NotDriven)?;
+        let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
         let dest = *target.chain[0];
         let scope = DrainScope {
             source: dest,
@@ -277,12 +277,61 @@ where
                 next.step = DissolveStep::Unindex;
                 Ok(journal.commit(hold, Some(&header), &next).await?)
             }
-            ParentNames::Source => self.relink(&scope, journal, hold, header, pass).await,
+            ParentNames::Source => {
+                if !self
+                    .keeps_binding(owner, &header, &target, &floors, &pass, left)
+                    .await
+                {
+                    return Err(NotDriven);
+                }
+                self.relink(&scope, journal, hold, header, pass).await
+            }
             ParentNames::Neither if !header.relink_sent => {
                 self.forsake(journal, hold, &header).await
             }
             ParentNames::Neither | ParentNames::Both => self.park(journal, hold, &header).await,
         }
+    }
+
+    /// Whether the copy still stands at the names and under the floors that
+    /// `header` binds: no owner cut of the destination read scope and no
+    /// write cut of its write scope since the seal (ADR 0077 D4). A grantee
+    /// rise keeps the copy, which the lazy wave carries after the relink.
+    async fn keeps_binding(
+        &self,
+        owner: &DrainScope<'_>,
+        header: &DissolveHeader,
+        target: &Destination<'_, '_>,
+        floors: &[u64],
+        pass: &Pass,
+        left: &Cell<usize>,
+    ) -> bool {
+        let dest = target.chain[0];
+        let Some(write_floor) = target
+            .chain
+            .iter()
+            .zip(floors)
+            .find_map(|(end, floor)| (end.root == target.write.root).then_some(*floor))
+        else {
+            return false;
+        };
+        let Ok(root) = pass.folder(dest.root) else {
+            return false;
+        };
+        let cut_epoch = root
+            .commitment
+            .as_ref()
+            .map_or(0, |commitment| commitment.cut_epoch);
+        let Ok(vouched) = self.vouched_read_epoch(owner, dest, left).await else {
+            return false;
+        };
+        let was = header.binding;
+        restarted(header, pass.epoch, cut_epoch, vouched, write_floor).is_some_and(|next| {
+            DissolveBinding {
+                read_epoch: was.read_epoch,
+                ..next.binding
+            } == was
+        })
     }
 
     /// A pass over `dest` that holds the relink parent of `header`, read

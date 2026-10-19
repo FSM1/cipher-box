@@ -126,7 +126,7 @@ pub(super) struct Destination<'t, 'e> {
 /// Only the owner moves the cut epoch and the pointer, so only those move
 /// `restart_floor`. A read rise alone is a grantee rise, and each sealed copy
 /// stays (ADR 0077 D4).
-fn restarted(
+pub(super) fn restarted(
     header: &DissolveHeader,
     epoch: u64,
     cut_epoch: u64,
@@ -868,7 +868,7 @@ where
     /// the `min_read_epoch` of its scope pointer, read under the trust rules
     /// of [`PointerConsult`], 0 for a scope never re-pointed, or the vouched
     /// floor of the vault root. A pointer that does not read pauses the tick.
-    async fn vouched_read_epoch(
+    pub(super) async fn vouched_read_epoch(
         &self,
         owner: &DrainScope<'_>,
         dest: &ScopeEnd<'_>,

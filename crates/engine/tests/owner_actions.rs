@@ -31929,3 +31929,48 @@ fn a_child_added_after_the_seal_returns_the_dissolve_to_its_map() {
         )]
     );
 }
+
+/// ADR 0077 D4: no step goes back from the relink, so a write cut of the
+/// destination after the copy sealed holds the relink. The parent does not
+/// name the copy at a name where no copy record stands, and the entry does
+/// not park.
+#[test]
+fn a_destination_write_cut_after_the_seal_holds_the_relink() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    let parent = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(parent.as_str());
+    for _ in 0..8 {
+        if header_at(&fx, inner).relink_sent {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let sent = header_at(&fx, inner);
+    assert!(sent.relink_sent, "the relink was sent");
+    assert_eq!(sent.binding.write_scope, folder, "the folder writes");
+    fx.world.record_store.heal_put_for(parent.as_str());
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, parent, "the write cut moved the folder root");
+    let puts = fx.world.record_store.put_count(moved.as_str());
+    ticks(&mut fx, 2);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Relink, "the relink waits");
+    assert!(!header.parked, "and does not park");
+    assert_eq!(
+        fx.world.record_store.put_count(moved.as_str()),
+        puts,
+        "no relink publish"
+    );
+}
