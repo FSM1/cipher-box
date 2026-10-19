@@ -99,14 +99,14 @@ use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
-    AscentAuthority, AscentRepair, CascadeResealResolver, CascadeTarget, ChildIndexResolver,
-    CommittedSet, DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed,
-    PublishedRoot, RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan,
-    RotationOutcome, RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory, WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    derive_write_name, lagging_read_seed, published_override_seed, reseal_scope_root, rotate_scope,
+    AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
+    DropCause, LaggingNode, NodeBound, NodeRef, NodeStop, PrevEpochSeed, PublishedRoot,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan, RotationOutcome,
+    RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher, SweepPublisher,
+    SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope, WriteHistory,
+    WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name,
+    lagging_read_seed, published_override_seed, reseal_scope_root, rotate_scope,
 };
 use crate::scope_seeds::seed_names;
 use crate::seams::{
@@ -752,7 +752,7 @@ struct Ancestry {
     parents: BTreeMap<[u8; 16], [u8; 16]>,
     override_seeds: BTreeMap<[u8; 16], Zeroizing<[u8; SECRET_LEN]>>,
     /// An ancestor node seed a caller imposes on one scope for one read
-    /// ([`OwnerRotationNet::resolve_under`]).
+    /// ([`OwnerRotationNet::pinned`]).
     pinned: Option<([u8; 16], Zeroizing<[u8; SECRET_LEN]>)>,
 }
 
@@ -2661,17 +2661,28 @@ where
         Ok(target)
     }
 
-    /// [`Self::resolve_at`] for a descendant scope root, gated under
-    /// `parent_node_seed` in place of the seed this walk derives for it.
-    async fn resolve_under(
+    /// Run `read` with `parent_node_seed` as the ascent authority of
+    /// `scope_id`, in place of the seed this walk derives for it.
+    async fn pinned<V>(
         &self,
-        scope: &ChildScopeRef,
+        scope_id: [u8; 16],
         parent_node_seed: Zeroizing<[u8; SECRET_LEN]>,
-    ) -> Result<CascadeTarget, ResolveFailure> {
-        self.ancestry.inner.borrow_mut().pinned = Some((scope.scope_id, parent_node_seed));
-        let target = self.resolve_at(scope, RootAnchor::Descendant).await;
+        read: impl AsyncFnOnce() -> V,
+    ) -> V {
+        self.ancestry.inner.borrow_mut().pinned = Some((scope_id, parent_node_seed));
+        let value = read().await;
         self.ancestry.inner.borrow_mut().pinned = None;
-        target
+        value
+    }
+
+    /// Whether a refused read of a descendant root may go on to an earlier
+    /// ascent authority. A link sealed to another keypair is availability at
+    /// the gate, and a record no endpoint served opens under no seed.
+    fn ascent_missed(&self, failure: ResolveFailure) -> Result<(), RotationPublishError> {
+        match failure {
+            ResolveFailure::Unavailable if self.refused.take().is_some() => Ok(()),
+            failure => Err(publish_verdict(failure)),
+        }
     }
 }
 
@@ -4063,44 +4074,53 @@ where
         &self,
         scope: &ChildScopeRef,
         child: &ChildScopeRef,
-    ) -> Result<AscentRepair, RotationPublishError> {
+    ) -> Result<(), RotationPublishError> {
         let source = self
             .swept_scope(scope)
             .map_err(|_| RotationPublishError::Rejected)?;
+        // An index that names its own scope names no child of it.
+        if child.scope_id == source.scope_id {
+            return Ok(());
+        }
+        let name = scope_name(&child.ipns_name).map_err(publish_verdict)?;
         let ascent_under = |seed: &[u8; SECRET_LEN]| {
             Zeroizing::new(*kdf::node_seed(seed, &child.scope_id).as_bytes())
         };
         let current = ascent_under(&source.read_scope_seed);
-        // A link sealed to another keypair is availability at the gate, so
-        // only that verdict walks on down the ratchet of `scope`.
+        // The gate alone: a write plane this device cannot open says nothing
+        // of the ascent link.
+        let gated = self
+            .pinned(child.scope_id, current.clone(), async || {
+                self.resealable_root(child.scope_id, &name, RootAnchor::Descendant)
+                    .await
+            })
+            .await;
+        match gated {
+            Ok(_) => return Ok(()),
+            Err(verdict) => self.ascent_missed(verdict.into())?,
+        }
         let mut epoch = source.read_epoch;
         let target = loop {
-            let parent_node_seed = if epoch == source.read_epoch {
-                current.clone()
-            } else {
-                let seed = lagging_read_seed(
-                    source.scope_id,
-                    &source.read_scope_seed,
-                    source.read_epoch,
-                    &source.history_links,
-                    epoch,
-                )
-                .map_err(|_| RotationPublishError::NotPublished)?;
-                ascent_under(&seed)
-            };
-            match self.resolve_under(child, parent_node_seed).await {
-                Ok(_) if epoch == source.read_epoch => return Ok(AscentRepair::Current),
-                Ok(target) => break target,
-                // A record no endpoint served opens under no seed.
-                Err(ResolveFailure::Unavailable) if self.refused.take().is_none() => {
-                    return Err(RotationPublishError::NotPublished);
-                }
-                Err(ResolveFailure::Unavailable) => {}
-                Err(failure) => return Err(publish_verdict(failure)),
-            }
             epoch = epoch
                 .checked_sub(1)
                 .ok_or(RotationPublishError::NotPublished)?;
+            let seed = lagging_read_seed(
+                source.scope_id,
+                &source.read_scope_seed,
+                source.read_epoch,
+                &source.history_links,
+                epoch,
+            )
+            .map_err(|_| RotationPublishError::NotPublished)?;
+            let resolved = self
+                .pinned(child.scope_id, ascent_under(&seed), async || {
+                    self.resolve_at(child, RootAnchor::Descendant).await
+                })
+                .await;
+            match resolved {
+                Ok(target) => break target,
+                Err(failure) => self.ascent_missed(failure)?,
+            }
         };
         let section = reseal_scope_root(
             &mut *self.entropy.borrow_mut(),
@@ -4140,8 +4160,8 @@ where
             write_epoch: target.write_epoch,
             section,
         })
-        .await?;
-        Ok(AscentRepair::Resealed)
+        .await
+        .map(drop)
     }
 }
 

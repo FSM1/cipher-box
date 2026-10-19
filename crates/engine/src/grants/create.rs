@@ -2455,8 +2455,8 @@ mod tests {
             &self,
             _scope: &ChildScopeRef,
             _child: &ChildScopeRef,
-        ) -> Result<crate::rotation::AscentRepair, RotationPublishError> {
-            Ok(crate::rotation::AscentRepair::Current)
+        ) -> Result<(), RotationPublishError> {
+            Ok(())
         }
     }
 

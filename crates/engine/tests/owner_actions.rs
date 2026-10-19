@@ -1148,6 +1148,16 @@ fn after_a_restart_the_sweep_reseals_a_nested_root_a_cut_left_behind() {
         publishes_under(&mut fx, folder, "after the restart", passes as usize),
         "a write under the granted folder publishes after the sweep re-seals it"
     );
+
+    let resealed = sequence_at(&fx.world, &folder_name);
+    for _ in 0..passes {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        sequence_at(&fx.world, &folder_name),
+        resealed,
+        "later passes leave the re-sealed root as it is"
+    );
 }
 
 /// The refusal the grant arm owes is decided before any key material is

@@ -88,9 +88,9 @@ pub(crate) use scope_material::{
     Boundaries, WalkedReadEpochs, ascent_node_seed, install_walked_read_epochs, proved_scope_ref,
 };
 pub use sweep::{
-    AscentRepair, LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher,
-    SweepResolveFailure, SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope,
-    converge_subtree, run_sweep, run_sweep_job, sweep_pass,
+    LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,
+    run_sweep_job, sweep_pass,
 };
 pub(crate) use sweep::{SweepKeys, SweepTaskFactory};
 pub use trigger::{
