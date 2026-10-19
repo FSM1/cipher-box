@@ -11370,10 +11370,10 @@ mod tests {
         assert_eq!(reports, 1);
     }
 
-    /// A rejected pointer consult in an ascent re-seal is one trust event: the
-    /// consult sends it, and the probe does not send it again.
-    #[test]
-    fn a_rejected_pointer_consult_in_an_ascent_reseal_is_one_trust_event() {
+    /// P at the epoch after the one that sealed the ascent link of its child,
+    /// and a child scope pointer that another identity signs.
+    fn a_child_with_a_rejected_pointer()
+    -> (Harness<InMemoryRecordStore>, ChildScopeRef, ChildScopeRef) {
         let (_, child, child_ref) = owner_tree();
         let root = owner_scope_root_at(
             ENVELOPE_V,
@@ -11399,19 +11399,63 @@ mod tests {
             &repoint_at(CHILD_SCOPE, OWNER_ROOT_EPOCH),
         );
         let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
-        let net = harness.net(core::slice::from_ref(&child_ref));
-        block_on(net.resolve_scope(&scope)).expect("the parent resolves");
+        (harness, scope, child_ref)
+    }
+
+    /// The probe of `child` under a new session report set.
+    fn probe_in_a_new_session(
+        harness: &Harness<InMemoryRecordStore>,
+        scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Option<AscentResidual> {
+        let net = harness.net(core::slice::from_ref(child));
+        block_on(net.resolve_scope(scope)).expect("the parent resolves");
+        block_on(net.reseal_child_ascent(scope, child)).err()
+    }
+
+    /// How many of `events` are trust events whose description contains `text`.
+    fn abuse_events(events: &[Event], text: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(event, Event::AttributableAbuse { description }
+                    if description.contains(text))
+            })
+            .count()
+    }
+
+    const CONSULT_EVENT: &str = "scope pointer unauthenticated";
+    const ASCENT_EVENT: &str = "ascent link is not re-sealed";
+
+    /// A rejected pointer consult in an ascent re-seal is one trust event: the
+    /// consult sends it, and the probe does not send it again.
+    #[test]
+    fn a_rejected_pointer_consult_in_an_ascent_reseal_is_one_trust_event() {
+        let (harness, scope, child_ref) = a_child_with_a_rejected_pointer();
 
         assert_eq!(
-            block_on(net.reseal_child_ascent(&scope, &child_ref)).err(),
+            probe_in_a_new_session(&harness, &scope, &child_ref),
             Some(AscentResidual::Rejected),
         );
-        let reports = harness
-            .events()
-            .iter()
-            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
-            .count();
-        assert_eq!(reports, 1);
+        let events = harness.events();
+        assert_eq!(abuse_events(&events, CONSULT_EVENT), 1);
+        assert_eq!(abuse_events(&events, ASCENT_EVENT), 0);
+    }
+
+    /// A rejected pointer miss that the consult interval still holds sends no
+    /// consult event, so the probe of a new session sends the ascent event.
+    #[test]
+    fn a_cached_rejected_pointer_is_one_ascent_event_in_a_new_session() {
+        let (harness, scope, child_ref) = a_child_with_a_rejected_pointer();
+        probe_in_a_new_session(&harness, &scope, &child_ref);
+
+        assert_eq!(
+            probe_in_a_new_session(&harness, &scope, &child_ref),
+            Some(AscentResidual::Rejected),
+        );
+        let events = harness.events();
+        assert_eq!(abuse_events(&events, CONSULT_EVENT), 1);
+        assert_eq!(abuse_events(&events, ASCENT_EVENT), 1);
     }
 
     // --- The grantee arm: the flat scope-exit cut --------------------------
