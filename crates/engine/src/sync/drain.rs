@@ -4808,6 +4808,20 @@ where
         .await
         .map_err(seam)?;
         let tied = !resolved.tied.is_empty();
+        self.open_resolved_child(plane, anchor, adopter, name, resolved, tied)
+            .await
+    }
+
+    /// [`Self::load_child_at`] over a resolve that `adopter` already gated.
+    async fn open_resolved_child(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: IpnsName,
+        resolved: GatedResolve,
+        tied: bool,
+    ) -> Result<LoadedNode, ChildFault> {
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
@@ -11434,6 +11448,7 @@ mod tests {
             observed: None,
             envelope: None,
             withheld: false,
+            endpoint_failed: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -11467,6 +11482,7 @@ mod tests {
             observed: None,
             envelope: None,
             withheld: false,
+            endpoint_failed: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -11505,6 +11521,7 @@ mod tests {
                 observed: None,
                 envelope: None,
                 withheld: false,
+                endpoint_failed: false,
                 committed_floor: None,
             },
             &refused_name(),

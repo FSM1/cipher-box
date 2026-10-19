@@ -14,7 +14,7 @@ use core::cell::Cell;
 use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildRef, Envelope, ReadBody, decode_grant_section, decode_write_body, grant_section_bytes,
@@ -25,8 +25,8 @@ use zeroize::Zeroizing;
 
 use super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 use super::{
-    Anchor, ChildFault, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor,
-    published_op_mark, refuse_record, seal_open_failed, seam, take_tick_read, walk_fault,
+    Anchor, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor, published_op_mark,
+    refuse_record, seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
 use crate::facade::{NodeId, emit_trust_violation};
@@ -34,7 +34,9 @@ use crate::gate::{GateError, GateRejection, GateStage, RejectionReason, floor};
 use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::unseal_write_body;
-use crate::net::{Adopter, RootAdopter, assemble_head_envelope};
+use crate::net::{
+    Adopter, GatedResolve, ResolveOutcome, RootAdopter, assemble_head_envelope, resolve_gated,
+};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
 };
@@ -713,33 +715,40 @@ where
         let name = end.write_name(&node.0);
         let floors = end.floors(&self.seams.floors);
         let adopter = self.child_adopter(&plane, &floors, node);
-        let loaded = match self
-            .load_child_at(&plane, anchor, &adopter, name.clone(), ResolveMode::NoCache)
-            .await
-        {
-            Ok(loaded) => loaded,
+        let resolved = resolve_gated(
+            &self.seams.transport,
+            &self.seams.snapshot_cache,
+            &adopter,
+            &name,
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(|_| ReadFault::Unanswered)?;
+        if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
             // The child gate refuses every grant section. Only the root gate
             // tells a grant from abuse (blueprint/engine.md "Grant creation").
-            Err(ChildFault::Refused(rejection)) if rejection.stage == GateStage::GrantSection => {
+            if rejection.stage == GateStage::GrantSection {
                 return Err(self.root_gate_read(owner, end, node, &name).await);
             }
-            Err(ChildFault::Refused(rejection)) if seal_open_failed(&rejection) => {
-                let Some(other) = adopter
-                    .unbound_scope()
-                    .and_then(|scope| outside(NodeId(scope)))
-                else {
-                    return Err(walk_fault(refuse_record(
-                        &self.seams.events,
-                        &name,
-                        &rejection,
-                    )));
-                };
-                return Err(self.outside_read(*other, node, &name, &rejection).await);
+            let other = adopter
+                .unbound_scope()
+                .and_then(|scope| outside(NodeId(scope)))
+                .filter(|other| other.write_name(&node.0) == name);
+            if seal_open_failed(rejection)
+                && let Some((other, bytes)) = other.zip(adopter.unbound_record())
+            {
+                return Err(self
+                    .outside_read(*other, node, &name, &bytes, &resolved)
+                    .await);
             }
-            Err(fault) => return Err(walk_fault(self.report_fault(&name, fault))),
-        };
-        if loaded.tied {
-            return Err(ReadFault::Untrusted);
+        }
+        let forked = resolved.resolved.fork.is_some();
+        let loaded = self
+            .open_resolved_child(&plane, anchor, &adopter, name.clone(), resolved, false)
+            .await
+            .map_err(|fault| walk_fault(self.report_fault(&name, fault)))?;
+        if forked {
+            return Err(self.fork_at(&name, loaded.observed.sequence()));
         }
         Ok(DissolveRead {
             mark: RecordMark {
@@ -754,11 +763,21 @@ where
         })
     }
 
+    /// Report a same-sequence fork at `sequence` of `name`, which holds the
+    /// walk.
+    fn fork_at(&self, name: &IpnsName, sequence: u64) -> ReadFault<Unmapped> {
+        self.cells
+            .forks
+            .report(&self.seams.events, name.as_str(), sequence);
+        ReadFault::Untrusted
+    }
+
     /// Read `node` at `name` again for the root gate, under the ascent
     /// authority of `end`'s read seed. The child gate refuses every record
     /// with a grant section, so a root gate refusal of such a record is a
     /// refusal by both gates. A record with no grant section changed after the
-    /// child gate read, and the walk reads it again on a later tick.
+    /// child gate read, and the walk reads it again on a later tick. A tie
+    /// counts as a fork only when it passes the root gate (ADR 0066 D1).
     async fn root_gate_read(
         &self,
         owner: &DrainScope<'_>,
@@ -789,12 +808,6 @@ where
             Ok(_) => return ReadFault::Unanswered,
             Err(error) => return refused(error),
         }
-        if served_fork(name, &pick, &tied, async |_| true).await {
-            self.cells
-                .forks
-                .report(&self.seams.events, name.as_str(), pick.sequence);
-            return ReadFault::Untrusted;
-        }
         let floors = end.floors(&self.seams.floors);
         let parent_seed = kdf::node_seed(end.read_scope_seed, &node.0);
         let adopter = RootAdopter::new(
@@ -806,58 +819,99 @@ where
             node.0,
         )
         .under_parent_node_seed(Zeroizing::new(*parent_seed.as_bytes()));
-        match adopter.adopt(name, &bytes).await {
-            Ok(_) => ReadFault::Fatal(Unmapped::NewScopeRoot),
+        // The root gate with no commit: an adopt, or our own record at the
+        // floor that recovers its material.
+        let judge = async |bytes: &[u8]| match adopter.adopt(name, bytes).await {
+            Ok(_) => Ok(true),
             Err(GateError::Rejected(GateRejection {
                 reason: RejectionReason::SequenceNotNewer { floor, sequence },
                 ..
-            })) if floor == sequence => {
-                match adopter.recover_own_scope_material(name, &bytes).await {
-                    Ok(Some(_)) => ReadFault::Fatal(Unmapped::NewScopeRoot),
-                    Ok(None) => ReadFault::Unanswered,
-                    Err(error) => refused(error),
-                }
-            }
-            Err(error) => refused(error),
+            })) if floor == sequence => adopter
+                .recover_own_scope_material(name, bytes)
+                .await
+                .map(|material| material.is_some()),
+            Err(error) => Err(error),
+        };
+        match judge(&bytes).await {
+            Ok(true) => {}
+            Ok(false) => return ReadFault::Unanswered,
+            Err(error) => return refused(error),
         }
+        if served_fork(name, &pick, &tied, async |tie| {
+            matches!(judge(tie).await, Ok(true))
+        })
+        .await
+        {
+            return self.fork_at(name, pick.sequence);
+        }
+        ReadFault::Fatal(Unmapped::NewScopeRoot)
     }
 
-    /// Read `node` at `name` again under `other`, the end that the tag of the
-    /// record names, as `load_owing_node` does, after the scope bind of the
-    /// walked end refused it as `rejection`. A scope whose parent shares its
-    /// write seed derives the parent's names, so the record of an outside node
-    /// can stand at a name of the walked scope. A record that opens under
-    /// `other` is outside the subtree, and the walk starts again. The AAD binds
-    /// the scope, so a hostile record does not open there.
+    /// Judge `bytes`, the record at `name` that the scope bind of the walked
+    /// end refused, under `other`, the end its tag names and that derives the
+    /// same name. A scope whose parent shares its write seed derives the
+    /// parent's names, so the record of an outside node can stand at a name of
+    /// the walked scope. A record that opens under `other` is outside the
+    /// subtree, and the walk starts again. The AAD binds the scope, so a
+    /// hostile record does not open there. The check fetches nothing at
+    /// `name` and commits nothing, and a tie counts as a fork only when it
+    /// opens too (ADR 0066 D1).
     async fn outside_read(
         &self,
         other: ScopeEnd<'_>,
         node: NodeId,
         name: &IpnsName,
-        rejection: &GateRejection,
+        bytes: &[u8],
+        resolved: &GatedResolve,
     ) -> ReadFault<Unmapped> {
         let Some((plane, root)) = self.ledger_plane(other).await else {
             return ReadFault::Unanswered;
         };
         let floors = other.floors(&self.seams.floors);
         let adopter = self.child_adopter(&plane, &floors, node);
-        match self
-            .load_child_at(
-                &plane,
-                root.anchor(),
-                &adopter,
-                name.clone(),
-                ResolveMode::NoCache,
-            )
-            .await
-        {
-            Ok(_) => ReadFault::Fatal(Unmapped::Outside),
-            Err(ChildFault::Halt(halt)) if halt != Halt::RecordRefused => ReadFault::Unanswered,
-            Err(_) => {
-                refuse_record(&self.seams.events, name, rejection);
-                ReadFault::Untrusted
+        // The child gate of `load_child_at`, on held bytes: a record below the
+        // epoch floor opens under the seed of its own epoch.
+        let refused = |error: GateError| match LeafRefusal::of(error, resolved.endpoint_failed) {
+            LeafRefusal::Seam(_) | LeafRefusal::Withheld => None,
+            LeafRefusal::Rejected(rejection) => Some(rejection),
+        };
+        let open = async |bytes: &[u8]| -> Result<u64, Option<GateRejection>> {
+            let lagging = match adopter.open_held(name, bytes).await {
+                Ok(adopted) => return Ok(adopted.sequence),
+                Err(GateError::Rejected(GateRejection {
+                    reason: RejectionReason::EpochBelowFloor { epoch, .. },
+                    ..
+                })) => epoch,
+                Err(error) => return Err(refused(error)),
+            };
+            let seed =
+                seed_for_lagging(other.root.0, other.read_scope_seed, root.anchor(), lagging)
+                    .map_err(|_| None)?;
+            adopter
+                .open_interior_under(name, bytes, &seed)
+                .await
+                .map(|(adopted, _)| adopted.sequence)
+                .map_err(refused)
+        };
+        let sequence = match open(bytes).await {
+            Ok(sequence) => sequence,
+            Err(Some(rejection)) => {
+                refuse_record(&self.seams.events, name, &rejection);
+                return ReadFault::Untrusted;
             }
+            Err(None) => return ReadFault::Unanswered,
+        };
+        let Ok(pick) = IpnsRecord::unmarshal(bytes).and_then(|record| record.verify(name)) else {
+            return ReadFault::Untrusted;
+        };
+        if served_fork(name, &pick, &resolved.tied, async |tie| {
+            open(tie).await.is_ok()
+        })
+        .await
+        {
+            return self.fork_at(name, sequence);
         }
+        ReadFault::Fatal(Unmapped::Outside)
     }
 }
 

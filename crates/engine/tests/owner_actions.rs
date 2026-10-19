@@ -12,6 +12,7 @@ use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::BTreeSet;
 
+use cipherbox_core::codec::Value;
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
@@ -4188,7 +4189,7 @@ fn a_walk_that_reads_an_owned_scope_root_forked_reports_it_once() {
         b"/ipfs/bafyanotherscoperoot",
         held.sequence,
         held.ttl,
-        "2098-01-01T00:00:00Z",
+        "1970-01-10T00:00:00Z",
     )
     .marshal();
     block_on(
@@ -13638,7 +13639,7 @@ fn forked_over(fx: &GrantScenario, node: NodeId, held: u64) -> Vec<u8> {
         &edited.value,
         held,
         edited.ttl,
-        "2098-01-01T00:00:00Z",
+        "1970-01-10T00:00:00Z",
     )
     .marshal()
 }
@@ -28588,6 +28589,7 @@ fn a_plain_row_under_a_write_cut_names_its_node_under_the_new_seed() {
     );
     assert_eq!(row.old_name, derived.as_str().as_bytes());
 }
+
 /// The staging key of the dissolve header at the folder.
 fn dissolve_header_key(fx: &GrantScenario) -> Vec<u8> {
     [
@@ -28813,17 +28815,21 @@ fn a_ref_to_an_outside_folder_under_a_write_cut_is_never_mapped() {
 /// A read-only scope keeps the write seed of its parent scope, so the name it
 /// derives for an outside folder is that folder's own name. The record there
 /// opens under the vault end that its tag names, so it is outside the subtree:
-/// no trust violation, and no map commits.
+/// no trust violation, the first tick starts the walk again, and no map
+/// commits.
 #[test]
 fn a_ref_to_an_outside_folder_in_a_shared_write_scope_is_never_mapped() {
     let mut fx = GrantScenario::new();
-    let outside = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "out");
-    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
-    let (carried, derived) = plant_outside_ref(&fx, plain, outside);
-    assert_eq!(derived, carried, "the write seed is shared");
+    let (_, plain) = outside_ref_fixture(&mut fx);
+    let plain_name = cut_name(&fx, plain);
     events_so_far(&mut fx._events);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    ticks(&mut fx, 4);
+    assert!(
+        tick_reads(&mut fx, &plain_name) > 0,
+        "the second tick walks again"
+    );
+    ticks(&mut fx, 2);
 
     assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
     assert_eq!(
@@ -28831,6 +28837,98 @@ fn a_ref_to_an_outside_folder_in_a_shared_write_scope_is_never_mapped() {
         DissolveStep::Map,
         "no map commits"
     );
+}
+
+/// A cut subtree whose plain folder holds a ref to `out`, a folder of the
+/// vault scope that the read-only cut scope shares the write seed of. Answers
+/// `out` and the plain folder.
+fn outside_ref_fixture(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let outside = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "out");
+    let (_, plain, _) = cut_dissolve_subtree(fx);
+    let (carried, derived) = plant_outside_ref(fx, plain, outside);
+    assert_eq!(derived, carried, "the write seed is shared");
+    (outside, plain)
+}
+
+/// A record at `outside`'s name one sequence past what stands, with the tag
+/// of the vault scope and a read body that does not open under it.
+fn forged_outside_record(fx: &GrantScenario, outside: NodeId) -> Vec<u8> {
+    let name = write_name(outside);
+    let head = published_head(&fx.world, &fx.blocks, &name).expect("the outside folder");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let last = envelope.read_sealed.len() - 1;
+    envelope.read_sealed[last] ^= 1;
+    let cid = fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &outside.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal()
+}
+
+/// The GETs that one tick makes at `name`.
+fn tick_reads(fx: &mut GrantScenario, name: &IpnsName) -> usize {
+    let before = fx.world.record_store.get_count(name.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world.record_store.get_count(name.as_str()) - before
+}
+
+/// The walk judges the record that the scope bind refused, and never a later
+/// one: endpoint A serves a forged record with the tag of the vault scope and
+/// then fails, and endpoint B serves the honest record. One trust violation,
+/// and the walk holds.
+#[test]
+fn a_forged_first_pick_at_an_outside_name_holds_the_walk() {
+    let mut fx = GrantScenario::new();
+    let (outside, plain) = outside_ref_fixture(&mut fx);
+    let name = write_name(outside);
+    let plain_name = cut_name(&fx, plain);
+    let endpoints = fx.world.record_store.endpoints();
+    let forged = forged_outside_record(&fx, outside);
+    fx.world
+        .record_store
+        .seed_record(&endpoints[0], name.as_str(), forged);
+    // The child gate read takes the first two GETs, one at each endpoint.
+    fx.world
+        .record_store
+        .serve_gets_for_after(name.as_str(), 2, 1, None);
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(tick_reads(&mut fx, &plain_name), 0, "the walk holds");
+    assert_eq!(tick_reads(&mut fx, &plain_name), 0, "the walk holds");
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+}
+
+/// A record with the tag of the vault scope that does not open under the
+/// vault end is one trust violation, and the walk holds.
+#[test]
+fn an_outside_record_that_does_not_open_holds_the_walk() {
+    let mut fx = GrantScenario::new();
+    let (outside, plain) = outside_ref_fixture(&mut fx);
+    let name = write_name(outside);
+    let plain_name = cut_name(&fx, plain);
+    let forged = forged_outside_record(&fx, outside);
+    for endpoint in &fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(endpoint, name.as_str(), forged.clone());
+    }
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_events(&mut fx._events), 1, "one trust violation");
+    assert_eq!(tick_reads(&mut fx, &plain_name), 0, "the walk holds");
+    assert_eq!(tick_reads(&mut fx, &plain_name), 0, "the walk holds");
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
 }
 
 /// Grant `plain` while the cut scope root does not publish, so that the new
@@ -28910,40 +29008,84 @@ fn a_root_gate_read_that_meets_the_plain_record_pauses_the_walk() {
     assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
 }
 
-/// A same-sequence fork at an unindexed scope root holds the walk with one
-/// fork event, before the root gate judges either side.
+/// Seed endpoint B with a record of `value` at the sequence that `plain`'s
+/// new scope root stands at, valid to `eol`: the other side of a
+/// same-sequence fork. An earlier `eol` ranks below the honest record.
+fn seed_tie(fx: &GrantScenario, plain: NodeId, value: &[u8], eol: &str) {
+    let name = cut_name(fx, plain);
+    let seed = owner_write_seed(fx, fx.folder);
+    let tie = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&seed, &plain.0).as_bytes()),
+        value,
+        sequence_at(&fx.world, &name),
+        TTL_NANOS,
+        eol,
+    )
+    .marshal();
+    let endpoints = fx.world.record_store.endpoints();
+    fx.world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), tie);
+}
+
+/// The fork events that the stream holds.
+fn fork_events(events: &mut EventStream) -> usize {
+    events_so_far(events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .count()
+}
+
+/// ADR 0066 D1: a tie at an unindexed scope root that passes the root gate is
+/// a same-sequence fork. One fork event goes out, and the walk holds.
 #[test]
 fn a_fork_at_an_unindexed_scope_root_holds_the_walk() {
     let mut fx = GrantScenario::new();
     let (_, plain, _) = cut_dissolve_subtree(&mut fx);
     grant_with_the_index_owed(&mut fx, plain);
     let name = cut_name(&fx, plain);
-    let seed = owner_write_seed(&fx, fx.folder);
-    let other = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&seed, &plain.0).as_bytes()),
-        &published_value(&fx.world, &write_name(ROOT)),
-        sequence_at(&fx.world, &name),
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    let endpoints = fx.world.record_store.endpoints();
-    fx.world
-        .record_store
-        .seed_record(&endpoints[1], name.as_str(), other);
+    let head = published_head(&fx.world, &fx.blocks, &name).expect("the new scope root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    envelope.unknown = envelope
+        .unknown
+        .entries()
+        .iter()
+        .cloned()
+        .chain([("xTie".to_owned(), Value::Text("other side".to_owned()))])
+        .collect();
+    let cid = fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    seed_tie(&fx, plain, format!("/ipfs/{cid}").as_bytes(), EOL);
 
     ticks(&mut fx, 2);
 
-    let forks = events_so_far(&mut fx._events)
-        .into_iter()
-        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
-        .count();
-    assert_eq!(forks, 1, "one fork event");
+    assert_eq!(fork_events(&mut fx._events), 1, "one fork event");
     assert_eq!(
         fx.standing_dissolve().step,
         DissolveStep::Map,
         "the walk holds"
     );
+}
+
+/// ADR 0066 D1: a tie that fails the root gate is no fork. No fork event goes
+/// out, and the new scope root stops the dissolve.
+#[test]
+fn a_tie_that_fails_the_root_gate_is_no_fork() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    grant_with_the_index_owed(&mut fx, plain);
+    seed_tie(
+        &fx,
+        plain,
+        &published_value(&fx.world, &write_name(ROOT)),
+        "1970-01-10T00:00:00Z",
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fork_events(&mut fx._events), 0, "no fork event");
+    assert_eq!(fx.dissolve_header(), None, "the dissolve stops");
 }
 
 /// An unindexed child whose root gate cannot read pauses the walk with no
@@ -29158,6 +29300,7 @@ fn a_write_body_that_does_not_decode_holds_the_walk() {
         "the walk holds"
     );
 }
+
 /// A carried walk belongs to the read material of its ends. A rotation of
 /// the cut scope between two map ticks starts the walk again under the new
 /// material, and the map commits with no trust violation.
@@ -29192,4 +29335,59 @@ fn a_rotation_between_two_map_ticks_starts_the_walk_again() {
 
     assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
     assert_eq!(fx.standing_dissolve().step, DissolveStep::Seal);
+}
+
+/// A read that goes unanswered pauses the walk at that read. After the third
+/// unanswered tick, the next tick walks again from the cut root, through the
+/// drive.
+#[test]
+fn a_read_unanswered_for_three_ticks_starts_the_walk_again() {
+    let mut fx = GrantScenario::new();
+    let (inner, plain, below) = cut_dissolve_subtree(&mut fx);
+    let plain_name = cut_name(&fx, plain);
+    fx.world
+        .record_store
+        .fail_get_for(derive_write_name(&owner_write_seed(&fx, inner), &below.0).as_str());
+    events_so_far(&mut fx._events);
+    ticks(&mut fx, 2);
+
+    assert_eq!(
+        tick_reads(&mut fx, &plain_name),
+        0,
+        "the third tick reads the unanswered node only"
+    );
+    assert!(
+        tick_reads(&mut fx, &plain_name) > 0,
+        "the fourth tick walks again"
+    );
+    assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
+}
+
+/// ADR 0071 D1 at the outside name: an endpoint fails, and the other serves
+/// the record below the floor of the vault scope. That is no trust violation.
+#[test]
+fn a_stale_outside_record_while_an_endpoint_fails_pauses_the_walk() {
+    let mut fx = GrantScenario::new();
+    let (outside, _) = outside_ref_fixture(&mut fx);
+    let name = write_name(outside);
+    let endpoints = fx.world.record_store.endpoints();
+    let stale = fx
+        .world
+        .record_store
+        .record_at(&endpoints[1], name.as_str())
+        .expect("the outside record");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outside, "x");
+    fx.world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), stale);
+    fx.world
+        .record_store
+        .fail_get_at_for(&endpoints[0], name.as_str());
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Map);
 }
