@@ -50,9 +50,9 @@ pub(crate) struct DissolveSeal {
     /// A gate refused a record, or the endpoints served a fork. The run
     /// publishes nothing more.
     refused: bool,
-    /// The read scope and the write scope that the last tick computed for a
-    /// rebind that waits.
-    rebind: Option<(NodeId, NodeId)>,
+    /// The read scope and the write scope that a tick computed for a rebind
+    /// that waits, and the number of that tick.
+    rebind: Option<((NodeId, NodeId), u64)>,
 }
 
 impl DissolveSeal {
@@ -325,31 +325,46 @@ where
         let dest = target.chain[0];
         let mark = EndMark::of(dest);
         let carried = self.cells.dissolve_seals.borrow_mut().remove(&root);
-        let mut run = carried
-            .filter(|run| run.seals(&header, &mark))
-            .unwrap_or_else(|| DissolveSeal::new(&header, mark.clone()));
         let binding = header.binding;
         let candidate = (dest.root, target.write.root);
-        let header = if candidate == (binding.read_scope, binding.write_scope) {
-            run.rebind = None;
-            header
+        let (header, mut run) = if candidate == (binding.read_scope, binding.write_scope) {
+            let run = carried
+                .filter(|run| run.seals(&header, &mark))
+                .unwrap_or_else(|| DissolveSeal::new(&header, mark.clone()));
+            (header, run)
         } else {
             // The write scope comes from the seeds of the ends, which can
             // differ for one tick, so a change of it alone commits only when
-            // two ticks in a row compute it.
-            let confirmed = dest.root != binding.read_scope || run.rebind == Some(candidate);
-            run.rebind = Some(candidate);
+            // two ticks in a row compute it. A walk that did not prove the
+            // bound read scope reads its nodes as its parent's, so no read
+            // rebind commits off it.
+            let confirmed = if dest.root == binding.read_scope {
+                let previous = self.inputs.tick.checked_sub(1);
+                carried.as_ref().and_then(|run| run.rebind) == previous.map(|at| (candidate, at))
+            } else {
+                !self
+                    .inputs
+                    .unproved_scope_roots
+                    .contains(&binding.read_scope)
+            };
             let next = rebound(&header, dest.root, target.write.root).filter(|_| confirmed);
-            let Some(next) = next else {
+            let committed = match next {
+                Some(next) => journal
+                    .commit(&hold, Some(&header), &next)
+                    .await
+                    .is_ok()
+                    .then_some(next),
+                None => None,
+            };
+            let Some(next) = committed else {
+                // The run of the bound destination waits as it stands.
+                let mut run = carried.unwrap_or_else(|| DissolveSeal::new(&header, mark));
+                run.rebind = Some((candidate, self.inputs.tick));
                 self.cells.dissolve_seals.borrow_mut().insert(root, run);
                 return;
             };
-            if journal.commit(&hold, Some(&header), &next).await.is_err() {
-                self.cells.dissolve_seals.borrow_mut().insert(root, run);
-                return;
-            }
-            run = DissolveSeal::new(&next, mark);
-            next
+            let run = DissolveSeal::new(&next, mark);
+            (next, run)
         };
         if !run.refused
             && let Err(SealFault::Refused) = self

@@ -102,7 +102,8 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
     pass_events: Option<PassEventSink>,
-    /// Passes run under `pass_events`, so each event names its pass.
+    /// The passes this session ran. Each event under `pass_events` names its
+    /// pass, and the drain counts its ticks by it.
     passes: Cell<u64>,
 }
 
@@ -405,10 +406,11 @@ where
             return PassReport::STOPPED;
         };
         let scheduler = &self.seams.scheduler;
-        let mut clock = self.pass_events.as_ref().map(|sink| {
-            self.passes.set(self.passes.get() + 1);
-            LegClock::start(sink, self.passes.get(), cause, scheduler.now())
-        });
+        self.passes.set(self.passes.get() + 1);
+        let mut clock = self
+            .pass_events
+            .as_ref()
+            .map(|sink| LegClock::start(sink, self.passes.get(), cause, scheduler.now()));
         // One lap per entry of `PASS_LEGS`, in that order.
         let mut lap = || {
             if let Some(clock) = clock.as_mut() {
@@ -1515,6 +1517,8 @@ where
                 owner_pointers: pointer_keys
                     .as_deref()
                     .map(|keys| &keys.scope_keys as &dyn OwnerPointerRead),
+                tick: self.passes.get(),
+                unproved_scope_roots: &scopes.unproved,
             },
         );
         drain

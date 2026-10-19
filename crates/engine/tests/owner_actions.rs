@@ -30366,6 +30366,92 @@ fn a_fork_that_names_a_former_destination_holds_the_seal() {
     );
 }
 
+/// A change of the write scope alone commits only on two ticks in a row. A
+/// tick between them that fails a guard drops the candidate, so the next
+/// mismatch does not confirm it: the header stays, and nothing publishes.
+#[test]
+fn a_guard_that_fails_between_two_mismatches_drops_the_rebind_candidate() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = header_at(&fx, inner);
+    assert_eq!(header.binding.write_scope, ROOT, "one tick does not rebind");
+    let root_floor = floor_label(&write_epoch_floor_key(&ROOT.0));
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&root_floor);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+    let puts = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(header_at(&fx, inner), header, "the header stays");
+    assert_eq!(folder_copy_puts(&fx, inner), puts, "nothing publishes");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        header_at(&fx, inner).binding.write_scope,
+        fx.folder,
+        "two ticks in a row rebind"
+    );
+}
+
+/// A restart whose first walk does not prove the folder reads the relink
+/// parent under the vault root. The bound read scope is unproved, so no read
+/// rebind commits, and the seal spends no prior-binding slot.
+#[test]
+fn a_restart_that_does_not_prove_the_destination_spends_no_slot() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_get_for(root.as_str());
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert!(
+        header_at(&fx, inner).prior_bindings.is_empty(),
+        "no slot while the folder is unproved"
+    );
+    fx.world.record_store.heal_get_for(root.as_str());
+    tick(&fx.world, &engine, &mut tasks);
+    let header = header_at(&fx, inner);
+    assert!(header.prior_bindings.is_empty(), "no slot after the proof");
+    assert_eq!(header.binding.read_scope, fx.folder);
+}
+
+/// ADR 0077 D4: no rebind commits on a tick where a write cut is owed on the
+/// chain from the destination to the vault root.
+#[test]
+fn a_rebind_waits_while_a_write_cut_is_owed_on_the_chain() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, dissolve_binding()),
+        Ok(Some(DissolveStep::Map))
+    );
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    stop_the_revoke_wave(&mut fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal, "the map commits");
+    assert!(
+        header.prior_bindings.is_empty(),
+        "no rebind while the cut is owed"
+    );
+}
+
 /// ADR 0077 D4: no copy publishes at a name of an old write seed. A write
 /// epoch floor that rises after the tick's first read, before a publish,
 /// stops the tick with no PUT.

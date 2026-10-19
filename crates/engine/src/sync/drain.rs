@@ -2274,6 +2274,11 @@ pub(crate) struct TickInputs<'a> {
     /// The read edges of this owner's scope pointers, with no signer. `None`
     /// when the session holds no owner keys.
     pub(crate) owner_pointers: Option<&'a dyn OwnerPointerRead>,
+    /// The number of this tick in the session.
+    pub(crate) tick: u64,
+    /// The scope roots a walk named and did not prove
+    /// ([`SessionState::unproved_scope_roots`](crate::session::SessionState::unproved_scope_roots)).
+    pub(crate) unproved_scope_roots: &'a BTreeSet<NodeId>,
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -11307,6 +11312,9 @@ mod tests {
     use crate::sync::kept_op::KeptNote;
     use crate::sync::model::NodeMeta;
 
+    /// No scope root unproved.
+    static NO_UNPROVED: BTreeSet<NodeId> = BTreeSet::new();
+
     const SOURCE_ROOT: NodeId = NodeId([1; 16]);
     const DESTINATION_ROOT: NodeId = NodeId([2; 16]);
     const SOURCE_EPOCH: u64 = 7;
@@ -13038,6 +13046,8 @@ mod tests {
                     owed_move_reads: &[],
                     owed_write_cuts: Some(&[]),
                     owner_pointers: None,
+                    tick: 1,
+                    unproved_scope_roots: &NO_UNPROVED,
                     deferred_raises: &self.deferred_raises,
                     every_scope_reached: true,
                 },
@@ -14496,6 +14506,8 @@ mod tests {
                 owed_move_reads: &legs,
                 owed_write_cuts: Some(&[]),
                 owner_pointers: None,
+                tick: 1,
+                unproved_scope_roots: &NO_UNPROVED,
                 deferred_raises: &harness.deferred_raises,
                 every_scope_reached: true,
             },
