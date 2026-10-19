@@ -330,15 +330,15 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 
     /// The full child pipeline over held `record_bytes` at or above the
     /// durable sequence floor, with **no** floor advance: a caller that judges
-    /// a record it read before, and admits nothing.
+    /// a record it read before, and admits nothing. The decoded envelope comes
+    /// back with the body.
     pub(crate) async fn open_held(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<Adopted, GateError> {
+    ) -> Result<(Adopted, Envelope), GateError> {
         self.open_carried(name, record_bytes, floor::Strictness::AtOrAboveFloor)
             .await
-            .map(|(adopted, _)| adopted)
     }
 
     async fn open_carried(

@@ -24,12 +24,12 @@ use zeroize::Zeroizing;
 
 use super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 use super::{
-    Anchor, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor, refuse_record,
+    Anchor, Drain, DrainScope, Halt, LoadedNode, RecordMark, ScopeEnd, WalkAnchor, refuse_record,
     seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
 use crate::facade::{NodeId, emit_trust_violation};
-use crate::gate::{GateError, GateRejection, GateStage, RejectionReason, floor};
+use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason, floor};
 use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::unseal_write_body;
@@ -50,6 +50,10 @@ use crate::sync::op::Op;
 use crate::sync::rebase::decode_queue;
 use crate::sync::record::RecordReader;
 use crate::sync::tick::ResolveMode;
+
+mod seal;
+
+pub(crate) use seal::DissolveSeal;
 
 /// The node records one tick reads for dissolve walks.
 const MAX_DISSOLVE_WALK_READS: usize = 128;
@@ -181,6 +185,12 @@ fn ascends_from(parent: &ScopeEnd<'_>, child: &ScopeEnd<'_>) -> bool {
             seed,
         )
     })
+}
+
+/// Whether a cut scope root that holds `rows` at `cut_epoch` shows work that
+/// the dissolve did not do, against `cut`, the cut epoch of the entry.
+fn cut_overtaken(rows: bool, cut_epoch: u64, cut: Option<u64>) -> bool {
+    rows || Some(cut_epoch) != cut
 }
 
 /// The cut epoch at which `header` cuts `scope`, `None` when it does not cut
@@ -367,8 +377,7 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
     ) -> Result<(), Overflow> {
         let at = u32::try_from(sweep.read.len() - 1).map_err(|_| Overflow)?;
         if let Some(root) = read.root {
-            if root.rows
-                || Some(root.cut_epoch) != self.cuts(key.node)
+            if cut_overtaken(root.rows, root.cut_epoch, self.cuts(key.node))
                 || root.index.iter().any(|scope| self.cuts(*scope).is_none())
             {
                 return self.stop(MapHalt::Concurrent);
@@ -443,14 +452,10 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Drive the map step of each dissolve entry this owner holds over the
-    /// tick's own `ends`, within one share of reads for the tick. An entry the
-    /// drive cannot move waits for the next tick.
-    pub(super) async fn drive_dissolve_maps(
-        &self,
-        passes: &[DrainScope<'_>],
-        ends: &[ScopeEnd<'_>],
-    ) {
+    /// Drive the map and the seal step of each dissolve entry this owner
+    /// holds over the tick's own `ends`, within one share of reads for the
+    /// tick. An entry the drive cannot move waits for the next tick.
+    pub(super) async fn drive_dissolves(&self, passes: &[DrainScope<'_>], ends: &[ScopeEnd<'_>]) {
         let Some(owner) = passes.iter().find(|scope| !scope.is_grafted()) else {
             return;
         };
@@ -465,6 +470,7 @@ where
         let left = Cell::new(MAX_DISSOLVE_WALK_READS);
         for root in roots {
             let _ = self.drive_map(owner, ends, &journal, root, &left).await;
+            self.drive_seal(owner, ends, &journal, root, &left).await;
         }
     }
 
@@ -705,6 +711,32 @@ where
         anchor: Anchor<'_>,
         node: NodeId,
     ) -> Result<DissolveRead, ReadFault<Unmapped>> {
+        let loaded = self
+            .gated_child(owner, ends, header, end, anchor, node)
+            .await?;
+        Ok(DissolveRead {
+            mark: RecordMark {
+                sequence: loaded.observed.sequence(),
+                digest: cipherbox_core::suite::hash::hash(&loaded.record),
+            },
+            children: match loaded.body {
+                ReadBody::Folder { children, .. } => children,
+                ReadBody::File { .. } => Vec::new(),
+            },
+            root: None,
+        })
+    }
+
+    /// [`Self::dissolve_child`] as the opened record.
+    async fn gated_child(
+        &self,
+        owner: &DrainScope<'_>,
+        ends: &[ScopeEnd<'_>],
+        header: &DissolveHeader,
+        end: &ScopeEnd<'_>,
+        anchor: Anchor<'_>,
+        node: NodeId,
+    ) -> Result<LoadedNode, ReadFault<Unmapped>> {
         let plane = end.at(anchor.epoch);
         let name = end.write_name(&node.0);
         let floors = end.floors(&self.seams.floors);
@@ -769,17 +801,7 @@ where
         if forked {
             return Err(self.fork_at(&name, loaded.observed.sequence()));
         }
-        Ok(DissolveRead {
-            mark: RecordMark {
-                sequence: loaded.observed.sequence(),
-                digest: cipherbox_core::suite::hash::hash(&loaded.record),
-            },
-            children: match loaded.body {
-                ReadBody::Folder { children, .. } => children,
-                ReadBody::File { .. } => Vec::new(),
-            },
-            root: None,
-        })
+        Ok(loaded)
     }
 
     /// Report a same-sequence fork at `sequence` of `name`, which holds the
@@ -898,7 +920,7 @@ where
             )
             .await;
         let sequence = match opened {
-            Ok(sequence) => sequence,
+            Ok((adopted, _)) => adopted.sequence,
             Err(Some(rejection)) => {
                 refuse_record(&self.seams.events, name, &rejection);
                 return ReadFault::Untrusted;
@@ -934,13 +956,13 @@ where
         name: &IpnsName,
         bytes: &[u8],
         endpoint_failed: bool,
-    ) -> Result<u64, Option<GateRejection>> {
+    ) -> Result<(Adopted, Envelope), Option<GateRejection>> {
         let refused = |error: GateError| match LeafRefusal::of(error, endpoint_failed) {
             LeafRefusal::Seam(_) | LeafRefusal::Withheld => None,
             LeafRefusal::Rejected(rejection) => Some(rejection),
         };
         let lagging = match adopter.open_held(name, bytes).await {
-            Ok(adopted) => return Ok(adopted.sequence),
+            Ok(adopted) => return Ok(adopted),
             Err(GateError::Rejected(GateRejection {
                 reason: RejectionReason::EpochBelowFloor { epoch, .. },
                 ..
@@ -952,7 +974,6 @@ where
         adopter
             .open_interior_under(name, bytes, &seed)
             .await
-            .map(|(adopted, _)| adopted.sequence)
             .map_err(refused)
     }
 
@@ -1417,6 +1438,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: Some(1),
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: crate::grants::grafted::FloorNamespace::Own,
             }

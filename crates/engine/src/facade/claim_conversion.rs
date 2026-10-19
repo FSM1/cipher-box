@@ -1026,7 +1026,7 @@ where
         let write = report.write.ok_or_else(|| EngineError::Seam {
             message: "the write-scope cut ran no write wave".to_owned(),
         })?;
-        floor::advance_write_epoch_on_sight(
+        floor::advance_write_epoch_after_wave(
             self.floors,
             &target.scope.scope_id,
             write.new_write_epoch,
