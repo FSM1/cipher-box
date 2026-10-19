@@ -481,6 +481,14 @@ pub(crate) enum PutMark<'a> {
     /// The sequence the record was signed at, for a caller that marks a PUT
     /// no endpoint acknowledged: its bytes can still have landed.
     Signed(&'a core::cell::Cell<Option<u64>>),
+    /// [`Self::Signed`], and a monotonic-max raise of the floor-store `key`
+    /// to the signed sequence, which outlives the session.
+    SignedDurable {
+        /// The floor-store key the mark lives at.
+        key: &'a [u8],
+        /// The cell that takes the signed sequence.
+        signed: &'a core::cell::Cell<Option<u64>>,
+    },
 }
 
 /// The durable floors one signature is checked against, read last before it.
@@ -753,19 +761,13 @@ where
     )?;
 
     match mark {
-        Some(PutMark::Durable { key, value }) => {
-            let stored = floors
-                .raise_sequence_floor(key, value)
-                .await
-                .map_err(PublishError::MarkUnrecorded)?;
-            if stored < value {
-                return Err(PublishError::MarkUnrecorded(SeamError::new(
-                    "the floor store did not take the mark",
-                )));
-            }
-        }
+        Some(PutMark::Durable { key, value }) => raise_mark(floors, key, value).await?,
         Some(PutMark::Sent(sent)) => sent.set(true),
         Some(PutMark::Signed(signed)) => signed.set(Some(sequence)),
+        Some(PutMark::SignedDurable { key, signed }) => {
+            signed.set(Some(sequence));
+            raise_mark(floors, key, sequence).await?;
+        }
         None => {}
     }
 
@@ -777,6 +779,20 @@ where
         sequence,
     )
     .await
+}
+
+/// Raise the floor-store mark at `key` to `value`, or refuse the PUT.
+async fn raise_mark<F: FloorStore>(floors: &F, key: &[u8], value: u64) -> Result<(), PublishError> {
+    let stored = floors
+        .raise_sequence_floor(key, value)
+        .await
+        .map_err(PublishError::MarkUnrecorded)?;
+    if stored < value {
+        return Err(PublishError::MarkUnrecorded(SeamError::new(
+            "the floor store did not take the mark",
+        )));
+    }
+    Ok(())
 }
 
 /// PUT the signed `record_bytes` at `sequence` to every endpoint, then confirm

@@ -7,6 +7,11 @@
 //! the gated destination root and the write epoch floor (ADR 0077 D4), each
 //! publish reads the write epoch floor again, and each name goes into the
 //! name log before its first publish.
+//!
+//! Once every row is sealed, the confirm reads each row again: each source
+//! folder must name the children that the map places in it, and each copy
+//! must hold the body that its source gives now. A confirm that covers every
+//! row closes the seal (`close_seal`).
 
 use core::cell::Cell;
 use std::collections::btree_map::Entry;
@@ -47,6 +52,9 @@ pub(crate) struct DissolveSeal {
     mark: EndMark,
     /// The rows sealed under that destination, by map index.
     done: BTreeSet<u32>,
+    /// The rows that a read after every row was sealed found sealed, with
+    /// a source that the map still describes. Each row in it closes the seal.
+    confirmed: BTreeSet<u32>,
     /// A gate refused a record, or the endpoints served a fork. The run
     /// publishes nothing more.
     refused: bool,
@@ -62,6 +70,7 @@ impl DissolveSeal {
             binding: header.binding,
             mark,
             done: BTreeSet::new(),
+            confirmed: BTreeSet::new(),
             refused: false,
             rebind: None,
         }
@@ -73,7 +82,7 @@ impl DissolveSeal {
 }
 
 /// Why one tick of a seal stopped.
-enum SealFault {
+pub(super) enum SealFault {
     /// A read did not land, or the entry waits. The next tick reads again.
     Unanswered,
     /// A gate refused a record, or the endpoints served a fork. The event
@@ -100,13 +109,13 @@ impl<E> From<ReadFault<E>> for SealFault {
 }
 
 /// The destination of a seal tick, from the ends of the tick.
-struct Destination<'t, 'e> {
+pub(super) struct Destination<'t, 'e> {
     ends: &'t [ScopeEnd<'e>],
     /// The end of each scope root from the destination up to the vault root.
     /// Each copy name derives from the seed that the destination shares with
     /// each scope up to `write`.
-    chain: Vec<&'t ScopeEnd<'e>>,
-    write: &'t ScopeEnd<'e>,
+    pub(super) chain: Vec<&'t ScopeEnd<'e>>,
+    pub(super) write: &'t ScopeEnd<'e>,
 }
 
 /// The header that the gated destination root at `epoch` and `cut_epoch`,
@@ -277,6 +286,21 @@ fn fresh_body(
     }
 }
 
+/// Whether the children of `source`, the body of the row at `at`, are the
+/// old ids of the rows whose parent is that row.
+fn maps_the_children(source: &ReadBody, at: u32, rows: &[MapRow]) -> bool {
+    let ReadBody::Folder { children, .. } = source else {
+        return true;
+    };
+    let named: BTreeSet<NodeId> = children.iter().map(|child| NodeId(child.id)).collect();
+    let mapped: BTreeSet<NodeId> = rows
+        .iter()
+        .filter(|row| row.parent == Some(at))
+        .map(|row| row.old)
+        .collect();
+    named.len() == children.len() && named == mapped
+}
+
 /// One node this tick publishes.
 struct SealJob {
     at: u32,
@@ -394,7 +418,7 @@ where
     /// write cut is owed at one of them or a floor does not hold its seed. A
     /// write cut anywhere up to the vault root can move the copy names, so no
     /// rebind commits and no copy publishes while one runs (ADR 0077 D4).
-    async fn guards_hold(&self, target: &Destination<'_, '_>) -> Option<Vec<u64>> {
+    pub(super) async fn guards_hold(&self, target: &Destination<'_, '_>) -> Option<Vec<u64>> {
         let mut floors = Vec::with_capacity(target.chain.len());
         for end in &target.chain {
             if owes_write_cut(self.inputs.owed_write_cuts, end.root) {
@@ -460,12 +484,19 @@ where
         let scopes = row_scopes(&header, &rows).ok_or(SealFault::Unanswered)?;
         let index = row_index(&rows);
         let plane = dest.at(header.binding.read_epoch);
+        // Once every row is sealed, each row is read again: the confirm.
+        let confirming = run.done.len() == rows.len();
         let mut source_roots: BTreeMap<NodeId, LoadedRoot> = BTreeMap::new();
         let mut jobs = Vec::new();
         let mut fault = None;
         for (at, (row, scope)) in rows.iter().zip(&scopes).enumerate().rev() {
             let at = u32::try_from(at).map_err(|_| SealFault::Unanswered)?;
-            if run.done.contains(&at) {
+            let held = if confirming {
+                &run.confirmed
+            } else {
+                &run.done
+            };
+            if held.contains(&at) {
                 continue;
             }
             let Some(end) = end_of(*scope) else {
@@ -473,7 +504,16 @@ where
                 break;
             };
             let source = match self
-                .seal_source(owner, ends, &header, end, row.old, &mut source_roots, left)
+                .seal_source(
+                    owner,
+                    ends,
+                    &header,
+                    end,
+                    row.old,
+                    &mut source_roots,
+                    left,
+                    confirming,
+                )
                 .await
             {
                 Ok(Some(source)) => source,
@@ -483,6 +523,13 @@ where
                     break;
                 }
             };
+            // A source child that the map does not place in this folder, or
+            // a mapped child that the source no longer names, sends the entry
+            // back to its map step.
+            if confirming && !maps_the_children(&source, at, &rows) {
+                fault = Some(SealFault::Remap);
+                break;
+            }
             if !take_tick_read(left) {
                 break;
             }
@@ -502,14 +549,20 @@ where
             {
                 Ok(None) => {
                     run.done.insert(at);
+                    if confirming {
+                        run.confirmed.insert(at);
+                    }
                 }
-                Ok(Some(basis)) => jobs.push(SealJob {
-                    at,
-                    node: row.new,
-                    name,
-                    basis,
-                    body,
-                }),
+                Ok(Some(basis)) => {
+                    run.done.remove(&at);
+                    jobs.push(SealJob {
+                        at,
+                        node: row.new,
+                        name,
+                        basis,
+                        body,
+                    });
+                }
                 Err(error) => {
                     fault = Some(error);
                     break;
@@ -573,14 +626,21 @@ where
             .map_err(|_| SealFault::Unanswered)?;
             run.done.insert(job.at);
         }
-        fault.map_or(Ok(()), Err)
+        if let Some(fault) = fault {
+            return Err(fault);
+        }
+        if run.confirmed.len() == rows.len() {
+            self.close_seal(owner, ends, journal, hold, &header, left)
+                .await?;
+        }
+        Ok(())
     }
 
     /// The destination of the relink parent `node` now: its nearest scope
     /// root, and the nearest scope root from there up whose write seed is not
     /// its parent scope's, or the vault root. `None` when the tick holds no end
     /// for a scope on the path to the vault root.
-    fn destination_of<'t, 'e>(
+    pub(super) fn destination_of<'t, 'e>(
         &self,
         owner: &DrainScope<'_>,
         ends: &'t [ScopeEnd<'e>],
@@ -605,8 +665,9 @@ where
     }
 
     /// The source body of the row at `node` under `end`, its scope. A scope
-    /// root reads through its own gate once in a tick, into `roots`. `None`
-    /// when the tick has no reads left.
+    /// root reads through its own gate once in a tick, into `roots`. In the
+    /// confirm, its gated index may name only the scopes that `header` cuts.
+    /// `None` when the tick has no reads left.
     #[expect(clippy::too_many_arguments, reason = "one source read of one row")]
     async fn seal_source(
         &self,
@@ -617,6 +678,7 @@ where
         node: NodeId,
         roots: &mut BTreeMap<NodeId, LoadedRoot>,
         left: &Cell<usize>,
+        confirming: bool,
     ) -> Result<Option<ReadBody>, SealFault> {
         let root = match roots.entry(end.root) {
             Entry::Occupied(slot) => slot.into_mut(),
@@ -624,7 +686,7 @@ where
                 if !take_tick_read(left) {
                     return Ok(None);
                 }
-                let (root, _) = self.dissolve_root::<()>(owner, end).await?;
+                let (root, envelope) = self.dissolve_root::<()>(owner, end).await?;
                 // A row or another cut at a cut scope is work that the dissolve
                 // did not do, and the seal waits.
                 let commitment = root
@@ -638,6 +700,15 @@ where
                     cut_epoch_of(header, end.root),
                 ) {
                     return Err(SealFault::Unanswered);
+                }
+                if confirming
+                    && self
+                        .gated_index(end, &envelope)
+                        .await?
+                        .iter()
+                        .any(|scope| cut_epoch_of(header, *scope).is_none())
+                {
+                    return Err(SealFault::Remap);
                 }
                 slot.insert(root)
             }

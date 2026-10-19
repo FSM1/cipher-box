@@ -51,6 +51,7 @@ use crate::sync::rebase::decode_queue;
 use crate::sync::record::RecordReader;
 use crate::sync::tick::ResolveMode;
 
+mod relink;
 mod seal;
 
 pub(crate) use seal::DissolveSeal;
@@ -477,9 +478,9 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Drive the map and the seal step of each dissolve entry this owner
-    /// holds over the tick's own `ends`, within one share of reads for the
-    /// tick. An entry the drive cannot move waits for the next tick.
+    /// Drive the map, the seal and the relink step of each dissolve entry
+    /// this owner holds over the tick's own `ends`, within one share of reads
+    /// for the tick. An entry the drive cannot move waits for the next tick.
     pub(super) async fn drive_dissolves(&self, passes: &[DrainScope<'_>], ends: &[ScopeEnd<'_>]) {
         let Some(owner) = passes.iter().find(|scope| !scope.is_grafted()) else {
             return;
@@ -496,6 +497,7 @@ where
         for root in roots {
             let _ = self.drive_map(owner, ends, &journal, root, &left).await;
             self.drive_seal(owner, ends, &journal, root, &left).await;
+            self.drive_relink(owner, ends, &journal, root, &left).await;
         }
     }
 

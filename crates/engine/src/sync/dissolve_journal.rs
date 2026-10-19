@@ -8,7 +8,7 @@
 //! (AGENTS.md rule 8), and [`DissolveJournal::commit`] checks each header
 //! against the one it replaces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use core::cell::RefCell;
 use zeroize::Zeroizing;
@@ -928,9 +928,27 @@ pub struct DissolveCell {
     /// The source roots with an entry, `None` until this session lists the
     /// store. A pass then needs no listing of its own.
     roots: RefCell<Option<BTreeSet<NodeId>>>,
+    /// The cut scopes whose final records hold for less than one term, by
+    /// source root. The drain holds no pointer signer, so the owner pass
+    /// publishes them again.
+    short_terms: RefCell<BTreeMap<NodeId, BTreeSet<NodeId>>>,
 }
 
 impl DissolveCell {
+    /// Note that the final records of `scopes`, cut by the dissolve at
+    /// `root`, hold for less than one term.
+    pub fn note_short_terms(&self, root: NodeId, scopes: BTreeSet<NodeId>) {
+        self.short_terms.borrow_mut().insert(root, scopes);
+    }
+
+    /// Take the scopes that [`Self::note_short_terms`] noted for `root`.
+    pub fn take_short_terms(&self, root: NodeId) -> BTreeSet<NodeId> {
+        self.short_terms
+            .borrow_mut()
+            .remove(&root)
+            .unwrap_or_default()
+    }
+
     /// Drop what this session knows of the store, so the next session lists
     /// it again.
     pub fn forget(&self) {
