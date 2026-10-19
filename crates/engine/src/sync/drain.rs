@@ -146,7 +146,7 @@ mod dissolve;
 mod keyless_kept;
 mod walker;
 
-pub(crate) use dissolve::DissolveWalk;
+pub(crate) use dissolve::{DissolveSeal, DissolveWalk};
 
 use walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 
@@ -2203,6 +2203,8 @@ pub(crate) struct DrainCells<'a> {
     /// The map walks of dissolve entries that a tick left unfinished, by
     /// source root. In memory only.
     pub(crate) dissolve_walks: &'a RefCell<BTreeMap<NodeId, DissolveWalk>>,
+    /// The seals of dissolve entries, by source root. In memory only.
+    pub(crate) dissolve_seals: &'a RefCell<BTreeMap<NodeId, DissolveSeal>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -3005,7 +3007,7 @@ where
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
-        self.drive_dissolve_maps(&passes, &ends).await;
+        self.drive_dissolves(&passes, &ends).await;
         // The retire ledger is the identity's and reads under the vault root's
         // material, so only a tick that holds that root settles.
         if vault_held && let Some(vault) = passes.first() {
