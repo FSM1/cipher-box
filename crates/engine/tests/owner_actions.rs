@@ -31435,3 +31435,45 @@ fn a_concurrent_stop_after_the_copy_started_runs_no_forget() {
     assert!(book_holds(&fx, &identity), "no forget runs");
     assert!(fx.standing_dissolve().copy_started);
 }
+
+/// A joined scope cannot leave the subtree: a move of a scope root into
+/// another scope is refused, so the cut step of the join completes. A cut
+/// step that finds a joined scope outside the subtree after the copy started
+/// holds its entry at the cut step.
+#[test]
+fn a_joined_scope_cannot_leave_the_subtree_so_the_join_completes() {
+    let mut fx = GrantScenario::new();
+    let (plain, before) = log_the_cut_subtree(&mut fx);
+    grant_to_recipient(&mut fx.engine, plain);
+    let plain_pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &plain.0);
+    fx.world.record_store.fail_put_for(plain_pointer.as_str());
+    ticks(&mut fx, 6);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Cut,
+        "the shared folder joins"
+    );
+
+    let moved = block_on(fx.engine.command(Command::Move {
+        node: plain,
+        new_parent: ROOT,
+        new_name: "plain".into(),
+        replacing: None,
+    }));
+
+    assert!(
+        matches!(moved, Err(EngineError::ScopeExitRefused { .. })),
+        "the joined scope stays in the subtree"
+    );
+    fx.world.record_store.heal_put_for(plain_pointer.as_str());
+    ticks(&mut fx, 6);
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Seal);
+    let joined = header
+        .scopes
+        .iter()
+        .find(|scope| scope.scope_id == plain)
+        .expect("the joined scope stays listed");
+    assert!(joined.cut_time != 0 && joined.final_landed, "and is cut");
+    assert_eq!(new_ids(&fx), before, "the remap keeps each id");
+}
