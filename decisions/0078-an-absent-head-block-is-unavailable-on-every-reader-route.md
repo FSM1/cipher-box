@@ -1,6 +1,6 @@
 # ADR 0078: An absent head block is unavailable on every reader route
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-19
 - **Date:** 2026-10-18
 - **Relates to:** [#2448](https://github.com/FSM1/cipher-box/issues/2448),
   [ADR 0029](./0029-a-record-head-block-follows-placement-and-the-hosted-leg-alone-can-fail-an-op.md)
