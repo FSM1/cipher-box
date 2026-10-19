@@ -1500,7 +1500,11 @@ fall back at once on an owner command and in the re-drive that a command runs
 first, and in a sync pass re-drive only past the bound below (ADR 0068 D1,
 amended on 2026-10-03). A record below the floor, or a head block that no source
 holds, met while a record endpoint failed, is unavailable, with no trust event
-and no fallback (ADR 0071 D1). A transport fault, a local seam fault, and a root
+and no fallback (ADR 0071 D1). Every reader that is not an owner rotation reads a head
+block that no source holds as unavailable, whether or not an endpoint failed,
+with no trust event
+([ADR 0078](../decisions/0078-an-absent-head-block-is-unavailable-on-every-reader-route.md)
+D1). A transport fault, a local seam fault, and a root
 with no record at all never fall back. Each refused record sends one trust event
 in a session, with the scope root and the refused sequence. A
 confirmed scope root publish by the owner is a last copy (D2). A rotation whose
