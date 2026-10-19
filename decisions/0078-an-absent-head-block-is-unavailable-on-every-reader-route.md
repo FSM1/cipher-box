@@ -32,13 +32,8 @@ on 2026-10-18.
 whether or not an endpoint failed.** It adopts nothing, raises no floor, keeps last-known-good,
 sends no trust event, and reads again later. A boundary walk that meets it is unavailable, not
 rejected, and a rejection of another scope root in the same walk still holds. The renewal walk
-reports the scope root as a failed renewal, not as a rejection.
-
-**D2 — The root gate keeps `HeadBlockAbsent` as its own verdict, and each reader folds it.** The
-owner rotation reads it as ADR 0068 D1 states: a fallback at once on a command, past the bound of
-ADR 0065 D3 in a sync pass re-drive, with one trust event for each refused record. Every other
-reader folds it to unavailable under D1. An absent head block met while a record endpoint failed
-stays unavailable on every route, the owner rotation included (ADR 0071 D1).
+reports the scope root as a failed renewal, not as a rejection. The owner rotation keeps ADR
+0068 D1.
 
 ## Alternatives considered
 
@@ -53,22 +48,15 @@ stays unavailable on every route, the owner rotation included (ADR 0071 D1).
   signature. The owner commitment and the ascent link are inside the block. A writer who holds the
   write scope seed can sign, at either name, a record whose block no source holds. Thus the root
   and the child have the same exposure.
-- **Collapse `HeadBlockAbsent` into `Unavailable` at the gate.** Then the owner rotation cannot
+- **Unavailable on every route, the owner rotation included.** Then the owner rotation cannot
   fall back on a planted root whose block no source holds, and the ADR 0068 problem returns.
 
 ## Consequences
 
 1. ADR 0068 D1 carries an "Amended by ADR 0078 D1" sentence.
 2. `blueprint/engine.md` "rotateScopeWrite" states D1 beside the owner rotation rule.
-3. The renewal walk reports an absent head block of a scope root with a failed report and the
-   detail `NO_HEAD_BLOCK`, as it reports `NO_RECORD` for a name with no record. The host then
-   gets `renewalFailed`, so a grant does not lapse with no signal.
-4. A boundary walk that meets an absent head block sends no trust event, and the session does not
-   refuse moves and restores for good. They wait until a walk names the whole boundary set.
-5. The grantee rotation root read and the write wave scope boundary read stop as unavailable, and
-   a later pass reads again.
-6. `blueprint/testing.md` names the tests of #2474 for each changed route.
-7. `decisions/README.md` lists this ADR.
+3. `blueprint/testing.md` names the tests of #2474 for each changed route.
+4. `decisions/README.md` lists this ADR.
 
 ## Residuals
 
