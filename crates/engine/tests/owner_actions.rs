@@ -1085,19 +1085,60 @@ fn publishes_under(fx: &mut GrantScenario, parent: NodeId, name: &str, passes: u
     )
 }
 
-/// A flat cut of the vault root re-seals no nested scope root, but each nested
-/// root's ascent link derives from the root's override seed. The walk after
-/// the cut must still prove the granted folder, so a write under it publishes.
+/// Whether the ascent link `node` publishes opens under
+/// `nodeSeed(parent_seed, node)`.
+fn ascent_opens_under(fx: &GrantScenario, node: NodeId, parent_seed: &[u8; 32]) -> bool {
+    let section = published_grant_section(&fx.world, &fx.blocks, node).expect("a scope root");
+    let ascent = section
+        .ascent_link
+        .as_ref()
+        .expect("a nested scope root carries an ascent link");
+    open_ascent_link(
+        kdf::node_seed(parent_seed, &node.0).as_bytes(),
+        &AadContext {
+            v: ENVELOPE_V,
+            id: node.0,
+            scope: node.0,
+            epoch: published_read_epoch(&fx.world, &fx.blocks, node),
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        },
+        &AscentLink {
+            ascent_public: ascent.ascent_public,
+            enc: ascent.enc,
+            ciphertext: ascent.ciphertext.clone(),
+            unknown: PreservedFields::new(),
+        },
+    )
+    .is_ok()
+}
+
+/// The ascent link of a nested scope root derives from the override seed of
+/// the vault root. The cut itself re-seals that link under the new seed, so
+/// the walk after the cut still proves the granted folder and a write under it
+/// publishes.
 #[test]
 fn a_manual_rotation_of_the_vault_root_keeps_a_granted_folder_writable() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let (seed_before, epoch_before) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let (root_seed_before, _) = scope_material_of(&fx.world, &fx.blocks, ROOT);
+    assert!(ascent_opens_under(&fx, fx.folder, &root_seed_before));
 
     assert_eq!(
         block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
         Ok(CommandOutcome::Done)
+    );
+    // No sweep has run yet: the enqueued one is not polled, and no tick moved
+    // the clock.
+    let (root_seed_after, _) = scope_material_of(&fx.world, &fx.blocks, ROOT);
+    assert!(
+        ascent_opens_under(&fx, fx.folder, &root_seed_after),
+        "the cut re-sealed the link under the new seed of the vault root"
+    );
+    assert!(
+        !ascent_opens_under(&fx, fx.folder, &root_seed_before),
+        "and the old seed no longer opens it"
     );
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
@@ -1159,6 +1200,10 @@ fn after_a_restart_the_sweep_reseals_a_nested_root_a_cut_left_behind() {
         "later passes leave the re-sealed root as it is"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Grant
+// ---------------------------------------------------------------------------
 
 /// The refusal the grant arm owes is decided before any key material is
 /// wrapped: an unimported recipient has no verified subkey to seal to. Both

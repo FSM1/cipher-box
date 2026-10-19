@@ -439,9 +439,9 @@ impl SweepPublisher for FakeNet {
     async fn reseal_child_ascent(
         &self,
         _scope: &ChildScopeRef,
-        _child: &ChildScopeRef,
-    ) -> Result<(), RotationPublishError> {
-        Ok(())
+        child: &ChildScopeRef,
+    ) -> Result<crate::rotation::AscentRepair, crate::rotation::AscentResidual> {
+        Ok(crate::rotation::AscentRepair::Current(child.clone()))
     }
 }
 

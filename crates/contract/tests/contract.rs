@@ -1734,9 +1734,12 @@ impl SweepPublisher for LocalNet {
     async fn reseal_child_ascent(
         &self,
         _scope: &ChildScopeRef,
-        _child: &ChildScopeRef,
-    ) -> Result<(), RotationPublishError> {
-        Ok(())
+        child: &ChildScopeRef,
+    ) -> Result<cipherbox_engine::rotation::AscentRepair, cipherbox_engine::rotation::AscentResidual>
+    {
+        Ok(cipherbox_engine::rotation::AscentRepair::Current(
+            child.clone(),
+        ))
     }
 }
 

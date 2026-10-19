@@ -8,8 +8,10 @@ use std::rc::Rc;
 use cipherbox_core::seal::ChildScopeRef;
 use futures_channel::mpsc;
 
+use super::reseal::MAX_RETAINED_HISTORY_LINKS;
+use super::rotate::RotationPublishError;
 use super::rotate::{RotateError, RotationOutcome, complete_cut, rotate_scope};
-use super::sweep::{SweepKeys, SweepTaskFactory, reseal_ascents_after_cut};
+use super::sweep::{AscentResidual, SweepKeys, SweepTaskFactory, reseal_child_ascents_of};
 use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, ScopeRootIdentity};
 use crate::api::ApiClient;
 use crate::content::read::Gateway;
@@ -179,6 +181,17 @@ where
     if ascent.is_none() && anchor.is_none() {
         return Err(RotateError::Resolve(ResolveFailure::Unavailable));
     }
+    // Each cut adds a history link and the window drops the oldest, so a cut
+    // that would drop the seed an owed child still opens under waits for that
+    // re-seal (ADR 0080).
+    if let Some((epoch, residuals)) = reseal_child_ascents_of(net, net, scope).await
+        && residuals.iter().any(|(_, residual)| {
+            matches!(residual, AscentResidual::Owed { epoch: owed, .. }
+                if epoch.saturating_add(1) - owed >= MAX_RETAINED_HISTORY_LINKS as u64)
+        })
+    {
+        return Err(RotateError::Publish(RotationPublishError::NotPublished));
+    }
     let current = net
         .resolve_anchored(scope)
         .await
@@ -204,7 +217,7 @@ where
                 make_sweep,
             )
             .await?;
-            reseal_ascents_after_cut(net, net, scope).await;
+            reseal_child_ascents_of(net, net, scope).await;
             return Ok(outcome);
         }
     }
@@ -242,9 +255,7 @@ where
         make_sweep,
     )
     .await?;
-    // The cut is landed, so a nested root this leaves unsealed is the sweep's
-    // to retry rather than a reason to cut again.
-    reseal_ascents_after_cut(net, net, scope).await;
+    reseal_child_ascents_of(net, net, scope).await;
     Ok(outcome)
 }
 

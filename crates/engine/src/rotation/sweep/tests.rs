@@ -1088,3 +1088,42 @@ fn the_check_surface_matches_the_variants_in_order() {
     .collect();
     assert_eq!(named, SweepError::CHECKS);
 }
+
+// --- The ascent re-seal of indexed scope roots (ADR 0080) ---
+
+/// A residual a retry can clear keeps the scope unsettled, and one it cannot
+/// settles it. Either way the root counts as not proved at the epoch.
+#[test]
+fn only_a_retryable_ascent_residual_keeps_the_scope_unsettled() {
+    let cases = [
+        (
+            AscentResidual::Retry(RotationPublishError::NotPublished),
+            true,
+        ),
+        (
+            AscentResidual::Owed {
+                epoch: 3,
+                error: RotationPublishError::LostRace,
+            },
+            true,
+        ),
+        (AscentResidual::Superseded, true),
+        (AscentResidual::OutOfReach, false),
+        (AscentResidual::NotResealable, false),
+        (AscentResidual::Rejected, false),
+    ];
+    for (residual, unsettled) in cases {
+        let outcome = SweepOutcome {
+            scope_read_epoch: 5,
+            unrepaired_ascents: vec![(id(0x07), residual.clone())],
+            ..SweepOutcome::default()
+        };
+        assert_eq!(outcome.worth_another_pass(), unsettled, "{residual:?}");
+        assert_eq!(
+            outcome.settled_epoch(),
+            (!unsettled).then_some(5),
+            "{residual:?}"
+        );
+        assert_eq!(outcome.old_epoch_nodes(), 1, "{residual:?}");
+    }
+}
