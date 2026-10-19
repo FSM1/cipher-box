@@ -335,17 +335,22 @@ where
         } else {
             // The write scope comes from the seeds of the ends, which can
             // differ for one tick, so a change of it alone commits only when
-            // two ticks in a row compute it. A walk that did not prove the
-            // bound read scope reads its nodes as its parent's, so no read
-            // rebind commits off it.
+            // two ticks in a row compute it. A walk that did not finish, or
+            // did not prove the bound read scope, reads its nodes as its
+            // parent's, so no read rebind commits off it.
             let confirmed = if dest.root == binding.read_scope {
-                let previous = self.inputs.tick.checked_sub(1);
-                carried.as_ref().and_then(|run| run.rebind) == previous.map(|at| (candidate, at))
+                carried
+                    .as_ref()
+                    .and_then(|run| run.rebind)
+                    .is_some_and(|(seen, at)| {
+                        seen == candidate && at.checked_add(1) == Some(self.inputs.tick)
+                    })
             } else {
-                !self
-                    .inputs
-                    .unproved_scope_roots
-                    .contains(&binding.read_scope)
+                self.inputs.walk_complete
+                    && !self
+                        .inputs
+                        .unproved_scope_roots
+                        .contains(&binding.read_scope)
             };
             let next = rebound(&header, dest.root, target.write.root).filter(|_| confirmed);
             let committed = match next {

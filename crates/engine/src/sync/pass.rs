@@ -1518,6 +1518,7 @@ where
                     .as_deref()
                     .map(|keys| &keys.scope_keys as &dyn OwnerPointerRead),
                 tick: self.passes.get(),
+                walk_complete,
                 unproved_scope_roots: &scopes.unproved,
             },
         );

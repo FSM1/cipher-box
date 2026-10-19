@@ -2276,6 +2276,9 @@ pub(crate) struct TickInputs<'a> {
     pub(crate) owner_pointers: Option<&'a dyn OwnerPointerRead>,
     /// The number of this tick in the session.
     pub(crate) tick: u64,
+    /// This tick's scope walk ran and met no failure, so its proved and
+    /// unproved scope roots name the whole boundary set.
+    pub(crate) walk_complete: bool,
     /// The scope roots a walk named and did not prove
     /// ([`SessionState::unproved_scope_roots`](crate::session::SessionState::unproved_scope_roots)).
     pub(crate) unproved_scope_roots: &'a BTreeSet<NodeId>,
@@ -13047,6 +13050,7 @@ mod tests {
                     owed_write_cuts: Some(&[]),
                     owner_pointers: None,
                     tick: 1,
+                    walk_complete: true,
                     unproved_scope_roots: &NO_UNPROVED,
                     deferred_raises: &self.deferred_raises,
                     every_scope_reached: true,
@@ -14507,6 +14511,7 @@ mod tests {
                 owed_write_cuts: Some(&[]),
                 owner_pointers: None,
                 tick: 1,
+                walk_complete: true,
                 unproved_scope_roots: &NO_UNPROVED,
                 deferred_raises: &harness.deferred_raises,
                 every_scope_reached: true,

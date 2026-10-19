@@ -323,6 +323,11 @@ impl Blocks {
         self.failing.lock().expect("lock").insert(cid.to_owned());
     }
 
+    /// Serve `cid` again after [`Self::fail_block`].
+    pub fn heal_block(&self, cid: &str) {
+        self.failing.lock().expect("lock").remove(cid);
+    }
+
     /// The one block on the plane, for a fixture that uploaded exactly one.
     pub fn only_block(&self) -> String {
         let store = self.store.lock().expect("lock");

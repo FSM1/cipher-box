@@ -30367,10 +30367,11 @@ fn a_fork_that_names_a_former_destination_holds_the_seal() {
 }
 
 /// A change of the write scope alone commits only on two ticks in a row. A
-/// tick between them that fails a guard drops the candidate, so the next
-/// mismatch does not confirm it: the header stays, and nothing publishes.
+/// tick between them that fails a guard leaves the candidate a tick behind by
+/// its tick number, so the next mismatch does not confirm it: the header
+/// stays, and nothing publishes.
 #[test]
-fn a_guard_that_fails_between_two_mismatches_drops_the_rebind_candidate() {
+fn a_guard_that_fails_between_two_mismatches_leaves_the_rebind_candidate_stale() {
     let mut fx = GrantScenario::new();
     let (inner, _) = seal_inner_into_the_folder(&mut fx);
     let folder = fx.folder;
@@ -30425,6 +30426,32 @@ fn a_restart_that_does_not_prove_the_destination_spends_no_slot() {
     assert_eq!(header.binding.read_scope, fx.folder);
 }
 
+/// A restart whose first walk stops with a transient fault before it names
+/// the folder proves no scope root, and the relink parent reads under the
+/// vault root. The walk did not finish, so no read rebind commits, and
+/// nothing rebinds after the walk heals.
+#[test]
+fn a_restart_whose_walk_stops_before_it_names_the_destination_spends_no_slot() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let value = published_value(&fx.world, &write_name(ROOT));
+    let head = String::from_utf8(value).expect("an /ipfs/ path");
+    let cid = head.trim_start_matches("/ipfs/");
+    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.blocks.fail_block(cid);
+
+    tick(&fx.world, &engine, &mut tasks);
+
+    assert!(
+        header_at(&fx, inner).prior_bindings.is_empty(),
+        "no slot while the walk does not finish"
+    );
+    fx.blocks.heal_block(cid);
+    tick(&fx.world, &engine, &mut tasks);
+    let header = header_at(&fx, inner);
+    assert!(header.prior_bindings.is_empty(), "no slot after the walk");
+    assert_eq!(header.binding.read_scope, fx.folder);
+}
 /// ADR 0077 D4: no rebind commits on a tick where a write cut is owed on the
 /// chain from the destination to the vault root.
 #[test]
