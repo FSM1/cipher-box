@@ -216,16 +216,31 @@ where
     // Each cut adds a history link and the window drops the oldest, so a cut
     // that would drop the seed an owed child still opens under waits for that
     // re-seal (ADR 0080).
-    if strands_owed_child(current.current_read_epoch, 0)
-        && let Some((epoch, residuals)) = reseal_child_ascents_of(net, net, scope).await
-        && let Some((child, _)) = residuals.iter().find(|(_, residual)| match residual {
-            AscentResidual::Owed { epoch: owed, .. } => {
-                residual.is_retryable() && strands_owed_child(epoch, *owed)
-            }
-            _ => false,
-        })
-    {
-        return Err(RotateError::NestedRootOwed { child: *child });
+    if strands_owed_child(current.current_read_epoch, 0) {
+        // The re-seal reads P again and publishes children through the one
+        // parked slot. The cut publishes over the base of its own read, so a
+        // cut of P between the two reads makes it lose the CAS.
+        let own_read = net.gated.hold();
+        let owed = reseal_child_ascents_of(net, net, scope)
+            .await
+            .and_then(|(epoch, residuals)| {
+                residuals
+                    .into_iter()
+                    .find_map(|(child, residual)| match residual {
+                        AscentResidual::Owed { epoch: owed, .. }
+                            if strands_owed_child(epoch, owed) =>
+                        {
+                            Some(child)
+                        }
+                        _ => None,
+                    })
+            });
+        net.put_back_unmoved(own_read)
+            .await
+            .map_err(RotateError::Publish)?;
+        if let Some(child) = owed {
+            return Err(RotateError::NestedRootOwed { child });
+        }
     }
     let outcome = rotate_scope(
         &mut SharedEntropy(net.entropy),

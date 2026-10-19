@@ -159,9 +159,6 @@ impl FakeNet {
         self
     }
 
-    /// A descendant scope root: the walk stops at it, so it never publishes a
-    /// body and never yields children. `indexed` lists it in the scope's
-    /// `directChildScopeIndex`; omitting it is the #38 D6 gap.
     /// The ascent repair of scope root `byte` finds it at `name`.
     pub(crate) fn ascent_moved_to(self, byte: u8, name: &[u8]) -> Self {
         self.state
@@ -171,6 +168,9 @@ impl FakeNet {
         self
     }
 
+    /// A descendant scope root: the walk stops at it, so it never publishes a
+    /// body and never yields children. `indexed` lists it in the scope's
+    /// `directChildScopeIndex`; omitting it is the #38 D6 gap.
     pub(crate) fn scope_root(self, byte: u8, indexed: bool) -> Self {
         {
             let mut state = self.state.borrow_mut();
