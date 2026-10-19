@@ -812,7 +812,13 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-cut-epoch-fell");
     }
-    if held.step >= DissolveStep::Relink && new.step < held.step {
+    // While no relink left this device, a moved destination seals again
+    // (ADR 0077 D4).
+    let reseal = held.step == DissolveStep::Relink
+        && new.step == DissolveStep::Seal
+        && !held.relink_sent
+        && !new.relink_sent;
+    if held.step >= DissolveStep::Relink && new.step < held.step && !reseal {
         return Err("dissolve-journal-step-back-after-relink");
     }
     // A re-cut returns to the cut step, and only before the copy is named.

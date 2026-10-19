@@ -9808,7 +9808,7 @@ where
         folder: NodeId,
         modified_at: u64,
         completes: Option<Completion<'_>>,
-        mark: Option<&[u8]>,
+        mark: Option<&[Vec<u8>]>,
     ) -> Result<u64, PublishHalt> {
         let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
@@ -9986,9 +9986,9 @@ where
         .await
     }
 
-    /// [`Self::publish_node`]. When `mark` names a floor-store key, the
-    /// publish raises it to the signed sequence before the PUT
-    /// ([`PutMark::SignedDurable`]).
+    /// [`Self::publish_node`]. When `mark` names floor-store keys, the
+    /// publish signs above each, and raises each to the signed sequence
+    /// before the PUT ([`PutMark::SignedDurable`]).
     #[expect(clippy::too_many_arguments, reason = "one record's full authoring")]
     async fn publish_node_marked(
         &self,
@@ -10003,7 +10003,7 @@ where
         carried_epoch_tag_unknown: PreservedFields,
         completes: Option<Completion<'_>>,
         lost_winner: LostWinner,
-        mark: Option<&[u8]>,
+        mark: Option<&[Vec<u8>]>,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         let base = observed.sequence();
@@ -10071,16 +10071,15 @@ where
             None
         };
         let observed = observed.clearing(signed_over.cleared_by(floor));
-        // A marked publish signs above each sequence that it signed before.
-        let observed = match mark {
-            Some(key) => observed.clearing(
+        let mut observed = observed;
+        for key in mark.unwrap_or_default() {
+            observed = observed.clearing(
                 floor::sequence_floor(&plane.end.floors(&self.seams.floors), key)
                     .await
                     .map_err(|error| PublishHalt::before_the_put(seam(error)))?
                     .unwrap_or(0),
-            ),
-            None => observed,
-        };
+            );
+        }
         let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone(), mark)
             .await
@@ -10247,7 +10246,7 @@ where
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
-        mark: Option<&[u8]>,
+        mark: Option<&[Vec<u8>]>,
     ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
@@ -10271,8 +10270,8 @@ where
             self.head_placement(),
             &mut mirror,
             Some(match mark {
-                Some(key) => PutMark::SignedDurable {
-                    key,
+                Some(keys) => PutMark::SignedDurable {
+                    keys,
                     signed: &signed,
                 },
                 None => PutMark::Signed(&signed),

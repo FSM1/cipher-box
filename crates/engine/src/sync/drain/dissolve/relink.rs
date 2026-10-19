@@ -8,12 +8,14 @@
 //!
 //! The header holds `relink_sent` and the parent name before the publish
 //! call, and the floor store holds the signed sequence before the PUT
-//! ([`PutMark::SignedDurable`](crate::net::publish::PutMark)). A relink
-//! publish signs above that mark, so no retry signs other bytes at a sequence
-//! that this device signed. Each tick reads the gated parent first: a parent
-//! that names neither root parks the entry once a relink was sent, and a
-//! parked entry keeps its copy. With no relink sent, the copy is this
-//! device's alone, and its names retire (ADR 0077, "Rotation primitives").
+//! ([`PutMark::SignedDurable`](crate::net::publish::PutMark)): at a mark of
+//! the entry, and at a mark of the parent name that every entry shares. A
+//! relink publish signs above both, so no relink publish signs other bytes at
+//! a sequence that a relink publish of this device signed. Each tick reads
+//! the gated parent first: a parent that names neither root parks the entry
+//! once a relink was sent, and a parked entry keeps its copy. With no relink
+//! sent, the copy is this device's alone, and its names retire (ADR 0077,
+//! "Rotation primitives"), and a moved destination seals again (ADR 0077 D4).
 
 use core::cell::Cell;
 use std::collections::BTreeSet;
@@ -25,6 +27,7 @@ use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_re
 use super::seal::{Destination, SealFault, restarted};
 use super::{NotDriven, cut_epoch_of, cut_overtaken};
 use crate::facade::{NodeId, emit_trust_violation};
+use crate::gate::floor;
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
 use crate::net::publish::head_cid_from_value;
 use crate::net::retire::retire;
@@ -40,14 +43,20 @@ use crate::sync::dissolve_journal::{
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 
-/// The floor-store prefix of a relink mark.
+/// The floor-store prefix of the relink mark of one entry.
 const RELINK_MARK_PREFIX: &[u8] = b"dissolve-relink/";
 
-/// The floor-store key of the relink mark of the dissolve of `source_root`
-/// at the parent name `name`: the highest sequence a relink publish signed
-/// there.
-fn relink_mark_key(source_root: NodeId, name: &[u8]) -> Vec<u8> {
-    [RELINK_MARK_PREFIX, &source_root.0, name].concat()
+/// The floor-store prefix of the relink mark of one parent name.
+const PARENT_MARK_PREFIX: &[u8] = b"dissolve-relink-parent/";
+
+/// The floor-store keys of the relink marks of the dissolve of `source_root`
+/// at the parent name `name`: the mark of the entry, then the mark of the
+/// name. Each holds the highest sequence that a relink publish signed there.
+fn relink_mark_keys(source_root: NodeId, name: &[u8]) -> [Vec<u8>; 2] {
+    [
+        [RELINK_MARK_PREFIX, &source_root.0, name].concat(),
+        [PARENT_MARK_PREFIX, name].concat(),
+    ]
 }
 
 /// The time, in scheduler milliseconds, until which a final record cut at
@@ -79,6 +88,16 @@ enum ParentNames {
     Neither,
     /// Both roots.
     Both,
+}
+
+/// Whether the binding `now` that the destination gives moves the copy off
+/// the binding `was` of the seal: a change other than a rise of the read
+/// epoch, which a grantee rise moves alone.
+fn moved(was: DissolveBinding, now: DissolveBinding) -> bool {
+    DissolveBinding {
+        read_epoch: was.read_epoch,
+        ..now
+    } != was
 }
 
 impl<T, H, C, F, S, St, Sch> Drain<'_, T, H, C, F, S, St, Sch>
@@ -131,7 +150,7 @@ where
 
     /// The final records of `scope` under `end`, from gated reads: the root,
     /// which must hold no row at the cut epoch of the dissolve, and the
-    /// scope pointer. An absent pointer gives no EOL.
+    /// scope pointer. A scope with no pointer gives the root EOL.
     async fn final_records(
         &self,
         owner: &DrainScope<'_>,
@@ -169,12 +188,9 @@ where
             owner_identity: owner.owner_identity,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
+        let floors = end.floors(&self.seams.floors);
         match consult
-            .read(
-                &self.seams.transport,
-                &end.floors(&self.seams.floors),
-                &scope.scope_id.0,
-            )
+            .read(&self.seams.transport, &floors, &scope.scope_id.0)
             .await
         {
             Ok(Some(read)) => {
@@ -182,7 +198,17 @@ where
                     signed_eol(&pointer_name, &read.record_bytes).ok_or(SealFault::Unanswered)?;
                 hold_until = hold_until.min(eol);
             }
-            Ok(None) => {}
+            // A pointer that this device signed and that no endpoint serves
+            // proves no term.
+            Ok(None) => {
+                if floor::sequence_floor(&floors, pointer_name.as_str().as_bytes())
+                    .await
+                    .map_err(|_| SealFault::Unanswered)?
+                    .is_some()
+                {
+                    hold_until = 0;
+                }
+            }
             Err(PointerConsultError::Unavailable) => return Err(SealFault::Unanswered),
             Err(PointerConsultError::Rejected) => {
                 emit_trust_violation(
@@ -228,8 +254,8 @@ where
             .await;
     }
 
-    /// One tick of the relink: read the gated parent under the bound
-    /// destination, then act on what it names.
+    /// One tick of the relink: read the gated parent under the destination
+    /// now, then act on what it names.
     async fn relink_tick(
         &self,
         owner: &DrainScope<'_>,
@@ -239,22 +265,10 @@ where
         header: DissolveHeader,
         left: &Cell<usize>,
     ) -> Result<(), NotDriven> {
-        let binding = header.binding;
         let target = self
             .destination_of(owner, ends, header.relink_parent)
             .ok_or(NotDriven)?;
-        // The copy seals under the bound destination, and no rebind comes
-        // after the seal.
-        if (target.chain[0].root, target.write.root) != (binding.read_scope, binding.write_scope) {
-            return Err(NotDriven);
-        }
-        let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
         let dest = *target.chain[0];
-        let scope = DrainScope {
-            source: dest,
-            destination: None,
-            ..*owner
-        };
         let pass = match self.relink_parent(owner, ends, &header, &dest, left).await {
             Ok(pass) => pass,
             Err(ReadFault::Untrusted) if header.relink_sent => {
@@ -278,13 +292,24 @@ where
                 Ok(journal.commit(hold, Some(&header), &next).await?)
             }
             ParentNames::Source => {
-                if !self
-                    .keeps_binding(owner, &header, &target, &floors, &pass, left)
+                let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
+                match self
+                    .destination_moved(owner, &header, &target, &floors, &pass, left)
                     .await
                 {
-                    return Err(NotDriven);
+                    None => Err(NotDriven),
+                    Some(true) if header.relink_sent => self.park(journal, hold, &header).await,
+                    Some(true) => self.reseal(journal, hold, &header).await,
+                    Some(false) => {
+                        let scope = DrainScope {
+                            source: dest,
+                            destination: None,
+                            ..*owner
+                        };
+                        self.relink(&scope, journal, hold, header, pass, &target, &floors)
+                            .await
+                    }
                 }
-                self.relink(&scope, journal, hold, header, pass).await
             }
             ParentNames::Neither if !header.relink_sent => {
                 self.forsake(journal, hold, &header).await
@@ -293,11 +318,11 @@ where
         }
     }
 
-    /// Whether the copy still stands at the names and under the floors that
-    /// `header` binds: no owner cut of the destination read scope and no
-    /// write cut of its write scope since the seal (ADR 0077 D4). A grantee
-    /// rise keeps the copy, which the lazy wave carries after the relink.
-    async fn keeps_binding(
+    /// Whether the destination moved since the seal: another read or write
+    /// scope, an owner cut of the read scope, or a write cut of the write
+    /// scope (ADR 0077 D4). A grantee rise keeps the copy, which the lazy wave
+    /// carries after the relink. `None` while a read lags the header.
+    async fn destination_moved(
         &self,
         owner: &DrainScope<'_>,
         header: &DissolveHeader,
@@ -305,33 +330,26 @@ where
         floors: &[u64],
         pass: &Pass,
         left: &Cell<usize>,
-    ) -> bool {
+    ) -> Option<bool> {
+        let was = header.binding;
         let dest = target.chain[0];
-        let Some(write_floor) = target
+        if (dest.root, target.write.root) != (was.read_scope, was.write_scope) {
+            return Some(true);
+        }
+        let write_floor = target
             .chain
             .iter()
             .zip(floors)
-            .find_map(|(end, floor)| (end.root == target.write.root).then_some(*floor))
-        else {
-            return false;
-        };
-        let Ok(root) = pass.folder(dest.root) else {
-            return false;
-        };
-        let cut_epoch = root
+            .find_map(|(end, floor)| (end.root == target.write.root).then_some(*floor))?;
+        let cut_epoch = pass
+            .folder(dest.root)
+            .ok()?
             .commitment
             .as_ref()
             .map_or(0, |commitment| commitment.cut_epoch);
-        let Ok(vouched) = self.vouched_read_epoch(owner, dest, left).await else {
-            return false;
-        };
-        let was = header.binding;
-        restarted(header, pass.epoch, cut_epoch, vouched, write_floor).is_some_and(|next| {
-            DissolveBinding {
-                read_epoch: was.read_epoch,
-                ..next.binding
-            } == was
-        })
+        let vouched = self.vouched_read_epoch(owner, dest, left).await.ok()?;
+        let next = restarted(header, pass.epoch, cut_epoch, vouched, write_floor)?;
+        Some(moved(was, next.binding))
     }
 
     /// A pass over `dest` that holds the relink parent of `header`, read
@@ -384,7 +402,9 @@ where
     }
 
     /// Publish the relink parent with the copy's root in place of the source
-    /// root. The header holds `relink_sent` and the parent name first.
+    /// root, under the write leases of `target`'s chain at `floors`. The
+    /// header holds `relink_sent` and the parent name first.
+    #[expect(clippy::too_many_arguments, reason = "one relink publish")]
     async fn relink(
         &self,
         scope: &DrainScope<'_>,
@@ -392,6 +412,8 @@ where
         hold: &DissolveHold<'_>,
         header: DissolveHeader,
         mut pass: Pass,
+        target: &Destination<'_, '_>,
+        floors: &[u64],
     ) -> Result<(), NotDriven> {
         let source = header.scopes[0].scope_id;
         let parent = header.relink_parent;
@@ -402,6 +424,10 @@ where
             .as_str()
             .as_bytes()
             .to_vec();
+        let _leases = self
+            .lease_the_chain(target, floors)
+            .await
+            .map_err(|_| NotDriven)?;
         let header = if header.relink_sent && header.relink_names.contains(&name) {
             header
         } else {
@@ -431,8 +457,8 @@ where
             }
         }
         let modified_at = state.modified_at;
-        let key = relink_mark_key(source, &name);
-        self.publish_folder_marked(scope, &mut pass, parent, modified_at, None, Some(&key))
+        let keys = relink_mark_keys(source, &name);
+        self.publish_folder_marked(scope, &mut pass, parent, modified_at, None, Some(&keys))
             .await
             .map_err(|_| NotDriven)?;
         let mut next = header.clone();
@@ -463,6 +489,23 @@ where
         Ok(journal.drop_entry(hold, header).await?)
     }
 
+    /// No relink left this device, and the destination moved: the entry
+    /// goes back to its seal, which binds the destination again and closes
+    /// new manifests (ADR 0077 D4).
+    async fn reseal(
+        &self,
+        journal: &DissolveJournal<'_, St>,
+        hold: &DissolveHold<'_>,
+        header: &DissolveHeader,
+    ) -> Result<(), NotDriven> {
+        let mut next = header.clone();
+        next.step = DissolveStep::Seal;
+        for scope in &mut next.scopes {
+            scope.manifest = None;
+        }
+        Ok(journal.commit(hold, Some(header), &next).await?)
+    }
+
     /// Mark the entry parked: its copy stays, and nothing retires.
     async fn park(
         &self,
@@ -473,5 +516,44 @@ where
         let mut parked = header.clone();
         parked.parked = true;
         Ok(journal.commit(hold, Some(header), &parked).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header() -> DissolveHeader {
+        let binding = DissolveBinding {
+            read_scope: NodeId([0x01; 16]),
+            read_epoch: 3,
+            restart_floor: 3,
+            base_cut: 2,
+            write_scope: NodeId([0x01; 16]),
+            write_epoch: 5,
+        };
+        DissolveHeader::at_cut(
+            NodeId([0x70; 16]),
+            NodeId([0x01; 16]),
+            binding,
+            vec![DissolvedScope::uncut(NodeId([0x50; 16]))],
+        )
+    }
+
+    /// ADR 0077 D4 before the relink: a grantee rise keeps the copy, and an
+    /// owner cut, a pointer rise or a write cut moves it.
+    #[test]
+    fn only_a_grantee_rise_keeps_the_copy_at_the_relink() {
+        let held = header();
+        let moves = |epoch, cut_epoch, vouched, write_epoch| {
+            let next = restarted(&held, epoch, cut_epoch, vouched, write_epoch).expect("no lag");
+            moved(held.binding, next.binding)
+        };
+
+        assert!(!moves(3, 2, 3, 5), "no change");
+        assert!(!moves(4, 2, 3, 5), "a grantee rise");
+        assert!(moves(4, 3, 3, 5), "an owner cut");
+        assert!(moves(4, 2, 4, 5), "a pointer rise");
+        assert!(moves(3, 2, 3, 6), "a write cut");
     }
 }

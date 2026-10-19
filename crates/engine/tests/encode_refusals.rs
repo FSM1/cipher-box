@@ -844,6 +844,43 @@ fn the_dissolve_journal_writer_refuses_a_step_back_past_relink() {
     );
 }
 
+/// While no relink left this device, the relink goes back to the seal and
+/// nowhere further. Once a relink was sent, it does not go back.
+#[test]
+fn the_dissolve_journal_writer_takes_a_return_to_seal_only_before_a_relink() {
+    let mut held = dissolve_header_at(DissolveStep::Relink);
+    held.relink_sent = false;
+    held.relink_names.clear();
+    let back = |step: DissolveStep| {
+        let mut back = DissolveHeader {
+            step,
+            ..held.clone()
+        };
+        for scope in &mut back.scopes {
+            scope.manifest = None;
+        }
+        back
+    };
+    assert_eq!(
+        dissolve_commit(&held, &[], &back(DissolveStep::Seal)),
+        Ok(())
+    );
+    assert_eq!(
+        dissolve_commit(&held, &[], &back(DissolveStep::Map)),
+        Err("dissolve-journal-step-back-after-relink".to_owned())
+    );
+    let sent = DissolveHeader {
+        step: DissolveStep::Seal,
+        relink_sent: true,
+        relink_names: vec![b"k51parent".to_vec()],
+        ..held.clone()
+    };
+    assert_eq!(
+        dissolve_commit(&held, &[], &sent),
+        Err("dissolve-journal-step-back-after-relink".to_owned())
+    );
+}
+
 /// The journal writer refuses to rewrite a page of the live map, so a stop
 /// before the next header commits reads the map the header counts.
 #[test]

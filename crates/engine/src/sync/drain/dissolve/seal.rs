@@ -290,7 +290,7 @@ fn fresh_body(
 /// old ids of the rows whose parent is that row.
 fn maps_the_children(source: &ReadBody, at: u32, rows: &[MapRow]) -> bool {
     let ReadBody::Folder { children, .. } = source else {
-        return true;
+        return rows.iter().all(|row| row.parent != Some(at));
     };
     let named: BTreeSet<NodeId> = children.iter().map(|child| NodeId(child.id)).collect();
     let mapped: BTreeSet<NodeId> = rows
@@ -427,6 +427,31 @@ where
             floors.push(self.write_floor(end).await.ok()?);
         }
         Some(floors)
+    }
+
+    /// The write lease of each end of `target`'s chain, taken once each write
+    /// floor still is the one in `held` with no deferred raise above it. A
+    /// write cut moves each name, so no publish under the leases lands at a
+    /// name of the old write seed (ADR 0077 D4).
+    pub(super) async fn lease_the_chain(
+        &self,
+        target: &Destination<'_, '_>,
+        held: &[u64],
+    ) -> Result<Vec<floor::WriteEpochLease>, SealFault> {
+        let mut leases = Vec::with_capacity(target.chain.len());
+        for end in &target.chain {
+            leases
+                .push(floor::acquire_write_epoch_lease(&end.root.0).ok_or(SealFault::Unanswered)?);
+        }
+        for (end, held) in target.chain.iter().zip(held) {
+            let current = self.write_floor(end).await?;
+            let deferred = floor::owed_write_raise(&end.floors(&self.seams.floors), &end.root.0)
+                .map_err(|_| SealFault::Unanswered)?;
+            if !floor_holds(current, *held, deferred) {
+                return Err(SealFault::Unanswered);
+            }
+        }
+        Ok(leases)
     }
 
     /// One tick of the seal: the D4 check, then each row left, children
@@ -582,23 +607,7 @@ where
         }
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
-            // A write cut moves each copy name: no publish lands at a name of
-            // the old write seed (ADR 0077 D4).
-            let mut leases = Vec::with_capacity(target.chain.len());
-            for end in &target.chain {
-                leases.push(
-                    floor::acquire_write_epoch_lease(&end.root.0).ok_or(SealFault::Unanswered)?,
-                );
-            }
-            for (end, held) in target.chain.iter().zip(held_floors) {
-                let current = self.write_floor(end).await?;
-                let deferred =
-                    floor::owed_write_raise(&end.floors(&self.seams.floors), &end.root.0)
-                        .map_err(|_| SealFault::Unanswered)?;
-                if !floor_holds(current, *held, deferred) {
-                    return Err(SealFault::Unanswered);
-                }
-            }
+            let _leases = self.lease_the_chain(target, held_floors).await?;
             let content_cids = match &job.body {
                 ReadBody::File { versions, .. } => versions
                     .iter()
@@ -1282,5 +1291,22 @@ mod tests {
         assert!(unknown.is_empty());
         version.unknown = PreservedFields::new();
         assert_eq!(versions, vec![version]);
+    }
+
+    /// A row that the map holds as a folder with mapped children, and that
+    /// the source now holds as a file, does not confirm: the confirm sends it
+    /// back to the map. A file with no mapped child confirms.
+    #[test]
+    fn a_folder_that_reads_as_a_file_does_not_confirm() {
+        let rows = rows();
+        let file = ReadBody::File {
+            created_at: 1,
+            modified_at: 2,
+            versions: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+
+        assert!(!maps_the_children(&file, 2, &rows), "N maps B");
+        assert!(maps_the_children(&file, 1, &rows), "A maps no child");
     }
 }

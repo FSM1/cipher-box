@@ -481,11 +481,12 @@ pub(crate) enum PutMark<'a> {
     /// The sequence the record was signed at, for a caller that marks a PUT
     /// no endpoint acknowledged: its bytes can still have landed.
     Signed(&'a core::cell::Cell<Option<u64>>),
-    /// [`Self::Signed`], and a monotonic-max raise of the floor-store `key`
-    /// to the signed sequence, which outlives the session.
+    /// [`Self::Signed`], and a monotonic-max raise of each floor-store key
+    /// in `keys` to the signed sequence, which outlives the session. The
+    /// caller signs above the marks.
     SignedDurable {
-        /// The floor-store key the mark lives at.
-        key: &'a [u8],
+        /// The floor-store keys the mark lives at.
+        keys: &'a [Vec<u8>],
         /// The cell that takes the signed sequence.
         signed: &'a core::cell::Cell<Option<u64>>,
     },
@@ -764,9 +765,11 @@ where
         Some(PutMark::Durable { key, value }) => raise_mark(floors, key, value).await?,
         Some(PutMark::Sent(sent)) => sent.set(true),
         Some(PutMark::Signed(signed)) => signed.set(Some(sequence)),
-        Some(PutMark::SignedDurable { key, signed }) => {
+        Some(PutMark::SignedDurable { keys, signed }) => {
             signed.set(Some(sequence));
-            raise_mark(floors, key, sequence).await?;
+            for key in keys {
+                raise_mark(floors, key, sequence).await?;
+            }
         }
         None => {}
     }

@@ -102,7 +102,8 @@ carry a rise.
   its own copy only when its entry proves that it sent no relink. Else a gated link proof of the
   parent scope decides, and only a proof that the old root is still linked lets it retire the
   copy. An optimistic confirm does not prove a loss. The loser also keeps its copy until the
-  served parent passes every relink sequence that its entry records.
+  served parent passes every relink sequence that its relink marks in the floor store hold. The
+  marks stay after the entry goes.
 - `blueprint/api.md` "Pin/name registry": after the gated parent root shows the index removal, the
   dissolve retires every name of the old subtree except the D1 final records.
 - Accepted residuals: the uploads of a write grantee stay in the new folder. Content keys are re-wrapped and content bytes are not encrypted again, so a cut grantee keeps each version it opened. The publish of N new names and the retire of N old names show the dissolve and its size to the server, as a bin re-key does (`blueprint/core.md` "Bin index"). The server also links old and new file records through unchanged content CIDs. The journal's explicit id map stays local.
