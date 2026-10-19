@@ -35,10 +35,12 @@ use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::unseal_write_body;
 use crate::net::{
-    Adopter, GatedResolve, ResolveOutcome, RootAdopter, assemble_head_envelope, resolve_gated,
+    Adopter, ChildAdopter, GatedResolve, ResolveOutcome, RootAdopter, assemble_head_envelope,
+    resolve_gated,
 };
 use crate::seams::{
-    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
+    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SharerScopedFloorStore,
+    SnapshotCache, StagingStore,
 };
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
@@ -742,11 +744,31 @@ where
                     .await);
             }
         }
-        let forked = resolved.resolved.fork.is_some();
+        // The resolve gates a tie at the epoch floor only, so a tie of a
+        // lagging pick is judged here under the seed of its own epoch.
+        let (endpoint_failed, forked) =
+            (resolved.endpoint_failed, resolved.resolved.fork.is_some());
+        let tied = if forked {
+            Vec::new()
+        } else {
+            resolved.tied.clone()
+        };
         let loaded = self
             .open_resolved_child(&plane, anchor, &adopter, name.clone(), resolved, false)
             .await
             .map_err(|fault| walk_fault(self.report_fault(&name, fault)))?;
+        let forked = forked
+            || self
+                .held_fork(
+                    end,
+                    anchor,
+                    &adopter,
+                    &name,
+                    &loaded.record,
+                    &tied,
+                    endpoint_failed,
+                )
+                .await;
         if forked {
             return Err(self.fork_at(&name, loaded.observed.sequence()));
         }
@@ -869,31 +891,18 @@ where
         };
         let floors = other.floors(&self.seams.floors);
         let adopter = self.child_adopter(&plane, &floors, node);
-        // The child gate of `load_child_at`, on held bytes: a record below the
-        // epoch floor opens under the seed of its own epoch.
-        let refused = |error: GateError| match LeafRefusal::of(error, resolved.endpoint_failed) {
-            LeafRefusal::Seam(_) | LeafRefusal::Withheld => None,
-            LeafRefusal::Rejected(rejection) => Some(rejection),
-        };
-        let open = async |bytes: &[u8]| -> Result<u64, Option<GateRejection>> {
-            let lagging = match adopter.open_held(name, bytes).await {
-                Ok(adopted) => return Ok(adopted.sequence),
-                Err(GateError::Rejected(GateRejection {
-                    reason: RejectionReason::EpochBelowFloor { epoch, .. },
-                    ..
-                })) => epoch,
-                Err(error) => return Err(refused(error)),
-            };
-            let seed =
-                seed_for_lagging(other.root.0, other.read_scope_seed, root.anchor(), lagging)
-                    .map_err(|_| None)?;
-            adopter
-                .open_interior_under(name, bytes, &seed)
-                .await
-                .map(|(adopted, _)| adopted.sequence)
-                .map_err(refused)
-        };
-        let sequence = match open(bytes).await {
+        let endpoint_failed = resolved.endpoint_failed;
+        let opened = self
+            .open_held(
+                &other,
+                root.anchor(),
+                &adopter,
+                name,
+                bytes,
+                endpoint_failed,
+            )
+            .await;
+        let sequence = match opened {
             Ok(sequence) => sequence,
             Err(Some(rejection)) => {
                 refuse_record(&self.seams.events, name, &rejection);
@@ -901,17 +910,79 @@ where
             }
             Err(None) => return ReadFault::Unanswered,
         };
-        let Ok(pick) = IpnsRecord::unmarshal(bytes).and_then(|record| record.verify(name)) else {
-            return ReadFault::Untrusted;
-        };
-        if served_fork(name, &pick, &resolved.tied, async |tie| {
-            open(tie).await.is_ok()
-        })
-        .await
-        {
+        let forked = self
+            .held_fork(
+                &other,
+                root.anchor(),
+                &adopter,
+                name,
+                bytes,
+                &resolved.tied,
+                endpoint_failed,
+            )
+            .await;
+        if forked {
             return self.fork_at(name, sequence);
         }
         ReadFault::Fatal(Unmapped::Outside)
+    }
+
+    /// The child gate of `load_child_at` on held `bytes` under `end`, with no
+    /// commit. A record below the epoch floor opens under the seed of its own
+    /// epoch. `Err(None)` is a check that cannot run, or a record withheld
+    /// while an endpoint failed (ADR 0071 D1).
+    async fn open_held(
+        &self,
+        end: &ScopeEnd<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: &IpnsName,
+        bytes: &[u8],
+        endpoint_failed: bool,
+    ) -> Result<u64, Option<GateRejection>> {
+        let refused = |error: GateError| match LeafRefusal::of(error, endpoint_failed) {
+            LeafRefusal::Seam(_) | LeafRefusal::Withheld => None,
+            LeafRefusal::Rejected(rejection) => Some(rejection),
+        };
+        let lagging = match adopter.open_held(name, bytes).await {
+            Ok(adopted) => return Ok(adopted.sequence),
+            Err(GateError::Rejected(GateRejection {
+                reason: RejectionReason::EpochBelowFloor { epoch, .. },
+                ..
+            })) => epoch,
+            Err(error) => return Err(refused(error)),
+        };
+        let seed =
+            seed_for_lagging(end.root.0, end.read_scope_seed, anchor, lagging).map_err(|_| None)?;
+        adopter
+            .open_interior_under(name, bytes, &seed)
+            .await
+            .map(|(adopted, _)| adopted.sequence)
+            .map_err(refused)
+    }
+
+    /// Whether a tie in `tied` of the record `pick` opens through
+    /// [`Self::open_held`]: a fork (ADR 0066 D1).
+    #[expect(clippy::too_many_arguments, reason = "one held read of a tie")]
+    async fn held_fork(
+        &self,
+        end: &ScopeEnd<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: &IpnsName,
+        pick: &[u8],
+        tied: &[Vec<u8>],
+        endpoint_failed: bool,
+    ) -> bool {
+        let Ok(pick) = IpnsRecord::unmarshal(pick).and_then(|record| record.verify(name)) else {
+            return false;
+        };
+        served_fork(name, &pick, tied, async |tie| {
+            self.open_held(end, anchor, adopter, name, tie, endpoint_failed)
+                .await
+                .is_ok()
+        })
+        .await
     }
 }
 
