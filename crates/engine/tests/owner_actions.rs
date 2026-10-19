@@ -30555,8 +30555,13 @@ fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
             fx.folder.0,
             10,
         );
-    // The upgrade waits for the owed raise.
-    assert!(fx.grant_folder_at(Permission::Write).is_err());
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Err(EngineError::Seam {
+            message: "rotation-work-owed".to_owned()
+        }),
+        "the upgrade waits for the owed raise"
+    );
     let landed = fx.granted_scope_repoint().write_epoch;
     assert!(
         folder_write_floor(&fx) < landed,
@@ -30581,4 +30586,12 @@ fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
         "the owed step raises the floor"
     );
     assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(old_puts(&fx), before, "no copy at a name of the old seed");
+    assert!(
+        folder_copy_puts(&fx, inner).iter().all(|puts| *puts > 0),
+        "each copy publishes at its new name"
+    );
 }

@@ -731,15 +731,18 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
     scope_id: &[u8; 16],
     write_epoch: u64,
 ) -> SeamResult<u64> {
-    let floor = advance_write_epoch_on_sight(floors, scope_id, write_epoch).await?;
-    if floor < write_epoch {
+    let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
         OWED_WRITE_RAISES.with(|owed| {
             let mut owed = owed.borrow_mut();
             let epoch = owed.entry(*scope_id).or_insert(write_epoch);
             *epoch = (*epoch).max(write_epoch);
         });
         return Err(SeamError::new("the write-epoch floor is leased"));
-    }
+    };
+    let floor = floors
+        .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
+        .await?;
+    settle_owed_write_raise(scope_id, floor);
     Ok(floor)
 }
 
@@ -811,9 +814,9 @@ pub(crate) struct WriteEpochLease {
 thread_local! {
     static WRITE_EPOCH_LEASES: RefCell<BTreeSet<[u8; 16]>> =
         const { RefCell::new(BTreeSet::new()) };
-    // In memory, keyed as the leases are: the entry is set with no await after
-    // the deferral, so the next row of a seal sees it. The owed record covers a
-    // restart.
+    // In memory, keyed as the leases are: the entry is set in the same poll
+    // that finds the lease held, so the next row of a seal sees it. The owed
+    // record covers a restart.
     static OWED_WRITE_RAISES: RefCell<BTreeMap<[u8; 16], u64>> =
         const { RefCell::new(BTreeMap::new()) };
 }
@@ -877,6 +880,23 @@ mod tests {
                 .unwrap();
             assert_eq!(owed_write_raise(&SCOPE), None);
         });
+    }
+
+    /// A post-wave raise that finds the lease held records its epoch with no
+    /// floor read, so a floor store that does not answer cannot lose it.
+    #[test]
+    fn a_deferred_post_wave_raise_is_owed_with_no_floor_read() {
+        let floors = InMemoryFloorStore::default();
+        floors.fail_floor_reads();
+        block_on(async {
+            let _lease = acquire_write_epoch_lease(&SHARED_SCOPE).expect("the scope starts free");
+            assert!(
+                advance_write_epoch_after_wave(&floors, &SHARED_SCOPE, 7)
+                    .await
+                    .is_err()
+            );
+        });
+        assert_eq!(owed_write_raise(&SHARED_SCOPE), Some(7));
     }
 
     #[test]

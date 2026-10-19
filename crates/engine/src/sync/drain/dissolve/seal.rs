@@ -682,10 +682,10 @@ mod tests {
         ]
     }
 
-    /// Each guard against an owed write cut pauses the seal alone: the owed
-    /// record at the start of the tick, and a raise that the lease deferred.
+    /// Each predicate against an owed write cut refuses alone: the owed record
+    /// at the start of the tick, and a raise that the lease deferred.
     #[test]
-    fn each_owed_write_cut_guard_pauses_alone() {
+    fn each_owed_write_cut_predicate_refuses_alone() {
         let write = NodeId([1; 16]);
         assert!(!owes_write_cut(Some(&[]), write));
         assert!(owes_write_cut(Some(&[write]), write), "the owed record");
