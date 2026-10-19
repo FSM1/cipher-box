@@ -33,9 +33,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::ct_eq;
-use cipherbox_engine::testkit::fakes::{
-    InMemoryRecordStore, InMemoryStagingStore, release_held_write_epoch_lease,
-};
+use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 
 use zeroize::Zeroizing;
 
@@ -30500,7 +30498,8 @@ fn a_write_wave_raise_that_finds_the_lease_held_lands_on_the_next_tick() {
     let mut fx = GrantScenario::new();
     // The fourteenth read of the write floor of the folder is the first after
     // the root publish of the wave, and it takes the lease.
-    fx.owner_device
+    let held = fx
+        .owner_device
         .floor_store
         .hold_write_epoch_lease_on_read_after(
             &floor_label(&write_epoch_floor_key(&fx.folder.0)),
@@ -30519,7 +30518,7 @@ fn a_write_wave_raise_that_finds_the_lease_held_lands_on_the_next_tick() {
         "the held lease defers the raise"
     );
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
-    release_held_write_epoch_lease();
+    drop(held);
     fx.owner_device.floor_store.heal_floors();
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -30552,7 +30551,8 @@ fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
         .iter()
         .map(|row| folder_copy_name(&fx, row.new))
         .collect();
-    fx.owner_device
+    let held = fx
+        .owner_device
         .floor_store
         .hold_write_epoch_lease_on_read_after(
             &floor_label(&write_epoch_floor_key(&fx.folder.0)),
@@ -30572,7 +30572,7 @@ fn a_write_wave_during_a_copy_publish_moves_each_copy_name() {
         "the held lease defers the raise"
     );
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the raise is owed");
-    release_held_write_epoch_lease();
+    drop(held);
     fx.owner_device.floor_store.heal_floors();
     let old_puts = |fx: &GrantScenario| -> Vec<usize> {
         old_names

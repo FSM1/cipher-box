@@ -535,7 +535,7 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
             FloorRaise::epoch(write_epoch_key(&repoint.scope_id), repoint.write_epoch),
         ])
         .await?;
-    settle_owed_write_raise(&repoint.scope_id, repoint.write_epoch);
+    settle_owed_write_raise(floors, &repoint.scope_id, repoint.write_epoch);
     Ok(())
 }
 
@@ -719,7 +719,7 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
     let floor = floors
         .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
         .await?;
-    settle_owed_write_raise(scope_id, floor);
+    settle_owed_write_raise(floors, scope_id, floor);
     Ok(floor)
 }
 
@@ -733,7 +733,9 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
 ) -> SeamResult<u64> {
     OWED_WRITE_RAISES.with(|owed| {
         let mut owed = owed.borrow_mut();
-        let epoch = owed.entry(*scope_id).or_insert(write_epoch);
+        let epoch = owed
+            .entry(owed_raise_key(floors, scope_id))
+            .or_insert(write_epoch);
         *epoch = (*epoch).max(write_epoch);
     });
     let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
@@ -742,24 +744,34 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
     let floor = floors
         .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
         .await?;
-    settle_owed_write_raise(scope_id, floor);
+    settle_owed_write_raise(floors, scope_id, floor);
     Ok(floor)
 }
 
 /// The highest epoch that [`advance_write_epoch_after_wave`] asked for at
-/// `scope_id`, until a raise of the floor reaches it.
-pub(crate) fn owed_write_raise(scope_id: &[u8; 16]) -> Option<u64> {
-    OWED_WRITE_RAISES.with(|owed| owed.borrow().get(scope_id).copied())
+/// `scope_id` in the namespace of `floors`, until a raise of that floor
+/// reaches it.
+pub(crate) fn owed_write_raise<F: FloorStore>(floors: &F, scope_id: &[u8; 16]) -> Option<u64> {
+    let key = owed_raise_key(floors, scope_id);
+    OWED_WRITE_RAISES.with(|owed| owed.borrow().get(&key).copied())
 }
 
-/// Drop the deferred raise at `scope_id` that `floor` reaches.
-fn settle_owed_write_raise(scope_id: &[u8; 16], floor: u64) {
+/// Drop the deferred raise at `scope_id` in the namespace of `floors` that
+/// `floor` reaches.
+fn settle_owed_write_raise<F: FloorStore>(floors: &F, scope_id: &[u8; 16], floor: u64) {
+    let key = owed_raise_key(floors, scope_id);
     OWED_WRITE_RAISES.with(|owed| {
         let mut owed = owed.borrow_mut();
-        if owed.get(scope_id).is_some_and(|epoch| *epoch <= floor) {
-            owed.remove(scope_id);
+        if owed.get(&key).is_some_and(|epoch| *epoch <= floor) {
+            owed.remove(&key);
         }
     });
+}
+
+/// The key of the write-epoch floor of `scope_id` in the namespace of
+/// `floors`, as the store keeps it.
+fn owed_raise_key<F: FloorStore>(floors: &F, scope_id: &[u8; 16]) -> Vec<u8> {
+    floors.epoch_floor_key(&write_epoch_key(scope_id))
 }
 
 /// Seed a scope root's write-epoch floor (ADR 0067 D1 (c)) — the anchor for a
@@ -814,10 +826,10 @@ pub(crate) struct WriteEpochLease {
 thread_local! {
     static WRITE_EPOCH_LEASES: RefCell<BTreeSet<[u8; 16]>> =
         const { RefCell::new(BTreeSet::new()) };
-    // In memory, keyed as the leases are: the entry is set before the lease
-    // is tested, so the next row of a seal sees a raise that did not land.
-    // The owed record covers a restart.
-    static OWED_WRITE_RAISES: RefCell<BTreeMap<[u8; 16], u64>> =
+    // In memory, keyed by the floor key of the store's namespace: the entry is
+    // set before the lease is tested, so the next row of a seal sees a raise
+    // that did not land. The owed record covers a restart.
+    static OWED_WRITE_RAISES: RefCell<BTreeMap<Vec<u8>, u64>> =
         const { RefCell::new(BTreeMap::new()) };
 }
 
@@ -868,17 +880,21 @@ mod tests {
                     .await
                     .is_err()
             );
-            assert_eq!(owed_write_raise(&SCOPE), Some(5));
+            assert_eq!(owed_write_raise(&floors, &SCOPE), Some(5));
             drop(lease);
 
             advance_write_epoch_on_sight(&floors, &SCOPE, 4)
                 .await
                 .unwrap();
-            assert_eq!(owed_write_raise(&SCOPE), Some(5), "a floor below the epoch");
+            assert_eq!(
+                owed_write_raise(&floors, &SCOPE),
+                Some(5),
+                "a floor below the epoch"
+            );
             advance_write_epoch_on_sight(&floors, &SCOPE, 5)
                 .await
                 .unwrap();
-            assert_eq!(owed_write_raise(&SCOPE), None);
+            assert_eq!(owed_write_raise(&floors, &SCOPE), None);
         });
     }
 
@@ -896,7 +912,7 @@ mod tests {
                     .is_err()
             );
         });
-        assert_eq!(owed_write_raise(&SHARED_SCOPE), Some(7));
+        assert_eq!(owed_write_raise(&floors, &SHARED_SCOPE), Some(7));
     }
 
     /// A post-wave raise that the store refuses under a free lease stays
@@ -914,7 +930,49 @@ mod tests {
                     .is_err()
             );
         });
-        assert_eq!(owed_write_raise(&REFUSED_SCOPE), Some(6));
+        assert_eq!(owed_write_raise(&floors, &REFUSED_SCOPE), Some(6));
+    }
+
+    /// A deferred raise belongs to the floor namespace of its store: the same
+    /// scope id under a granting identity neither sees it nor clears it.
+    #[test]
+    fn a_deferred_post_wave_raise_stays_in_its_floor_namespace() {
+        use crate::seams::{ContactLabel, SharerScopedFloorStore};
+        use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+
+        const NAMESPACED_SCOPE: [u8; 16] = [0x0B; 16];
+        let store = InMemoryFloorStore::default();
+        let own = SharerScopedFloorStore::own(&store);
+        let sharer = ContactLabel::of(
+            &cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]),
+            &[0x02; IDENTITY_PUBLIC_LEN],
+        );
+        let granted = SharerScopedFloorStore::granted_by(&store, sharer);
+        block_on(async {
+            let lease =
+                acquire_write_epoch_lease(&NAMESPACED_SCOPE).expect("the scope starts free");
+            assert!(
+                advance_write_epoch_after_wave(&own, &NAMESPACED_SCOPE, 4)
+                    .await
+                    .is_err()
+            );
+            drop(lease);
+            assert_eq!(
+                owed_write_raise(&granted, &NAMESPACED_SCOPE),
+                None,
+                "no pause in another namespace"
+            );
+
+            advance_write_epoch_on_sight(&granted, &NAMESPACED_SCOPE, 9)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                owed_write_raise(&own, &NAMESPACED_SCOPE),
+                Some(4),
+                "a raise in another namespace does not clear it"
+            );
+        });
     }
 
     #[test]

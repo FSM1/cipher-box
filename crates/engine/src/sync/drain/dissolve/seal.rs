@@ -397,7 +397,8 @@ where
                 return Err(SealFault::Unanswered);
             };
             let current = self.write_floor(write).await?;
-            let deferred = floor::owed_write_raise(&write.root.0);
+            let deferred =
+                floor::owed_write_raise(&write.floors(&self.seams.floors), &write.root.0);
             if !floor_holds(current, header.binding.write_epoch, deferred) {
                 return Err(SealFault::Unanswered);
             }

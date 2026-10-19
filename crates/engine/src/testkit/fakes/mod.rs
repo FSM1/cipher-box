@@ -19,7 +19,7 @@ mod staging_store;
 
 pub use adopter::{ADMITTED_BAR, AdoptVerdict, ScriptedAdopter};
 pub use credential_store::InMemoryCredentialStore;
-pub use floor_store::{InMemoryFloorStore, SplitWriteFloorStore, release_held_write_epoch_lease};
+pub use floor_store::{HeldLeaseRelease, InMemoryFloorStore, SplitWriteFloorStore};
 pub use http::ScriptedHttp;
 pub use mailbox::{InMemoryMailbox, InMemoryMailboxHub};
 pub use name_registry::InMemoryNameRegistry;

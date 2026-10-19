@@ -47,14 +47,20 @@ struct Inner {
 
 thread_local! {
     /// The lease [`InMemoryFloorStore::hold_write_epoch_lease_on_read_after`]
-    /// took, held until [`release_held_write_epoch_lease`].
+    /// took, held until its [`HeldLeaseRelease`] drops.
     static HELD_LEASE: RefCell<Option<crate::gate::floor::WriteEpochLease>> =
         const { RefCell::new(None) };
 }
 
-/// Drop the lease that an epoch floor read took.
-pub fn release_held_write_epoch_lease() {
-    HELD_LEASE.with(|held| held.borrow_mut().take());
+/// Drops the lease that an epoch floor read took, also when a test panics, so
+/// no later test on the thread finds it held.
+#[must_use]
+pub struct HeldLeaseRelease(());
+
+impl Drop for HeldLeaseRelease {
+    fn drop(&mut self) {
+        HELD_LEASE.with(|held| held.borrow_mut().take());
+    }
 }
 
 impl Inner {
@@ -231,14 +237,15 @@ impl InMemoryFloorStore {
     /// Take the write-epoch lease of `scope_id` on an epoch floor read of
     /// `key` after `skipped` of them, at the first such read that finds the
     /// lease free, as a publish of another task holds it. The lease stays
-    /// until [`release_held_write_epoch_lease`].
+    /// until the returned guard drops.
     pub fn hold_write_epoch_lease_on_read_after(
         &self,
         key: &[u8],
         scope_id: [u8; 16],
         skipped: u32,
-    ) {
+    ) -> HeldLeaseRelease {
         self.inner.lock().expect("lock").lease_on_read = Some((key.to_vec(), scope_id, skipped));
+        HeldLeaseRelease(())
     }
 
     /// Restore every injected floor fault, the clear's and the commit's
