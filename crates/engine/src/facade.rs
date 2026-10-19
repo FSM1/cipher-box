@@ -12343,7 +12343,12 @@ where {
                         grafted_root_name(&share.display_name, NodeId(share.scope_id)).to_string()
                     },
                     permission: live_permission(&verdicts, share).into(),
-                    resolution: verdicts.get(&share.key()).map(|v| v.class),
+                    // The `ended` mark outlives the records that set it
+                    // (ADR 0079 D1).
+                    resolution: match share.ended {
+                        Some(_) => Some(ResolutionClass::RevocationSignal),
+                        None => verdicts.get(&share.key()).map(|v| v.class),
+                    },
                     via_link,
                 }
             })

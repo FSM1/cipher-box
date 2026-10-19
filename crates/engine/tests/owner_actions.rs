@@ -18026,6 +18026,44 @@ fn a_link_join_keeps_the_marks_of_the_bookmarks_held() {
     );
 }
 
+/// ADR 0079 D1: a bookmark with the `ended` mark reports the ended state from
+/// the durable list, before any pass reaches its scope.
+#[test]
+fn a_bookmark_with_the_ended_mark_reports_the_ended_state() {
+    let fx = GrantScenario::new();
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    for (scope, marks) in [
+        ([0x6e; 16], (Some(7), Some(5))),
+        ([0x6f; 16], (None, Some(5))),
+    ] {
+        cipherbox_engine::testkit::plant_marked_bookmark(
+            &fx.recipient_device.staging_store,
+            &enc,
+            scope,
+            marks,
+        );
+    }
+
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    let resolution = |scope: [u8; 16]| {
+        shares
+            .iter()
+            .find(|share| share.scope.0 == scope)
+            .expect("the planted share")
+            .resolution
+    };
+    assert_eq!(
+        resolution([0x6e; 16]),
+        Some(ResolutionClass::RevocationSignal)
+    );
+    assert_ne!(
+        resolution([0x6f; 16]),
+        Some(ResolutionClass::RevocationSignal),
+        "a baseline alone is no mark"
+    );
+}
+
 /// ADR 0024 D2, D4: a write conversion runs a real write wave that moves the
 /// scope root. A holder that still reads through the link follows the scope
 /// pointer to the moved root, and the converted claimant holds write there.

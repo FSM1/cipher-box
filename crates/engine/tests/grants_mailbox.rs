@@ -1489,8 +1489,141 @@ fn an_added_bookmark_keeps_the_marks_of_the_bookmarks_held() {
                 .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
                 .unwrap()
         ),
-        (None, None),
-        "the accept sets no value"
+        (None, Some(0)),
+        "the accept writes the cut epoch of the commitment it opened"
+    );
+}
+
+/// ADR 0079 D2: the accept writes `grantCut` in the bookmark persist, before
+/// the floor commit. A crash between the two keeps the baseline.
+#[test]
+fn an_accept_whose_floor_commit_fails_keeps_the_grant_cut_it_persisted() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    recipient.floor_store.fail_floor_commits();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &import_contact(&fx.owner_contact).unwrap(),
+        &fx.recipient_enc,
+        &recipient_contact_label_seed(),
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
+        &mut ReceivedSharesList::new(),
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Gate(_)), "got {err}");
+
+    let stored = block_on(recipient.received_share_store.load()).expect("loads");
+    assert_eq!(
+        bookmark_marks(
+            stored
+                .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+                .unwrap()
+        ),
+        (None, Some(0))
+    );
+}
+
+/// ADR 0079 D3: an accept opens the personal grant blob, so it clears an
+/// `ended` mark at or below the cut epoch of its commitment, and keeps a
+/// mark above it. A failed persist puts the mark back.
+#[test]
+fn an_opened_regrant_clears_the_ended_mark_at_or_below_its_cut() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let accept = |sequence: u64, received: &mut ReceivedSharesList| {
+        let item = deliver_pointer(
+            &fx,
+            &recipient,
+            &poster,
+            &fx.owner_identity,
+            &fx.share_pointer(),
+        );
+        block_on(accept_share(
+            &recipient.floor_store,
+            &recipient.mailbox,
+            &recipient.received_share_store,
+            &item,
+            &contact,
+            &fx.recipient_enc,
+            &recipient_contact_label_seed(),
+            &fx.candidate_with_record(fx.record_bytes(sequence)),
+            &fx.grant_blobs(),
+            &VAULT_ROOT_SCOPE,
+            received,
+        ))
+    };
+    let stored_marks = || {
+        let stored = block_on(recipient.received_share_store.load()).expect("loads");
+        bookmark_marks(
+            stored
+                .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+                .unwrap(),
+        )
+    };
+    let key = (fx.owner_identity_pub.to_sec1(), fx.scope_id);
+    let mut received = ReceivedSharesList::new();
+    accept(1, &mut received).expect("the share accepts");
+
+    received.mark_for_test(&key, (Some(1), Some(0)));
+    block_on(recipient.received_share_store.persist(&received)).expect("the mark persists");
+    accept(2, &mut received).expect("the re-grant accepts");
+    assert_eq!(
+        stored_marks(),
+        (Some(1), Some(0)),
+        "a mark above the cut stays"
+    );
+
+    received.mark_for_test(&key, (Some(0), Some(0)));
+    block_on(recipient.received_share_store.persist(&received)).expect("the mark persists");
+    recipient.received_share_store.set_failing(true);
+    let err = accept(3, &mut received).unwrap_err();
+    assert!(matches!(err, AcceptError::Persist(_)), "got {err}");
+    assert_eq!(
+        bookmark_marks(received.find(&key).unwrap()),
+        (Some(0), Some(0)),
+        "a failed persist puts the mark back"
+    );
+
+    recipient.received_share_store.set_failing(false);
+    // The failed attempt left its item un-acked.
+    let redelivered = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .remove(0);
+    block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &redelivered,
+        &contact,
+        &fx.recipient_enc,
+        &recipient_contact_label_seed(),
+        &fx.candidate_with_record(fx.record_bytes(3)),
+        &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
+        &mut received,
+    ))
+    .expect("the re-grant accepts");
+    assert_eq!(
+        stored_marks(),
+        (None, Some(0)),
+        "the mark at the cut clears"
     );
 }
 
@@ -1817,6 +1950,7 @@ fn revocation_classification_triple() {
     let signal = classify(&ResolutionFacts {
         owner_signed_record: owner_signed,
         blob_present,
+        tag_committed: true,
         record_epoch: fx.epoch,
         epoch_floor: 0,
     });
@@ -1835,6 +1969,7 @@ fn revocation_classification_triple() {
     let unresolvable = classify(&ResolutionFacts {
         owner_signed_record: resolved.is_some(),
         blob_present: false,
+        tag_committed: false,
         record_epoch: 0,
         epoch_floor: 0,
     });
@@ -1851,6 +1986,7 @@ fn revocation_classification_triple() {
     let lag = classify(&ResolutionFacts {
         owner_signed_record: true,
         blob_present: self_locate(&fx.grant_blobs(), &fx.tag).is_some(),
+        tag_committed: true,
         record_epoch: fx.epoch,
         epoch_floor: floor,
     });

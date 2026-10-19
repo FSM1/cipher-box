@@ -1776,6 +1776,7 @@ where
             claims: &state.grafted_claims,
             pointer_pins: &state.pointer_pins,
             deferred_raises: &state.deferred_raises,
+            baseline_tried: &state.baseline_tried,
             root_sequences: &state.root_sequences,
             events: &self.seams.events,
         }

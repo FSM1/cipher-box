@@ -70,6 +70,10 @@ use super::revocation::{ResolutionClass, ResolutionFacts, classify};
 /// their held verdict and stay due for the next pass.
 const MAX_RESOLVES_PER_PASS: usize = 16;
 
+/// The share of [`MAX_RESOLVES_PER_PASS`] that the baseline backfill can
+/// spend, so the ordinary refresh keeps at least half of each pass.
+const MAX_BACKFILL_RESOLVES_PER_PASS: usize = MAX_RESOLVES_PER_PASS / 2;
+
 /// One shared scope's last resolution verdict, and when the pass that reached
 /// it ran — the stamp the refresh damper paces against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +151,9 @@ pub(crate) struct ScopeRender<'a> {
     /// pass follows it again and the drain keeps the kept ops of its scope.
     /// A bookmark, not a scope id: each sharer's floors ratchet apart.
     pub deferred_raises: &'a RefCell<BTreeSet<BookmarkKey>>,
+    /// Each bookmark with no `grantCut` that a pass of this session already
+    /// scheduled, so the baseline backfill tries it one time per session.
+    pub baseline_tried: &'a RefCell<BTreeSet<BookmarkKey>>,
     /// The sequence this pass gated at each grafted root, which a navigation
     /// measures that root against.
     pub root_sequences: &'a RefCell<RootSequences>,
@@ -318,6 +325,28 @@ struct Classified {
     hold_change: Option<HoldChange>,
     /// A record below the sequence floor while an endpoint failed.
     withheld: bool,
+    /// What the verified commitment says about the personal grant.
+    grant: Option<PersonalGrant>,
+}
+
+/// What a verified commitment says about this device's personal grant, at
+/// the commitment's cut epoch (ADR 0079 D2, D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersonalGrant {
+    /// The personal grant blob opened.
+    Opened(u64),
+    /// The commitment leaves the personal tag out.
+    Excluded(u64),
+}
+
+impl PersonalGrant {
+    /// Whether this changes the `grantCut` or `ended` mark of `share`.
+    fn moves_marks(self, share: &ReceivedShare) -> bool {
+        match self {
+            Self::Opened(cut_epoch) => share.open_moves_marks(cut_epoch),
+            Self::Excluded(cut_epoch) => share.exclusion_ends(cut_epoch),
+        }
+    }
 }
 
 impl Classified {
@@ -329,6 +358,7 @@ impl Classified {
             link: None,
             hold_change: None,
             withheld: false,
+            grant: None,
         }
     }
 
@@ -360,6 +390,9 @@ enum HoldChange {
     Drop(BookmarkKey),
     /// The link entry's deadline differs from the last verified one.
     Deadline(BookmarkKey, Option<UnixMillis>),
+    /// The personal grant opened or was left out, which moves the bookmark's
+    /// `grantCut` or `ended` mark.
+    Grant(BookmarkKey, PersonalGrant),
 }
 
 impl HoldChange {
@@ -369,6 +402,12 @@ impl HoldChange {
                 list.drop_link(&key);
             }
             Self::Deadline(key, deadline) => list.set_link_deadline(&key, deadline),
+            Self::Grant(key, PersonalGrant::Opened(cut_epoch)) => {
+                list.note_grant_opened(&key, cut_epoch);
+            }
+            Self::Grant(key, PersonalGrant::Excluded(cut_epoch)) => {
+                list.mark_ended(&key, cut_epoch);
+            }
         }
     }
 }
@@ -383,6 +422,8 @@ pub(crate) struct PointerFollow {
     seen: BTreeSet<BookmarkKey>,
     /// What is left of the pass's [`MAX_RESOLVES_PER_PASS`].
     budget: usize,
+    /// What is left of the pass's [`MAX_BACKFILL_RESOLVES_PER_PASS`].
+    backfill_budget: usize,
     scheduled: BTreeSet<BookmarkKey>,
     pointers: BTreeMap<BookmarkKey, PointerVerdict>,
     pin_reads: BTreeMap<BookmarkKey, PointerVerdict>,
@@ -397,6 +438,7 @@ impl PointerFollow {
             now,
             seen: BTreeSet::new(),
             budget: MAX_RESOLVES_PER_PASS,
+            backfill_budget: MAX_BACKFILL_RESOLVES_PER_PASS,
             scheduled: BTreeSet::new(),
             pointers: BTreeMap::new(),
             pin_reads: BTreeMap::new(),
@@ -535,28 +577,65 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     profile,
                 )
         };
-        // One budget, spent least recently refreshed first, so capped passes
-        // reach every bookmark in turn. A held bookmark spends one resolve on
-        // its scope pointer and one on its scope root.
-        let mut due_keys: Vec<(Option<UnixMillis>, BookmarkKey)> = fresh
-            .iter()
-            .copied()
-            .filter(due)
-            .map(|key| (verdicts.borrow().get(&key).map(|held| held.at), key))
-            .collect();
-        due_keys.sort_by_key(|(at, _)| *at);
+        let last_refreshed = |key: &BookmarkKey| verdicts.borrow().get(key).map(|held| held.at);
+        // A held bookmark spends one resolve on its scope pointer and one on
+        // its scope root.
+        let cost = |key: &BookmarkKey| {
+            1 + usize::from(
+                received
+                    .find(key)
+                    .is_some_and(|share| share.scope_pointer_name.is_some()),
+            )
+        };
+        // The baseline backfill (ADR 0079): each personal bookmark with no
+        // `grantCut` gets one attempt per session, due or not, on its own
+        // share of the budget. The ordinary refresh does not schedule it.
+        let backfill: BTreeSet<BookmarkKey> = {
+            let tried = render.baseline_tried.borrow();
+            fresh
+                .iter()
+                .copied()
+                .filter(|key| {
+                    !tried.contains(key)
+                        && received.link_hold(key).is_none()
+                        && received
+                            .find(key)
+                            .is_some_and(|share| share.grant_cut.is_none())
+                })
+                .collect()
+        };
         let mut budget = prior.budget;
-        let scheduled: BTreeSet<BookmarkKey> = due_keys
+        let mut backfill_budget = prior.backfill_budget.min(budget);
+        let mut backfill_due: Vec<BookmarkKey> = backfill.iter().copied().collect();
+        backfill_due.sort_by_key(last_refreshed);
+        let backfilled: Vec<BookmarkKey> = backfill_due
             .into_iter()
-            .map(|(_, key)| key)
             .map_while(|key| {
-                let named = received
-                    .find(&key)
-                    .is_some_and(|share| share.scope_pointer_name.is_some());
-                let cost = 1 + usize::from(named);
-                budget = budget.checked_sub(cost)?;
+                backfill_budget = backfill_budget.checked_sub(cost(&key))?;
+                budget -= cost(&key);
                 Some(key)
             })
+            .collect();
+        render
+            .baseline_tried
+            .borrow_mut()
+            .extend(backfilled.iter().copied());
+        // One budget, spent least recently refreshed first, so capped passes
+        // reach every bookmark in turn.
+        let mut due_keys: Vec<BookmarkKey> = fresh
+            .iter()
+            .copied()
+            .filter(|key| !backfill.contains(key))
+            .filter(due)
+            .collect();
+        due_keys.sort_by_key(last_refreshed);
+        let scheduled: BTreeSet<BookmarkKey> = due_keys
+            .into_iter()
+            .map_while(|key| {
+                budget = budget.checked_sub(cost(&key))?;
+                Some(key)
+            })
+            .chain(backfilled)
             .collect();
         let (pointers, heals, pin_reads) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render)
@@ -579,6 +658,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
         prior.seen.extend(fresh);
         prior.budget = budget;
+        prior.backfill_budget = backfill_budget;
         prior.scheduled.extend(scheduled);
         prior.pointers.extend(pointers);
         prior.pin_reads.extend(pin_reads);
@@ -810,7 +890,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 link,
                 hold_change,
                 withheld,
+                grant,
             } = classified;
+            if let Some(grant) = grant.filter(|grant| grant.moves_marks(share)) {
+                hold_changes.push(HoldChange::Grant(key, grant));
+            }
             let reached_record = resolved.is_some();
             if let Some(hold) = hold.filter(|_| !personal) {
                 let deadline = match &hold_change {
@@ -1049,7 +1133,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut reads = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let Some(name) = &share.scope_pointer_name else {
+            // An ended share's pointer retires with its scope (ADR 0079 D1).
+            let (Some(name), None) = (&share.scope_pointer_name, share.ended) else {
                 continue;
             };
             let read = match pin_reads.get(&key) {
@@ -1149,8 +1234,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             return Classified::unresolvable();
         };
         let sharer_enc = contact.enc_subkey();
+        let personal_opens = personal_blob_opens(&candidate, share, self.enc_secret, &sharer_enc);
         let link = match hold {
-            Some(hold) if !personal_blob_opens(&candidate, share, self.enc_secret, &sharer_enc) => {
+            Some(hold) if !personal_opens => {
                 // A stored secret that is no scalar reads nothing.
                 match EphemeralInvitee::from_secret(hold.invite_secret.as_bytes()) {
                     Ok(invitee) => Some(invitee),
@@ -1196,6 +1282,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         {
             return Classified::unresolvable();
         }
+        // The link path keeps its revoke path, and its facts name the link
+        // tag, not the personal one.
+        let grant = match (personal_opens, &link) {
+            (true, _) => Some(PersonalGrant::Opened(cut_epoch)),
+            (false, None) if !facts.tag_committed => Some(PersonalGrant::Excluded(cut_epoch)),
+            _ => None,
+        };
         let mut class = classify(&facts);
         let mut hold_change = None;
         if let (Some(invitee), Some(hold)) = (&link, hold) {
@@ -1220,6 +1313,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             link,
             hold_change,
             withheld: false,
+            grant,
         }
     }
 
@@ -1506,10 +1600,14 @@ pub(crate) fn facts_from(
             stage: GateStage::CommitmentVerify,
             reason: RejectionReason::Trust(e),
         })?;
+    let tag = recipient_blinded_tag(my_enc_secret, sharer_enc_pub, scope_root_name);
+    let tag_committed =
+        tag.is_some_and(|tag| section.commitment.entries.iter().any(|e| e.tag == tag));
     Ok(ResolutionFacts {
         owner_signed_record: true,
         blob_present: committed_blob(section, my_enc_secret, sharer_enc_pub, scope_root_name)
             .is_some(),
+        tag_committed,
         record_epoch: candidate.envelope.epoch,
         epoch_floor: floors.epoch,
     })
@@ -2520,6 +2618,7 @@ mod tests {
         escalations: RefCell<Vec<Vec<u8>>>,
         pointer_pins: RefCell<BTreeMap<Vec<u8>, WithheldPin>>,
         deferred_raises: RefCell<BTreeSet<BookmarkKey>>,
+        baseline_tried: RefCell<BTreeSet<BookmarkKey>>,
         /// What the pass reports about its vault root resolve.
         root_reconciled: Cell<bool>,
         list_lock: ReceivedSharesLock,
@@ -2579,6 +2678,7 @@ mod tests {
                 escalations: RefCell::new(Vec::new()),
                 pointer_pins: RefCell::new(BTreeMap::new()),
                 deferred_raises: RefCell::new(BTreeSet::new()),
+                baseline_tried: RefCell::new(BTreeSet::new()),
                 root_reconciled: Cell::new(true),
                 list_lock: ReceivedSharesLock::new(()),
             };
@@ -2795,6 +2895,7 @@ mod tests {
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
                         deferred_raises: &self.deferred_raises,
+                        baseline_tried: &self.baseline_tried,
                         root_sequences: &RefCell::default(),
                         events,
                     },
@@ -2846,6 +2947,7 @@ mod tests {
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
                         deferred_raises: &self.deferred_raises,
+                        baseline_tried: &self.baseline_tried,
                         root_sequences: &RefCell::default(),
                         events: &events,
                     },
@@ -3834,6 +3936,7 @@ mod tests {
                         claims: &self.claims,
                         pointer_pins: &self.pointer_pins,
                         deferred_raises: &RefCell::default(),
+                        baseline_tried: &RefCell::default(),
                         root_sequences: &RefCell::default(),
                         events: &events,
                     },
@@ -4214,6 +4317,7 @@ mod tests {
                 claims: &claims,
                 pointer_pins: &pointer_pins,
                 deferred_raises: &RefCell::default(),
+                baseline_tried: &RefCell::default(),
                 root_sequences: &RefCell::default(),
                 events: &events,
             },
@@ -5504,6 +5608,412 @@ mod tests {
                 "the share carries a verdict"
             );
             assert!(fx.listing().is_empty());
+        }
+
+        /// The `ended` mark and its `grantCut` baseline (ADR 0079).
+        mod ended_mark {
+            use super::*;
+
+            /// A personal bookmark of the standing root with the scope
+            /// pointer name, and `marks` as its `(ended, grantCut)` values.
+            fn personal(marks: (Option<u64>, Option<u64>)) -> RenderedScope {
+                let fx = RenderedScope::new(Vec::new());
+                let mut list = ReceivedSharesList::new();
+                list.reconcile(ReceivedShare {
+                    scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                    scope_id: SCOPE,
+                    sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                    display_name: "photos-folder".to_owned(),
+                    permission: Permission::Read,
+                    pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                    scope_pointer_name: Some(pointer_name()),
+                    grant_cut: marks.1,
+                    ended: marks.0,
+                });
+                fx.persist(&list).expect("the bookmark persists");
+                serve_pointer(&fx, &sharer_signer(), 1);
+                fx
+            }
+
+            /// A personal bookmark whose first open under this release
+            /// wrote the baseline 1, then a cut at 2 that left it out.
+            fn ended_at_2() -> RenderedScope {
+                let mut fx = personal((None, None));
+                serve_root(&mut fx, vec![personal_row()], 1, 1);
+                assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+                serve_root(&mut fx, vec![other_row()], 2, 2);
+                assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (Some(2), Some(1)));
+                fx
+            }
+
+            /// Serve the scope root committing `rows` at cut epoch `cut`,
+            /// with `edit` applied to its grant section after the owner signed
+            /// the commitment.
+            fn serve_edited(
+                fx: &mut RenderedScope,
+                rows: Vec<GrantRow>,
+                cut: u64,
+                sequence: u64,
+                edit: impl FnOnce(&mut GrantSection),
+            ) {
+                serve_root(fx, rows, cut, sequence);
+                let signed = core::mem::replace(&mut fx.fixture, published(&sharer_signer(), &[]));
+                fx.fixture = reencoded(signed, |_, section| edit(section));
+                seed_scope_root(&fx.records, &fx.fixture, sequence);
+            }
+
+            #[test]
+            fn a_first_open_writes_the_baseline_and_a_later_cut_sets_the_mark() {
+                let fx = ended_at_2();
+                assert!(
+                    !fx.read_seeds.borrow().contains_key(&SCOPE),
+                    "the ended share holds no read seed"
+                );
+            }
+
+            /// An append adds a row at the same cut epoch, so a set at the
+            /// baseline that leaves the tag out can be a writer's replay of
+            /// the set from before the append.
+            #[test]
+            fn an_exclusion_at_the_baseline_cut_sets_nothing() {
+                let mut fx = personal((None, None));
+                serve_root(&mut fx, vec![personal_row()], 1, 1);
+                assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+                serve_root(&mut fx, vec![other_row()], 1, 2);
+
+                assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (None, Some(1)));
+            }
+
+            /// A crash between the accept persist and the floor commit leaves
+            /// the baseline with no cut-epoch floor. A set at the baseline
+            /// still sets nothing, and a cut above it sets the mark.
+            #[test]
+            fn a_baseline_with_no_cut_floor_sets_the_mark_only_above_it() {
+                let mut fx = personal((None, Some(1)));
+                serve_root(&mut fx, vec![other_row()], 1, 1);
+                assert_eq!(fx.forced_pass(0), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (None, Some(1)));
+
+                serve_root(&mut fx, vec![other_row()], 2, 2);
+                fx.forced_pass(1_000);
+                assert_eq!(stored_marks(&fx), (Some(2), Some(1)));
+            }
+
+            /// A bookmark with no baseline, as a release before this one left
+            /// it, gets no mark from an exclusion.
+            #[test]
+            fn an_exclusion_without_a_baseline_sets_nothing() {
+                let mut fx = personal((None, None));
+                serve_root(&mut fx, vec![other_row()], 2, 1);
+
+                assert_eq!(fx.forced_pass(0), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (None, None));
+            }
+
+            /// A committed writer can strip a blob, but the commitment still
+            /// names the tag: no owner exclusion.
+            #[test]
+            fn a_stripped_blob_sets_nothing() {
+                let mut fx = personal((None, Some(1)));
+                serve_edited(&mut fx, vec![personal_row()], 2, 1, |section| {
+                    section.grant_blobs.clear();
+                });
+
+                assert_eq!(fx.forced_pass(0), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (None, Some(1)));
+            }
+
+            /// A link-held bookmark keeps its revoke path.
+            #[test]
+            fn a_link_held_bookmark_gets_no_mark() {
+                let mut fx = RenderedScope::new(Vec::new());
+                join_marked(&fx, LINK_SECRET, (None, Some(1)));
+                serve_pointer(&fx, &sharer_signer(), 1);
+                serve_root(&mut fx, vec![other_row()], 2, 1);
+
+                assert_eq!(fx.forced_pass(0), ResolutionClass::RevocationSignal);
+                assert_eq!(stored_marks(&fx), (None, Some(1)));
+                assert!(stored(&fx).1.is_some(), "the link keys stay");
+            }
+
+            /// The mark stays through an unavailable pointer, an absent root,
+            /// a blob that is present but does not open, and a forged blob.
+            #[test]
+            fn the_mark_stays_until_a_personal_grant_opens() {
+                let mut fx = ended_at_2();
+
+                for name in [pointer_name(), scope_root_name()] {
+                    fx.records.fail_get_for(name.as_str());
+                }
+                assert_eq!(fx.forced_pass(2_000), ResolutionClass::Unresolvable);
+                assert_eq!(stored_marks(&fx), (Some(2), Some(1)), "unavailable");
+                for name in [pointer_name(), scope_root_name()] {
+                    fx.records.heal_get_for(name.as_str());
+                }
+
+                fx.records.lapse(scope_root_name().as_str());
+                assert_eq!(fx.forced_pass(3_000), ResolutionClass::Unresolvable);
+                assert_eq!(stored_marks(&fx), (Some(2), Some(1)), "unresolvable");
+
+                let mut unopenable = personal_row();
+                unopenable.ledger_entry.recipient_enc_pk = someone_else().to_bytes();
+                serve_root(&mut fx, vec![unopenable], 2, 3);
+                fx.forced_pass(4_000);
+                assert_eq!(
+                    stored_marks(&fx),
+                    (Some(2), Some(1)),
+                    "a blob that will not open"
+                );
+
+                serve_edited(&mut fx, vec![personal_row()], 3, 4, |section| {
+                    for blob in &mut section.grant_blobs {
+                        let last = blob.ciphertext.len() - 1;
+                        blob.ciphertext[last] ^= 0x01;
+                    }
+                });
+                fx.forced_pass(5_000);
+                assert_eq!(stored_marks(&fx), (Some(2), Some(1)), "a forged blob");
+            }
+
+            /// A re-grant whose personal blob opens at a cut at or above the
+            /// mark clears it and raises the baseline.
+            #[test]
+            fn an_opened_regrant_clears_the_mark() {
+                let mut fx = ended_at_2();
+                serve_root(&mut fx, vec![personal_row()], 2, 3);
+
+                assert_eq!(fx.forced_pass(2_000), ResolutionClass::Granted);
+                assert_eq!(stored_marks(&fx), (None, Some(2)));
+            }
+
+            /// ADR 0079 D1: an ended share's pointer retires with its scope,
+            /// and its absence raises no escalation. The mark removes no
+            /// custody key.
+            #[test]
+            fn a_retired_pointer_of_an_ended_share_never_escalates() {
+                let fx = ended_at_2();
+                fx.records.lapse(pointer_name().as_str());
+                fx.records.lapse(scope_root_name().as_str());
+
+                for at in [2_000, 7_000, 60_000] {
+                    fx.forced_pass(at);
+                }
+                assert_eq!(pointer_escalations(&fx), 0);
+                assert!(!pointer_pinned(&fx), "no hold opens");
+
+                let list = block_on(
+                    StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+                )
+                .expect("the list loads");
+                let share = list.iter().next().expect("the bookmark stays");
+                assert_eq!(share.pointer_read_key(), &OWNER_ROOT_POINTER_READ_KEY);
+                assert_eq!(share.scope_pointer_name, Some(pointer_name()));
+                assert_eq!((share.ended, share.grant_cut), (Some(2), Some(1)));
+            }
+
+            /// The same retired pointer without the mark escalates, so the
+            /// test above proves the skip.
+            #[test]
+            fn a_retired_pointer_of_a_share_with_no_mark_escalates() {
+                let mut fx = personal((None, None));
+                serve_root(&mut fx, vec![personal_row()], 1, 1);
+                assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+                fx.records.lapse(pointer_name().as_str());
+
+                for at in [2_000, 7_000, 60_000] {
+                    fx.forced_pass(at);
+                }
+                assert_eq!(pointer_escalations(&fx), 1);
+            }
+
+            const BOOKMARKS: u8 = 12;
+            /// The bookmarks with a baseline.
+            const ORDINARY: [u8; 4] = [0, 1, 2, 3];
+            /// The bookmarks with no baseline whose root never resolves.
+            const FAILING: [u8; 3] = [5, 8, 11];
+
+            fn backfill_scope(i: u8) -> [u8; 16] {
+                let mut scope = [0x70; 16];
+                scope[15] = i;
+                scope
+            }
+
+            fn backfill_root(i: u8) -> IpnsName {
+                derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &backfill_scope(i))
+            }
+
+            /// Twelve personal bookmarks, each with a scope pointer name that
+            /// no endpoint serves: four with a baseline, and eight with none,
+            /// of which [`FAILING`] never resolve.
+            fn backfill_world() -> RenderedScope {
+                let mut fx = RenderedScope::new(Vec::new());
+                let blocks: Arc<Mutex<BTreeMap<String, Vec<u8>>>> = Arc::default();
+                let served = Arc::clone(&blocks);
+                fx.http = ScriptedHttp::with_route(move |request| {
+                    let body = served
+                        .lock()
+                        .expect("lock")
+                        .get(&requested_cid(&request.url))?
+                        .clone();
+                    Some(Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: body.into(),
+                    }))
+                });
+                let mut list = ReceivedSharesList::new();
+                for i in 0..BOOKMARKS {
+                    let scope = backfill_scope(i);
+                    let name = backfill_root(i);
+                    list.reconcile(ReceivedShare {
+                        scope_root_name: name.as_str().as_bytes().to_vec(),
+                        scope_id: scope,
+                        sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                        display_name: String::new(),
+                        permission: Permission::Read,
+                        pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                        scope_pointer_name: Some(scope_pointer_name(&POINTER_SEED, &scope)),
+                        grant_cut: ORDINARY.contains(&i).then_some(0),
+                        ended: None,
+                    });
+                    if FAILING.contains(&i) {
+                        continue;
+                    }
+                    let fixture = owner_root_fixture(OwnerRootSpec {
+                        writer_pseudonym: &owner_root_pseudonym(),
+                        pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                        owner_identity: &sharer_signer(),
+                        owner_enc: &sharer_enc().public(),
+                        scope_id: scope,
+                        root_id: scope,
+                        children: Vec::new(),
+                        child_scope_index: Vec::new(),
+                        grants: vec![
+                            mint_grant_row(
+                                &sharer_signer(),
+                                &sharer_enc(),
+                                &OWNER_ROOT_POINTER_READ_KEY,
+                                [0x03; IDENTITY_PUBLIC_LEN],
+                                &my_enc().public(),
+                                &scope,
+                                name.as_str().as_bytes(),
+                                Permission::Read,
+                            )
+                            .expect("contributory"),
+                        ],
+                        parent_node_seed: None,
+                        owner_write_blob_epoch: None,
+                        write_history_link: Vec::new(),
+                    });
+                    blocks
+                        .lock()
+                        .expect("lock")
+                        .insert(fixture.head_cid_str.clone(), fixture.head_block.clone());
+                    fx.records.seed_record(
+                        &EndpointId::new("e0"),
+                        name.as_str(),
+                        IpnsRecord::create_v2(
+                            &kdf::ipns_keypair(
+                                kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &scope).as_bytes(),
+                            ),
+                            format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+                            1,
+                            2_000_000_000,
+                            "2099-01-01T00:00:00Z",
+                        )
+                        .marshal(),
+                    );
+                }
+                fx.persist(&list).expect("the bookmarks persist");
+                fx
+            }
+
+            /// The bookmarks whose scope root one poll pass at `at` read.
+            fn read_in_pass(fx: &RenderedScope, at: u64) -> BTreeSet<u8> {
+                let reads = |i: u8| fx.records.get_count(backfill_root(i).as_str());
+                let before: Vec<usize> = (0..BOOKMARKS).map(reads).collect();
+                fx.pass(at);
+                (0..BOOKMARKS)
+                    .filter(|i| reads(*i) > before[usize::from(*i)])
+                    .collect()
+            }
+
+            fn baselines(fx: &RenderedScope) -> BTreeMap<u8, Option<u64>> {
+                let list = block_on(
+                    StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+                )
+                .expect("the list loads");
+                (0..BOOKMARKS)
+                    .map(|i| {
+                        let key = (sharer_signer().verifying_key().to_sec1(), backfill_scope(i));
+                        (i, list.find(&key).expect("each bookmark stays").grant_cut)
+                    })
+                    .collect()
+            }
+
+            /// Each named bookmark costs two resolves, so the backfill share of
+            /// eight reaches four bookmarks in a pass, and the ordinary refresh
+            /// keeps the other half.
+            #[test]
+            fn baseline_backfill_reaches_every_bookmark_and_ordinary_refresh_keeps_its_share() {
+                let fx = backfill_world();
+                let members: BTreeSet<u8> =
+                    (0..BOOKMARKS).filter(|i| !ORDINARY.contains(i)).collect();
+                let ordinary = BTreeSet::from(ORDINARY);
+
+                let first = read_in_pass(&fx, 0);
+                let first_backfill: BTreeSet<u8> = first.intersection(&members).copied().collect();
+                assert_eq!(first_backfill.len(), 4, "the backfill reaches four");
+                assert!(
+                    ordinary.is_subset(&first),
+                    "each ordinary bookmark is due and refreshes"
+                );
+
+                // Inside the staleness window: no ordinary bookmark is due.
+                let second = read_in_pass(&fx, 1_000);
+                let second_backfill: BTreeSet<u8> =
+                    members.difference(&first_backfill).copied().collect();
+                assert_eq!(
+                    second, second_backfill,
+                    "the backfill reaches the other four, alone"
+                );
+
+                let after = baselines(&fx);
+                for i in 0..BOOKMARKS {
+                    let want = (!FAILING.contains(&i)).then_some(0);
+                    assert_eq!(after[&i], want, "bookmark {i} within two passes");
+                }
+
+                // Past the window: the bookmarks the first pass read are due,
+                // and the backfill, now empty, takes nothing from them.
+                let third = read_in_pass(&fx, 3_000);
+                assert!(
+                    ordinary.is_subset(&third),
+                    "each ordinary bookmark refreshes again"
+                );
+                assert!(third.is_disjoint(&second_backfill), "not due yet");
+
+                // A restart repeats the backfill for the bookmarks that have
+                // no baseline yet, and for those only.
+                *fx.verdicts.borrow_mut() = ReceivedVerdicts::new();
+                fx.baseline_tried.borrow_mut().clear();
+                let restart = read_in_pass(&fx, 10_000);
+                let failing = BTreeSet::from(FAILING);
+                assert!(failing.is_subset(&restart));
+                let tried: BTreeSet<[u8; 16]> = fx
+                    .baseline_tried
+                    .borrow()
+                    .iter()
+                    .map(|(_, scope)| *scope)
+                    .collect();
+                assert_eq!(
+                    tried,
+                    failing.iter().map(|i| backfill_scope(*i)).collect(),
+                    "one backfill attempt for each bookmark with no baseline"
+                );
+            }
         }
     }
 }
