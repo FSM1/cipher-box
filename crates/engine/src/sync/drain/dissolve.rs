@@ -14,9 +14,11 @@ use core::cell::Cell;
 use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildRef, Envelope, ReadBody, decode_grant_section, decode_write_body, grant_section_bytes,
+    has_grant_section,
 };
 use cipherbox_core::suite::secret::ct_eq;
 use zeroize::Zeroizing;
@@ -24,14 +26,15 @@ use zeroize::Zeroizing;
 use super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 use super::{
     Anchor, ChildFault, Drain, DrainScope, Halt, RecordMark, ScopeEnd, WalkAnchor,
-    published_op_mark, refuse_record, seam, take_tick_read, walk_fault,
+    published_op_mark, refuse_record, seal_open_failed, seam, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::gate::{GateError, GateRejection, GateStage, RejectionReason, floor};
+use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
 use crate::net::rotation::unseal_write_body;
-use crate::net::{Adopter, RootAdopter};
+use crate::net::{Adopter, RootAdopter, assemble_head_envelope};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
 };
@@ -84,10 +87,17 @@ pub(super) struct DissolveRead {
     root: Option<RootFacts>,
 }
 
-/// A child that the root gate passes as a scope root the dissolve does not
-/// cut: a folder shared after the cut, whose parent index can still be owed.
+/// A child read that a gate passed outside the walked subtree.
 #[derive(Debug)]
-pub(super) struct NewScopeRoot;
+pub(super) enum Unmapped {
+    /// The root gate passes the child as a scope root the dissolve does not
+    /// cut: a folder shared after the cut, whose parent index can still be
+    /// owed. The dissolve stops.
+    NewScopeRoot,
+    /// The child opens under another end of the tick that the dissolve does
+    /// not cut: a node outside the subtree. The walk starts again.
+    Outside,
+}
 
 /// What a walk holds of one end's material: a read cut moves the stamp, and a
 /// name wave moves the root name.
@@ -118,7 +128,9 @@ pub(crate) struct DissolveWalk {
     /// starts the walk again.
     marks: BTreeMap<NodeId, EndMark>,
     /// A gate refused a record of the walk, or the endpoints served a
-    /// same-sequence fork. The walk reads no more until its material changes.
+    /// same-sequence fork. The walk reads no more until a new header or new
+    /// material of a marked end. A refusal at the first root read marks no
+    /// end, so that hold lasts until a new header.
     refused: bool,
 }
 
@@ -170,7 +182,7 @@ fn ascends_from(parent: &ScopeEnd<'_>, child: &ScopeEnd<'_>) -> bool {
 }
 
 /// A walk fault of the shared root read.
-fn widen(fault: ReadFault<Infallible>) -> ReadFault<NewScopeRoot> {
+fn widen(fault: ReadFault<Infallible>) -> ReadFault<Unmapped> {
     match fault {
         ReadFault::Unanswered => ReadFault::Unanswered,
         ReadFault::Untrusted => ReadFault::Untrusted,
@@ -199,11 +211,13 @@ impl DissolveWalk {
         self.scopes == scope_ids(header)
     }
 
-    /// Whether each end that gave an anchor still has the material it had.
+    /// Whether each end that gave an anchor still has the material it had. An
+    /// end absent from the tick brings no material, and its reads go
+    /// unanswered.
     fn keeps_material(&self, mark: impl Fn(NodeId) -> Option<EndMark>) -> bool {
         self.marks
             .iter()
-            .all(|(scope, held)| mark(*scope).as_ref() == Some(held))
+            .all(|(scope, held)| mark(*scope).is_none_or(|now| now == *held))
     }
 
     /// Hold the material of each end whose root gave an anchor.
@@ -225,10 +239,7 @@ impl DissolveWalk {
         left: &Cell<usize>,
         bound: usize,
         ascends: &dyn Fn(NodeId, NodeId) -> bool,
-        read: impl AsyncFn(
-            &WalkKey,
-            Option<Anchor<'_>>,
-        ) -> Result<DissolveRead, ReadFault<NewScopeRoot>>,
+        read: impl AsyncFn(&WalkKey, Option<Anchor<'_>>) -> Result<DissolveRead, ReadFault<Unmapped>>,
     ) -> MapStep {
         let Self {
             scopes,
@@ -269,7 +280,8 @@ impl DissolveWalk {
             Swept::Paused => MapStep::Unfinished,
             Swept::Moved => MapStep::Restart,
             Swept::Fault(ReadFault::Untrusted) => MapStep::Refused,
-            Swept::Fault(ReadFault::Fatal(NewScopeRoot)) => MapStep::Stop,
+            Swept::Fault(ReadFault::Fatal(Unmapped::NewScopeRoot)) => MapStep::Stop,
+            Swept::Fault(ReadFault::Fatal(Unmapped::Outside)) => MapStep::Restart,
             Swept::Fault(ReadFault::Unanswered) => {
                 if sweep.unanswered_at(MAX_DISSOLVE_READ_ATTEMPTS) {
                     MapStep::Restart
@@ -502,16 +514,7 @@ where
                 left,
                 MAX_DISSOLVE_WALK_NODES,
                 &ascends,
-                async |key, anchor| {
-                    let end = end_of(key.scope).ok_or(ReadFault::Unanswered)?;
-                    let cut_epoch = header
-                        .scopes
-                        .iter()
-                        .find(|scope| scope.scope_id == key.node)
-                        .map(|scope| scope.cut_epoch);
-                    self.dissolve_read(owner, end, anchor, key.node, cut_epoch)
-                        .await
-                },
+                async |key, anchor| self.dissolve_read(owner, ends, &header, key, anchor).await,
             )
             .await;
         walk.note_material(mark_of);
@@ -599,20 +602,37 @@ where
         Ok(journal.drop_uncounted_pages(hold, &sealed).await?)
     }
 
-    /// One node of a dissolve walk, read under `end` through the gate from
-    /// the record plane. A scope root that holds no row at `cut_epoch` also
-    /// gives its gated index.
+    /// One node of a dissolve walk, read under the end of its scope through
+    /// the gate from the record plane. A scope root that holds no row at the
+    /// cut epoch of its cut also gives its gated index.
     async fn dissolve_read(
         &self,
         owner: &DrainScope<'_>,
-        end: &ScopeEnd<'_>,
+        ends: &[ScopeEnd<'_>],
+        header: &DissolveHeader,
+        key: &WalkKey,
         anchor: Option<Anchor<'_>>,
-        node: NodeId,
-        cut_epoch: Option<u64>,
-    ) -> Result<DissolveRead, ReadFault<NewScopeRoot>> {
-        if node != end.root {
-            return self.dissolve_child(owner, end, anchor, node).await;
+    ) -> Result<DissolveRead, ReadFault<Unmapped>> {
+        let end = ends
+            .iter()
+            .find(|end| end.root == key.scope)
+            .ok_or(ReadFault::Unanswered)?;
+        if key.node != end.root {
+            let anchor = anchor.ok_or(ReadFault::Unanswered)?;
+            let outside = |scope: NodeId| {
+                ends.iter().find(|end| {
+                    end.root == scope && header.scopes.iter().all(|cut| cut.scope_id != scope)
+                })
+            };
+            return self
+                .dissolve_child(owner, end, anchor, key.node, &outside)
+                .await;
         }
+        let cut_epoch = header
+            .scopes
+            .iter()
+            .find(|scope| scope.scope_id == key.node)
+            .map(|scope| scope.cut_epoch);
         let (record, root, envelope) = self.walk_root(owner, end, true).await.map_err(widen)?;
         let commitment = root.state.commitment.as_ref().ok_or(ReadFault::Untrusted)?;
         let rows = !commitment.entries.is_empty();
@@ -645,7 +665,7 @@ where
         &self,
         end: &ScopeEnd<'_>,
         envelope: &Envelope,
-    ) -> Result<BTreeSet<NodeId>, ReadFault<NewScopeRoot>> {
+    ) -> Result<BTreeSet<NodeId>, ReadFault<Unmapped>> {
         let section = grant_section_bytes(envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
             .ok_or(ReadFault::Untrusted)?;
@@ -681,18 +701,20 @@ where
 
     /// One non-root node under `end`, read through the child gate at the name
     /// the end derives. A file body names no children.
-    async fn dissolve_child(
+    async fn dissolve_child<'e>(
         &self,
         owner: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
-        anchor: Option<Anchor<'_>>,
+        anchor: Anchor<'_>,
         node: NodeId,
-    ) -> Result<DissolveRead, ReadFault<NewScopeRoot>> {
-        let anchor = anchor.ok_or(ReadFault::Unanswered)?;
+        outside: &dyn Fn(NodeId) -> Option<&'e ScopeEnd<'e>>,
+    ) -> Result<DissolveRead, ReadFault<Unmapped>> {
         let plane = end.at(anchor.epoch);
         let name = end.write_name(&node.0);
+        let floors = end.floors(&self.seams.floors);
+        let adopter = self.child_adopter(&plane, &floors, node);
         let loaded = match self
-            .load_child_node_unreported(&plane, anchor, node, ResolveMode::NoCache)
+            .load_child_at(&plane, anchor, &adopter, name.clone(), ResolveMode::NoCache)
             .await
         {
             Ok(loaded) => loaded,
@@ -700,6 +722,19 @@ where
             // tells a grant from abuse (blueprint/engine.md "Grant creation").
             Err(ChildFault::Refused(rejection)) if rejection.stage == GateStage::GrantSection => {
                 return Err(self.root_gate_read(owner, end, node, &name).await);
+            }
+            Err(ChildFault::Refused(rejection)) if seal_open_failed(&rejection) => {
+                let Some(other) = adopter
+                    .unbound_scope()
+                    .and_then(|scope| outside(NodeId(scope)))
+                else {
+                    return Err(walk_fault(refuse_record(
+                        &self.seams.events,
+                        &name,
+                        &rejection,
+                    )));
+                };
+                return Err(self.outside_read(*other, node, &name, &rejection).await);
             }
             Err(fault) => return Err(walk_fault(self.report_fault(&name, fault))),
         };
@@ -719,24 +754,47 @@ where
         })
     }
 
-    /// Read `node` at `name` again through the root gate, under the ascent
-    /// authority of `end`'s read seed. A pass is a new scope root, and a
-    /// refusal by both gates is reported.
+    /// Read `node` at `name` again for the root gate, under the ascent
+    /// authority of `end`'s read seed. The child gate refuses every record
+    /// with a grant section, so a root gate refusal of such a record is a
+    /// refusal by both gates. A record with no grant section changed after the
+    /// child gate read, and the walk reads it again on a later tick.
     async fn root_gate_read(
         &self,
         owner: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
         node: NodeId,
-        name: &cipherbox_core::ipns::IpnsName,
-    ) -> ReadFault<NewScopeRoot> {
+        name: &IpnsName,
+    ) -> ReadFault<Unmapped> {
         let Ok(LeafRead {
+            pick,
             bytes,
+            tied,
             endpoint_failed,
-            ..
         }) = LeafRead::fetch(&self.seams.transport, name).await
         else {
             return ReadFault::Unanswered;
         };
+        let refused = |error: GateError| match LeafRefusal::of(error, endpoint_failed) {
+            LeafRefusal::Seam(_) | LeafRefusal::Withheld => ReadFault::Unanswered,
+            LeafRefusal::Rejected(rejection) => {
+                refuse_record(&self.seams.events, name, &rejection);
+                ReadFault::Untrusted
+            }
+        };
+        match assemble_head_envelope(&self.seams.gateway, &self.seams.http, name, &bytes, None)
+            .await
+        {
+            Ok((_, envelope, _)) if has_grant_section(&envelope) => {}
+            Ok(_) => return ReadFault::Unanswered,
+            Err(error) => return refused(error),
+        }
+        if served_fork(name, &pick, &tied, async |_| true).await {
+            self.cells
+                .forks
+                .report(&self.seams.events, name.as_str(), pick.sequence);
+            return ReadFault::Untrusted;
+        }
         let floors = end.floors(&self.seams.floors);
         let parent_seed = kdf::node_seed(end.read_scope_seed, &node.0);
         let adopter = RootAdopter::new(
@@ -748,24 +806,55 @@ where
             node.0,
         )
         .under_parent_node_seed(Zeroizing::new(*parent_seed.as_bytes()));
-        let refused = match adopter.adopt(name, &bytes).await {
-            Ok(_) => return ReadFault::Fatal(NewScopeRoot),
+        match adopter.adopt(name, &bytes).await {
+            Ok(_) => ReadFault::Fatal(Unmapped::NewScopeRoot),
             Err(GateError::Rejected(GateRejection {
                 reason: RejectionReason::SequenceNotNewer { floor, sequence },
                 ..
             })) if floor == sequence => {
                 match adopter.recover_own_scope_material(name, &bytes).await {
-                    Ok(Some(_)) => return ReadFault::Fatal(NewScopeRoot),
-                    Ok(None) => return ReadFault::Unanswered,
-                    Err(error) => error,
+                    Ok(Some(_)) => ReadFault::Fatal(Unmapped::NewScopeRoot),
+                    Ok(None) => ReadFault::Unanswered,
+                    Err(error) => refused(error),
                 }
             }
-            Err(error) => error,
+            Err(error) => refused(error),
+        }
+    }
+
+    /// Read `node` at `name` again under `other`, the end that the tag of the
+    /// record names, as `load_owing_node` does, after the scope bind of the
+    /// walked end refused it as `rejection`. A scope whose parent shares its
+    /// write seed derives the parent's names, so the record of an outside node
+    /// can stand at a name of the walked scope. A record that opens under
+    /// `other` is outside the subtree, and the walk starts again. The AAD binds
+    /// the scope, so a hostile record does not open there.
+    async fn outside_read(
+        &self,
+        other: ScopeEnd<'_>,
+        node: NodeId,
+        name: &IpnsName,
+        rejection: &GateRejection,
+    ) -> ReadFault<Unmapped> {
+        let Some((plane, root)) = self.ledger_plane(other).await else {
+            return ReadFault::Unanswered;
         };
-        match LeafRefusal::of(refused, endpoint_failed) {
-            LeafRefusal::Seam(_) | LeafRefusal::Withheld => ReadFault::Unanswered,
-            LeafRefusal::Rejected(rejection) => {
-                refuse_record(&self.seams.events, name, &rejection);
+        let floors = other.floors(&self.seams.floors);
+        let adopter = self.child_adopter(&plane, &floors, node);
+        match self
+            .load_child_at(
+                &plane,
+                root.anchor(),
+                &adopter,
+                name.clone(),
+                ResolveMode::NoCache,
+            )
+            .await
+        {
+            Ok(_) => ReadFault::Fatal(Unmapped::Outside),
+            Err(ChildFault::Halt(halt)) if halt != Halt::RecordRefused => ReadFault::Unanswered,
+            Err(_) => {
+                refuse_record(&self.seams.events, name, rejection);
                 ReadFault::Untrusted
             }
         }
@@ -896,7 +985,7 @@ mod tests {
                     return Err(ReadFault::Untrusted);
                 }
                 if node.promoted {
-                    return Err(ReadFault::Fatal(NewScopeRoot));
+                    return Err(ReadFault::Fatal(Unmapped::NewScopeRoot));
                 }
                 let root = (key.node == key.scope)
                     .then(|| node.root.clone())
@@ -1168,7 +1257,7 @@ mod tests {
             !walk.keeps_material(|_| Some(mark(3))),
             "a read cut moves the stamp"
         );
-        assert!(!walk.keeps_material(|_| None), "an end that went");
+        assert!(walk.keeps_material(|_| None), "an end absent from the tick");
         assert!(
             !walk.keeps_material(|_| Some(EndMark {
                 root_name: "k51moved".into(),
