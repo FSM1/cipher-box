@@ -218,6 +218,10 @@ pub enum DeadLetterReason {
     /// read, so another device runs a newer release. The op waited out the
     /// unattributed budget; the member's remedy is to update this app.
     NewerRelease,
+    /// The op is under a scope root that its parent folder no longer names: an
+    /// owner dissolved the scope into a plain folder with new node ids
+    /// (ADR 0077 D1).
+    ScopeDissolved,
 }
 
 /// One applied op, resolved for republish.

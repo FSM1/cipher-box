@@ -52,6 +52,7 @@ use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{
     RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
 };
+use crate::sync::reseal_journal::RESEAL_JOURNAL_PREFIX;
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use crate::sync::tick::elapsed_at_least;
 use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
@@ -64,7 +65,7 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, the scope roots that still owe a
 /// scope-exit cut, the conversion record, the renewal walk's cursor, the
-/// owed rotation record, or the kept-op notes. All
+/// owed rotation record, the kept-op notes, or the subtree re-seal journal. All
 /// are per-owner, so their whole prefixes are referenced — an entry this
 /// session cannot read belongs to the identity that still needs it.
 ///
@@ -86,6 +87,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(OWED_ROTATION_PREFIX)
         || key.starts_with(KEPT_OP_NOTES_PREFIX)
         || key.starts_with(crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX)
+        || key.starts_with(RESEAL_JOURNAL_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -228,6 +230,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::GraftedScopeVaultSurface => 19,
         DeadLetterReason::NewerRelease => 20,
         DeadLetterReason::TargetIsScopeRoot => 21,
+        DeadLetterReason::ScopeDissolved => 22,
     }
 }
 
@@ -257,6 +260,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         19 => DeadLetterReason::GraftedScopeVaultSurface,
         20 => DeadLetterReason::NewerRelease,
         21 => DeadLetterReason::TargetIsScopeRoot,
+        22 => DeadLetterReason::ScopeDissolved,
         _ => return None,
     })
 }
@@ -1659,6 +1663,7 @@ mod tests {
                 OWED_ROTATION_PREFIX,
                 KEPT_OP_NOTES_PREFIX,
                 crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX,
+                RESEAL_JOURNAL_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
@@ -1676,6 +1681,62 @@ mod tests {
                 vec![b"orphan".to_vec()],
                 "only the residue is collected, never anyone's bookkeeping"
             );
+        });
+    }
+
+    /// A reconcile pass keeps each re-seal journal value byte for byte,
+    /// whatever its caller, and a value that does not open.
+    #[test]
+    fn a_reconcile_keeps_every_reseal_journal_value_as_it_is() {
+        use crate::facade::NodeId;
+        use crate::sync::reseal_journal::{ResealEnvelope, ResealJournal};
+        use cipherbox_core::suite::x25519::X25519Secret;
+
+        let store = InMemoryStagingStore::default();
+        let entropy = RefCell::new(crate::testkit::SeededEntropy::new(4));
+        let secret = X25519Secret::from_scalar([9; 32]);
+        let journal = ResealJournal::new(&store, BookkeepingSeal::new(&secret, &entropy));
+        block_on(async {
+            for caller in [1u8, 2] {
+                journal
+                    .put(
+                        b"h",
+                        &ResealEnvelope {
+                            caller,
+                            source_root: NodeId([caller; 16]),
+                            payload: vec![caller; 40].into(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            store
+                .put_staged_bytes(&journal.key(NodeId([3; 16]), b"h"), b"does not open")
+                .await
+                .unwrap();
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+            let journal_values = || {
+                let mut staged = store.contents().1;
+                staged.retain(|key, _| key.starts_with(RESEAL_JOURNAL_PREFIX));
+                staged
+            };
+            let before = journal_values();
+            assert_eq!(before.len(), 3);
+
+            reconcile_staging(
+                &store,
+                &RefCell::new(LiveBlocks::default()),
+                bounds(u64::MAX),
+                None,
+            )
+            .await;
+
+            assert_eq!(
+                store.staged_bytes(b"orphan").await.unwrap(),
+                None,
+                "the sweep ran"
+            );
+            assert_eq!(journal_values(), before);
         });
     }
 
@@ -3112,6 +3173,151 @@ mod tests {
         });
     }
 
+    /// A preserved set the previous release wrote, one entry for each of its
+    /// 21 reasons: op id `n`, tag `n`, stamp 1 700 000 000 000 + `n` ms, and
+    /// record `[n; 3]`.
+    const PREVIOUS_RELEASE_PRESERVED: &str = concat!(
+        "030000000000000001010000018bcfe56801000000030101010000000000000002020000",
+        "018bcfe56802000000030202020000000000000003030000018bcfe56803000000030303",
+        "030000000000000004040000018bcfe56804000000030404040000000000000005050000",
+        "018bcfe56805000000030505050000000000000006060000018bcfe56806000000030606",
+        "060000000000000007070000018bcfe56807000000030707070000000000000008080000",
+        "018bcfe56808000000030808080000000000000009090000018bcfe56809000000030909",
+        "09000000000000000a0a0000018bcfe5680a000000030a0a0a000000000000000b0b0000",
+        "018bcfe5680b000000030b0b0b000000000000000c0c0000018bcfe5680c000000030c0c",
+        "0c000000000000000d0d0000018bcfe5680d000000030d0d0d000000000000000e0e0000",
+        "018bcfe5680e000000030e0e0e000000000000000f0f0000018bcfe5680f000000030f0f",
+        "0f0000000000000010100000018bcfe56810000000031010100000000000000011110000",
+        "018bcfe56811000000031111110000000000000012120000018bcfe56812000000031212",
+        "120000000000000013130000018bcfe56813000000031313130000000000000014140000",
+        "018bcfe56814000000031414140000000000000015150000018bcfe56815000000031515",
+        "15",
+    );
+
+    /// The notices the previous release wrote: op id 100 + `n`, tag `n`, stamp
+    /// 1 700 000 000 000 + `n` ms, for each of its 21 reasons.
+    const PREVIOUS_RELEASE_NOTICES: &str = concat!(
+        "010000000000000065010000018bcfe568010000000000000066020000018bcfe5680200",
+        "00000000000067030000018bcfe568030000000000000068040000018bcfe56804000000",
+        "0000000069050000018bcfe56805000000000000006a060000018bcfe568060000000000",
+        "00006b070000018bcfe56807000000000000006c080000018bcfe5680800000000000000",
+        "6d090000018bcfe56809000000000000006e0a0000018bcfe5680a000000000000006f0b",
+        "0000018bcfe5680b00000000000000700c0000018bcfe5680c00000000000000710d0000",
+        "018bcfe5680d00000000000000720e0000018bcfe5680e00000000000000730f0000018b",
+        "cfe5680f0000000000000074100000018bcfe568100000000000000075110000018bcfe5",
+        "68110000000000000076120000018bcfe568120000000000000077130000018bcfe56813",
+        "0000000000000078140000018bcfe568140000000000000079150000018bcfe56815",
+    );
+
+    #[test]
+    fn the_dead_letters_the_previous_release_wrote_still_read() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            store
+                .put_staged_bytes(
+                    PRESERVED_DEAD_LETTERS_KEY,
+                    &hex::decode(PREVIOUS_RELEASE_PRESERVED).unwrap(),
+                )
+                .await
+                .unwrap();
+            store
+                .put_staged_bytes(NOTICES_KEY, &hex::decode(PREVIOUS_RELEASE_NOTICES).unwrap())
+                .await
+                .unwrap();
+
+            let kept = read_preserved_dead_letters(&store)
+                .await
+                .unwrap()
+                .expect("the set reads");
+            let noted = notices(&store).await;
+            assert_eq!(kept.len(), 21);
+            assert_eq!(noted.len(), 21);
+            let previous = [
+                DeadLetterReason::TargetGone,
+                DeadLetterReason::DestinationGone,
+                DeadLetterReason::DestinationInsideTarget,
+                DeadLetterReason::SuffixExhausted,
+                DeadLetterReason::Undecodable,
+                DeadLetterReason::PayloadRefused,
+                DeadLetterReason::AttemptsExhausted,
+                DeadLetterReason::HeadTooLarge,
+                DeadLetterReason::BaseSuperseded,
+                DeadLetterReason::ContentUnrecoverable,
+                DeadLetterReason::PreservationRefused,
+                DeadLetterReason::AlreadyPublished,
+                DeadLetterReason::TargetStillLinked,
+                DeadLetterReason::ScopeRootNotResealable,
+                DeadLetterReason::BinIndexFull,
+                DeadLetterReason::CrossingUnauthorable,
+                DeadLetterReason::BinIndexStrandedMint,
+                DeadLetterReason::TargetLinkedAcrossScopes,
+                DeadLetterReason::GraftedScopeVaultSurface,
+                DeadLetterReason::NewerRelease,
+                DeadLetterReason::TargetIsScopeRoot,
+            ];
+            assert_eq!(previous.len(), 21);
+            for ((n, reason), (entry, notice)) in
+                (1..=21u8).zip(previous).zip(kept.iter().zip(&noted))
+            {
+                assert_eq!(entry.op_id, OpId(u64::from(n)));
+                assert_eq!(entry.reason, reason, "tag {n}");
+                assert_eq!(
+                    entry.preserved_at,
+                    UnixMillis(1_700_000_000_000 + u64::from(n))
+                );
+                assert_eq!(entry.record, vec![n; 3]);
+                assert_eq!(notice.op_id, OpId(100 + u64::from(n)));
+                assert_eq!(notice.reason, reason, "tag {n}");
+            }
+        });
+    }
+
+    /// The tag of a dissolved scope reads, so a set that holds one is not
+    /// refused whole, and a write gives back the same bytes.
+    #[test]
+    fn a_set_with_the_scope_dissolved_tag_reads_and_writes_back() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let mut preserved = vec![PRESERVED_FORMAT_V3];
+            preserved.extend_from_slice(&7u64.to_be_bytes());
+            preserved.push(22);
+            preserved.extend_from_slice(&NOW.0.to_be_bytes());
+            preserved.extend_from_slice(&1u32.to_be_bytes());
+            preserved.push(9);
+            store
+                .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &preserved)
+                .await
+                .unwrap();
+            let mut notice = vec![NOTICE_FORMAT_V1];
+            notice.extend_from_slice(&8u64.to_be_bytes());
+            notice.push(22);
+            notice.extend_from_slice(&NOW.0.to_be_bytes());
+            store.put_staged_bytes(NOTICES_KEY, &notice).await.unwrap();
+
+            let kept = read_preserved_dead_letters(&store)
+                .await
+                .unwrap()
+                .expect("the set reads");
+            let noted = notices(&store).await;
+            assert_eq!(kept[0].reason, DeadLetterReason::ScopeDissolved);
+            assert_eq!(noted[0].reason, DeadLetterReason::ScopeDissolved);
+
+            store.clear().await.unwrap();
+            write_preserved_dead_letters(&store, &kept).await.unwrap();
+            write_dead_letter_notices(&store, NOTICES_KEY, &noted)
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .staged_bytes(PRESERVED_DEAD_LETTERS_KEY)
+                    .await
+                    .unwrap(),
+                Some(preserved)
+            );
+            assert_eq!(store.staged_bytes(NOTICES_KEY).await.unwrap(), Some(notice));
+        });
+    }
+
     /// Every reason a park can carry survives the round trip, so no parked write
     /// comes back under another reason's words.
     #[test]
@@ -3138,6 +3344,7 @@ mod tests {
             DeadLetterReason::GraftedScopeVaultSurface,
             DeadLetterReason::NewerRelease,
             DeadLetterReason::TargetIsScopeRoot,
+            DeadLetterReason::ScopeDissolved,
         ];
         for reason in reasons {
             assert_eq!(

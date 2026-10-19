@@ -78,11 +78,14 @@ pub enum OwnerLocalKind {
     /// The record name each preserved dead letter's version would have joined
     /// (ADR 0075 D2).
     DeadLetterNames,
+    /// The owner-local journal of a subtree re-seal: each entry is a common
+    /// envelope around a payload its caller owns (ADR 0077 D3).
+    SubtreeReseal,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
@@ -95,6 +98,7 @@ impl OwnerLocalKind {
         Self::KeptOps,
         Self::OwnerSeedCache,
         Self::DeadLetterNames,
+        Self::SubtreeReseal,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -112,6 +116,7 @@ impl OwnerLocalKind {
             Self::KeptOps => "kept-ops",
             Self::OwnerSeedCache => "owner-seed-cache",
             Self::DeadLetterNames => "dead-letter-names",
+            Self::SubtreeReseal => "subtree-reseal",
         }
     }
 
@@ -130,6 +135,7 @@ impl OwnerLocalKind {
             Self::KeptOps => 0x0b,
             Self::OwnerSeedCache => 0x0c,
             Self::DeadLetterNames => 0x0d,
+            Self::SubtreeReseal => 0x0e,
         }
     }
 
@@ -343,6 +349,7 @@ mod tests {
                 OwnerLocalKind::KeptOps => 9,
                 OwnerLocalKind::OwnerSeedCache => 10,
                 OwnerLocalKind::DeadLetterNames => 11,
+                OwnerLocalKind::SubtreeReseal => 12,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

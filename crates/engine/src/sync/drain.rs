@@ -70,7 +70,7 @@ use crate::net::author::{
     AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
-use crate::net::gated_read::{BelowFloor, sequence_refusal};
+use crate::net::gated_read::{LeafRead, LeafRefusal, Unserved};
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{
     Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict, PutMark,
@@ -85,10 +85,10 @@ use crate::net::retire::{
 };
 use crate::net::signed_data;
 use crate::net::{
-    Adopter, AnsweredFetch, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey,
-    HeldRecord, HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome,
-    RootAdopter, assemble_head_envelope, fanout_get_answered, fanout_get_classified,
-    fanout_get_verify, observed_at, resolve, resolve_gated,
+    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
+    HeldRecords, HeldValue, LocalHead, OwedMoveLeg, OwnScopeMaterial, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_classified, fanout_get_verify, observed_at, resolve,
+    resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -107,6 +107,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::crossing::{Authority, authoritative, enclosing_scope_root, landed_cut, owed_cut};
+use crate::sync::dissolve_journal::DissolveCell;
 use crate::sync::doomed::{
     MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS,
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
@@ -141,8 +142,11 @@ use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_m
 
 use crate::sync::tick::{ResolveMode, scope_root_of};
 
+mod dissolve;
 mod keyless_kept;
 mod walker;
+
+pub(crate) use dissolve::{DissolveSeal, DissolveWalk};
 
 use walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 
@@ -1547,10 +1551,19 @@ pub(crate) struct DeleteProof {
     /// whole subtree in one first sweep with no bound, and the session keeps
     /// only this mark.
     overflowed: bool,
+    /// The doomed walk of a hard delete. It runs between the two sweeps, so
+    /// the tick that ends it reads the subtree fresh before the unlink.
+    walk: Option<DoomedWalk>,
 }
 
 impl DeleteProof {
-    fn new(origin: NodeId, plane_root: NodeId, target: &ChildRef, overflowed: bool) -> Self {
+    fn new(
+        origin: NodeId,
+        plane_root: NodeId,
+        target: &ChildRef,
+        overflowed: bool,
+        doomed: bool,
+    ) -> Self {
         let mut sweep = TwoSweep::new(target.clone(), NodeId(target.id));
         // Child refs are wire data, so a cycle back to the parent is reachable.
         sweep.seen.insert(origin);
@@ -1564,6 +1577,7 @@ impl DeleteProof {
             carried: false,
             probe: None,
             overflowed,
+            walk: doomed.then(|| DoomedWalk::new(origin, NodeId(target.id), target.kind)),
         }
     }
 
@@ -1603,6 +1617,10 @@ struct DeletePolicy<'p> {
     whole: bool,
     /// The nodes the proof may read.
     bound: usize,
+    /// A doomed walk is not complete, so the second sweep waits for it.
+    walking: bool,
+    /// [`DrainCells::unproved_grants`]: a confirmed file in it is read.
+    unproved: &'p RefCell<BTreeSet<NodeId>>,
 }
 
 impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
@@ -1612,6 +1630,9 @@ impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
     /// no bound (blueprint/engine.md "Delete branch"). They end the share of
     /// every other proof of the tick.
     fn take_read(&mut self, confirming: bool) -> bool {
+        if confirming && self.walking {
+            return false;
+        }
         if self.whole || (confirming && self.carried) {
             self.tick_left.set(0);
             return true;
@@ -1621,7 +1642,7 @@ impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
 
     /// A first sweep that one tick reads whole is a snapshot of the subtree.
     fn settles_unconfirmed(&self, _: &TwoSweep<ChildRef>) -> bool {
-        !self.carried
+        !self.carried && !self.walking
     }
 
     fn visit(
@@ -1637,7 +1658,10 @@ impl SweepPolicy<ChildRef> for DeletePolicy<'_> {
             let id = NodeId(next.id);
             // A version projected before a grant survives a relabel, so a
             // known root stays in the walk whatever the base calls it.
-            if !self.known_scope_roots.contains(&id) && confirmed_file(self.base, id) {
+            if !self.known_scope_roots.contains(&id)
+                && confirmed_file(self.base, id)
+                && !self.unproved.borrow().contains(&id)
+            {
                 self.skipped.insert(id);
             } else if sweep.seen.insert(id) {
                 sweep.pending.push(next);
@@ -1658,6 +1682,15 @@ fn take_tick_read(tick_left: &Cell<usize>) -> bool {
     }
     tick_left.set(left - 1);
     true
+}
+
+/// The walk fault of a halt: a refused record is untrusted, and every other
+/// halt may answer on a later tick.
+fn walk_fault<F>(halt: Halt) -> ReadFault<F> {
+    match halt {
+        Halt::RecordRefused => ReadFault::Untrusted,
+        _ => ReadFault::Unanswered,
+    }
 }
 
 /// Whether this device's own gate-passing state calls `node` a file. A ref
@@ -1690,6 +1723,9 @@ pub(crate) struct ScopeEnd<'a> {
     pub(crate) read_seed_stamp: Option<u64>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
+    /// The stamp of `write_scope_seed`, or `None` where no stamp is known. A
+    /// write floor above it means a write cut moved the names off this seed.
+    pub(crate) write_seed_stamp: Option<u64>,
     /// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority the
     /// gate derives an interior scope root's expected ascent keypair from
     /// ([`RootAdopter::under_parent_node_seed`]). `None` at the vault root,
@@ -2159,6 +2195,19 @@ pub(crate) struct DrainCells<'a> {
     /// The subtree proofs of queued deletes that a tick left unfinished. In
     /// memory only, like `kept_chains`.
     pub(crate) delete_proofs: &'a RefCell<BTreeMap<OpId, DeleteProof>>,
+    /// Each node whose doomed walk read showed a grant section. The proof of
+    /// each later delete reads it, and the walk of each later hard delete reads
+    /// it through the scope root gate alone, so a cached copy cannot answer
+    /// it. Only a gate read that reads a plain record or refuses the record
+    /// removes it. In memory only.
+    pub(crate) unproved_grants: &'a RefCell<BTreeSet<NodeId>>,
+    /// The session's dissolve drivers and journal listing.
+    pub(crate) dissolve: &'a DissolveCell,
+    /// The map walks of dissolve entries that a tick left unfinished, by
+    /// source root. In memory only.
+    pub(crate) dissolve_walks: &'a RefCell<BTreeMap<NodeId, DissolveWalk>>,
+    /// The seals of dissolve entries, by source root. In memory only.
+    pub(crate) dissolve_seals: &'a RefCell<BTreeMap<NodeId, DissolveSeal>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2211,6 +2260,9 @@ pub(crate) struct TickInputs<'a> {
     /// Each owed interior move's scope root, with the scope its folder left,
     /// which a child read under that root also binds (ADR 0072 D1).
     pub(crate) owed_move_reads: &'a [(NodeId, OwedMoveLeg<'a>)],
+    /// The scopes this device owes a write cut at, or `None` when the owed
+    /// record did not read.
+    pub(crate) owed_write_cuts: Option<&'a [NodeId]>,
     /// The scope id of each bookmark in
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     pub(crate) deferred_raises: &'a [NodeId],
@@ -2572,6 +2624,48 @@ struct Doomed {
     versions: Vec<ContentVersion>,
 }
 
+/// A doomed walk that can stop between two reads and continue on a later
+/// tick ([`Drain::step_doomed`]).
+struct DoomedWalk {
+    /// Each node still to read. The last is read next, and leaves only once
+    /// it is read.
+    pending: Vec<(NodeId, NodeKind)>,
+    seen: BTreeSet<[u8; 16]>,
+    doomed: Vec<Doomed>,
+}
+
+impl DoomedWalk {
+    fn new(parent: NodeId, target: NodeId, kind: NodeKind) -> Self {
+        Self {
+            pending: vec![(target, kind)],
+            seen: BTreeSet::from([parent.0]),
+            doomed: Vec::new(),
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+/// Where one step left a [`DoomedWalk`].
+enum DoomedStep {
+    Complete,
+    /// The tick's share gave no more reads.
+    Paused,
+    /// The walk passed its node bound.
+    Stopped(Overflow),
+}
+
+/// What a delete's doomed walk needs to gate a grant section through the
+/// scope root gate ([`Drain::prove_node_plane`]).
+#[derive(Clone, Copy)]
+struct WalkGate<'b, 'e> {
+    scope: &'b DrainScope<'e>,
+    pass: &'b Pass,
+    target: NodeId,
+}
+
 /// What a record read is anchored to: the scope epoch the reader is at, and the
 /// backward key-regression ratchet that reaches the epochs below it.
 #[derive(Clone, Copy)]
@@ -2919,6 +3013,7 @@ where
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
+        self.drive_dissolves(&passes, &ends).await;
         // The retire ledger is the identity's and reads under the vault root's
         // material, so only a tick that holds that root settles.
         if vault_held && let Some(vault) = passes.first() {
@@ -4469,6 +4564,20 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
+        self.open_root_envelope(scope, source, record_bytes, sequence, &envelope)
+            .await
+    }
+
+    /// [`Self::open_root_record`] over the head `envelope` that `record_bytes`
+    /// at `sequence` names.
+    async fn open_root_envelope(
+        &self,
+        scope: Option<&DrainScope<'_>>,
+        source: &ScopeEnd<'_>,
+        record_bytes: &[u8],
+        sequence: u64,
+        envelope: &Envelope,
+    ) -> Result<LoadedRoot, Halt> {
         // The cache can be older than the floors — a restored data dir is
         // exactly that. The whole pass anchors here: this record's epoch
         // becomes the epoch every record it publishes is sealed at, so a
@@ -4489,7 +4598,7 @@ where
         let observed = Observed::gated(source.root_name, sequence, envelope.v, record_bytes)
             .map_err(classify_publish_error)?;
         let read_key = source.read_key(&source.root.0);
-        let Ok(body) = open_read_body(&envelope, &read_key) else {
+        let Ok(body) = open_read_body(envelope, &read_key) else {
             return Err(self
                 .unopened_root(scope, source, record_bytes, envelope.epoch)
                 .await);
@@ -4506,7 +4615,7 @@ where
         let epoch = envelope.epoch;
         // A scope root the root gate passed carries a decodable section; bytes
         // that do not are not a root this pass may anchor a ratchet on.
-        let section = grant_section_bytes(&envelope)
+        let section = grant_section_bytes(envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
             .ok_or(Halt::Unclassified)?;
         Ok(LoadedRoot {
@@ -4515,8 +4624,8 @@ where
                 name: source.root_name.clone(),
                 record: record_bytes.to_vec(),
                 commitment: Some(section.commitment),
-                envelope_unknown: envelope.unknown,
-                epoch_tag_unknown: envelope.epoch_tag_unknown,
+                envelope_unknown: envelope.unknown.clone(),
+                epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
                 created_at,
                 modified_at,
                 children,
@@ -4706,6 +4815,19 @@ where
         )
         .await
         .map_err(seam)?;
+        self.open_resolved_child(plane, anchor, adopter, name, resolved)
+            .await
+    }
+
+    /// [`Self::load_child_at`] over a resolve that `adopter` already gated.
+    async fn open_resolved_child(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: IpnsName,
+        resolved: GatedResolve,
+    ) -> Result<LoadedNode, ChildFault> {
         let tied = !resolved.tied.is_empty();
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
@@ -5258,17 +5380,19 @@ where
         // the origin link resolved onto: a node joins the scope of the parent
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
-        if !scope.is_grafted() {
-            self.prove_delete_plane(scope, pass, &plane, origin, &child, applied.op_id)
-                .await?;
-        }
+        let soft = !scope.is_grafted() && to_bin && names_this_scope(&plane.end, &child);
+        let walked = match scope.is_grafted() {
+            true => None,
+            false => {
+                self.prove_delete_plane(scope, pass, &plane, origin, &child, applied.op_id, !soft)
+                    .await?
+            }
+        };
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
         // republish every parent, which is where the op completes.
-        let doomed = if scope.is_grafted() {
-            None
-        } else if to_bin && names_this_scope(&plane.end, &child) {
+        let doomed = if soft {
             let unlinked = UnlinkedChild {
                 scope_id: plane.end.root.0,
                 // The highest-ranked link still standing: the folder a reader
@@ -5296,17 +5420,7 @@ where
             .await?;
             None
         } else {
-            Some(
-                self.enumerate_doomed(
-                    &plane,
-                    pass.anchor_for(&plane)?,
-                    origin,
-                    target,
-                    child.kind,
-                    Boundary::None,
-                )
-                .await?,
-            )
+            walked
         };
         // Before the publish that completes the op: a crash in between leaves a
         // live scope with no entry, which its next confirmed read saves again.
@@ -5378,6 +5492,13 @@ where
     /// except past [`MAX_DELETE_PROOF_NODES`], where each tick reads the whole
     /// subtree. Until the [`DeleteProof`] completes, the delete holds the
     /// queue head uncharged.
+    ///
+    /// With `doomed`, the proof also walks what a hard delete detaches, under
+    /// the same tick share, and answers it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one delete's proof and its doomed walk"
+    )]
     async fn prove_delete_plane(
         &self,
         scope: &DrainScope<'_>,
@@ -5386,15 +5507,20 @@ where
         origin: NodeId,
         target: &ChildRef,
         op_id: OpId,
-    ) -> Result<(), Halt> {
+        doomed: bool,
+    ) -> Result<Option<Vec<Doomed>>, Halt> {
         let bin_target = NodeId(target.id);
-        let new_proof = |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed);
-        let hold = |proof: DeleteProof| {
+        let new_proof =
+            |overflowed| DeleteProof::new(origin, plane.end.root, target, overflowed, doomed);
+        let keep = |proof: DeleteProof| {
             let kept = match proof.overflowed {
                 true => new_proof(true),
                 false => proof,
             };
             self.cells.delete_proofs.borrow_mut().insert(op_id, kept);
+        };
+        let hold = |proof: DeleteProof| {
+            keep(proof);
             Err(Halt::DeletePlaneUnavailable)
         };
         let read_node = async |child: &ChildRef| {
@@ -5403,19 +5529,29 @@ where
                     DeadLetterReason::TargetIsScopeRoot,
                 )));
             }
-            self.prove_node_plane(scope, pass, plane, bin_target, child)
-                .await
-                .map_err(|halt| match halt {
-                    Halt::DeletePlaneUnavailable => ReadFault::Unanswered,
-                    halt => ReadFault::Fatal(halt),
-                })
+            let read = self
+                .prove_node_plane(scope, pass, plane, bin_target, child)
+                .await;
+            // A plain record or a refused one settles a marked node.
+            if matches!(read, Ok(_) | Err(Halt::RecordRefused)) {
+                self.cells
+                    .unproved_grants
+                    .borrow_mut()
+                    .remove(&NodeId(child.id));
+            }
+            read.map_err(|halt| match halt {
+                Halt::DeletePlaneUnavailable => ReadFault::Unanswered,
+                halt => ReadFault::Fatal(halt),
+            })
         };
         let mut proof = self
             .cells
             .delete_proofs
             .borrow_mut()
             .remove(&op_id)
-            .filter(|proof| proof.proves(origin, plane.end.root, target))
+            .filter(|proof| {
+                proof.proves(origin, plane.end.root, target) && proof.walk.is_some() == doomed
+            })
             .unwrap_or_else(|| new_proof(false));
         // An outage on one node costs one read on each tick, not the second
         // sweep up to that node.
@@ -5432,6 +5568,7 @@ where
             }
         }
         loop {
+            let walk = proof.walk.as_mut().filter(|walk| !walk.complete());
             let mut policy = DeletePolicy {
                 base: self.cells.base,
                 known_scope_roots: scope.known_scope_roots,
@@ -5440,6 +5577,8 @@ where
                 carried: proof.carried,
                 whole: proof.overflowed,
                 bound: self.delete_proof_nodes,
+                walking: walk.is_some(),
+                unproved: self.cells.unproved_grants,
             };
             let swept = proof
                 .sweep
@@ -5448,6 +5587,47 @@ where
                     async |_: &DeletePolicy<'_>, child: &ChildRef| read_node(child).await,
                 )
                 .await;
+            if let (Swept::Paused, Some(walk)) = (&swept, walk)
+                && proof.sweep.pending.is_empty()
+            {
+                let budget = (!proof.overflowed)
+                    .then_some((&self.delete_proof_reads, self.delete_proof_nodes));
+                let gate = WalkGate {
+                    scope,
+                    pass,
+                    target: bin_target,
+                };
+                let stepped = self
+                    .step_doomed(
+                        plane,
+                        pass.anchor_for(plane)?,
+                        walk,
+                        Boundary::None,
+                        budget,
+                        Some(gate),
+                    )
+                    .await;
+                match stepped {
+                    Ok(DoomedStep::Complete) => {}
+                    // The first sweep is no longer a snapshot of this tick, so
+                    // the unlink waits for a second sweep.
+                    Ok(DoomedStep::Paused) => {
+                        proof.carried = true;
+                        return hold(proof);
+                    }
+                    Ok(DoomedStep::Stopped(Overflow)) => proof = new_proof(true),
+                    // A seam fault, or a gate read that did not settle a grant,
+                    // answers on a later tick. A refused read drops the walk,
+                    // so a new proof reads the subtree from the target.
+                    Err(Halt::Unclassified) => {
+                        proof.carried = true;
+                        keep(proof);
+                        return Err(Halt::Unclassified);
+                    }
+                    Err(halt) => return Err(halt),
+                }
+                continue;
+            }
             match swept {
                 // A node an earlier tick read or skipped can become a known
                 // root since.
@@ -5457,7 +5637,7 @@ where
                 Swept::Complete if proof.skipped_a_folder(self.cells.base) => {
                     return hold(new_proof(proof.overflowed));
                 }
-                Swept::Complete => return Ok(()),
+                Swept::Complete => return Ok(proof.walk.map(|walk| walk.doomed)),
                 Swept::Moved | Swept::Fault(ReadFault::Untrusted) => {
                     proof = new_proof(proof.overflowed);
                 }
@@ -5492,25 +5672,20 @@ where
     ) -> Result<(RecordMark, ReadBody), Halt> {
         let name =
             crate::net::rotation::scope_name(&child.ipns_name).map_err(|_| Halt::Unclassified)?;
-        let AnsweredFetch {
-            record,
+        let LeafRead {
+            bytes,
             endpoint_failed,
             ..
-        } = fanout_get_answered(&self.seams.transport, &name).await;
-        let bytes = match record {
-            FanoutRecord::Found(_, bytes) => bytes,
-            FanoutRecord::Absent => return Err(Halt::Unclassified),
-            FanoutRecord::Unavailable(_) => return Err(Halt::DeletePlaneUnavailable),
+        } = match LeafRead::fetch(&self.seams.transport, &name).await {
+            Ok(read) => read,
+            Err(Unserved { absent: true, .. }) => return Err(Halt::Unclassified),
+            Err(Unserved { absent: false, .. }) => return Err(Halt::DeletePlaneUnavailable),
         };
-        let fault = |error| match error {
-            GateError::Seam(_) => Halt::DeletePlaneUnavailable,
-            GateError::Rejected(rejection)
-                if sequence_refusal(&rejection.reason, endpoint_failed)
-                    == Some(BelowFloor::Unavailable) =>
-            {
-                Halt::DeletePlaneUnavailable
+        let fault = |error| match LeafRefusal::of(error, endpoint_failed) {
+            LeafRefusal::Seam(_) | LeafRefusal::Withheld => Halt::DeletePlaneUnavailable,
+            LeafRefusal::Rejected(rejection) => {
+                refuse_record(&self.seams.events, &name, &rejection)
             }
-            GateError::Rejected(rejection) => refuse_record(&self.seams.events, &name, &rejection),
         };
         let (sequence, envelope, _) =
             assemble_head_envelope(&self.seams.gateway, &self.seams.http, &name, &bytes, None)
@@ -6049,27 +6224,110 @@ where
         kind: NodeKind,
         boundary: Boundary<'_>,
     ) -> Result<Vec<Doomed>, Halt> {
-        let mut doomed = Vec::new();
-        let mut seen = BTreeSet::from([parent.0]);
-        let mut pending = vec![(target, kind)];
-        while let Some((node, kind)) = pending.pop() {
+        let mut walk = DoomedWalk::new(parent, target, kind);
+        self.step_doomed(plane, anchor, &mut walk, boundary, None, None)
+            .await?;
+        Ok(walk.doomed)
+    }
+
+    /// Step `walk` ([`Self::enumerate_doomed`]) under `budget`: one read from
+    /// its share per node, and one more for the `gate` read of a grant
+    /// section, until its node bound. A node that faults stays next to read,
+    /// and with a `gate`, a node in [`DrainCells::unproved_grants`] reads
+    /// through the gate alone.
+    async fn step_doomed(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        walk: &mut DoomedWalk,
+        boundary: Boundary<'_>,
+        budget: Option<(&Cell<usize>, usize)>,
+        gate: Option<WalkGate<'_, '_>>,
+    ) -> Result<DoomedStep, Halt> {
+        let unproved = self.cells.unproved_grants;
+        while let Some(&(node, kind)) = walk.pending.last() {
             // Child refs are wire data, so a diamond or a cycle among them is
             // reachable: a node already walked is never walked again, which is
             // also what terminates the walk.
-            if seen.contains(&node.0) {
+            if walk.seen.contains(&node.0) {
+                walk.pending.pop();
                 continue;
             }
-            seen.insert(node.0);
-            let (name, versions) = match self
-                .load_child_node(plane, anchor, node, ResolveMode::CacheFirst)
-                .await
-            {
+            // As the sweep does, a known root refuses with no read.
+            if gate.is_some_and(|gate| gate.scope.known_scope_roots.contains(&node)) {
+                return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
+            }
+            let read = match gate.is_some() && unproved.borrow().contains(&node) {
+                true => None,
+                false => {
+                    if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
+                        return Ok(DoomedStep::Paused);
+                    }
+                    Some(
+                        self.load_child_node_unreported(
+                            plane,
+                            anchor,
+                            node,
+                            ResolveMode::CacheFirst,
+                        )
+                        .await,
+                    )
+                }
+            };
+            let granted = match &read {
+                None => true,
+                Some(Err(ChildFault::Refused(rejection))) => {
+                    rejection.stage == GateStage::GrantSection
+                }
+                Some(_) => false,
+            };
+            // The child gate refuses any grant section. Only the scope root
+            // gate tells a grant from abuse, so the walk reads the node again
+            // through it. The sighting marks the node until that gate reads a
+            // plain record or refuses the record, and the walk holds until then.
+            let read = match gate {
+                Some(gate) if granted => {
+                    unproved.borrow_mut().insert(node);
+                    if budget.is_some_and(|(reads, _)| !take_tick_read(reads)) {
+                        return Ok(DoomedStep::Paused);
+                    }
+                    let child = ChildRef {
+                        id: node.0,
+                        name: String::new(),
+                        ipns_name: plane.end.write_name(&node.0).as_str().as_bytes().to_vec(),
+                        kind,
+                        link_counter: 0,
+                        unknown: PreservedFields::new(),
+                    };
+                    match self
+                        .prove_node_plane(gate.scope, gate.pass, plane, gate.target, &child)
+                        .await
+                    {
+                        Err(Halt::RecordRefused) => {
+                            unproved.borrow_mut().remove(&node);
+                            Err(ChildFault::Halt(Halt::RecordRefused))
+                        }
+                        // The two reads disagree: the next tick reads again.
+                        Ok(_) => {
+                            unproved.borrow_mut().remove(&node);
+                            return Err(Halt::Unclassified);
+                        }
+                        Err(Halt::DeletePlaneUnavailable | Halt::Unclassified) => {
+                            return Err(Halt::Unclassified);
+                        }
+                        // A valid grant, and a fault, keep the mark.
+                        Err(halt) => return Err(halt),
+                    }
+                }
+                _ => read.unwrap_or(Err(ChildFault::Halt(Halt::Unclassified))),
+            };
+            let mut children = Vec::new();
+            let (name, versions) = match read {
                 Ok(loaded) => {
                     let versions = match loaded.body {
-                        ReadBody::Folder { children, .. } => {
-                            pending.extend(
-                                children
-                                    .iter()
+                        ReadBody::Folder { children: refs, .. } => {
+                            children.extend(
+                                refs.iter()
                                     .filter(|child| boundary.admits(&plane.end, child))
                                     .map(|child| (NodeId(child.id), child.kind)),
                             );
@@ -6089,18 +6347,30 @@ where
                 }
                 // An unreadable node's sealed body cannot confirm its ref
                 // kind, so only a confirmed file licenses the best-effort arm.
-                Err(halt) if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) => {
-                    return Err(halt);
+                Err(fault)
+                    if kind == NodeKind::Folder || !confirmed_file(self.cells.base, node) =>
+                {
+                    return Err(self.report_fault(&plane.end.write_name(&node.0), fault));
                 }
-                Err(_) => (plane.end.write_name(&node.0), Vec::new()),
+                Err(fault) => {
+                    let name = plane.end.write_name(&node.0);
+                    self.report_fault(&name, fault);
+                    (name, Vec::new())
+                }
             };
-            doomed.push(Doomed {
+            walk.pending.pop();
+            walk.seen.insert(node.0);
+            walk.pending.extend(children);
+            walk.doomed.push(Doomed {
                 node,
                 name,
                 versions,
             });
+            if budget.is_some_and(|(_, bound)| walk.seen.len() + walk.pending.len() > bound) {
+                return Ok(DoomedStep::Stopped(Overflow));
+            }
         }
-        Ok(doomed)
+        Ok(DoomedStep::Complete)
     }
 
     /// Add one soft-deleted node to the owner's bin index, reporting the
@@ -6863,31 +7133,12 @@ where
         node: NodeId,
         report: bool,
     ) -> Result<WalkRead, ReadFault<Infallible>> {
-        let fault = |halt: Halt| match halt {
-            Halt::RecordRefused => ReadFault::Untrusted,
-            _ => ReadFault::Unanswered,
-        };
         if node == end.root {
-            let resolved = self
-                .gated_scope_root(scope, end, ResolveMode::NoCache)
-                .await
-                .map_err(fault)?;
-            if !resolved.tied.is_empty()
-                || (!report
-                    && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
-            {
-                return Err(ReadFault::Untrusted);
-            }
-            let record =
-                resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(fault)?;
-            let root = self
-                .open_root_record(Some(scope), end, &record)
-                .await
-                .map_err(fault)?;
+            let (root, _) = self.walk_root(scope, end, report).await?;
             return Ok(WalkRead {
                 mark: RecordMark {
                     sequence: root.state.observed.sequence(),
-                    digest: cipherbox_core::suite::hash::hash(&record),
+                    digest: cipherbox_core::suite::hash::hash(&root.state.record),
                 },
                 children: root.state.children,
                 anchor: Some(WalkAnchor {
@@ -6905,7 +7156,7 @@ where
             Ok(loaded) => loaded,
             Err(ChildFault::Refused(_)) if !report => return Err(ReadFault::Untrusted),
             Err(error) => {
-                return Err(fault(
+                return Err(walk_fault(
                     self.report_fault(&plane.end.write_name(&node.0), error),
                 ));
             }
@@ -6924,6 +7175,41 @@ where
             },
             anchor: None,
         })
+    }
+
+    /// One end's scope root for a walk, read through its own gate from the
+    /// record plane and never from the cache: the root and its head envelope.
+    async fn walk_root<E>(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        report: bool,
+    ) -> Result<(LoadedRoot, Envelope), ReadFault<E>> {
+        let resolved = self
+            .gated_scope_root(scope, end, ResolveMode::NoCache)
+            .await
+            .map_err(walk_fault)?;
+        if !resolved.tied.is_empty()
+            || (!report && matches!(resolved.resolved.outcome, ResolveOutcome::TrustViolation(_)))
+        {
+            return Err(ReadFault::Untrusted);
+        }
+        let record =
+            resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(walk_fault)?;
+        let (sequence, envelope, _) = assemble_head_envelope(
+            &self.seams.gateway,
+            &self.seams.http,
+            end.root_name,
+            &record,
+            None,
+        )
+        .await
+        .map_err(|_| ReadFault::Unanswered)?;
+        let root = self
+            .open_root_envelope(Some(scope), end, &record, sequence, &envelope)
+            .await
+            .map_err(walk_fault)?;
+        Ok((root, envelope))
     }
 
     /// Put back the captures this pass did not settle, up to the frozen bound
@@ -11038,6 +11324,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: None,
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: None,
                 floor_namespace: FloorNamespace::Own,
             }
@@ -11168,6 +11455,7 @@ mod tests {
             observed: None,
             envelope: None,
             withheld: false,
+            endpoint_failed: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -11201,6 +11489,7 @@ mod tests {
             observed: None,
             envelope: None,
             withheld: false,
+            endpoint_failed: false,
             committed_floor: None,
         };
         let (events, _rx) = mpsc::unbounded();
@@ -11239,6 +11528,7 @@ mod tests {
                 observed: None,
                 envelope: None,
                 withheld: false,
+                endpoint_failed: false,
                 committed_floor: None,
             },
             &refused_name(),
@@ -12731,6 +13021,7 @@ mod tests {
                     retention: RetentionPolicy::KeepAll,
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
+                    owed_write_cuts: Some(&[]),
                     deferred_raises: &self.deferred_raises,
                     every_scope_reached: true,
                 },
@@ -12753,6 +13044,7 @@ mod tests {
                     read_scope_seed: &self.read_scope_seed,
                     read_seed_stamp: Some(OWNER_ROOT_EPOCH),
                     write_scope_seed: &self.write_scope_seed,
+                    write_seed_stamp: None,
                     ascent_node_seed: None,
                     floor_namespace,
                 },
@@ -13555,57 +13847,6 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// A kept rename whose note records its result waits past a cut for a
-    /// pass that can check it. One with no result, as a version 1 note holds,
-    /// leaves at once with no second apply.
-    #[test]
-    fn a_kept_rename_with_no_result_in_its_note_leaves_with_no_apply() {
-        for (recorded, waits) in [(true, true), (false, false)] {
-            let mut harness = grafted_harness();
-            let root = NodeId([0x61; 16]);
-            harness.known_scope_roots.push(root);
-            let op = Op::rename(NodeId([0x62; 16]), "after", 1, UnixMillis(0));
-            let op_id = harness.queue_an_op(&op);
-            let mut notes = KeptNotes::default();
-            notes
-                .insert(
-                    op_id,
-                    KeptNote {
-                        scope: Some(root),
-                        write_epoch: 2,
-                        published_at: harness.seams.scheduler.now(),
-                        parent: Some(NodeId([0x63; 16])),
-                        result: recorded.then(|| KeptResult::Rename {
-                            before: Zeroizing::new("before".to_owned()),
-                            after: Zeroizing::new("after".to_owned()),
-                        }),
-                    },
-                )
-                .expect("the note is in bounds");
-            let drain = harness.drain();
-            let scope = harness.scope();
-            block_on(drain.store_kept_notes(&scope, &notes)).expect("the notes store");
-            block_on(floor::advance_write_epoch_on_sight(
-                &FloorNamespace::Own.view(&harness.seams.floors),
-                &root.0,
-                3,
-            ))
-            .expect("the floor rises");
-            let mut report = DrainReport::default();
-
-            let queue = block_on(drain.queued_ops(&scope, &mut report)).expect("the queue reads");
-
-            assert!(queue.mine.is_empty(), "no second apply");
-            if waits {
-                assert_eq!(queue.kept, vec![op_id], "the rename waits past the cut");
-                assert!(report.dropped.is_empty());
-            } else {
-                assert!(queue.kept.is_empty());
-                assert_eq!(report.dropped, vec![op_id], "the rename left");
-            }
-        }
-    }
-
     /// An own pass looks up a granted root's write floor in its sharer's
     /// namespace. The test proves only that lookup, with an injected floor.
     #[test]
@@ -13720,21 +13961,6 @@ mod tests {
         (op, op_id, queue, report)
     }
 
-    /// A kept content edit of `KEPT_NODE`, with its root block staged.
-    fn kept_edit(harness: &DrainHarness) -> Op {
-        let root_cid = compute_cid(DAG_ROOT_CODEC, b"edit");
-        block_on(harness.seams.staging.put_staged_bytes(&root_cid, b"edit"))
-            .expect("the block stages");
-        let content = StagedContent {
-            root_cid,
-            plaintext_size: 1,
-            sealed_content_key: vec![0x67; 4],
-            scope: HARNESS_ROOT,
-            epoch: 0,
-        };
-        Op::update_content(KEPT_NODE, content, None, 1, UnixMillis(0))
-    }
-
     /// The op dead-lettered with a notice and left the queue.
     fn dead_lettered_with_a_notice(op: &Op, op_id: OpId, queue: &Queue, report: &DrainReport) {
         assert!(queue.kept.is_empty() && queue.mine.is_empty());
@@ -13752,41 +13978,6 @@ mod tests {
     #[test]
     fn a_kept_create_under_a_folder_this_session_saw_unlinked_dead_letters() {
         let (op, op_id, queue, report) = kept_create_under_an_unlinked_folder(true, HARNESS_ROOT);
-
-        dead_lettered_with_a_notice(&op, op_id, &queue, &report);
-    }
-
-    /// A kept content edit writes under the folder its note names, and a live
-    /// unlink of that folder or of its own file dead-letters it.
-    #[test]
-    fn a_kept_edit_whose_folder_or_file_this_session_saw_unlinked_dead_letters() {
-        for unlinked in [KEPT_FOLDER, KEPT_NODE] {
-            let harness = drain_harness(Some(harness_root_envelope()));
-            let edit = kept_edit(&harness);
-            let (op, op_id, queue, report) = kept_op_under_an_unlinked_node(
-                &harness,
-                edit,
-                cut_note(),
-                unlinked,
-                true,
-                HARNESS_ROOT,
-            );
-
-            dead_lettered_with_a_notice(&op, op_id, &queue, &report);
-        }
-    }
-
-    /// A note with no folder (version 1) checks the edit's own file.
-    #[test]
-    fn a_kept_edit_with_no_folder_in_its_note_checks_its_file() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let edit = kept_edit(&harness);
-        let note = KeptNote {
-            parent: None,
-            ..cut_note()
-        };
-        let (op, op_id, queue, report) =
-            kept_op_under_an_unlinked_node(&harness, edit, note, KEPT_NODE, true, HARNESS_ROOT);
 
         dead_lettered_with_a_notice(&op, op_id, &queue, &report);
     }
@@ -13855,90 +14046,6 @@ mod tests {
         assert!(report.dropped.is_empty());
     }
 
-    /// A kept delete under `root` after a seen cut, whose note names
-    /// `parent`, read by a pass anchored at another root, so that pass cannot
-    /// check it.
-    fn kept_delete_read_elsewhere(
-        harness: &DrainHarness,
-        root: NodeId,
-        parent: Option<NodeId>,
-    ) -> (OpId, Queue, DrainReport) {
-        kept_delete_read_elsewhere_at(harness, root, parent, true)
-    }
-
-    /// [`kept_delete_read_elsewhere`], past the bound or before it.
-    fn kept_delete_read_elsewhere_at(
-        harness: &DrainHarness,
-        root: NodeId,
-        parent: Option<NodeId>,
-        past_the_bound: bool,
-    ) -> (OpId, Queue, DrainReport) {
-        let target = NodeId([0x65; 16]);
-        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
-        let cut = if past_the_bound {
-            kept_op_past_the_bound_after_a_cut
-        } else {
-            kept_op_after_a_cut
-        };
-        let op_id = cut(harness, &op, root, FloorNamespace::Own, parent);
-        let mut report = DrainReport::default();
-        let scope = harness.own_scope_at(NodeId([0x70; 16]));
-        let queue =
-            block_on(harness.drain().queued_ops(&scope, &mut report)).expect("the queue reads");
-        (op_id, queue, report)
-    }
-
-    /// The base still holds the deleted node, so the delete is not shown to
-    /// have landed, and a seen cut keeps it past the bound (ADR 0069 D5).
-    #[test]
-    fn a_kept_delete_of_a_node_the_base_holds_waits_past_the_bound() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        link_in_base(
-            &harness,
-            HARNESS_ROOT,
-            NodeId([0x65; 16]),
-            crate::facade::NodeKind::Folder,
-        );
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, None);
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
-    }
-
-    /// The base no longer holds the deleted node, but the note names the
-    /// folder the delete unlinked it from. A seen cut keeps the delete past
-    /// the bound for a read of that folder at its live name (ADR 0069 D6).
-    #[test]
-    fn a_kept_delete_of_a_node_a_proved_base_lacks_waits_past_the_bound_for_its_parent() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let parent = NodeId([0x67; 16]);
-        link_in_base(
-            &harness,
-            HARNESS_ROOT,
-            parent,
-            crate::facade::NodeKind::Folder,
-        );
-
-        let (op_id, queue, report) =
-            kept_delete_read_elsewhere(&harness, HARNESS_ROOT, Some(parent));
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
-    }
-
-    /// A version 1 note names no parent, so a delete whose node a proved
-    /// root's base no longer holds leaves at the bound (ADR 0069 D6).
-    #[test]
-    fn a_kept_delete_with_no_parent_of_a_node_a_proved_base_lacks_leaves_at_the_bound() {
-        let harness = drain_harness(Some(harness_root_envelope()));
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, None);
-
-        assert!(queue.kept.is_empty());
-        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
-    }
-
     /// The live root no longer names the folder a kept delete unlinked its
     /// node from, which a stale base still holds. After the flip the pass
     /// reads the root, the folder and the node are gone, and the delete
@@ -13974,24 +14081,6 @@ mod tests {
         assert_eq!(report.dropped, vec![op_id], "the delete left");
         assert!(report.dead_letters.is_empty(), "with no notice");
         assert!(!harness.state.snapshot.borrow().contains(parent));
-    }
-
-    /// A base after a cold start lacks deep folders, so a folder the base
-    /// does not hold shows nothing: past a flip, the delete waits until the
-    /// bound, and leaves there.
-    #[test]
-    fn a_kept_delete_whose_parent_a_proved_base_lacks_leaves_at_the_bound() {
-        let parent = Some(NodeId([0x67; 16]));
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let (op_id, queue, report) =
-            kept_delete_read_elsewhere_at(&harness, HARNESS_ROOT, parent, false);
-        assert_eq!(queue.kept, vec![op_id], "the op waits before the bound");
-        assert!(report.dropped.is_empty());
-
-        let harness = drain_harness(Some(harness_root_envelope()));
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, HARNESS_ROOT, parent);
-        assert!(queue.kept.is_empty());
-        assert_eq!(report.dropped, vec![op_id], "the op leaves at the bound");
     }
 
     /// A read of this session at the live parent name saw the folder a kept
@@ -14043,20 +14132,6 @@ mod tests {
                 assert!(report.dropped.is_empty());
             }
         }
-    }
-
-    /// A base without the deleted node shows nothing under a root the walk
-    /// did not prove, so a seen cut keeps the delete past the bound.
-    #[test]
-    fn a_kept_delete_under_an_unproved_root_waits_past_the_bound() {
-        let mut harness = drain_harness(Some(harness_root_envelope()));
-        let root = NodeId([0x66; 16]);
-        harness.known_scope_roots.push(root);
-
-        let (op_id, queue, report) = kept_delete_read_elsewhere(&harness, root, None);
-
-        assert_eq!(queue.kept, vec![op_id], "the op waits past the bound");
-        assert!(report.dropped.is_empty());
     }
 
     fn sharer_label() -> crate::seams::ContactLabel {
@@ -14345,6 +14420,96 @@ mod tests {
         blocks.insert(version.content_cid.clone(), root_block);
         harness.seams.http = serve_walk_blocks(blocks);
         leaf_cids.into_iter().chain([version.content_cid]).collect()
+    }
+
+    /// The copy adopter binds the destination scope alone. A record at a
+    /// destination name under an owed-move scope of the destination opens
+    /// through the child adopter, and the copy adopter refuses it.
+    #[test]
+    fn a_copy_adopter_binds_no_owed_move_scope() {
+        const OWED: [u8; 16] = [0x0E; 16];
+        const NODE: NodeId = NodeId([0x0C; 16]);
+        let owed_seed = crate::scope_seeds::StampedSeed {
+            seed: Zeroizing::new([0x3C; 32]),
+            stamp: OWNER_ROOT_EPOCH,
+        };
+        let read_key = kdf::read_key(kdf::node_seed(&owed_seed.seed, &NODE.0).as_bytes());
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: NODE.0,
+            scope_id: OWED,
+            epoch: OWNER_ROOT_EPOCH,
+            read_key: read_key.as_bytes(),
+            nonce: &[8; 24],
+            body: &ReadBody::Folder {
+                created_at: 1,
+                modified_at: 1,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .expect("a child folder record");
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &NODE.0).as_bytes()),
+            format!("/ipfs/{}", head.cid).as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        let mut harness = drain_harness(None);
+        harness.seams.http = serve(&BTreeMap::from([(head.cid.clone(), head.block.clone())]));
+        let legs = [(
+            HARNESS_ROOT,
+            OwedMoveLeg {
+                scope_id: OWED,
+                read_seed: Some(&owed_seed),
+                root_name: None,
+            },
+        )];
+        let drain = Drain::new(
+            &harness.seams,
+            harness.state.drain_cells(),
+            TickInputs {
+                placement: &harness.placement,
+                bin_keys: &harness.bin_keys,
+                bin_retention_days: harness.bin_retention_days,
+                retention: RetentionPolicy::KeepAll,
+                owed_moves: Some(&[]),
+                owed_move_reads: &legs,
+                owed_write_cuts: Some(&[]),
+                deferred_raises: &harness.deferred_raises,
+                every_scope_reached: true,
+            },
+        );
+        let scope = harness.scope();
+        let plane = scope.source.at(OWNER_ROOT_EPOCH);
+        let floors = plane.end.floors(&harness.seams.floors);
+        let name = plane.end.write_name(&NODE.0);
+
+        let opened = block_on(
+            drain
+                .child_adopter(&plane, &floors, NODE)
+                .open_held(&name, &record),
+        );
+        let copy = drain.copy_adopter(&plane, &floors, NODE);
+        let copied = block_on(copy.open_held(&name, &record));
+
+        assert!(opened.is_ok(), "the owed-move scope opens the record");
+        assert!(
+            copied
+                .err()
+                .as_ref()
+                .and_then(GateError::rejection)
+                .is_some_and(|rejection| rejection.stage == GateStage::Unseal),
+            "the copy adopter rejects the record at the unseal stage"
+        );
+        assert_eq!(
+            copy.unbound_scope(),
+            Some(OWED),
+            "for the scope it does not bind"
+        );
     }
 
     /// Link `node` below `parent` in the harness base.
@@ -14872,7 +15037,9 @@ mod tests {
             HARNESS_ROOT,
             target,
             op_id,
+            false,
         ))
+        .map(drop)
     }
 
     /// One tick's delete proof of [`WALK_FOLDER`] under `reads`, with the reads
@@ -14952,6 +15119,335 @@ mod tests {
         assert_eq!(MAX_DELETE_PROOF_READS - left, PROOF_CHAIN.len());
     }
 
+    /// A doomed walk past the node bound reads the whole subtree in one tick,
+    /// and the session carries no state for it.
+    #[test]
+    fn a_doomed_walk_past_its_node_bound_reads_the_subtree_whole_in_one_tick() {
+        const FILES: [NodeId; 2] = [NodeId([0x74; 16]), NodeId([0x75; 16])];
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let files = FILES.map(|file| projected_file_ref(&harness, file));
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, files.to_vec());
+        // The proof skips the files, so only the walk passes the bound.
+        let drain = harness
+            .drain()
+            .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
+        let scope = harness.scope();
+        let walked = block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            HARNESS_ROOT,
+            &harness_folder_ref(WALK_FOLDER),
+            OpId(7),
+            true,
+        ))
+        .expect("the subtree is proved and walked in one tick")
+        .expect("a hard delete walks");
+        let walked: BTreeSet<NodeId> = walked.iter().map(|doomed| doomed.node).collect();
+        assert_eq!(walked, PROOF_CHAIN.into_iter().chain(FILES).collect());
+        assert_eq!(
+            drain.delete_proof_reads.get(),
+            0,
+            "the whole read ends the share"
+        );
+        assert!(harness.state.delete_proofs.borrow().is_empty());
+    }
+
+    /// A [`granted_file_harness`] whose file fails each read after the walk
+    /// read.
+    fn unsettled_grant_harness() -> (DrainHarness, NodeId, usize) {
+        let (harness, _, file, name, endpoints) = granted_file_harness();
+        harness
+            .seams
+            .transport
+            .fail_get_for_after(name.as_str(), endpoints);
+        (harness, file, endpoints)
+    }
+
+    /// A harness whose first file serves the grant section of the harness
+    /// root. Also its blocks, the file, its name and the endpoint count.
+    fn granted_file_harness() -> (
+        DrainHarness,
+        BTreeMap<String, Vec<u8>>,
+        NodeId,
+        IpnsName,
+        usize,
+    ) {
+        const FILES: [NodeId; 2] = [NodeId([0x74; 16]), NodeId([0x75; 16])];
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let files = FILES.map(|file| projected_file_ref(&harness, file));
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, files.to_vec());
+        let root_block = encode_envelope(&harness_root_envelope()).expect("the fixture encodes");
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &root_block));
+        blocks.insert(cid.clone(), root_block);
+        harness.seams.http = serve_walk_blocks(&blocks);
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(
+                kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &FILES[0].0).as_bytes(),
+            ),
+            format!("/ipfs/{cid}").as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &FILES[0].0);
+        let endpoints = harness.seams.transport.endpoints();
+        for endpoint in &endpoints {
+            harness
+                .seams
+                .transport
+                .seed_record(endpoint, name.as_str(), record.clone());
+        }
+        let count = endpoints.len();
+        (harness, blocks, FILES[0], name, count)
+    }
+
+    /// One tick of the delete `op` of the unsettled-grant harness from
+    /// `origin`, past the node bound.
+    fn unsettled_grant_tick(
+        harness: &DrainHarness,
+        (origin, op): (NodeId, OpId),
+    ) -> Result<(), Halt> {
+        let drain = harness
+            .drain()
+            .with_delete_proof_nodes(PROOF_CHAIN.len() + 1);
+        let scope = harness.scope();
+        block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            origin,
+            &harness_folder_ref(WALK_FOLDER),
+            op,
+            true,
+        ))
+        .map(drop)
+    }
+
+    /// The scope root gate read of a grant at a file does not answer. Each
+    /// of the two `ticks` holds with no abuse event, and the proof of the
+    /// second reads that file through the scope root gate alone.
+    fn assert_the_unsettled_grant_holds(ticks: [(NodeId, OpId); 2]) {
+        let (mut harness, file, endpoints) = unsettled_grant_harness();
+        assert_eq!(
+            unsettled_grant_tick(&harness, ticks[0]),
+            Err(Halt::Unclassified)
+        );
+        assert_eq!(reads_of(&harness, file), 2 * endpoints);
+        assert_eq!(
+            unsettled_grant_tick(&harness, ticks[1]),
+            Err(Halt::DeletePlaneUnavailable),
+            "the next tick holds again"
+        );
+        assert_eq!(
+            reads_of(&harness, file),
+            3 * endpoints,
+            "the next tick reads the node through the gate alone"
+        );
+        let reported = drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        assert_eq!(reported, 0);
+    }
+
+    /// Below the node bound, the walk read of a file shows a grant section
+    /// with the last read of the share. The next tick reads that file through
+    /// the scope root gate alone and holds.
+    #[test]
+    fn a_grant_seen_with_the_last_read_of_the_share_is_read_through_the_gate() {
+        let (harness, file, endpoints) = unsettled_grant_harness();
+        let tick = |reads| {
+            let drain = harness.drain().with_delete_proof_reads(reads);
+            let scope = harness.scope();
+            block_on(drain.prove_delete_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(WALK_FOLDER),
+                OpId(7),
+                true,
+            ))
+            .map(drop)
+        };
+        // The first sweep and the walk of the four folders, the plain file,
+        // then the grant.
+        assert_eq!(
+            tick(2 * PROOF_CHAIN.len() + 2),
+            Err(Halt::DeletePlaneUnavailable)
+        );
+        assert_eq!(reads_of(&harness, file), endpoints);
+        assert_eq!(tick(MAX_DELETE_PROOF_READS), Err(Halt::Unclassified));
+        assert_eq!(
+            reads_of(&harness, file),
+            2 * endpoints,
+            "the next tick reads the node through the gate alone"
+        );
+    }
+
+    /// The walk read of a file shows a grant section, and the gate read then
+    /// gets a record that does not open under the plane while the bin index
+    /// cannot load. The next tick reads the file through the gate alone, and
+    /// the refusal there settles the mark.
+    #[test]
+    fn a_grant_seen_before_a_bin_index_fault_is_read_through_the_gate() {
+        let (mut harness, mut blocks, file, name, endpoints) = granted_file_harness();
+        let body = ReadBody::Folder {
+            created_at: 1,
+            modified_at: 2,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: file.0,
+            scope_id: HARNESS_ROOT.0,
+            epoch: OWNER_ROOT_EPOCH,
+            read_key: &[9; 32],
+            nonce: &[7; 24],
+            body: &body,
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .expect("a record under another key");
+        blocks.insert(head.cid.clone(), head.block.clone());
+        harness.seams.http = serve_walk_blocks(&blocks);
+        let sealed_elsewhere = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &file.0).as_bytes()),
+            format!("/ipfs/{}", head.cid).as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        harness.seams.transport.serve_gets_for_after(
+            name.as_str(),
+            endpoints,
+            endpoints,
+            Some(sealed_elsewhere),
+        );
+        harness.state.bin_index_unsettled.set(Some(1));
+        let tick = |harness: &DrainHarness| {
+            let drain = harness.drain();
+            let scope = harness.scope();
+            block_on(drain.prove_delete_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(WALK_FOLDER),
+                OpId(7),
+                true,
+            ))
+            .map(drop)
+        };
+
+        assert!(matches!(tick(&harness), Err(Halt::HeldByBinIndex(_))));
+        assert_eq!(reads_of(&harness, file), 2 * endpoints);
+        // The harness grant names another root, so the gate refuses it.
+        assert_eq!(tick(&harness), Err(Halt::RecordRefused));
+        assert_eq!(
+            reads_of(&harness, file),
+            3 * endpoints,
+            "the next tick reads the node through the gate alone"
+        );
+        let reported = drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        assert_eq!(reported, 1);
+        // The refusal settled the mark, so the next attempt does not refuse
+        // again. Its walk reads the forged record again and reports that read.
+        assert_eq!(tick(&harness), Ok(()));
+        let reported = drain_events(&mut harness.events)
+            .iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        assert_eq!(reported, 1);
+    }
+
+    /// The proof reads a marked confirmed file through the scope root gate.
+    /// A plain record from each endpoint settles the mark.
+    #[test]
+    fn a_marked_file_that_the_proof_reads_plain_loses_its_mark() {
+        const FILE: NodeId = NodeId([0x74; 16]);
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let file = projected_file_ref(&harness, FILE);
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, vec![file]);
+        let read_key = harness.scope().source.read_key(&FILE.0);
+        publish_harness_file(&mut harness, &mut blocks, FILE, &read_key, &[3u8; 100]);
+        harness.state.unproved_grants.borrow_mut().insert(FILE);
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let proved = block_on(drain.prove_delete_plane(
+            &scope,
+            &harness_pass(),
+            &scope.source.at(OWNER_ROOT_EPOCH),
+            HARNESS_ROOT,
+            &harness_folder_ref(WALK_FOLDER),
+            OpId(7),
+            true,
+        ));
+
+        assert!(proved.is_ok());
+        assert!(reads_of(&harness, FILE) > 0, "the proof reads the file");
+        assert!(harness.state.unproved_grants.borrow().is_empty());
+    }
+
+    /// Past the node bound, the next tick of the same delete holds.
+    #[test]
+    fn a_doomed_walk_past_its_node_bound_holds_on_an_unsettled_grant() {
+        assert_the_unsettled_grant_holds([(HARNESS_ROOT, OpId(7)); 2]);
+    }
+
+    /// A proof that starts again for another origin of the same delete holds.
+    #[test]
+    fn a_doomed_walk_from_another_origin_holds_on_an_unsettled_grant() {
+        assert_the_unsettled_grant_holds([(HARNESS_ROOT, OpId(7)), (NodeId([0x99; 16]), OpId(7))]);
+    }
+
+    /// The walk of another delete of the same subtree holds.
+    #[test]
+    fn a_doomed_walk_of_another_delete_holds_on_an_unsettled_grant() {
+        assert_the_unsettled_grant_holds([(HARNESS_ROOT, OpId(7)), (HARNESS_ROOT, OpId(8))]);
+    }
+
+    /// A projected file that becomes a known root after the first sweep
+    /// refuses the delete when the walk reaches it, with no read of it.
+    #[test]
+    fn a_known_root_refuses_the_doomed_walk_with_no_read() {
+        const FILE: NodeId = NodeId([0x74; 16]);
+        let (mut harness, mut blocks) = delete_proof_harness();
+        let file = projected_file_ref(&harness, FILE);
+        publish_harness_folder(&mut harness, &mut blocks, PROOF_CHAIN[3], 1, vec![file]);
+        let tick = |harness: &DrainHarness, reads| {
+            let drain = harness.drain().with_delete_proof_reads(reads);
+            let scope = harness.scope();
+            block_on(drain.prove_delete_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(WALK_FOLDER),
+                OpId(7),
+                true,
+            ))
+            .map(drop)
+        };
+        assert_eq!(
+            tick(&harness, PROOF_CHAIN.len()),
+            Err(Halt::DeletePlaneUnavailable),
+            "the first sweep ends, and the walk has no read left"
+        );
+        harness.known_scope_roots.push(FILE);
+        assert_eq!(
+            tick(&harness, MAX_DELETE_PROOF_READS),
+            Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot))
+        );
+        assert_eq!(reads_of(&harness, FILE), 0);
+    }
+
     /// A folder that moves between the two sweeps starts the proof again.
     #[test]
     fn a_folder_that_moves_between_ticks_restarts_the_delete_proof() {
@@ -14992,6 +15488,91 @@ mod tests {
             Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot))
         );
         assert!(harness.state.delete_proofs.borrow().is_empty());
+    }
+
+    /// A scope root below its sequence floor in a delete's subtree is a
+    /// rollback when every endpoint answers, and holds the delete while an
+    /// endpoint fails (ADR 0071 D1, D4). At its floor it refuses the delete as
+    /// a scope root, even while an endpoint fails.
+    #[test]
+    fn a_scope_root_below_its_floor_in_a_delete_subtree_is_refused_only_when_every_endpoint_answers()
+     {
+        const CHILD: NodeId = NodeId([0x75; 16]);
+        let endpoints = vec![EndpointId::new("a"), EndpointId::new("b")];
+        for (failed, floor, expected) in [
+            (false, 5, Halt::RecordRefused),
+            (true, 5, Halt::DeletePlaneUnavailable),
+            (
+                true,
+                1,
+                Halt::Permanent(DeadLetterReason::TargetIsScopeRoot),
+            ),
+        ] {
+            let mut harness = drain_harness(Some(harness_root_envelope()));
+            let child = owner_root_fixture(OwnerRootSpec {
+                owner_identity: &EcdsaSigner::from_scalar(&HARNESS_SECRET).expect("valid scalar"),
+                owner_enc: &kdf::enc_subkey(&HARNESS_SECRET).public(),
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                scope_id: CHILD.0,
+                root_id: CHILD.0,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: Some(
+                    *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD.0).as_bytes(),
+                ),
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            });
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &CHILD.0).as_bytes(),
+                ),
+                format!("/ipfs/{}", child.head_cid_str).as_bytes(),
+                1,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &CHILD.0);
+            harness.seams.transport = InMemoryRecordStore::new(endpoints.clone());
+            for endpoint in &endpoints {
+                harness
+                    .seams
+                    .transport
+                    .seed_record(endpoint, name.as_str(), record.clone());
+            }
+            if failed {
+                harness.seams.transport.fail_endpoint(&endpoints[0]);
+            }
+            harness.seams.http = serve_walk_blocks(&BTreeMap::from([(
+                child.head_cid_str.clone(),
+                child.head_block.clone(),
+            )]));
+            let scope = harness.scope();
+            block_on(
+                scope
+                    .source
+                    .floors(&harness.seams.floors)
+                    .raise_sequence_floor(name.as_str().as_bytes(), floor),
+            )
+            .expect("the floor is raised");
+
+            let drain = harness.drain();
+            let proved = block_on(drain.prove_node_plane(
+                &scope,
+                &harness_pass(),
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                HARNESS_ROOT,
+                &harness_folder_ref(CHILD),
+            ));
+            assert_eq!(
+                proved.err(),
+                Some(expected),
+                "endpoint failed {failed}, floor {floor}"
+            );
+        }
     }
 
     /// The first sweep skips a file this device projected. A grant makes it a
@@ -15254,7 +15835,7 @@ mod tests {
     #[test]
     fn a_delete_proof_proves_only_its_own_target() {
         let target = harness_folder_ref(WALK_FOLDER);
-        let proof = DeleteProof::new(HARNESS_ROOT, HARNESS_ROOT, &target, false);
+        let proof = DeleteProof::new(HARNESS_ROOT, HARNESS_ROOT, &target, false, false);
         assert!(proof.proves(HARNESS_ROOT, HARNESS_ROOT, &target));
         assert!(!proof.proves(PROOF_CHAIN[1], HARNESS_ROOT, &target));
         assert!(!proof.proves(HARNESS_ROOT, PROOF_CHAIN[1], &target));
@@ -15741,6 +16322,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: self.read_seed_stamp,
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: FloorNamespace::Own,
             }

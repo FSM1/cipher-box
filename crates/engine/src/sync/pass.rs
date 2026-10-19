@@ -24,6 +24,7 @@ use crate::bin_index::BinIndexKeys;
 use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, OnRunning, PointerIndex, TickSites, placed, scope_pointer_index,
 };
+use crate::facade::link_sweep::ReportedRefusal;
 use crate::facade::{
     EngineError, Event, ForkSightings, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
 };
@@ -50,9 +51,9 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, cached_seed_in,
-    cached_stamped_seed, cached_stamped_seed_in, current_seed, deposit_seed, deposit_write_seed,
-    own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_stamped_seed, cached_stamped_seed_in,
+    current_seed, deposit_seed, deposit_write_seed, own_descendant_scopes, refresh_seed_floors,
+    walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -144,7 +145,7 @@ struct Pass {
 
 /// The passes one tick drains, owned for the drain that borrows them.
 struct Assembly {
-    write_seed: Option<Zeroizing<[u8; 32]>>,
+    write_seed: Option<StampedSeed>,
     grafted: Vec<GraftedWritePass>,
     read_only_grafts: Vec<NodeId>,
     grafted_scope_roots: BookmarkedScopeRoots,
@@ -435,7 +436,8 @@ where
         let recovered_root = resolved
             .as_ref()
             .is_ok_and(|read| read.recovered_owner.is_some());
-        let (descendants, walk_complete) = self.walk_scopes(state, &pass, recovered_root).await;
+        let (descendants, walk_complete, reported) =
+            self.walk_scopes(state, &pass, recovered_root).await;
         lap();
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
         lap();
@@ -450,7 +452,7 @@ where
         lap();
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
         lap();
-        self.convert_claims(state, &pass, boundaries.as_ref(), pulled)
+        self.convert_claims(state, &pass, boundaries.as_ref(), pulled, reported.as_ref())
             .await;
         lap();
         self.repost_claims(state, &pass).await;
@@ -740,14 +742,15 @@ where
         (resolved, read_seed)
     }
 
-    /// The scope walk below the vault root, the boundaries it proved, and
-    /// whether it proved the whole set.
+    /// The scope walk below the vault root, the boundaries it proved, whether
+    /// it proved the whole set, and the scope root and record bytes of the
+    /// refusal it sent as abuse.
     async fn walk_scopes(
         &self,
         state: &SessionState,
         pass: &Pass,
         recovered_root: bool,
-    ) -> (Vec<DescendantScopeRoot>, bool) {
+    ) -> (Vec<DescendantScopeRoot>, bool, Option<ReportedRefusal>) {
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let mut held_root = state
@@ -767,6 +770,7 @@ where
         let walk_keys = self.secrets.sweep_keys.borrow().clone();
         let mut descendants = Vec::new();
         let mut complete = false;
+        let mut reported = None;
         let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
             owner_seed_cache: Some(owner_seed_cache),
             transport: &self.seams.transport,
@@ -800,7 +804,14 @@ where
                 .as_ref()
                 .map(|walked| walked.refused.clone())
                 .unwrap_or_default();
-            if let Ok(walked) = walked {
+            if let Ok(mut walked) = walked {
+                // The walk sends one event, for the refusal `failure` names.
+                if let Some(WalkFailure::Rejected { scope_id }) = failure {
+                    reported = walked
+                        .refused_records
+                        .remove(&NodeId(scope_id))
+                        .map(|record| (NodeId(scope_id), record));
+                }
                 note_walked_sequences(
                     &state.root_sequences,
                     NodeId(self.root_id),
@@ -850,7 +861,7 @@ where
                 Some(WalkFailure::Unavailable) => {}
             }
         }
-        (descendants, complete)
+        (descendants, complete, reported)
     }
 
     /// The focus-window legs, one per scope, and the scope sets they grouped by.
@@ -1094,7 +1105,7 @@ where
         // gate-passing state this pass just reconciled. Both scope seeds
         // are required — without them there is no name to publish under
         // and no key to seal with, so the queue simply waits.
-        let write_seed = cached_seed(&state.scope_write_seeds, &self.root_id);
+        let write_seed = cached_stamped_seed(&state.scope_write_seeds, &self.root_id);
         let write_grafts = write_grant_sharers(
             &state.bookmarked_permissions.borrow(),
             &state.grafted_sharers.borrow(),
@@ -1242,6 +1253,20 @@ where
         .ok()
     }
 
+    /// The scopes whose owed entry owes a write cut, or `None` when the owed
+    /// record does not read.
+    async fn owed_write_cuts(&self, state: &SessionState, pass: &Pass) -> Option<Vec<NodeId>> {
+        OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .write_cuts()
+        .await
+        .ok()
+    }
+
     /// The scope each owed interior move left, with its root, for the walk to
     /// descend into. A root this session minted holds its listing and seeds
     /// already. A root no listing holds is left out, as a soft delete re-keys
@@ -1380,6 +1405,7 @@ where
                     read_scope_seed: &end.material.read_scope_seed,
                     read_seed_stamp: None,
                     write_scope_seed: &end.material.write_scope_seed,
+                    write_seed_stamp: None,
                     ascent_node_seed: end.ascent.as_ref(),
                     floor_namespace: FloorNamespace::Own,
                 },
@@ -1471,6 +1497,7 @@ where
                         || grafted.iter().any(|pass| pass.root.0 == *scope_id)
                 })
             && self.rotation_idle(state, pass).await;
+        let owed_write_cuts = self.owed_write_cuts(state, pass).await;
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1481,6 +1508,7 @@ where
                 retention: owner_retention(&state.settings_summary),
                 owed_moves: owed_moves.as_deref(),
                 owed_move_reads: &owed_move_reads,
+                owed_write_cuts: owed_write_cuts.as_deref(),
                 deferred_raises: &deferred_raises,
                 every_scope_reached,
             },
@@ -1550,6 +1578,7 @@ where
         pass: &Pass,
         boundaries: Option<&Boundaries<'_>>,
         pulled: MailboxPull,
+        reported: Option<&ReportedRefusal>,
     ) {
         let MailboxPull {
             owner_keys,
@@ -1623,11 +1652,18 @@ where
         }
         // After the conversion above, so a claim acked this
         // pass converts before its link can be cut.
-        if pace_due(
-            pass.now,
-            self.link_swept.get(),
-            seams.profile.link_sweep_cadence,
-        ) && let Some(swept) = conversion.sweep_links(&root_name, &pointers).await
+        conversion.redrive_dissolve_cuts(&sites, &pointers).await;
+        // The sweep reads the vault root first, so it runs only on a pass
+        // that reconciled the root.
+        if pass.root_reconciled
+            && pace_due(
+                pass.now,
+                self.link_swept.get(),
+                seams.profile.link_sweep_cadence,
+            )
+            && let Some(swept) = conversion
+                .sweep_links(&root_name, &pointers, reported)
+                .await
         {
             // A capped sweep continues on the next tick.
             if !swept.more {
@@ -2021,14 +2057,15 @@ fn vault_source<'a>(
     root: NodeId,
     root_name: &'a IpnsName,
     read: &'a StampedSeed,
-    write: &'a Zeroizing<[u8; 32]>,
+    write: &'a StampedSeed,
 ) -> ScopeEnd<'a> {
     ScopeEnd {
         root,
         root_name,
         read_scope_seed: &read.seed,
         read_seed_stamp: Some(read.stamp),
-        write_scope_seed: write,
+        write_scope_seed: &write.seed,
+        write_seed_stamp: Some(write.stamp),
         // The vault root carries no ascent link.
         ascent_node_seed: None,
         floor_namespace: FloorNamespace::Own,
@@ -2063,6 +2100,7 @@ fn interior_source<'a>(scope: &'a DescendantScopeRoot, write: &'a ScopeWritePlan
         read_scope_seed: &scope.read_scope_seed,
         read_seed_stamp: Some(scope.adopted.epoch),
         write_scope_seed: &write.seed,
+        write_seed_stamp: Some(write.epoch),
         ascent_node_seed: Some(&scope.parent_node_seed),
         // A grant cut mints an interior scope root out of this vault's own
         // tree, so its floors are this identity's own.
@@ -2076,7 +2114,7 @@ struct GraftedWritePass {
     root: NodeId,
     name: IpnsName,
     read_scope_seed: StampedSeed,
-    write_scope_seed: Zeroizing<[u8; 32]>,
+    write_scope_seed: StampedSeed,
     /// The granting identity, which is the owner a grafted record's commitment
     /// and grant section verify under — never this vault's own.
     sharer_identity: EcdsaVerifier,
@@ -2097,7 +2135,8 @@ impl GraftedWritePass {
             root_name: &self.name,
             read_scope_seed: &self.read_scope_seed.seed,
             read_seed_stamp: Some(self.read_scope_seed.stamp),
-            write_scope_seed: &self.write_scope_seed,
+            write_scope_seed: &self.write_scope_seed.seed,
+            write_seed_stamp: Some(self.write_scope_seed.stamp),
             // A grantee enters by its own grant blob and holds no ancestor
             // seed to derive an ascent keypair from.
             ascent_node_seed: None,
@@ -2144,7 +2183,7 @@ fn grafted_write_passes(
                 root,
                 name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
                 read_scope_seed: cached_stamped_seed_in(read_seeds, scope_id, floors)?,
-                write_scope_seed: cached_seed_in(write_seeds, scope_id, floors)?,
+                write_scope_seed: cached_stamped_seed_in(write_seeds, scope_id, floors)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
                 sharer_enc: *sharer_encs.get(scope_id)?,
                 floors,
@@ -2705,20 +2744,25 @@ mod tests {
             );
         }
 
-        /// The vault root's end carries the stamp of the cached read seed, so
-        /// the drain can tell a lag from a root the seed should open.
+        /// The vault root's end carries the stamps of the cached seeds, so
+        /// the drain can tell a lag from a root the seed should open, and a
+        /// write cut from the seed that derives the names.
         #[test]
         fn the_vault_end_carries_its_cached_seeds_stamp() {
             let read = StampedSeed {
                 seed: Zeroizing::new(READ_SCOPE_SEED),
                 stamp: 5,
             };
-            let write = Zeroizing::new(WRITE_SCOPE_SEED);
+            let write = StampedSeed {
+                seed: Zeroizing::new(WRITE_SCOPE_SEED),
+                stamp: 3,
+            };
             let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED);
 
             let end = vault_source(NodeId(SHARED), &name, &read, &write);
 
             assert_eq!(end.read_seed_stamp, Some(5));
+            assert_eq!(end.write_seed_stamp, Some(3));
         }
 
         /// A descendant with no write plane leaves a scope unreached, whether
@@ -3440,7 +3484,7 @@ mod report_tests {
         assert!(!abuse, "a seed below the floor accuses nobody");
         assert_eq!(verdict, RefreshVerdict::Unreachable);
         assert!(
-            cached_seed(&harness.state.scope_read_seeds, &PROMOTED.0).is_none(),
+            cached_stamped_seed(&harness.state.scope_read_seeds, &PROMOTED.0).is_none(),
             "the leg evicted the seed the floor revoked"
         );
     }

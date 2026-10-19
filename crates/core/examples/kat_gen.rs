@@ -9616,6 +9616,7 @@ fn build_owner_local_accept() -> Vec<OwnerLocalAcceptVector> {
             &match kind {
                 OwnerLocalKind::OwedRotation => owed_rotation_body(OWED_ROTATION_V2),
                 OwnerLocalKind::DeadLetterNames => dead_letter_names_body(),
+                OwnerLocalKind::SubtreeReseal => subtree_reseal_body(),
                 _ => owner_local_state_body(),
             },
         ));
@@ -9663,6 +9664,15 @@ fn dead_letter_names_body() -> Vec<u8> {
     body.extend_from_slice(&compute_cid(CONTENT_CID_CODEC, b"a parked version root"));
     body.push(u8::try_from(name.as_str().len()).expect("an IPNS name fits its length byte"));
     body.extend_from_slice(name.as_str().as_bytes());
+    body
+}
+
+/// The engine's `subtree-reseal` envelope: format 1, caller 1, the source
+/// root id, then a payload the caller owns (ADR 0077 D3).
+fn subtree_reseal_body() -> Vec<u8> {
+    let mut body = vec![1, 1];
+    body.extend_from_slice(&[0xe5; 16]);
+    body.extend_from_slice(b"caller payload");
     body
 }
 

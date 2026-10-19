@@ -24,6 +24,8 @@ fn list(entries: &[(&[u8], u8, Permission)]) -> ReceivedSharesList {
             permission: *permission,
             pointer_read_key: SecretBytes::new([*key_byte; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         });
     }
     shares
@@ -41,6 +43,8 @@ fn over_bound() -> ReceivedSharesList {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x5A; 32]),
             scope_pointer_name: None,
+            grant_cut: None,
+            ended: None,
         });
     }
     shares

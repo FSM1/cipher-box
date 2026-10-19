@@ -69,6 +69,12 @@ impl<'a> BookkeepingSeal<'a> {
             .map_err(|e| SeamError::new(e.to_string()))
     }
 
+    /// The owner tag of the `enc-subkey` this custody seals to, which scopes
+    /// each per-owner key.
+    pub(crate) fn owner_tag(&self) -> [u8; 32] {
+        crate::sync::owner_tag(self.enc_secret)
+    }
+
     /// Open one entry, or `None` for bytes this identity's key does not open —
     /// which every caller reads as *unwritten* rather than as state of its own,
     /// the same verdict a foreign or truncated encoding already earned.

@@ -16,7 +16,7 @@ use crate::content::read::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::{Event, NodeId};
 use crate::net::rotation::{
-    GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
+    GatedRoots, MovedScopeSeed, OnAccessMisses, RefusedRoot, RotationAncestry, SweptScopeState,
 };
 use crate::net::{
     OwnerRotationKeys, OwnerRotationNet, PointerConsultArm, VaultPointerVoucher, VouchedRoot,
@@ -121,6 +121,7 @@ where
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
+        refused: RefusedRoot::default(),
         root_fallback: None,
     };
     // The cut about to run mints a fresh seed at a fresh epoch, so the walked
