@@ -1861,6 +1861,16 @@ surviving committed grants uniformly in the republish it already does.
   blob or a scope root record; the owner keeps a denormalized
   sent-index in their own vault. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
+  The bookmark also holds two optional unsigned keys (ADR 0079): `grantCut`,
+  the cut epoch of the latest verified commitment in which this device opened
+  its personal grant blob, and `ended`, the cut epoch of the verified
+  commitment that left the personal tag out. Older bytes read as absent, and a
+  value that is not unsigned refuses the whole list and writes nothing.
+  `reconcile` keeps the held `ended` in every case and takes the higher
+  `grantCut`; `same_bookmark` compares `grantCut`; each writer of the list
+  writes both keys back. The accept writes `grantCut` in the bookmark persist,
+  before the floor commit, and clears `ended` by an in-place edit after
+  `reconcile`.
 - **Link-held arm**
   ([ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D1, D2, D5): a link holder reads at once. At join the engine posts the
@@ -1893,7 +1903,20 @@ surviving committed grants uniformly in the republish it already does.
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies
   revocation-signal vs unresolvable vs epoch-lag and surfaces the distinction
-  to hosts. Read revoke = the immediate-cut trigger above; the promise is
+  to hosts.
+  The `ended` mark keeps the revocation signal after the records retire
+  (ADR 0079). The refresh sets it only when the commitment verifies, the
+  personal tag is not in it, `grantCut` is present, and the cut epoch is
+  above `grantCut`; a link-held read sets nothing. The mark stays through an
+  unavailable read, an unresolvable read, an absent pointer, and a blob that
+  is present but does not open. While it is set, the `/shared` row reports
+  `RevocationSignal` and `observe_pointer_pins` skips the bookmark. Only a
+  personal blob that opens in a verified commitment at a cut epoch at or
+  above the mark clears it. The mark removes no custody key and sends no
+  event. A baseline backfill, in memory only, gives each personal bookmark
+  with no `grantCut` one refresh attempt per session, due or not, on at most
+  half of `MAX_RESOLVES_PER_PASS` per pass; the ordinary refresh does not
+  schedule a bookmark that waits for its attempt. Read revoke = the immediate-cut trigger above; the promise is
   "they keep what they saw; they lose everything new, now." Write
   revoke/downgrade = write rotation; old names are hijackable by the revokee and
   therefore dead to survivors. Every write-grantee revoke, downgrade and D1
