@@ -1344,6 +1344,8 @@ by FSM1/cipher-box-next#38 D5):
   FSM1/cipher-box-next#38 D5). A flat cut also re-seals the ascent link of each indexed child
   scope root under the new seed; the child keeps its seed and its read epoch
   ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
+  A flat cut that would drop a history link that an owed child re-seal needs refuses as
+  retryable, with the check `rot-read-nested-root-owed` (ADR 0080 D4).
 
 Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
