@@ -30229,28 +30229,36 @@ fn a_copy_sealed_under_another_scope_is_refused() {
     );
 }
 
-/// A copy that holds the copy body with an unknown field at the envelope and
-/// the epoch tag is not kept: the seal publishes a copy with neither.
+/// Each outer unknown field alone keeps no copy: a copy with only an envelope
+/// field, or only an epoch tag field, seals again.
 #[test]
-fn a_copy_with_carried_fields_seals_again() {
-    let mut fx = GrantScenario::new();
-    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let copy = new_id_of(&fx, plain);
-    let (mut envelope, _) = copy_at(&fx, copy).expect("the copy stands");
-    envelope.unknown = future_field();
-    envelope.epoch_tag_unknown = future_field();
-    let cid = fx
-        .blocks
-        .put(encode_envelope(&envelope).expect("the envelope encodes"));
-    publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
-    let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+fn a_copy_with_one_carried_field_seals_again() {
+    for (envelope_field, tag_field) in [(true, false), (false, true)] {
+        let mut fx = GrantScenario::new();
+        let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let copy = new_id_of(&fx, plain);
+        let (mut envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+        if envelope_field {
+            envelope.unknown = future_field();
+        }
+        if tag_field {
+            envelope.epoch_tag_unknown = future_field();
+        }
+        let cid = fx
+            .blocks
+            .put(encode_envelope(&envelope).expect("the envelope encodes"));
+        publish_value_at(&fx.world, copy, format!("/ipfs/{cid}").as_bytes());
+        let (engine, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
 
-    tick(&fx.world, &engine, &mut tasks);
+        tick(&fx.world, &engine, &mut tasks);
 
-    let (envelope, _) = copy_at(&fx, copy).expect("the copy stands");
-    assert!(envelope.unknown.is_empty(), "no envelope field");
-    assert!(envelope.epoch_tag_unknown.is_empty(), "no epoch tag field");
+        let (envelope, _) = copy_at(&fx, copy).expect("the copy stands");
+        assert!(
+            envelope.unknown.is_empty() && envelope.epoch_tag_unknown.is_empty(),
+            "the copy seals again: envelope field {envelope_field}, tag field {tag_field}"
+        );
+    }
 }
 
 /// A stop between two row publishes, then a restart: the seal publishes the
@@ -30341,4 +30349,129 @@ fn a_fork_at_a_copy_name_holds_the_seal() {
         puts,
         "the seal holds"
     );
+}
+
+/// The write epoch floor of the vault root.
+fn root_write_floor(fx: &GrantScenario) -> u64 {
+    block_on(floor::write_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &ROOT.0,
+    ))
+    .expect("the floor store answers")
+    .expect("the vault root has a write floor")
+}
+
+/// The folder binding with the vault root as the write scope: a read grant
+/// cuts no write scope, so the folder names its nodes under the vault write
+/// seed.
+fn vault_write_binding(fx: &GrantScenario) -> DissolveBinding {
+    DissolveBinding {
+        write_scope: ROOT,
+        write_epoch: root_write_floor(fx),
+        ..folder_binding(fx)
+    }
+}
+
+/// A dissolve of `inner` into the folder with the vault root as the write
+/// scope, mapped and logged in one tick with every PUT failing, so no copy
+/// stands.
+fn log_inner_into_the_folder(fx: &mut GrantScenario) -> (NodeId, DissolveBinding) {
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    let binding = vault_write_binding(fx);
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    fail_every_put(fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    heal_every_put(fx);
+    assert!(header_at(fx, inner).copy_started, "the seal ran");
+    (inner, binding)
+}
+
+/// ADR 0077 D4 with the write scope not the destination: a raise of the
+/// write epoch floor during a copy publish finds the lease of the seal and
+/// does not land, so no copy signs below the floor in force.
+#[test]
+fn a_write_raise_inside_a_copy_publish_waits_for_the_seal_lease() {
+    let mut fx = GrantScenario::new();
+    let (inner, binding) = log_inner_into_the_folder(&mut fx);
+    // The first sequence read of the root copy name is in its publish.
+    let root_copy = folder_copy_name(&fx, header_at(&fx, inner).new_root);
+    fx.owner_device
+        .floor_store
+        .raise_write_epoch_floor_on_sequence_read_after(
+            &floor_label(root_copy.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            binding.write_epoch + 100,
+            0,
+        );
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        root_write_floor(&fx),
+        binding.write_epoch,
+        "the raise waits for the lease"
+    );
+    let after = folder_copy_puts(&fx, inner);
+    assert!(
+        after.iter().zip(&before).all(|(now, was)| now > was),
+        "each copy publishes"
+    );
+}
+
+/// ADR 0077 D4: a write epoch floor that rises after the tick read the ends
+/// and before the floor read of the seal leaves the copy names on the old
+/// seed, and the seal publishes no copy.
+#[test]
+fn a_write_raise_before_the_floor_read_of_the_seal_publishes_no_copy() {
+    let mut fx = GrantScenario::new();
+    let (inner, binding) = log_inner_into_the_folder(&mut fx);
+    let raised = binding.write_epoch + 100;
+    // The fifth sequence read of the folder root name in the tick is the root
+    // walk of the seal, after the pass read the ends.
+    let folder_root = fx.granted_scope_repoint().current_root;
+    fx.owner_device
+        .floor_store
+        .raise_write_epoch_floor_on_sequence_read_after(
+            &floor_label(folder_root.as_str().as_bytes()),
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            raised,
+            4,
+        );
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(root_write_floor(&fx), raised, "the raise landed");
+    assert_eq!(
+        folder_copy_puts(&fx, inner),
+        before,
+        "no copy at a name of the old seed"
+    );
+}
+
+/// A write epoch floor read that fails before a later publish pauses the
+/// tick: the child copy stands, and the root copy waits.
+#[test]
+fn a_write_floor_read_that_fails_before_a_later_publish_pauses() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = log_inner_into_the_folder(&mut fx);
+    // The ninth read of the floor in the tick is the one before the root
+    // publish, after the child publish.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&write_epoch_floor_key(&ROOT.0)), 8);
+    let before = folder_copy_puts(&fx, inner);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let after = folder_copy_puts(&fx, inner);
+    assert_eq!(after[0], before[0], "the root copy waits");
+    assert!(after[1] > before[1], "the child copy publishes");
 }

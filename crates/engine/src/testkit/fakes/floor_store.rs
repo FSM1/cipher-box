@@ -36,6 +36,9 @@ struct Inner {
     /// An epoch raise the next sequence-floor read of a name fires: the name,
     /// the epoch floor key, and the epoch.
     raise_on_sequence_read: Option<(Vec<u8>, Vec<u8>, u64, u32)>,
+    /// The scope whose write-epoch lease that raise takes, as a sighting
+    /// raise does: a held lease drops the raise.
+    raise_lease_scope: Option<[u8; 16]>,
 }
 
 impl Inner {
@@ -187,8 +190,26 @@ impl InMemoryFloorStore {
         epoch: u64,
         skipped: u32,
     ) {
-        self.inner.lock().expect("lock").raise_on_sequence_read =
+        let mut inner = self.inner.lock().expect("lock");
+        inner.raise_on_sequence_read =
             Some((ipns_name.to_vec(), epoch_key.to_vec(), epoch, skipped));
+        inner.raise_lease_scope = None;
+    }
+
+    /// [`raise_epoch_floor_on_sequence_read_after`](Self::raise_epoch_floor_on_sequence_read_after)
+    /// for the write-epoch floor of `scope_id`, through its write-epoch lease
+    /// as [`advance_write_epoch_on_sight`](crate::gate::floor::advance_write_epoch_on_sight)
+    /// takes it: a raise that finds the lease held does not land.
+    pub fn raise_write_epoch_floor_on_sequence_read_after(
+        &self,
+        ipns_name: &[u8],
+        epoch_key: &[u8],
+        scope_id: [u8; 16],
+        epoch: u64,
+        skipped: u32,
+    ) {
+        self.raise_epoch_floor_on_sequence_read_after(ipns_name, epoch_key, epoch, skipped);
+        self.inner.lock().expect("lock").raise_lease_scope = Some(scope_id);
     }
 
     /// Restore every injected floor fault, the clear's and the commit's
@@ -207,6 +228,7 @@ impl InMemoryFloorStore {
         inner.raise_budget = None;
         inner.raise_report_skew = 0;
         inner.raise_on_sequence_read = None;
+        inner.raise_lease_scope = None;
     }
 
     /// Let `budget` raises through, on any key, and fail every raise after, so
@@ -341,11 +363,16 @@ impl FloorStore for InMemoryFloorStore {
                     inner.raise_on_sequence_read = Some((name, epoch_key, epoch, skipped - 1));
                 }
                 Some(tag) => {
-                    raise(
-                        &mut inner.epoch,
-                        &[tag, epoch_key.as_slice()].concat(),
-                        epoch,
-                    );
+                    let leased = inner.raise_lease_scope.take().is_none_or(|scope| {
+                        crate::gate::floor::acquire_write_epoch_lease(&scope).is_some()
+                    });
+                    if leased {
+                        raise(
+                            &mut inner.epoch,
+                            &[tag, epoch_key.as_slice()].concat(),
+                            epoch,
+                        );
+                    }
                 }
                 None => inner.raise_on_sequence_read = Some((name, epoch_key, epoch, skipped)),
             }

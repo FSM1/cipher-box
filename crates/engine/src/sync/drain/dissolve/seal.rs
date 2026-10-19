@@ -370,12 +370,15 @@ where
                 }
             }
         }
-        // No row of `jobs` is an ancestor of an earlier one, so each publish
-        // names only children that published before it.
+        // Each parent publishes after its children.
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
             // A write cut moves each copy name: no publish lands at a name of
-            // the old write seed (ADR 0077 D4).
+            // the old write seed (ADR 0077 D4). The lease holds the floor from
+            // this check through the signature.
+            let Some(_lease) = floor::acquire_write_epoch_lease(&write.root.0) else {
+                return Err(SealFault::Unanswered);
+            };
             if self.write_floor(write).await? != header.binding.write_epoch {
                 return Err(SealFault::Unanswered);
             }
@@ -535,19 +538,21 @@ where
         Ok((!sealed).then(|| Observed::record(name, read.pick.sequence)))
     }
 
-    /// The write epoch floor of `write`. A floor that does not read pauses
-    /// the tick.
+    /// The write epoch floor of `write`. A floor that does not read, or one
+    /// above the stamp of the seed that derives the copy names, pauses the
+    /// tick.
     async fn write_floor(&self, write: &ScopeEnd<'_>) -> Result<u64, SealFault> {
         floor::write_epoch_floor(&write.floors(&self.seams.floors), &write.root.0)
             .await
             .ok()
             .flatten()
+            .filter(|floor| write.write_seed_stamp.is_some_and(|stamp| *floor <= stamp))
             .ok_or(SealFault::Unanswered)
     }
 
     /// The child adopter of a copy name: the destination scope alone. A copy
     /// takes a new id, so no owed-move scope of the destination binds it.
-    fn copy_adopter<'e>(
+    pub(in crate::sync::drain) fn copy_adopter<'e>(
         &'e self,
         plane: &SealPlane<'_>,
         floors: &'e SharerScopedFloorStore<'e, F>,

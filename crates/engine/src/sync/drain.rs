@@ -1723,6 +1723,9 @@ pub(crate) struct ScopeEnd<'a> {
     pub(crate) read_seed_stamp: Option<u64>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
+    /// The stamp of `write_scope_seed`, or `None` where no stamp is known. A
+    /// write floor above it means a write cut moved the names off this seed.
+    pub(crate) write_seed_stamp: Option<u64>,
     /// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority the
     /// gate derives an interior scope root's expected ascent keypair from
     /// ([`RootAdopter::under_parent_node_seed`]). `None` at the vault root,
@@ -11318,6 +11321,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: None,
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: None,
                 floor_namespace: FloorNamespace::Own,
             }
@@ -13036,6 +13040,7 @@ mod tests {
                     read_scope_seed: &self.read_scope_seed,
                     read_seed_stamp: Some(OWNER_ROOT_EPOCH),
                     write_scope_seed: &self.write_scope_seed,
+                    write_seed_stamp: None,
                     ascent_node_seed: None,
                     floor_namespace,
                 },
@@ -14411,6 +14416,86 @@ mod tests {
         blocks.insert(version.content_cid.clone(), root_block);
         harness.seams.http = serve_walk_blocks(blocks);
         leaf_cids.into_iter().chain([version.content_cid]).collect()
+    }
+
+    /// The copy adopter binds the destination scope alone. A record at a
+    /// destination name under an owed-move scope of the destination opens
+    /// through the child adopter, and the copy adopter refuses it.
+    #[test]
+    fn a_copy_adopter_binds_no_owed_move_scope() {
+        const OWED: [u8; 16] = [0x0E; 16];
+        const NODE: NodeId = NodeId([0x0C; 16]);
+        let owed_seed = crate::scope_seeds::StampedSeed {
+            seed: Zeroizing::new([0x3C; 32]),
+            stamp: OWNER_ROOT_EPOCH,
+        };
+        let read_key = kdf::read_key(kdf::node_seed(&owed_seed.seed, &NODE.0).as_bytes());
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: NODE.0,
+            scope_id: OWED,
+            epoch: OWNER_ROOT_EPOCH,
+            read_key: read_key.as_bytes(),
+            nonce: &[8; 24],
+            body: &ReadBody::Folder {
+                created_at: 1,
+                modified_at: 1,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .expect("a child folder record");
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &NODE.0).as_bytes()),
+            format!("/ipfs/{}", head.cid).as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        let mut harness = drain_harness(None);
+        harness.seams.http = serve(&BTreeMap::from([(head.cid.clone(), head.block.clone())]));
+        let legs = [(
+            HARNESS_ROOT,
+            OwedMoveLeg {
+                scope_id: OWED,
+                read_seed: Some(&owed_seed),
+                root_name: None,
+            },
+        )];
+        let drain = Drain::new(
+            &harness.seams,
+            harness.state.drain_cells(),
+            TickInputs {
+                placement: &harness.placement,
+                bin_keys: &harness.bin_keys,
+                bin_retention_days: harness.bin_retention_days,
+                retention: RetentionPolicy::KeepAll,
+                owed_moves: Some(&[]),
+                owed_move_reads: &legs,
+                deferred_raises: &harness.deferred_raises,
+                every_scope_reached: true,
+            },
+        );
+        let scope = harness.scope();
+        let plane = scope.source.at(OWNER_ROOT_EPOCH);
+        let floors = plane.end.floors(&harness.seams.floors);
+        let name = plane.end.write_name(&NODE.0);
+
+        let opened = block_on(
+            drain
+                .child_adopter(&plane, &floors, NODE)
+                .open_held(&name, &record),
+        );
+        let copied = block_on(
+            drain
+                .copy_adopter(&plane, &floors, NODE)
+                .open_held(&name, &record),
+        );
+
+        assert!(opened.is_ok(), "the owed-move scope opens the record");
+        assert!(copied.is_err(), "the copy adopter refuses it");
     }
 
     /// Link `node` below `parent` in the harness base.
@@ -16223,6 +16308,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: self.read_seed_stamp,
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: FloorNamespace::Own,
             }

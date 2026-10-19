@@ -1438,6 +1438,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: Some(1),
                 write_scope_seed: &self.write_scope_seed,
+                write_seed_stamp: None,
                 ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: crate::grants::grafted::FloorNamespace::Own,
             }
