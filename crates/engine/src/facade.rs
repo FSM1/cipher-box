@@ -117,7 +117,7 @@ use crate::net::revival::{
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, RefusedRoot, RootFallback, RootWait, RotationAncestry,
-    SweptScopeState,
+    SpentSequences, SweptScopeState,
 };
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FanoutRecord, FolderRefresh,
@@ -8569,13 +8569,16 @@ where {
             None
         };
 
+        // A re-seal that did not confirm in one attempt can still have landed.
+        let spent = SpentSequences::default();
         self.bounded_rotation(async || {
-            let net = self.owner_rotation_net(
+            let mut net = self.owner_rotation_net(
                 api,
                 owner_keys(),
                 target.ancestry(),
                 PointerConsultArm::Refused,
             );
+            net.gated = GatedRoots::sharing(&spent);
             let outcome = flat_root_cut(
                 &net,
                 anchor.as_ref(),

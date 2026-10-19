@@ -375,16 +375,28 @@ impl RefusedRoot {
 #[derive(Default)]
 pub struct GatedRoots {
     inner: RefCell<Option<RepublishBase>>,
-    /// The highest sequence this pass parked at each name. A later publish at
-    /// that name signs above it, even over a read that an endpoint served
-    /// stale, so one sequence never carries two records.
-    spent: RefCell<BTreeMap<String, u64>>,
+    /// The highest sequence this pass parked or signed at each name. A later
+    /// publish at that name signs above it, even over a read that an endpoint
+    /// served stale, so one sequence never carries two records.
+    spent: SpentSequences,
 }
+
+/// [`GatedRoots`]'s spent sequences, shared by every attempt of one command.
+pub(crate) type SpentSequences = Rc<RefCell<BTreeMap<String, u64>>>;
 
 /// The parked base that [`GatedRoots::hold`] took out of the slot.
 pub(crate) struct HeldBase(Option<RepublishBase>);
 
 impl GatedRoots {
+    /// An empty slot over `spent`, which an earlier attempt of the same
+    /// command can have raised.
+    pub(crate) fn sharing(spent: &SpentSequences) -> Self {
+        Self {
+            inner: RefCell::default(),
+            spent: Rc::clone(spent),
+        }
+    }
+
     fn park(&self, base: RepublishBase) {
         self.spend(base.observed.name(), base.observed.sequence());
         *self.inner.borrow_mut() = Some(base);
@@ -410,7 +422,7 @@ impl GatedRoots {
     }
 
     /// `base`, with its CAS bound raised to the highest sequence this pass
-    /// parked at its name.
+    /// parked or signed at its name.
     fn above_spent(&self, base: RepublishBase) -> RepublishBase {
         match self.spent.borrow().get(base.observed.name().as_str()) {
             Some(&spent) => RepublishBase {
@@ -2843,7 +2855,8 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     owner_identity: &'a EcdsaVerifier,
     /// The scope root whose PUT raises the flag ([`RootFallback`]).
     put_sent: Option<([u8; 16], &'a Cell<bool>)>,
-    /// Takes the sequence of every other signed record, landed or not.
+    /// Takes the sequence of each signed record that `put_sent` does not
+    /// mark, landed or not.
     signed: Option<&'a Cell<Option<u64>>>,
 }
 
@@ -2972,7 +2985,7 @@ where
             }
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
-            // re-publishing is idempotent-in-sequence.
+            // the signed sequence is spent ([`GatedRoots::spend`]).
             PublishOutcome::Unconfirmed { .. } => Err(RotationPublishError::NotPublished),
         }
     }
@@ -4407,9 +4420,9 @@ where
     }
 
     /// Park again the base that [`GatedRoots::hold`] took out, unless a read in
-    /// between adopted, or this pass parked, a later record at its name. A
-    /// publish over the held base would sign above that record, from a read
-    /// that did not see it.
+    /// between adopted, or this pass parked or signed, a later record at its
+    /// name. A publish over the held base would sign above that record, from a
+    /// read that did not see it.
     pub(crate) async fn put_back_unmoved(
         &self,
         held: HeldBase,
@@ -11559,11 +11572,14 @@ mod tests {
         assert_eq!(reports, 1);
     }
 
-    /// A child re-seal whose PUT lands but does not confirm spends its
-    /// sequence, so the next re-seal in the pass signs above it and not again
-    /// at it with other bytes.
-    #[test]
-    fn an_unconfirmed_child_reseal_spends_its_sequence() {
+    /// P one epoch after the seed that sealed the ascent link of its child,
+    /// with both staged, so the next probe of the child re-seals it.
+    fn a_child_owed_a_reseal() -> (
+        Harness<InMemoryRecordStore>,
+        OwnerRootFixture,
+        ChildScopeRef,
+        ChildScopeRef,
+    ) {
         let (_, child, child_ref) = owner_tree();
         let root = owner_scope_root_at(
             ENVELOPE_V,
@@ -11581,12 +11597,30 @@ mod tests {
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
-        let first = harness.store.endpoints()[0].clone();
-        let key = child.name.as_str();
-        // Each PUT lands, and every read after it serves the staged record.
-        let staged = harness.store.record_at(&first, key);
-        harness.store.serve_after_put(key, 0, staged);
         let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
+        (harness, child, scope, child_ref)
+    }
+
+    /// Each PUT of `child` lands, and each read after it serves the staged
+    /// record: a publish that never confirms.
+    fn serve_the_staged_child_after_each_put(
+        harness: &Harness<InMemoryRecordStore>,
+        child: &OwnerRootFixture,
+    ) {
+        let first = harness.store.endpoints()[0].clone();
+        let staged = harness.store.record_at(&first, child.name.as_str());
+        harness
+            .store
+            .serve_after_put(child.name.as_str(), 0, staged);
+    }
+
+    /// A child re-seal whose PUT lands but does not confirm spends its
+    /// sequence, so the next re-seal in the pass signs above it and not again
+    /// at it with other bytes.
+    #[test]
+    fn an_unconfirmed_child_reseal_spends_its_sequence() {
+        let (harness, child, scope, child_ref) = a_child_owed_a_reseal();
+        serve_the_staged_child_after_each_put(&harness, &child);
         let net = harness.net(core::slice::from_ref(&child_ref));
         block_on(net.resolve_scope(&scope)).expect("the parent resolves");
 
@@ -11599,6 +11633,50 @@ mod tests {
             landed.push(sequence_at(&harness, &child.name).expect("the PUT landed"));
         }
         assert!(landed[1] > landed[0], "{landed:?}");
+    }
+
+    /// A retry attempt of one command builds a new net over the same spent
+    /// sequences, so it signs above a re-seal of the attempt before that did
+    /// not confirm.
+    #[test]
+    fn a_retry_attempt_signs_above_an_unconfirmed_reseal_of_the_attempt_before() {
+        let (harness, child, scope, child_ref) = a_child_owed_a_reseal();
+        serve_the_staged_child_after_each_put(&harness, &child);
+        let spent = SpentSequences::default();
+
+        let mut landed = Vec::new();
+        for _ in 0..2 {
+            let mut net = harness.net(core::slice::from_ref(&child_ref));
+            net.gated = GatedRoots::sharing(&spent);
+            block_on(net.resolve_scope(&scope)).expect("the parent resolves");
+            assert!(matches!(
+                block_on(net.reseal_child_ascent(&scope, &child_ref)),
+                Err(AscentResidual::Owed { .. })
+            ));
+            landed.push(sequence_at(&harness, &child.name).expect("the PUT landed"));
+        }
+        assert!(landed[1] > landed[0], "{landed:?}");
+    }
+
+    /// A child re-seal that no endpoint acknowledged still spends the
+    /// sequence it signed: its bytes can have landed.
+    #[test]
+    fn an_unacknowledged_child_reseal_spends_its_sequence() {
+        let (harness, child, scope, child_ref) = a_child_owed_a_reseal();
+        let net = harness.net(core::slice::from_ref(&child_ref));
+        block_on(net.resolve_scope(&scope)).expect("the parent resolves");
+        harness.store.fail_put_for(child.name.as_str());
+        assert!(matches!(
+            block_on(net.reseal_child_ascent(&scope, &child_ref)),
+            Err(AscentResidual::Owed { .. })
+        ));
+
+        harness.store.heal_put_for(child.name.as_str());
+        assert_eq!(
+            block_on(net.reseal_child_ascent(&scope, &child_ref)),
+            Ok(child_ref.clone()),
+        );
+        assert_eq!(sequence_at(&harness, &child.name), Some(3));
     }
 
     /// The index repair of P publishes over the base its own resolve parked.
