@@ -505,9 +505,47 @@ struct ResealableRoot {
     over_sequence: Option<u64>,
 }
 
-/// The refused scope root records a session already reported, by scope and
-/// refused sequence, so each one is one trust event.
-pub(crate) type RootReports = RefCell<BTreeSet<([u8; 16], u64)>>;
+/// The trust events a session already sent, by scope and what each reports, so
+/// each one is sent one time.
+pub(crate) type RootReports = RefCell<BTreeSet<([u8; 16], ReportKey)>>;
+
+/// What one trust event of [`RootReports`] reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ReportKey {
+    /// A refused record of the scope root of a cut, at its sequence.
+    RefusedRoot(u64),
+    /// A rejected record of an indexed child, at its verified sequence (0
+    /// where the record does not verify).
+    ChildRecord(u64),
+    /// The rejected scope pointer of an indexed child.
+    ChildPointer,
+}
+
+/// Why a write plane did not open. A rejected scope pointer stays apart, so a
+/// caller that reports it knows if this access already did.
+enum PlaneRefusal {
+    Failed(ResolveFailure),
+    /// The scope pointer was rejected; `reported` when this access sent the
+    /// event.
+    Pointer {
+        reported: bool,
+    },
+}
+
+impl PlaneRefusal {
+    fn failure(self) -> ResolveFailure {
+        match self {
+            Self::Failed(failure) => failure,
+            Self::Pointer { .. } => ResolveFailure::Rejected,
+        }
+    }
+}
+
+impl From<ResolveFailure> for PlaneRefusal {
+    fn from(failure: ResolveFailure) -> Self {
+        Self::Failed(failure)
+    }
+}
 
 /// An owner cut's fallback for its own scope root (ADR 0068 D1): a read that
 /// the gate refuses runs on the last copy of that root that passed the gate on
@@ -724,7 +762,7 @@ impl<'r, H: Http, F: FloorStore, S: SnapshotCache> FallbackRead<'r, H, F, S> {
         if this
             .reported
             .borrow_mut()
-            .insert((this.scope_id, refused_sequence))
+            .insert((this.scope_id, ReportKey::RefusedRoot(refused_sequence)))
         {
             emit_trust_violation(
                 self.events,
@@ -2496,11 +2534,22 @@ where
         scope: &ChildScopeRef,
         gated: ResealableRoot,
     ) -> Result<GatedWritePlane, ResolveFailure> {
+        self.write_plane_reporting(scope, gated)
+            .await
+            .map_err(PlaneRefusal::failure)
+    }
+
+    /// [`Self::write_plane_over`], with a rejected scope pointer kept apart.
+    async fn write_plane_reporting(
+        &self,
+        scope: &ChildScopeRef,
+        gated: ResealableRoot,
+    ) -> Result<GatedWritePlane, PlaneRefusal> {
         let ResealableRoot {
             mut root,
             over_sequence,
         } = gated;
-        self.open_write_seed_on_access(&mut root, scope.scope_id)
+        self.open_write_seed_reporting(&mut root, scope.scope_id)
             .await?;
         let GatedWriteBody {
             body: write_body,
@@ -2535,6 +2584,18 @@ where
         root: &mut GatedScopeRoot,
         scope_id: [u8; 16],
     ) -> Result<(), ResolveFailure> {
+        self.open_write_seed_reporting(root, scope_id)
+            .await
+            .map_err(PlaneRefusal::failure)
+    }
+
+    /// [`Self::open_write_seed_on_access`], with a rejected scope pointer kept
+    /// apart.
+    async fn open_write_seed_reporting(
+        &self,
+        root: &mut GatedScopeRoot,
+        scope_id: [u8; 16],
+    ) -> Result<(), PlaneRefusal> {
         if root.write_scope_seed.is_some() {
             return Ok(());
         }
@@ -2548,7 +2609,10 @@ where
             self.on_access_misses
                 .recent(&scope_id, now, self.profile.pointer_consult_interval)
         {
-            return Err(miss.failure());
+            return Err(match miss {
+                OnAccessMiss::Rejected => PlaneRefusal::Pointer { reported: false },
+                other => other.failure().into(),
+            });
         }
         let miss = match sight_write_seed(
             &self.pointer_consult(),
@@ -2572,7 +2636,7 @@ where
             // The lease holder settles the floor, so the next access reads
             // the pointer again rather than a miss kept from before it.
             Ok(Some(PointerSighting { deferred: true, .. })) => {
-                return Err(ResolveFailure::Unavailable);
+                return Err(ResolveFailure::Unavailable.into());
             }
             Ok(Some(PointerSighting {
                 current_root,
@@ -2583,7 +2647,9 @@ where
                 prev_root: prev_root.map(Box::new),
             },
             Ok(None) => OnAccessMiss::Absent,
-            Err(PointerConsultError::Unavailable) => return Err(ResolveFailure::Unavailable),
+            Err(PointerConsultError::Unavailable) => {
+                return Err(ResolveFailure::Unavailable.into());
+            }
             Err(PointerConsultError::Rejected) => {
                 emit_trust_violation(
                     self.events,
@@ -2593,9 +2659,12 @@ where
                 OnAccessMiss::Rejected
             }
         };
-        let failure = miss.failure();
+        let refusal = match miss {
+            OnAccessMiss::Rejected => PlaneRefusal::Pointer { reported: true },
+            ref other => other.failure().into(),
+        };
         self.on_access_misses.record(scope_id, now, miss);
-        Err(failure)
+        Err(refusal)
     }
 
     /// [`SweepResolveFailure::Superseded`] when the owner-signed re-point
@@ -4147,7 +4216,7 @@ where
                         .await
                 }
                 Err(SweepResolveFailure::Rejected) => {
-                    Err(self.reject_child(&source, child, Refusal::Pointer))
+                    Err(self.reject_child(&source, child, ReportKey::ChildPointer))
                 }
                 _ => Err(AscentResidual::Superseded),
             },
@@ -4178,7 +4247,7 @@ where
             .await
             .map_err(|(failure, sequence)| match failure {
                 ResolveFailure::Unavailable => retry(),
-                _ => self.reject_child(source, child, Refusal::Record(sequence)),
+                _ => self.reject_child(source, child, ReportKey::ChildRecord(sequence)),
             })?;
         // A failed endpoint can hold the record that a seed below opens.
         let window_end = || match head.endpoint_failed {
@@ -4207,7 +4276,11 @@ where
                     | RootGateVerdict::HeadBlockRefused
                     | RootGateVerdict::OwnerSeedRefused,
                 ) => {
-                    return Err(self.reject_child(source, child, Refusal::Record(head.sequence)));
+                    return Err(self.reject_child(
+                        source,
+                        child,
+                        ReportKey::ChildRecord(head.sequence),
+                    ));
                 }
             }
             epoch = epoch.checked_sub(1).ok_or_else(window_end)?;
@@ -4228,23 +4301,29 @@ where
         let owed = |error: RotationPublishError| match error {
             RotationPublishError::NotResealable => AscentResidual::NotResealable,
             error if error.is_retryable() => AscentResidual::Owed { epoch, error },
-            _ => self.reject_child(source, child, Refusal::Record(head.sequence)),
+            _ => self.reject_child(source, child, ReportKey::ChildRecord(head.sequence)),
         };
         let gated = ResealableRoot {
             root,
             over_sequence: None,
         };
-        let target = match self.write_plane_over(child, gated).await {
+        let target = match self.write_plane_reporting(child, gated).await {
             Ok(plane) => self.target_over(child, plane),
             // A write cut moved the root off this name.
             Err(_) if self.moved_from(child.scope_id, &head.name).is_some() => {
                 return Err(AscentResidual::Superseded);
             }
-            // The on-access consult already reported the pointer it rejected.
-            Err(ResolveFailure::Rejected) if self.pointer_refused(child.scope_id) => {
+            // The on-access consult of this access already sent the event.
+            Err(PlaneRefusal::Pointer { reported: true }) => {
+                self.ascent_reports
+                    .borrow_mut()
+                    .insert((child.scope_id, ReportKey::ChildPointer));
                 return Err(AscentResidual::Rejected);
             }
-            Err(failure) => Err(failure),
+            Err(PlaneRefusal::Pointer { reported: false }) => {
+                return Err(self.reject_child(source, child, ReportKey::ChildPointer));
+            }
+            Err(PlaneRefusal::Failed(failure)) => Err(failure),
         }
         .map_err(|failure| owed(publish_verdict(failure)))?;
         reseal_root_in_place(
@@ -4291,16 +4370,16 @@ where
     }
 
     /// Report a rejection of an indexed child as a trust violation (AGENTS.md
-    /// rule 6), one time for each record and one time for its pointer.
+    /// rule 6), one time for each [`ReportKey`].
     fn reject_child(
         &self,
         source: &SweptScopeSource,
         child: &ChildScopeRef,
-        refusal: Refusal,
+        key: ReportKey,
     ) -> AscentResidual {
-        let (key, what) = match refusal {
-            Refusal::Record(sequence) => (sequence, "record"),
-            Refusal::Pointer => (u64::MAX, "scope pointer"),
+        let what = match key {
+            ReportKey::ChildPointer => "scope pointer",
+            _ => "record",
         };
         if self
             .ascent_reports
@@ -4322,46 +4401,27 @@ where
     }
 
     /// Park again the base that [`GatedRoots::hold`] took out, unless a read in
-    /// between adopted a later record at its name. A publish over the held
-    /// base would sign above that record, from a read that did not see it.
+    /// between adopted, or this pass parked, a later record at its name. A
+    /// publish over the held base would sign above that record, from a read
+    /// that did not see it.
     pub(crate) async fn put_back_unmoved(
         &self,
         held: HeldBase,
     ) -> Result<(), RotationPublishError> {
         if let Some(base) = &held.0 {
-            let floor =
-                floor::sequence_floor(self.floors, base.observed.name().as_str().as_bytes())
-                    .await
-                    .map_err(|_| RotationPublishError::NotPublished)?;
-            if floor.is_some_and(|floor| floor > base.observed.sequence()) {
+            let name = base.observed.name().as_str();
+            let floor = floor::sequence_floor(self.floors, name.as_bytes())
+                .await
+                .map_err(|_| RotationPublishError::NotPublished)?;
+            let spent = self.gated.spent.borrow().get(name).copied();
+            let held = base.observed.sequence();
+            if floor.is_some_and(|floor| floor > held) || spent.is_some_and(|spent| spent > held) {
                 return Err(RotationPublishError::LostRace);
             }
         }
         *self.gated.inner.borrow_mut() = held.0;
         Ok(())
     }
-
-    /// Whether the last on-access consult of `scope_id` rejected its pointer.
-    fn pointer_refused(&self, scope_id: [u8; 16]) -> bool {
-        matches!(
-            self.on_access_misses.recent(
-                &scope_id,
-                self.scheduler.now(),
-                self.profile.pointer_consult_interval
-            ),
-            Some(OnAccessMiss::Rejected)
-        )
-    }
-}
-
-/// What [`OwnerRotationNet::reject_child`] reports.
-#[derive(Clone, Copy)]
-enum Refusal {
-    /// The child record at this verified sequence.
-    Record(u64),
-    /// The scope pointer of the child. It has no record sequence, so it keys as
-    /// `u64::MAX`.
-    Pointer,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> InteriorResealer
@@ -11200,6 +11260,70 @@ mod tests {
         );
         let (verified, _) = published_head(&harness, &root.name);
         assert_eq!(verified.sequence, 2, "the cut of the other device stands");
+    }
+
+    /// A flat cut of P at read epoch 64 reads P again before it publishes.
+    /// Where that read adopts a cut of another device, the cut loses the race
+    /// and the record of the other cut stays at the name.
+    #[test]
+    fn a_flat_cut_whose_pre_cut_read_adopts_another_cut_loses_the_race() {
+        const EPOCH: u64 = 64;
+        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let scope = owner_scope_root(
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            EPOCH,
+            Some(&parent_seed),
+            &[],
+        );
+        let scope_ref = child_ref(CHILD_SCOPE, &scope);
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &scope, Some(OWNER_ROOT_EPOCH));
+        let key = scope.name.as_str();
+        let first = harness.store.endpoints()[0].clone();
+        let before = harness
+            .store
+            .record_at(&first, key)
+            .expect("the staged record");
+        let flat_cut = |net| {
+            block_on(crate::rotation::flat_root_cut(
+                net,
+                None,
+                crate::rotation::FlatCut {
+                    scope: &scope_ref,
+                    ascent: Some(&parent_seed),
+                    make_sweep: || Box::pin(async {}),
+                },
+            ))
+        };
+
+        let other_floors = InMemoryFloorStore::default();
+        block_on(floor::advance_write_epoch_on_sight(
+            &other_floors,
+            &CHILD_SCOPE,
+            OWNER_ROOT_EPOCH,
+        ))
+        .expect("write floor");
+        let ancestry = || {
+            RotationAncestry::rooted_at(
+                SCOPE,
+                &OWNER_ROOT_SCOPE_SEED,
+                core::slice::from_ref(&scope_ref),
+            )
+        };
+        let other_device = harness.net_rooted_with_floors(ancestry(), &other_floors);
+        flat_cut(&other_device).expect("another device cuts P");
+        let after = harness.store.record_at(&first, key).expect("the other cut");
+        harness
+            .store
+            .serve_gets_for_after(key, 0, harness.store.endpoints().len(), Some(before));
+
+        let this_device = harness.net_rooted(ancestry());
+        assert_eq!(
+            flat_cut(&this_device).err(),
+            Some(RotateError::Publish(RotationPublishError::LostRace)),
+        );
+        assert_eq!(harness.store.record_at(&first, key), Some(after));
     }
 
     /// Under the seed whose ascent link opens, a read body that does not
