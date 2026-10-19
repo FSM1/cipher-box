@@ -1392,6 +1392,7 @@ where
                     boundaries,
                     walked_epochs: &state.walked_read_epochs,
                     on_access_misses: &state.on_access_misses,
+                    spent: &state.spent_sequences,
                     ascent_reports: state.owed_rotation.root_reports(),
                 },
                 scope_root,

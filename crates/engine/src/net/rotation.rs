@@ -375,40 +375,47 @@ impl RefusedRoot {
 #[derive(Default)]
 pub struct GatedRoots {
     inner: RefCell<Option<RepublishBase>>,
-    /// The highest sequence this pass parked or signed at each name. A later
-    /// publish at that name signs above it, even over a read that an endpoint
-    /// served stale, so one sequence never carries two records.
-    spent: SpentSequences,
+    /// The highest sequence this pass parked at each name.
+    parked: RefCell<BTreeMap<String, u64>>,
+    /// The highest sequence the session signed at each name.
+    signed: SpentSequences,
 }
 
-/// [`GatedRoots`]'s spent sequences, shared by every attempt of one command.
+/// [`GatedRoots`]'s signed sequences, shared by every net of the session. A
+/// later publish at a name signs above both maps, even over a read that an
+/// endpoint served stale, so one sequence never carries two records.
 pub(crate) type SpentSequences = Rc<RefCell<BTreeMap<String, u64>>>;
+
+/// Raise the sequence `spent` holds for `name` to `sequence`.
+fn raise(spent: &RefCell<BTreeMap<String, u64>>, name: &IpnsName, sequence: u64) {
+    spent
+        .borrow_mut()
+        .entry(name.as_str().to_owned())
+        .and_modify(|spent| *spent = (*spent).max(sequence))
+        .or_insert(sequence);
+}
 
 /// The parked base that [`GatedRoots::hold`] took out of the slot.
 pub(crate) struct HeldBase(Option<RepublishBase>);
 
 impl GatedRoots {
-    /// An empty slot over `spent`, which an earlier attempt of the same
-    /// command can have raised.
-    pub(crate) fn sharing(spent: &SpentSequences) -> Self {
+    /// An empty slot over `signed`, which an earlier net of the session can
+    /// have raised.
+    pub(crate) fn sharing(signed: &SpentSequences) -> Self {
         Self {
-            inner: RefCell::default(),
-            spent: Rc::clone(spent),
+            signed: Rc::clone(signed),
+            ..Self::default()
         }
     }
 
     fn park(&self, base: RepublishBase) {
-        self.spend(base.observed.name(), base.observed.sequence());
+        raise(&self.parked, base.observed.name(), base.observed.sequence());
         *self.inner.borrow_mut() = Some(base);
     }
 
-    /// Raise the highest sequence this pass spent at `name` to `sequence`.
+    /// Raise the highest sequence the session signed at `name` to `sequence`.
     fn spend(&self, name: &IpnsName, sequence: u64) {
-        self.spent
-            .borrow_mut()
-            .entry(name.as_str().to_owned())
-            .and_modify(|spent| *spent = (*spent).max(sequence))
-            .or_insert(sequence);
+        raise(&self.signed, name, sequence);
     }
 
     /// Take the parked base out, so that reads in between cannot replace it.
@@ -422,10 +429,13 @@ impl GatedRoots {
     }
 
     /// `base`, with its CAS bound raised to the highest sequence this pass
-    /// parked or signed at its name.
+    /// parked or the session signed at its name.
     fn above_spent(&self, base: RepublishBase) -> RepublishBase {
-        match self.spent.borrow().get(base.observed.name().as_str()) {
-            Some(&spent) => RepublishBase {
+        let name = base.observed.name().as_str();
+        let parked = self.parked.borrow().get(name).copied();
+        let signed = self.signed.borrow().get(name).copied();
+        match parked.max(signed) {
+            Some(spent) => RepublishBase {
                 observed: base.observed.clearing(spent),
                 ..base
             },
@@ -4420,9 +4430,9 @@ where
     }
 
     /// Park again the base that [`GatedRoots::hold`] took out, unless a read in
-    /// between adopted, or this pass parked or signed, a later record at its
-    /// name. A publish over the held base would sign above that record, from a
-    /// read that did not see it.
+    /// between adopted or parked a later record at its name. A publish over
+    /// the held base would sign above that record, from a read that did not
+    /// see it.
     pub(crate) async fn put_back_unmoved(
         &self,
         held: HeldBase,
@@ -4432,9 +4442,10 @@ where
             let floor = floor::sequence_floor(self.floors, name.as_bytes())
                 .await
                 .map_err(|_| RotationPublishError::NotPublished)?;
-            let spent = self.gated.spent.borrow().get(name).copied();
+            let parked = self.gated.parked.borrow().get(name).copied();
             let held = base.observed.sequence();
-            if floor.is_some_and(|floor| floor > held) || spent.is_some_and(|spent| spent > held) {
+            if floor.is_some_and(|floor| floor > held) || parked.is_some_and(|parked| parked > held)
+            {
                 return Err(RotationPublishError::LostRace);
             }
         }
@@ -11419,6 +11430,43 @@ mod tests {
                 make_sweep: || Box::pin(async {}),
             },
         ))
+    }
+
+    /// At the window edge, a retry attempt over the spent sequences of an
+    /// attempt whose cut PUT no endpoint acknowledged signs above that
+    /// sequence. It does not read its own signature as a lost race.
+    #[test]
+    fn a_retry_at_the_window_edge_signs_above_an_unacknowledged_cut() {
+        let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
+        let spent = SpentSequences::default();
+        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let attempt = || {
+            let mut net = harness.net_rooted(RotationAncestry::rooted_at(
+                SCOPE,
+                &OWNER_ROOT_SCOPE_SEED,
+                core::slice::from_ref(&scope_ref),
+            ));
+            net.gated = GatedRoots::sharing(&spent);
+            block_on(crate::rotation::flat_root_cut(
+                &net,
+                None,
+                crate::rotation::FlatCut {
+                    scope: &scope_ref,
+                    ascent: Some(&parent_seed),
+                    make_sweep: || Box::pin(async {}),
+                },
+            ))
+            .map(drop)
+        };
+
+        harness.store.fail_put_for(scope.name.as_str());
+        assert_eq!(
+            attempt(),
+            Err(RotateError::Publish(RotationPublishError::NotPublished))
+        );
+        harness.store.heal_put_for(scope.name.as_str());
+        assert_eq!(attempt(), Ok(()));
+        assert_eq!(sequence_at(&harness, &scope.name), Some(3));
     }
 
     /// At the window edge, a pre-cut read of P that fails stops the cut with

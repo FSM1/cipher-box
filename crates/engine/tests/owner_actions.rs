@@ -1203,6 +1203,58 @@ fn after_a_restart_the_sweep_reseals_a_nested_root_a_cut_left_behind() {
     );
 }
 
+/// Serve the record now at `name` to every GET after the next PUT under it:
+/// a re-seal there lands but does not confirm.
+fn serve_the_current_record_after_each_put(world: &FakeWorld, name: &IpnsName) {
+    let store = &world.record_store;
+    let current = store.record_at(&store.endpoints()[0], name.as_str());
+    store.serve_after_put(name.as_str(), 0, current);
+}
+
+/// A re-seal of a nested root that lands but does not confirm spends its
+/// sequence for the session, so a re-seal of a later command signs above it.
+#[test]
+fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder_name = write_name(fx.folder);
+    serve_the_current_record_after_each_put(&fx.world, &folder_name);
+
+    let mut landed = Vec::new();
+    for _ in 0..2 {
+        assert_eq!(
+            block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+            Ok(CommandOutcome::Done)
+        );
+        landed.push(sequence_at(&fx.world, &folder_name));
+    }
+    assert!(landed[1] > landed[0], "{landed:?}");
+}
+
+/// The sweep a cut enqueues signs above a re-seal of that cut that landed
+/// but did not confirm.
+#[test]
+fn the_sweep_signs_above_an_unconfirmed_nested_reseal_of_the_cut() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder_name = write_name(fx.folder);
+    serve_the_current_record_after_each_put(&fx.world, &folder_name);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    let mut landed = vec![sequence_at(&fx.world, &folder_name)];
+    let profile = fx.engine.profile();
+    for _ in 0..2 * profile.sweep_cadence.as_millis() / profile.poll_cadence.as_millis() {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    landed.push(sequence_at(&fx.world, &folder_name));
+    assert!(landed[1] > landed[0], "{landed:?}");
+}
+
 // ---------------------------------------------------------------------------
 // Grant
 // ---------------------------------------------------------------------------
@@ -10691,6 +10743,34 @@ fn a_scope_exit_cut_keeps_a_nested_granted_folder_writable() {
         publishes_under(&mut fx, inner, "after the exit", 4),
         "a write under the nested folder publishes after the scope-exit cut"
     );
+}
+
+/// A scope-exit cut signs above a re-seal of a nested root that an earlier
+/// scope-exit cut of the session landed but did not confirm.
+#[test]
+fn a_later_scope_exit_cut_signs_above_an_unconfirmed_nested_reseal() {
+    let mut fx = GrantScenario::new();
+    let one = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "one");
+    let two = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "two");
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    let inner = fx.grant_nested_folder("inner");
+    converge_into_granted_scope(&fx, one);
+    converge_into_granted_scope(&fx, two);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let inner_name = write_name(inner);
+    serve_the_current_record_after_each_put(&fx.world, &inner_name);
+
+    let mut landed = Vec::new();
+    for node in [one, two] {
+        block_on(fx.engine.command(Command::Relink {
+            node,
+            new_parent: album,
+        }))
+        .expect("a move out of the granted scope journals its crossing");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        landed.push(sequence_at(&fx.world, &inner_name));
+    }
+    assert!(landed[1] > landed[0], "{landed:?}");
 }
 
 /// A source-remove that confirms at its name and then fails a local step is the
