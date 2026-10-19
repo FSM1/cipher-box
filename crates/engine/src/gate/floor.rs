@@ -287,6 +287,8 @@ pub enum Strictness {
     /// law, rather than hand-rolled at each call site. The vault-pointer vouch
     /// reads its standing pointer at this bar too
     /// ([`VaultPointerVoucher::standing`](crate::net::VaultPointerVoucher)).
+    /// `ChildAdopter::open_held` takes this bar inside the full [`check`],
+    /// with the epoch stage, to judge a held record with no commit.
     ///
     /// [`ChildAdopter::open_interior_under`]: crate::net::ChildAdopter
     AtOrAboveFloor,
