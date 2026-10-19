@@ -11401,6 +11401,76 @@ mod tests {
         cut_at_the_window_edge(&harness, &scope_ref).expect("the next try cuts");
     }
 
+    /// A later record of P at sequence 2 that `edit` changes, served at every
+    /// endpoint after the first read of P.
+    fn serve_a_later_record_of_p(
+        harness: &Harness<InMemoryRecordStore>,
+        scope: &OwnerRootFixture,
+        edit: impl FnOnce(&mut Envelope, &mut GrantSection),
+    ) {
+        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let later = crate::testkit::reencoded(
+            owner_scope_root_at(
+                ENVELOPE_V,
+                CHILD_SCOPE,
+                &FRESH_SEED,
+                65,
+                Some(&parent_seed),
+                &[],
+                Vec::new(),
+                Some(PrevEpochSeed {
+                    seed: &OWNER_ROOT_SCOPE_SEED,
+                    epoch: 64,
+                }),
+            ),
+            edit,
+        );
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(later.head_cid_str.clone(), later.head_block.clone());
+        let endpoints = harness.store.endpoints().len();
+        harness.store.serve_gets_for_after(
+            scope.name.as_str(),
+            endpoints,
+            endpoints,
+            Some(record_for(&CHILD_SCOPE, &later.head_cid_str, 2)),
+        );
+    }
+
+    /// At the window edge, a pre-cut read of P that the gate rejects keeps its
+    /// trust verdict, and the cut publishes nothing.
+    #[test]
+    fn a_rejected_pre_cut_read_at_the_window_edge_keeps_its_verdict() {
+        let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
+        let first = harness.store.endpoints()[0].clone();
+        let before = harness.store.record_at(&first, scope.name.as_str());
+        serve_a_later_record_of_p(&harness, &scope, |_, section| {
+            section.commitment_sig[0] ^= 1;
+        });
+
+        let held = cut_at_the_window_edge(&harness, &scope_ref).expect_err("the cut holds");
+        assert_eq!(held, RotateError::Resolve(ResolveFailure::Rejected));
+        assert!(!held.is_retryable());
+        assert_eq!(harness.store.record_at(&first, scope.name.as_str()), before);
+    }
+
+    /// At the window edge, a pre-cut read that adopts a later record of P and
+    /// then fails loses the race.
+    #[test]
+    fn a_pre_cut_read_that_adopts_a_later_record_then_fails_loses_the_race() {
+        let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
+        serve_a_later_record_of_p(&harness, &scope, |_, section| {
+            section.owner_write_blob = None;
+        });
+
+        assert_eq!(
+            cut_at_the_window_edge(&harness, &scope_ref).err(),
+            Some(RotateError::Publish(RotationPublishError::LostRace)),
+        );
+    }
+
     /// At the window edge, a child that the probe cannot read holds the cut:
     /// the seed it opens under can be the one the cut drops.
     #[test]
