@@ -66,6 +66,9 @@ regress through an ancestor scope's history" is currently unenforced.
 _within_ a scope whose envelope epoch is behind the scope's current epoch, per #26 D2.
 Descendant scope roots are eager-set members and are not swept. The blueprint's
 `### sweep` section is corrected to say so.
+Amended by ADR 0080 D2 on 2026-10-19: a full sweep pass also re-seals the ascent link of each
+indexed child scope root that opens only under an earlier seed of the scope, and it still does not
+rotate that root.
 
 **D2 — a below-floor scope root is a name-staleness signal, handled by a pointer
 consult.** When a scope root's record is refused at gate stage 5, the resolver returns a

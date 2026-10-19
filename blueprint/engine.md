@@ -1341,7 +1341,9 @@ by FSM1/cipher-box-next#38 D5):
   the single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
-  FSM1/cipher-box-next#38 D5).
+  FSM1/cipher-box-next#38 D5). A flat cut also re-seals the ascent link of each indexed child
+  scope root under the new seed; the child keeps its seed and its read epoch
+  ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
 
 Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
@@ -1383,7 +1385,9 @@ subtree before a grant (the epoch-converged requirement, FSM1/cipher-box-next#26
 subtree, not the whole scope it sits in) and self-heals the direct-child-scope index —
 a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
-re-sealed. Only a name the walk resolved current may be written to an index: a
+re-sealed. A full pass also re-seals the ascent link of each indexed child scope
+root that opens only under an earlier seed of the scope; it still does not rotate
+that root (ADR 0080). Only a name the walk resolved current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
 never persist the superseded name that caused it (ADR 0041). A repair whose
 re-seal is over the scope root's grant section budget does not land: the
