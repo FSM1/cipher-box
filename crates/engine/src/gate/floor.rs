@@ -731,12 +731,12 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
     scope_id: &[u8; 16],
     write_epoch: u64,
 ) -> SeamResult<u64> {
+    OWED_WRITE_RAISES.with(|owed| {
+        let mut owed = owed.borrow_mut();
+        let epoch = owed.entry(*scope_id).or_insert(write_epoch);
+        *epoch = (*epoch).max(write_epoch);
+    });
     let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
-        OWED_WRITE_RAISES.with(|owed| {
-            let mut owed = owed.borrow_mut();
-            let epoch = owed.entry(*scope_id).or_insert(write_epoch);
-            *epoch = (*epoch).max(write_epoch);
-        });
         return Err(SeamError::new("the write-epoch floor is leased"));
     };
     let floor = floors
@@ -746,7 +746,7 @@ pub(crate) async fn advance_write_epoch_after_wave<F: FloorStore>(
     Ok(floor)
 }
 
-/// The highest epoch that [`advance_write_epoch_after_wave`] deferred at
+/// The highest epoch that [`advance_write_epoch_after_wave`] asked for at
 /// `scope_id`, until a raise of the floor reaches it.
 pub(crate) fn owed_write_raise(scope_id: &[u8; 16]) -> Option<u64> {
     OWED_WRITE_RAISES.with(|owed| owed.borrow().get(scope_id).copied())
@@ -814,9 +814,9 @@ pub(crate) struct WriteEpochLease {
 thread_local! {
     static WRITE_EPOCH_LEASES: RefCell<BTreeSet<[u8; 16]>> =
         const { RefCell::new(BTreeSet::new()) };
-    // In memory, keyed as the leases are: the entry is set in the same poll
-    // that finds the lease held, so the next row of a seal sees it. The owed
-    // record covers a restart.
+    // In memory, keyed as the leases are: the entry is set before the lease
+    // is tested, so the next row of a seal sees a raise that did not land.
+    // The owed record covers a restart.
     static OWED_WRITE_RAISES: RefCell<BTreeMap<[u8; 16], u64>> =
         const { RefCell::new(BTreeMap::new()) };
 }
@@ -897,6 +897,24 @@ mod tests {
             );
         });
         assert_eq!(owed_write_raise(&SHARED_SCOPE), Some(7));
+    }
+
+    /// A post-wave raise that the store refuses under a free lease stays
+    /// owed, so a seal that takes the lease next does not sign at the old
+    /// floor.
+    #[test]
+    fn a_post_wave_raise_that_the_store_refuses_stays_owed() {
+        const REFUSED_SCOPE: [u8; 16] = [9u8; 16];
+        let floors = InMemoryFloorStore::default();
+        floors.fail_floor_raises_for(&write_epoch_key(&REFUSED_SCOPE));
+        block_on(async {
+            assert!(
+                advance_write_epoch_after_wave(&floors, &REFUSED_SCOPE, 6)
+                    .await
+                    .is_err()
+            );
+        });
+        assert_eq!(owed_write_raise(&REFUSED_SCOPE), Some(6));
     }
 
     #[test]

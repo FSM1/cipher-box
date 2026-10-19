@@ -126,10 +126,15 @@ fn owes_write_cut(owed: Option<&[NodeId]>, write: NodeId) -> bool {
 }
 
 /// Whether a copy publish may sign at the write floor `current`: the floor of
-/// the header, and no raise that the lease deferred above it, which is a
-/// write cut with no floor yet.
+/// the header, and no post-wave raise above it that has not landed, which is
+/// a write cut with no floor yet.
 fn floor_holds(current: u64, header: u64, deferred: Option<u64>) -> bool {
     current == header && deferred.is_none_or(|epoch| epoch <= current)
+}
+
+/// The map index of each row, by its old id.
+fn row_index(rows: &[MapRow]) -> BTreeMap<NodeId, u32> {
+    (0u32..).zip(rows).map(|(at, row)| (row.old, at)).collect()
 }
 
 /// The scope root of each row: the row itself when it is a scope root that
@@ -327,8 +332,7 @@ where
             .flat_map(|page| page.rows)
             .collect();
         let scopes = row_scopes(&header, &rows).ok_or(SealFault::Unanswered)?;
-        let index: BTreeMap<NodeId, u32> =
-            (0u32..).zip(&rows).map(|(at, row)| (row.old, at)).collect();
+        let index = row_index(&rows);
         let plane = dest.at(header.binding.read_epoch);
         let mut source_roots: BTreeMap<NodeId, LoadedRoot> = BTreeMap::new();
         let mut jobs = Vec::new();
@@ -338,8 +342,7 @@ where
             if run.done.contains(&at) {
                 continue;
             }
-            let scope = *scope;
-            let Some(end) = end_of(scope) else {
+            let Some(end) = end_of(*scope) else {
                 fault = Some(SealFault::Unanswered);
                 break;
             };
@@ -354,10 +357,10 @@ where
                     break;
                 }
             };
-            let body = fresh_body(&source, at, &rows, &index, |id| dest.write_name(&id.0));
             if !take_tick_read(left) {
                 break;
             }
+            let body = fresh_body(&source, at, &rows, &index, |id| dest.write_name(&id.0));
             let name = dest.write_name(&row.new.0);
             match self
                 .probe_copy(
@@ -386,12 +389,10 @@ where
                 }
             }
         }
-        // Each parent publishes after its children.
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
             // A write cut moves each copy name: no publish lands at a name of
-            // the old write seed (ADR 0077 D4). The lease holds the floor from
-            // this check through the signature.
+            // the old write seed (ADR 0077 D4).
             let Some(_lease) = floor::acquire_write_epoch_lease(&write.root.0) else {
                 return Err(SealFault::Unanswered);
             };
@@ -410,25 +411,21 @@ where
                     .map_err(|_| SealFault::Unanswered)?,
                 ReadBody::Folder { .. } => Vec::new(),
             };
-            if self
-                .publish_node(
-                    owner,
-                    &plane,
-                    job.node,
-                    job.basis,
-                    false,
-                    &job.body,
-                    content_cids,
-                    PreservedFields::new(),
-                    PreservedFields::new(),
-                    None,
-                    LostWinner::Verdict,
-                )
-                .await
-                .is_err()
-            {
-                return Err(SealFault::Unanswered);
-            }
+            self.publish_node(
+                owner,
+                &plane,
+                job.node,
+                job.basis,
+                false,
+                &job.body,
+                content_cids,
+                PreservedFields::new(),
+                PreservedFields::new(),
+                None,
+                LostWinner::Verdict,
+            )
+            .await
+            .map_err(|_| SealFault::Unanswered)?;
             run.done.insert(job.at);
         }
         fault.map_or(Ok(()), Err)
@@ -795,11 +792,7 @@ mod tests {
     #[test]
     fn a_copy_folder_names_its_mapped_children_and_sheds_each_unknown_field() {
         let rows = rows();
-        let index = rows
-            .iter()
-            .zip(0u32..)
-            .map(|(row, at)| (row.old, at))
-            .collect();
+        let index = row_index(&rows);
         let source = ReadBody::Folder {
             created_at: 11,
             modified_at: 12,
@@ -840,11 +833,7 @@ mod tests {
     #[test]
     fn a_copy_file_keeps_each_version_and_sheds_each_unknown_field() {
         let rows = rows();
-        let index = rows
-            .iter()
-            .zip(0u32..)
-            .map(|(row, at)| (row.old, at))
-            .collect();
+        let index = row_index(&rows);
         let mut version = Version::new(b"cid".to_vec(), [0x33; 32], 9, 10);
         version.unknown = padding();
         let source = ReadBody::File {

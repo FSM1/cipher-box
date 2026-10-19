@@ -29694,7 +29694,7 @@ fn the_dissolve_seal_copies_each_row_under_its_new_id() {
     let (envelope, nested) = copy_at(&fx, new_of(inner)).expect("the nested copy stands");
     assert!(
         grant_section_bytes(&envelope).is_none(),
-        "R2: a plain folder"
+        "the nested copy is a plain folder (ADR 0077 D1)"
     );
     assert_eq!(copy_children(&nested), vec![named(below, "below")]);
     assert_eq!(
@@ -29990,14 +29990,23 @@ fn folder_copy_name(fx: &GrantScenario, node: NodeId) -> IpnsName {
     derive_write_name(&owner_write_seed(fx, fx.folder), &node.0)
 }
 
-/// The read epoch of each copy of the entry at `root`, at the name that the
-/// folder's live write seed derives. `None` for a copy that does not stand.
-fn folder_copy_epochs(fx: &GrantScenario, root: NodeId) -> Vec<Option<u64>> {
+/// The name of each copy of the entry at `root` that the folder's live write
+/// seed derives.
+fn folder_copy_names(fx: &GrantScenario, root: NodeId) -> Vec<IpnsName> {
     let header = header_at(fx, root);
     rows_of(fx, root, &header)
         .iter()
-        .map(|row| {
-            published_head(&fx.world, &fx.blocks, &folder_copy_name(fx, row.new))
+        .map(|row| folder_copy_name(fx, row.new))
+        .collect()
+}
+
+/// The read epoch of each copy of the entry at `root`. `None` for a copy that
+/// does not stand.
+fn folder_copy_epochs(fx: &GrantScenario, root: NodeId) -> Vec<Option<u64>> {
+    folder_copy_names(fx, root)
+        .iter()
+        .map(|name| {
+            published_head(&fx.world, &fx.blocks, name)
                 .map(|head| decode_envelope(&head).expect("the head decodes").epoch)
         })
         .collect()
@@ -30005,14 +30014,9 @@ fn folder_copy_epochs(fx: &GrantScenario, root: NodeId) -> Vec<Option<u64>> {
 
 /// The PUTs at each copy name of the entry at `root`.
 fn folder_copy_puts(fx: &GrantScenario, root: NodeId) -> Vec<usize> {
-    let header = header_at(fx, root);
-    rows_of(fx, root, &header)
+    folder_copy_names(fx, root)
         .iter()
-        .map(|row| {
-            fx.world
-                .record_store
-                .put_count(folder_copy_name(fx, row.new).as_str())
-        })
+        .map(|name| fx.world.record_store.put_count(name.as_str()))
         .collect()
 }
 
