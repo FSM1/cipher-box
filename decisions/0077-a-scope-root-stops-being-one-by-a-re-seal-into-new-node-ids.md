@@ -2,14 +2,9 @@
 
 - **Status:** Accepted on 2026-10-17
 - **Date:** 2026-10-17
-- **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298),
-  [#2241](https://github.com/FSM1/cipher-box/issues/2241),
-  [ADR 0012](./0012-the-drain-carries-the-write-wave-forward.md),
-  [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
-  [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md),
-  [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
+- **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298), [#2241](https://github.com/FSM1/cipher-box/issues/2241), [ADR 0012](./0012-the-drain-carries-the-write-wave-forward.md), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md), [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md), [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
 - **Implemented by:** not landed
-- **Amends:** —
+- **Amends:** ADR 0012 D2 (the count of sanctioned readers below the read-epoch floor)
 
 ## Context
 
@@ -41,14 +36,15 @@ journal entry carries it.** The re-seal walks a subtree from a source plane to a
 and seals each node at the destination's current epoch, child first. It opens a lagging source node
 as the drain's re-author does (ADR 0012), under the same four conditions. The dissolve gives each
 node a new id, random from the injected entropy, so no KDF edge is new, and sheds every carried
-field. The restore of FSM1/cipher-box#2241 keeps each id and keeps only the carried fields that are
-safe across a scope change (`blueprint/core.md` "Carried unknown fields"). The walk refuses,
-release-active, a ref to a node outside the source subtree. Before the first publish of the
-operation, the cut included, the engine writes one entry under a new owner-local kind: the source
-scope, the destination read scope and the destination write scope bound separately, their epochs,
-the step still owed, and the map from old to new ids, empty when the ids stay. It holds no seed and
-no key, and carries every step after the cut. Only the device with the entry resumes it, with the
-same id map, so a retry mints no second copy.
+field. The restore of FSM1/cipher-box#2241 keeps each id and every carried field (`blueprint/core.md`
+"Carried unknown fields"), and refuses by name a structure that is not safe across a scope change.
+The walk refuses, release-active, a ref to a node outside the source subtree. Before the cut, the
+engine writes one entry under a new owner-local kind: the source scope, the destination read scope
+and the destination write scope bound separately, their epochs, the step still owed, and the map
+from old to new ids. The dissolve fills the map after the cut, durably before the first re-seal
+publish; it stays empty when the ids stay. The entry holds no seed and no key, and carries every
+step after the cut. Only the device with the entry resumes it, with the same id map, so a retry
+mints no second copy.
 
 **D4 — Before the relink, only an owner read cut restarts the full re-seal, and a destination
 write cut restarts the names.** Each publish and irreversible step obeys ADR 0041. Each check reads
@@ -60,8 +56,10 @@ below the cut, and the lazy wave reaches no node that the destination does not l
 seals only the remaining nodes at the new epoch, so a grantee rotation cannot restart the pass. A
 write cut of the destination write scope derives each name again under the new write scope seed,
 publishes each node again and retires the vacated names; as ADR 0063 D1 refuses a resume at another
-write epoch, no publish lands at a name of an old write scope seed. After the relink, the lazy wave
-and the name wave carry a rise.
+write epoch, no publish lands at a name of an old write scope seed. A grant on an ancestor of the
+relink parent changes the destination scope: the dissolve binds the new read and write scopes,
+re-seals every node and restarts the names. After the relink, the lazy wave and the name wave
+carry a rise.
 
 ## Alternatives considered
 
@@ -95,25 +93,25 @@ and the name wave carry a rise.
 - Per-op rebase rules: a concurrent grant refuses the dissolve before its first re-seal publish.
   After it, the D3 entry cuts and re-seals the new root as well (D1), and the host reports it.
 - "Rotation primitives": the order is cut, re-seal, relink, index removal, retirement. The
-  `owed-rotation` entry carries the cut alone (ADR 0063 D1). The walk waits for the cut sweep of
-  the source. An op or owed step under a scope root that its parent no longer names dead-letters.
+  `owed-rotation` entry carries the cut alone (ADR 0063 D1). The dissolve files no sweep of the
+  scopes it cuts: the name wave and the re-point land in the cut, and the walk opens a lagging
+  interior node as the re-author does. No durable signal for that sweep exists. An op or owed
+  step under a scope root that its parent no longer names dead-letters.
 - "Rotation primitives": before the relink, another owner device can start a separate dissolve.
-  The parent CAS admits one replacement. A loser that finds the old root absent stops and retires
-  its own copy; it never replaces the winner.
+  The parent CAS admits one replacement, and a loser never replaces the winner. A loser retires
+  its own copy only when its entry proves that it sent no relink. Else a gated link proof of the
+  parent scope decides, and only a proof that the old root is still linked lets it retire the
+  copy. An optimistic confirm does not prove a loss. The loser also keeps its copy until the
+  served parent passes every relink sequence that its entry records.
 - `blueprint/api.md` "Pin/name registry": after the gated parent root shows the index removal, the
   dissolve retires every name of the old subtree except the D1 final records.
-- Accepted residuals: the uploads of a write grantee stay in the new folder. Content keys are
-  re-wrapped and content bytes are not encrypted again, so a cut grantee keeps each version it
-  opened. The publish of N new names and the retire of N old names show the dissolve and its size
-  to the server, as a bin re-key does (`blueprint/core.md` "Bin index"). The server also links old
-  and new file records through unchanged content CIDs. The journal's explicit id map stays local.
-- `blueprint/desktop.md` "Conflicts, dead letters, and rotation": a delete of a shared folder is a
-  dissolve, then a delete; the tray reports a refused dissolve.
-- `blueprint/testing.md`: crash and replay at each stop point; for the D3 kind, the previous-release
-  read, the cross-kind KAT pair, and a release-active encode and decode refusal of a duplicate id
-  in the map; a mid-pass read-epoch rise and write-epoch rise.
+- Accepted residuals: the uploads of a write grantee stay in the new folder. Content keys are re-wrapped and content bytes are not encrypted again, so a cut grantee keeps each version it opened. The publish of N new names and the retire of N old names show the dissolve and its size to the server, as a bin re-key does (`blueprint/core.md` "Bin index"). The server also links old and new file records through unchanged content CIDs. The journal's explicit id map stays local.
+- `blueprint/desktop.md` "Conflicts, dead letters, and rotation": a delete of a shared folder is a dissolve, then a delete; the tray reports a refused dissolve.
+- `blueprint/testing.md`: crash and replay at each stop point; for the D3 kind, the previous-release read, the cross-kind KAT pair, and a release-active encode and decode refusal of a duplicate id in the map; a mid-pass read-epoch rise and write-epoch rise.
 - `blueprint/engine.md` "Rotation primitives": the cut's name wave and the re-seal each walk the
-  source. The double walk is accepted: a dissolve is rare; one walk puts the re-seal in the cut sweep.
+  source. The double walk is accepted: a dissolve is rare.
+- `blueprint/engine.md` "sweep" and "Adoption gate and floors", and `CONTEXT.md` "Adoption gate":
+  the count of sanctioned lagging readers becomes five; the fifth is the D3 re-seal's read.
 - `blueprint/api.md` "Pin/name registry" and `blueprint/engine.md` "Revocation is discovered, not
   delivered": the D1 final records stay for one more EOL term, under owner-signed EOLs that cover
   it, so a grantee shows "this share ended" as after a revoke. At term end, the engine retires them.

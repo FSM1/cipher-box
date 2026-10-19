@@ -143,6 +143,10 @@ where
                 break;
             }
         }
+        // After the copy started, the entry and each copy stay.
+        if header.copy_started && matches!(reached, Ok(ScopeCut::Concurrent)) {
+            reached = Ok(ScopeCut::Waiting);
+        }
         let forgot = match reached {
             Ok(ScopeCut::Concurrent) => self.forget_landed(sites, &header).await,
             _ => Ok(true),

@@ -83,6 +83,7 @@ use crate::net::retire::{
     Acknowledged, AcknowledgedSlot, HeldMarks, LiveRecord, OrphanHeads, ReclaimStall, RootSource,
     StagingRetireLedger, drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
+use crate::net::rotation::OwnerPointerRead;
 use crate::net::signed_data;
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
@@ -2270,6 +2271,17 @@ pub(crate) struct TickInputs<'a> {
     /// rotation work is owed. A name no held end derives is then linked by no
     /// folder this device reads (ADR 0070 D2).
     pub(crate) every_scope_reached: bool,
+    /// The read edges of this owner's scope pointers, with no signer. `None`
+    /// when the session holds no owner keys.
+    pub(crate) owner_pointers: Option<&'a dyn OwnerPointerRead>,
+    /// The number of this tick in the session.
+    pub(crate) tick: u64,
+    /// This tick's scope walk ran and met no failure, so its proved and
+    /// unproved scope roots name the whole boundary set.
+    pub(crate) walk_complete: bool,
+    /// The scope roots a walk named and did not prove
+    /// ([`SessionState::unproved_scope_roots`](crate::session::SessionState::unproved_scope_roots)).
+    pub(crate) unproved_scope_roots: &'a BTreeSet<NodeId>,
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -7194,6 +7206,17 @@ where
         {
             return Err(ReadFault::Untrusted);
         }
+        self.open_walk_root(scope, end, resolved).await
+    }
+
+    /// The root and head envelope of `end` from `resolved`, a gated resolve
+    /// of its root.
+    async fn open_walk_root<E>(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        resolved: GatedResolve,
+    ) -> Result<(LoadedRoot, Envelope), ReadFault<E>> {
         let record =
             resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(walk_fault)?;
         let (sequence, envelope, _) = assemble_head_envelope(
@@ -11292,6 +11315,9 @@ mod tests {
     use crate::sync::kept_op::KeptNote;
     use crate::sync::model::NodeMeta;
 
+    /// No scope root unproved.
+    static NO_UNPROVED: BTreeSet<NodeId> = BTreeSet::new();
+
     const SOURCE_ROOT: NodeId = NodeId([1; 16]);
     const DESTINATION_ROOT: NodeId = NodeId([2; 16]);
     const SOURCE_EPOCH: u64 = 7;
@@ -13022,6 +13048,10 @@ mod tests {
                     owed_moves: Some(&[]),
                     owed_move_reads: &[],
                     owed_write_cuts: Some(&[]),
+                    owner_pointers: None,
+                    tick: 1,
+                    walk_complete: true,
+                    unproved_scope_roots: &NO_UNPROVED,
                     deferred_raises: &self.deferred_raises,
                     every_scope_reached: true,
                 },
@@ -14479,6 +14509,10 @@ mod tests {
                 owed_moves: Some(&[]),
                 owed_move_reads: &legs,
                 owed_write_cuts: Some(&[]),
+                owner_pointers: None,
+                tick: 1,
+                walk_complete: true,
+                unproved_scope_roots: &NO_UNPROVED,
                 deferred_raises: &harness.deferred_raises,
                 every_scope_reached: true,
             },

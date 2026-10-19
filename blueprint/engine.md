@@ -456,7 +456,7 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
-   interior record below the floor is opened only by the four readers that the
+   interior record below the floor is opened only by the five readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed. While an owed entry holds the interior move of a scope
@@ -1341,7 +1341,14 @@ by FSM1/cipher-box-next#38 D5):
   the single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
-  FSM1/cipher-box-next#38 D5).
+  FSM1/cipher-box-next#38 D5). An owner flat cut (`RotateNow`, an owned scope exit) also
+  re-seals the ascent link of each indexed child scope root under the new seed; the child keeps
+  its seed and its read epoch
+  ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
+  From read epoch 64, a flat cut refuses as retryable, with the check
+  `rot-read-nested-root-owed`, when it would drop a history link that an owed child re-seal
+  needs or when a child probe does not finish; a pre-cut re-read of the scope that does not
+  finish stops the cut with the class of its failure (ADR 0080 D4).
 
 Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
@@ -1356,7 +1363,7 @@ Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
-is behind its scope's current epoch. Reading one is one of exactly **four**
+is behind its scope's current epoch. Reading one is one of exactly **five**
 paths that run the sequence floor without the read-epoch floor. The second is
 the drain's re-author of a lagging interior node, which carries the same wave
 for an ordinary write
@@ -1366,13 +1373,15 @@ a member read before the wave arrives
 ([ADR 0021](../decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
 The fourth is the name wave's read of a lagging interior node, which it moves
 forward at the root's epoch (ADR 0064).
+The fifth is the subtree re-seal's open of a lagging source node, for a
+dissolve or a restore across scopes (ADR 0077 D3).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
 seed the scope's history-link ratchet walks back to. The re-seal relabels the
 node's epoch tag: the tag is a key-selection label that names the epoch whose
 read seed opens the body, and no reader treats it as authorship
 ([ADR 0017](../decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
-All four paths hold the same conditions: the record carries no grant section,
+All five paths hold the same conditions: the record carries no grant section,
 the read moves no read-epoch floor, the sequence bar is the replay bar, and the
 epoch is one the scope root's own ratchet reaches. A node the retained
 window no longer reaches is readable by nobody: it is reported unreachable and
@@ -1383,7 +1392,14 @@ subtree before a grant (the epoch-converged requirement, FSM1/cipher-box-next#26
 subtree, not the whole scope it sits in) and self-heals the direct-child-scope index —
 a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
-re-sealed. Only a name the walk resolved current may be written to an index: a
+re-sealed. A full pass also re-seals the ascent link of each indexed child scope
+root that opens only under an earlier seed of the scope; it still does not rotate
+that root (ADR 0080). In a session, the re-seal emits one event for each child and
+verified record sequence (a record whose own signature does not verify keys as
+sequence 0) and at most one ascent pointer event for each child; it emits no ascent
+event for a pointer rejection that the on-access consult of the same access already
+reported, and that consult emits its own event. Only a name the walk resolved
+current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
 never persist the superseded name that caused it (ADR 0041). A repair whose
 re-seal is over the scope root's grant section budget does not land: the
@@ -1500,7 +1516,11 @@ fall back at once on an owner command and in the re-drive that a command runs
 first, and in a sync pass re-drive only past the bound below (ADR 0068 D1,
 amended on 2026-10-03). A record below the floor, or a head block that no source
 holds, met while a record endpoint failed, is unavailable, with no trust event
-and no fallback (ADR 0071 D1). A transport fault, a local seam fault, and a root
+and no fallback (ADR 0071 D1). Every reader that is not an owner rotation reads a head
+block that no source holds as unavailable, whether or not an endpoint failed,
+with no trust event
+([ADR 0078](../decisions/0078-an-absent-head-block-is-unavailable-on-every-reader-route.md)
+D1). A transport fault, a local seam fault, and a root
 with no record at all never fall back. Each refused record sends one trust event
 in a session, with the scope root and the refused sequence. A
 confirmed scope root publish by the owner is a last copy (D2). A rotation whose

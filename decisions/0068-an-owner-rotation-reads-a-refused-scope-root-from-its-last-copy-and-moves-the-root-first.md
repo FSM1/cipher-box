@@ -34,6 +34,8 @@ the check of the re-drive that the cut set landed. The copy runs the full gate a
 that no endpoint serves falls back only past the bound of ADR 0065 D3. Each fallback sends one
 trust event with the scope root and the refused sequence. Readers that are not an owner rotation
 do not change.
+Amended by ADR 0078 D1 on 2026-10-18: every reader that is not an owner rotation reads a head
+block that no source holds as unavailable, whether or not an endpoint failed.
 
 Amended on 2026-10-03: the bound applies to a sync pass re-drive only. The reads of an owner
 command, and of the re-drive that a command runs first, fall back at once also for a cause that an
