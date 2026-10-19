@@ -1341,11 +1341,14 @@ by FSM1/cipher-box-next#38 D5):
   the single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
-  FSM1/cipher-box-next#38 D5). A flat cut also re-seals the ascent link of each indexed child
-  scope root under the new seed; the child keeps its seed and its read epoch
+  FSM1/cipher-box-next#38 D5). An owner flat cut (`RotateNow`, an owned scope exit) also
+  re-seals the ascent link of each indexed child scope root under the new seed; the child keeps
+  its seed and its read epoch
   ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
-  A flat cut that would drop a history link that an owed child re-seal needs refuses as
-  retryable, with the check `rot-read-nested-root-owed` (ADR 0080 D4).
+  From read epoch 64, a flat cut refuses as retryable, with the check
+  `rot-read-nested-root-owed`, when it would drop a history link that an owed child re-seal
+  needs or when a child probe does not finish; a pre-cut re-read of the scope that does not
+  finish stops the cut with the class of its failure (ADR 0080 D4).
 
 Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
@@ -1389,7 +1392,12 @@ a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
 re-sealed. A full pass also re-seals the ascent link of each indexed child scope
 root that opens only under an earlier seed of the scope; it still does not rotate
-that root (ADR 0080). Only a name the walk resolved current may be written to an index: a
+that root (ADR 0080). In a session, the re-seal emits one event for each child and
+verified record sequence (a record whose own signature does not verify keys as
+sequence 0) and at most one ascent pointer event for each child; it emits no ascent
+event for a pointer rejection that the on-access consult of the same access already
+reported, and that consult emits its own event. Only a name the walk resolved
+current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
 never persist the superseded name that caused it (ADR 0041). A repair whose
 re-seal is over the scope root's grant section budget does not land: the

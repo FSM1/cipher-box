@@ -38,28 +38,28 @@ self-heal already republishes metadata. These are trust violations: a child reco
 read refuses, a gate or floor rejection, a refused head block, and a record-byte refusal under the
 seed whose public half matched (`OwnerSeedRefused`: a read body or blob that does not open, or an
 ascent payload that does not cross-check). A re-seal error that no retry clears, for example a
-write body that does not unseal, is also a trust violation. In a session, the engine emits one
-event for each child and verified record sequence. A record whose own signature does not verify
-keys as sequence 0. The engine also emits at most one ascent pointer event for each child in a
-session, plus the event of each on-access consult that rejects the pointer. A pointer rejection
-that the consult of the same access already reported emits no ascent event. A superseded child
-name takes the pointer consult of ADR 0003 D2. A child that no seed in the retained window opens
-is a settled residual.
+write body that does not unseal, is also a trust violation. A superseded child name takes the
+pointer consult of ADR 0003 D2.
 
 Item D3 moved to Consequences on 2026-10-19.
 
-**D4 — A flat cut refuses as retryable only when it would drop a history link that an owed child
-still needs.** A flat cut (`RotateNow` and an owned scope exit) adds one history link to P. The 64
-retained links (`MAX_RETAINED_HISTORY_LINKS`) after a cut from epoch E reach back to epoch E-63.
-Every flat cut runs the check once P reaches read epoch 64 (`E + 1 > 64`). A served child C has a
-retryable owed re-seal that needs the seed of epoch O of P. The cut refuses only when
-`E + 1 - O > 64`. The refusal is `RotateError::NestedRootOwed`. The cut publishes over the base of
-its own first read of P. The cut returns a retryable lost race and publishes no record of P if the
-pre-cut re-seal read adopts a later record of P (another device cut P in between), or if a park
-of this pass at the name of P is above that base. The host sees the check string
-`rot-read-nested-root-owed:<scope hex of C>`: `RotateNow` gives it as ContentUnavailable, and the
-scope-exit debt gives it as the detail of the owed cut. The refusal holds until the re-seal of C
-lands. The vouch-completion branch of the cut adds no link and does not run the check.
+**D4 — A flat cut checks the history window before it drops a seed.** A flat cut (`RotateNow`
+and an owned scope exit) adds one history link to P. The 64 retained links
+(`MAX_RETAINED_HISTORY_LINKS`) after a cut from epoch E reach back to epoch E-63. Every flat cut
+runs the check once P reaches read epoch 64 (`E + 1 > 64`). The check re-reads P and probes each
+child that P indexes. If a child C has a retryable owed re-seal that needs the seed of epoch O of
+P, the cut refuses when `E + 1 - O > 64`. In that epoch range, the cut also refuses when a child
+probe returns `AscentResidual::Retry`, because the seed that opens that child is unknown. Each
+refusal is the retryable `RotateError::NestedRootOwed`. The cut publishes over the base of its own
+first read of P. The cut returns a retryable lost race and publishes no record of P if the pre-cut
+re-read adopts a later record of P (another device cut P in between), or if a park of this pass at
+the name of P is above that base. After the lost-race check, a pre-cut re-read of P that does not
+finish stops the cut. That failure keeps its class: an availability failure stays retryable, a
+rejection keeps its trust verdict, and an unreadable record or a version skew is not retryable.
+The host sees the check string `rot-read-nested-root-owed:<scope hex of C>`: `RotateNow` gives it
+as ContentUnavailable, and the scope-exit debt gives it as the detail of the owed cut. Each
+refusal holds until a later check finds no such child. The vouch-completion branch of the cut
+adds no link and does not run the check.
 
 ## Alternatives considered
 
@@ -67,8 +67,6 @@ lands. The vouch-completion branch of the cut adds no link and does not run the 
   old-seed holder stays a grantee, and the cascade mints a fresh seed for each nested root.
 - **A drain retry through a new `OwedStep` variant (D2).** Rejected: it changes the durable shape
   of ADR 0063, and the published records already carry each fact that the re-seal needs.
-- **No repair.** Rejected: nested scope roots stay unprovable until a revoke, as in
-  FSM1/cipher-box#2492.
 - **Proceed with the cut and lose C (D4).** Rejected: the cut drops the last seed that opens C, and
   C stays unprovable with no repair path.
 - **Keep the needed link past 64, up to the 256-link decode bound (D4).** Rejected: it changes the
@@ -78,12 +76,16 @@ lands. The vouch-completion branch of the cut adds no link and does not run the 
 
 ## Consequences
 
-- `blueprint/engine.md` "rotateScope": a flat cut also re-seals the ascent link of each indexed
-  child scope root under the new seed of the scope.
-- `blueprint/engine.md` "rotateScope": a flat cut that would drop a history link that an owed child
-  needs refuses as retryable (D4).
+- `blueprint/engine.md` "rotateScope": an owner flat cut (`RotateNow`, an owned scope exit) also
+  re-seals the ascent link of each indexed child scope root under the new seed of the scope.
+- `blueprint/engine.md` "rotateScope": from read epoch 64, a flat cut refuses as retryable when it
+  would drop a history link that an owed child needs or when a child probe does not finish, and a
+  pre-cut re-read of the scope that does not finish stops the cut with the class of its failure
+  (D4).
 - `blueprint/engine.md` "sweep": a full pass also re-seals the ascent link of each indexed child
-  scope root that opens only under an earlier seed of the scope.
+  scope root that opens only under an earlier seed of the scope, and the re-seal emits one event
+  for each child and verified record sequence and at most one ascent pointer event for each child
+  in a session.
 - ADR 0003 D1 carries an "Amended by" sentence for D2.
 - ADR 0063 does not change: the re-seal keeps no durable state, and after a crash the idle sweep
   repeats D2.
@@ -94,10 +96,11 @@ lands. The vouch-completion branch of the cut adds no link and does not run the 
   gap. Does a grantee re-seal the ascent links of the nested roots too?
 - A nested scope root that the index of P omits has no repair path under this ADR. Do we accept
   this gap?
-- A child whose GET fails at the pre-cut check does not hold the cut. A parent probe that fails
-  does not hold the cut. The seed of that child can then drop from the window. Do we accept this?
 - The refusal of D4 does not protect a superseded child, because the cut net refuses the pointer
   consult. Do we accept this?
+- A child that returns `Retry` holds every flat cut of P at read epoch 64 and above, with no time
+  limit. A child that no endpoint ever serves thus blocks the cut. Does the cut hold on every
+  `Retry` (the code now), or only on a child that an endpoint served?
 - A background read can adopt a cut of another device after the cut restores its held base and
   before the cut signs. The cut can then still sign above that base. Main has the same window on
   every flat cut, and FSM1/cipher-box#2496 tracks it. Do you accept that this ADR leaves that
