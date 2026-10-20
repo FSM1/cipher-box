@@ -14,6 +14,7 @@ import {
   type TestInfo,
 } from '@playwright/test';
 import type { Hex } from 'viem';
+import { loadInPage } from '../inPageLoad';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage, refusalText, type SignInOutcome } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
@@ -224,7 +225,7 @@ export async function signInWithWallet(
         outcome = { kind: 'refused', text: firstRefusal };
       } else if (attempt > 0) {
         // The reload resumes any saved session, which can sign in or refuse on its own.
-        await page.reload({ timeout: checkBudget() });
+        await loadInPage(page, 'reload', checkBudget());
         started = Date.now();
         outcome = await login.outcome(
           signedIn,

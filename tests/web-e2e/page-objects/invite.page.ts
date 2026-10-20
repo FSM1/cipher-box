@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { loadInPage } from '../inPageLoad';
 
 /**
  * The `/invite` route. The panel carries where the page stands on `data-state`
@@ -52,14 +53,16 @@ export class InvitePage {
 
   /**
    * A document load carries the fragment; a client-side navigation drops it.
+   * {@link loadInPage} runs the load. A URL on the same path and query, with
+   * any fragment, is a same-document navigation and fires no `load`.
    *
-   * The fragment reaches the uploaded trace. It may: the link names one folder
-   * of a vault the run cold-started, on a record store reachable only from
-   * inside the job.
+   * The fragment still reaches the trace of a local run. It may: the link names
+   * one folder of a vault the run cold-started, on a record store reachable only
+   * from inside the job.
    */
-  async open(url: URL): Promise<void> {
-    await this.page.goto(url.toString());
-    await expect(this.panel).toBeVisible();
+  async open(url: URL, timeout?: number): Promise<void> {
+    await loadInPage(this.page, url, timeout);
+    await expect(this.panel).toBeVisible({ timeout });
   }
 
   /** Waits for the panel to report one state. */

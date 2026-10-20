@@ -10,6 +10,7 @@
 #
 # Each leg uploads its `soak-results.jsonl`. The report joins them, and a
 # failed night opens or comments on the `ci: the staging soak failed` issue.
+# A web leg also keeps a copy per run attempt, which a re-run does not replace.
 # The issue also says whether the origin stopped or restarted in the run.
 name: Staging Soak
 
@@ -164,8 +165,9 @@ jobs:
         if: always()
         run: pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"
 
-      # The result lines only. The Playwright report stays on the runner: a
-      # soak page can show a bearer link URL.
+      # The result lines only. The Playwright report and `test-results/` stay
+      # on the runner: a soak page can show a bearer link URL, and a failed
+      # matcher writes an ARIA snapshot of the page into `error-context.md`.
       - name: Upload the result lines
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -175,6 +177,15 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Upload the result lines of this attempt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: soak-attempt-${{ github.run_attempt }}-web-vault
+          path: tests/web-e2e/test-results/soak-results.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
 
   web-shares:
     name: 'Soak: Web Shares'
@@ -223,6 +234,15 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Upload the result lines of this attempt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: soak-attempt-${{ github.run_attempt }}-web-shares
+          path: tests/web-e2e/test-results/soak-results.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
 
   # One job per OS, not a matrix: the legs run in a fixed order, and a matrix
   # gives its legs none.
