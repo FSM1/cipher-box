@@ -152,11 +152,25 @@ describe('the wallet login retry flow', () => {
       return null;
     });
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(2_000);
-    // A reload (no target URL), not `page.reload`, whose call log prints the URL.
     expect(opened.calls.evaluate).toHaveBeenCalledExactlyOnceWith(expect.any(Function), null);
     expect(opened.calls.waitForEvent).toHaveBeenCalledExactlyOnceWith('load', {
       timeout: expect.any(Number),
     });
+    const [armed] = opened.calls.waitForEvent.mock.invocationCallOrder;
+    const [acted] = opened.calls.evaluate.mock.invocationCallOrder;
+    expect(armed).toBeLessThan(acted!);
+    const [[inPage]] = opened.calls.evaluate.mock.calls as [[(href: string | null) => void]];
+    const location = { reload: vi.fn(), assign: vi.fn() };
+    vi.stubGlobal('window', { location });
+    try {
+      inPage(null);
+      inPage('https://example.test/next');
+      vi.runOnlyPendingTimers();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(location.reload).toHaveBeenCalledOnce();
+    expect(location.assign).toHaveBeenCalledExactlyOnceWith('https://example.test/next');
     expect(records()).toEqual([
       { faults: [{ fault: 'node-busy', attempt: 1 }], result: 'recovered' },
     ]);

@@ -53,9 +53,8 @@ export class InvitePage {
 
   /**
    * A document load carries the fragment; a client-side navigation drops it.
-   * {@link loadInPage} runs the load, so no error or call log prints the URL.
-   * A URL on the current path and query with only a new fragment is a
-   * same-document navigation and fires no `load`.
+   * {@link loadInPage} runs the load. A URL on the same path and query, with
+   * any fragment, is a same-document navigation and fires no `load`.
    *
    * The fragment still reaches the trace of a local run. It may: the link names
    * one folder of a vault the run cold-started, on a record store reachable only
