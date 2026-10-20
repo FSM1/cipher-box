@@ -237,6 +237,10 @@ pub(super) enum RootGateVerdict {
     /// No endpoint served a record, and the endpoints agree the name holds
     /// none ([`TiedFetch::absent`]).
     Absent,
+    /// The ascent link is sealed to a keypair the parent seed of this read
+    /// does not derive. Availability to every reader but the ascent re-seal,
+    /// which tries an earlier parent seed on it (ADR 0080).
+    AscentMismatch,
 }
 
 impl RootGateVerdict {
@@ -258,7 +262,9 @@ impl RootGateVerdict {
 impl From<RootGateVerdict> for ResolveFailure {
     fn from(verdict: RootGateVerdict) -> Self {
         match verdict {
-            RootGateVerdict::Unavailable | RootGateVerdict::Absent => Self::Unavailable,
+            RootGateVerdict::Unavailable
+            | RootGateVerdict::Absent
+            | RootGateVerdict::AscentMismatch => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
@@ -273,7 +279,9 @@ impl From<RootGateVerdict> for ResolveFailure {
 impl From<RootGateVerdict> for SweepResolveFailure {
     fn from(verdict: RootGateVerdict) -> Self {
         match verdict {
-            RootGateVerdict::Unavailable | RootGateVerdict::Absent => Self::Unavailable,
+            RootGateVerdict::Unavailable
+            | RootGateVerdict::Absent
+            | RootGateVerdict::AscentMismatch => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
@@ -287,6 +295,7 @@ impl From<RootGateVerdict> for SweepResolveFailure {
 
 pub(super) fn cache_gate_verdict(error: GateError) -> RootGateVerdict {
     match error {
+        GateError::Seam(seam) if seam.is_ascent_mismatch() => RootGateVerdict::AscentMismatch,
         GateError::Seam(_) => RootGateVerdict::Unavailable,
         GateError::Rejected(_) => RootGateVerdict::Rejected,
     }
@@ -319,6 +328,12 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         .map_err(|e| match e {
             GateError::Rejected(ref rejection) if super::adopter::owner_seed_refused(rejection) => {
                 RootGateVerdict::OwnerSeedRefused
+            }
+            // The same superseded name as on the first read (ADR 0003 D2).
+            GateError::Rejected(ref rejection)
+                if matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) =>
+            {
+                RootGateVerdict::Superseded
             }
             e => cache_gate_verdict(e),
         })?
@@ -412,6 +427,9 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
         }
         Err(GateError::Seam(seam)) if seam.is_block_not_held() => {
             Err(RootGateVerdict::HeadBlockAbsent)
+        }
+        Err(GateError::Seam(seam)) if seam.is_ascent_mismatch() => {
+            Err(RootGateVerdict::AscentMismatch)
         }
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
         Err(GateError::Rejected(rejection))

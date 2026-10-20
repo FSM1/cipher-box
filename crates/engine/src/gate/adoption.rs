@@ -619,7 +619,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         // public, for an effect withholding the record already buys it.
         let payload = open_ascent_link(parent_node_seed, &aad, &link).map_err(|e| {
             if matches!(e, CodecError::Trust(TrustViolation::AscentLinkMismatch)) {
-                GateError::Seam(SeamError::new(
+                GateError::Seam(SeamError::ascent_mismatch(
                     "ascent link is sealed to an ascent keypair this parent node seed does not derive",
                 ))
             } else {

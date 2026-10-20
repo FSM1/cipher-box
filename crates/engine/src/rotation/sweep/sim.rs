@@ -127,6 +127,8 @@ pub(crate) struct NetState {
     pub(crate) index_repair_lost_race_next: u32,
     /// `(parent, child)` pairs the parent names at a caller-chosen `ipnsName`.
     pub(crate) child_names: HashMap<(u8, u8), Vec<u8>>,
+    /// Scope roots whose ascent repair answers a moved `ipnsName`.
+    pub(crate) ascent_moves: HashMap<[u8; 16], Vec<u8>>,
 }
 
 /// The sweep's fake network: one scope, its interior nodes, and its pointer.
@@ -154,6 +156,15 @@ impl FakeNet {
             .borrow_mut()
             .nodes
             .insert(id(byte), FakeNode::new(epoch, children));
+        self
+    }
+
+    /// The ascent repair of scope root `byte` finds it at `name`.
+    pub(crate) fn ascent_moved_to(self, byte: u8, name: &[u8]) -> Self {
+        self.state
+            .borrow_mut()
+            .ascent_moves
+            .insert(id(byte), name.to_vec());
         self
     }
 
@@ -434,6 +445,19 @@ impl SweepPublisher for FakeNet {
         }
         state.repaired_index = Some(index.to_vec());
         Ok(())
+    }
+
+    async fn reseal_child_ascent(
+        &self,
+        _scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Result<ChildScopeRef, crate::rotation::AscentResidual> {
+        Ok(
+            match self.state.borrow().ascent_moves.get(&child.scope_id) {
+                Some(name) => ChildScopeRef::new(child.scope_id, name.clone()),
+                None => child.clone(),
+            },
+        )
     }
 }
 
