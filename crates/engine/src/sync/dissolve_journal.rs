@@ -8,7 +8,7 @@
 //! (AGENTS.md rule 8), and [`DissolveJournal::commit`] checks each header
 //! against the one it replaces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use core::cell::RefCell;
 use zeroize::Zeroizing;
@@ -812,7 +812,13 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     {
         return Err("dissolve-journal-cut-epoch-fell");
     }
-    if held.step >= DissolveStep::Relink && new.step < held.step {
+    // While no relink left this device, a moved destination seals again
+    // (ADR 0077 D4).
+    let reseal = held.step == DissolveStep::Relink
+        && new.step == DissolveStep::Seal
+        && !held.relink_sent
+        && !new.relink_sent;
+    if held.step >= DissolveStep::Relink && new.step < held.step && !reseal {
         return Err("dissolve-journal-step-back-after-relink");
     }
     // A re-cut returns to the cut step, and only before the copy is named.
@@ -928,9 +934,62 @@ pub struct DissolveCell {
     /// The source roots with an entry, `None` until this session lists the
     /// store. A pass then needs no listing of its own.
     roots: RefCell<Option<BTreeSet<NodeId>>>,
+    /// The cut scopes whose final records hold for less than one term, by
+    /// source root. The drain holds no pointer signer, so the owner pass
+    /// publishes them again.
+    short_terms: RefCell<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    /// The cut scopes whose pointer this device signed and no endpoint
+    /// serves, each reported once.
+    lost_pointers: RefCell<BTreeSet<NodeId>>,
+    /// The destination, read scope and write scope, that a relink tick
+    /// computed off the binding, and the number of that tick, by source root.
+    relink_rebinds: RefCell<BTreeMap<NodeId, RelinkRebind>>,
 }
 
+/// A destination that a relink tick computed, and the number of that tick.
+pub type RelinkRebind = ((NodeId, NodeId), u64);
+
 impl DissolveCell {
+    /// Note that the final records of `scopes`, cut by the dissolve at
+    /// `root`, hold for less than one term.
+    pub fn note_short_terms(&self, root: NodeId, scopes: BTreeSet<NodeId>) {
+        self.short_terms.borrow_mut().insert(root, scopes);
+    }
+
+    /// Note that no endpoint serves the pointer of `scope`, which this
+    /// device signed. `true` the first time.
+    pub fn note_lost_pointer(&self, scope: NodeId) -> bool {
+        self.lost_pointers.borrow_mut().insert(scope)
+    }
+
+    /// Note that an endpoint serves the pointer of `scope` again, so a later
+    /// loss is reported again.
+    pub fn found_pointer(&self, scope: NodeId) {
+        self.lost_pointers.borrow_mut().remove(&scope);
+    }
+
+    /// Note that the relink tick `tick` of the entry at `root` computed the
+    /// destination `candidate`, and answer the one that an earlier tick
+    /// computed.
+    pub fn see_relink_rebind(
+        &self,
+        root: NodeId,
+        candidate: (NodeId, NodeId),
+        tick: u64,
+    ) -> Option<RelinkRebind> {
+        self.relink_rebinds
+            .borrow_mut()
+            .insert(root, (candidate, tick))
+    }
+
+    /// Take the scopes that [`Self::note_short_terms`] noted for `root`.
+    pub fn take_short_terms(&self, root: NodeId) -> BTreeSet<NodeId> {
+        self.short_terms
+            .borrow_mut()
+            .remove(&root)
+            .unwrap_or_default()
+    }
+
     /// Drop what this session knows of the store, so the next session lists
     /// it again.
     pub fn forget(&self) {

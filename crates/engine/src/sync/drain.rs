@@ -9795,6 +9795,21 @@ where
         modified_at: u64,
         completes: Option<Completion<'_>>,
     ) -> Result<u64, PublishHalt> {
+        self.publish_folder_marked(scope, pass, folder, modified_at, completes, None)
+            .await
+    }
+
+    /// [`Self::publish_folder`], with the PUT mark that `mark` keys
+    /// ([`Self::publish_node_marked`]).
+    async fn publish_folder_marked(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        folder: NodeId,
+        modified_at: u64,
+        completes: Option<Completion<'_>>,
+        mark: Option<&[Vec<u8>]>,
+    ) -> Result<u64, PublishHalt> {
         let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
@@ -9819,7 +9834,7 @@ where
             .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
-            .publish_node(
+            .publish_node_marked(
                 scope,
                 &plane,
                 folder,
@@ -9831,6 +9846,7 @@ where
                 epoch_tag_unknown,
                 completes,
                 LostWinner::Verdict,
+                mark,
             )
             .await?;
 
@@ -9953,6 +9969,42 @@ where
         completes: Option<Completion<'_>>,
         lost_winner: LostWinner,
     ) -> Result<Published, PublishHalt> {
+        self.publish_node_marked(
+            scope,
+            plane,
+            node,
+            observed,
+            is_scope_root,
+            body,
+            content_cids,
+            carried_unknown,
+            carried_epoch_tag_unknown,
+            completes,
+            lost_winner,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::publish_node`]. When `mark` names floor-store keys, the
+    /// publish signs above each, and raises each to the signed sequence
+    /// before the PUT ([`PutMark::SignedDurable`]).
+    #[expect(clippy::too_many_arguments, reason = "one record's full authoring")]
+    async fn publish_node_marked(
+        &self,
+        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
+        node: NodeId,
+        observed: Observed,
+        is_scope_root: bool,
+        body: &ReadBody,
+        content_cids: Vec<String>,
+        carried_unknown: PreservedFields,
+        carried_epoch_tag_unknown: PreservedFields,
+        completes: Option<Completion<'_>>,
+        lost_winner: LostWinner,
+        mark: Option<&[Vec<u8>]>,
+    ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         let base = observed.sequence();
         let base_data = if is_scope_root {
@@ -10018,9 +10070,22 @@ where
         } else {
             None
         };
-        let observed = observed.clearing(signed_over.cleared_by(floor));
+        let mut observed = observed.clearing(signed_over.cleared_by(floor));
+        if let Some(keys) = mark {
+            // The signature gate reads the relink mark of the name itself.
+            let parent_mark = floor::relink_parent_mark_key(name.as_str().as_bytes());
+            let floors = plane.end.floors(&self.seams.floors);
+            for key in keys.iter().filter(|key| **key != parent_mark) {
+                observed = observed.clearing(
+                    floor::sequence_floor(&floors, key)
+                        .await
+                        .map_err(|error| PublishHalt::before_the_put(seam(error)))?
+                        .unwrap_or(0),
+                );
+            }
+        }
         let (record_bytes, bar, sequence) = match self
-            .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
+            .publish_head(plane, &observed, &node.0, &head, content_cids.clone(), mark)
             .await
             .map_err(PublishHalt::before_the_put)?
         {
@@ -10185,6 +10250,7 @@ where
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
+        mark: Option<&[Vec<u8>]>,
     ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
@@ -10207,7 +10273,13 @@ where
             },
             self.head_placement(),
             &mut mirror,
-            Some(PutMark::Signed(&signed)),
+            Some(match mark {
+                Some(keys) => PutMark::SignedDurable {
+                    keys,
+                    signed: &signed,
+                },
+                None => PutMark::Signed(&signed),
+            }),
         )
         .await;
         self.mirror.borrow_mut().leg = mirror;

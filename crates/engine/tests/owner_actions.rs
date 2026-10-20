@@ -67,7 +67,7 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::dissolve_journal::{
     DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
-    MapRow,
+    MAX_DISSOLVED_SCOPES, MapRow,
 };
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
@@ -28978,8 +28978,12 @@ fn a_tick_after_the_dissolve_map_commits_mints_nothing() {
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve(), header);
-    assert_eq!(dissolve_rows(&fx, &header), rows);
+    let after = fx.standing_dissolve();
+    assert_eq!(
+        (after.new_root, after.map_gen, after.rows),
+        (header.new_root, header.map_gen, header.rows)
+    );
+    assert_eq!(dissolve_rows(&fx, &after), rows);
 }
 
 /// ADR 0077 D3: the header is the commit point of the map. A stop after the
@@ -29044,7 +29048,7 @@ fn the_dissolve_map_waits_for_a_queued_op_under_the_subtree() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.step >= DissolveStep::Seal, "the map committed");
     assert_eq!(header.rows, 5, "the late folder is a row");
 }
 
@@ -29703,7 +29707,10 @@ fn a_rotation_between_two_map_ticks_starts_the_walk_again() {
     ticks(&mut fx, 2);
 
     assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Seal);
+    assert!(
+        fx.standing_dissolve().step >= DissolveStep::Seal,
+        "the map committed"
+    );
 }
 
 /// A read that goes unanswered pauses the walk at that read. After the third
@@ -31349,7 +31356,7 @@ fn a_node_moved_out_after_the_copy_started_is_remapped_with_the_live_ids() {
     ticks(&mut fx, 2);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.step >= DissolveStep::Seal, "the map committed");
     assert_eq!(header.map_gen, generation + 1, "a new generation");
     let mut kept = before.clone();
     kept.remove(&plain);
@@ -31449,7 +31456,7 @@ fn a_folder_shared_after_the_copy_started_joins_the_dissolve() {
     ticks(&mut fx, 6);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.step >= DissolveStep::Seal, "the map committed");
     let joined = header
         .scopes
         .iter()
@@ -31799,7 +31806,7 @@ fn a_joined_scope_cannot_leave_the_subtree_so_the_join_completes() {
     fx.world.record_store.heal_put_for(plain_pointer.as_str());
     ticks(&mut fx, 6);
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Seal);
+    assert!(header.step >= DissolveStep::Seal, "the map committed");
     let joined = header
         .scopes
         .iter()
@@ -31807,4 +31814,1081 @@ fn a_joined_scope_cannot_leave_the_subtree_so_the_join_completes() {
         .expect("the joined scope stays listed");
     assert!(joined.cut_time != 0 && joined.final_landed, "and is cut");
     assert_eq!(new_ids(&fx), before, "the remap keeps each id");
+}
+
+// ---------------------------------------------------------------------------
+// Dissolve: the confirm and the relink (ADR 0077 D1)
+// ---------------------------------------------------------------------------
+
+/// The relink mark of the dissolve at the folder, at the parent name `name`:
+/// the highest sequence that a relink publish signed there.
+fn relink_mark(fx: &GrantScenario, name: &IpnsName) -> Option<u64> {
+    relink_mark_of(fx, fx.folder, name)
+}
+
+/// The floor key of the relink mark of the dissolve at `root`, at the parent
+/// name `name`.
+fn relink_entry_key(root: NodeId, name: &IpnsName) -> Vec<u8> {
+    [
+        b"dissolve-relink/".as_slice(),
+        root.0.as_slice(),
+        name.as_str().as_bytes(),
+    ]
+    .concat()
+}
+
+/// The relink mark of the dissolve at `root`, at the parent name `name`.
+fn relink_mark_of(fx: &GrantScenario, root: NodeId, name: &IpnsName) -> Option<u64> {
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .sequence_floor(&relink_entry_key(root, name)),
+    )
+    .expect("the floor store reads")
+}
+
+/// One EOL term in milliseconds, less the second that the signed EOL drops.
+fn term_millis() -> u64 {
+    u64::try_from(EOL_WINDOW.as_millis()).expect("a short window") - 1_000
+}
+
+/// The subtree of [`cut_dissolve_subtree`], sealed in one tick: every row is
+/// sealed, and the confirm has not run.
+fn sealed_dissolve(fx: &mut GrantScenario) {
+    cut_dissolve_subtree(fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Seal);
+}
+
+/// The children of the vault root's published record.
+fn vault_children(fx: &GrantScenario) -> Vec<(NodeId, String, Vec<u8>)> {
+    copy_children(&copy_at(fx, ROOT).expect("the vault root stands").1)
+}
+
+/// Move `node` into `new_parent` as `new_name` from a second owner device,
+/// and publish the move.
+fn move_from_a_second_device(fx: &GrantScenario, node: NodeId, new_parent: NodeId, new_name: &str) {
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Move {
+        node,
+        new_parent,
+        new_name: new_name.into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+}
+
+/// Move the folder into `other` from a second owner device, and publish the
+/// move.
+fn move_the_folder_elsewhere(fx: &GrantScenario, other: NodeId) {
+    move_from_a_second_device(fx, fx.folder, other, "shared");
+    assert!(
+        vault_children(fx).iter().all(|(id, ..)| *id != fx.folder),
+        "the vault root no longer names the folder"
+    );
+}
+
+/// ADR 0077 D1: the tick after the seal confirms each row, records the final
+/// records of each cut scope, and publishes the vault root with the copy in
+/// place of the source root. The header holds the relink mark and the parent
+/// name, and the floor store holds the signed sequence.
+#[test]
+fn a_confirmed_dissolve_relinks_the_copy_in_place_of_the_source_root() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink landed");
+    assert!(header.relink_sent);
+    assert_eq!(
+        header.relink_names,
+        vec![root_name.as_str().as_bytes().to_vec()]
+    );
+    let children = vault_children(&fx);
+    assert!(
+        children.iter().all(|(id, ..)| *id != fx.folder),
+        "the vault root does not name the source root"
+    );
+    let copy = (
+        header.new_root,
+        "shared".to_owned(),
+        write_name(header.new_root).as_str().as_bytes().to_vec(),
+    );
+    assert!(children.contains(&copy), "it names the copy");
+    assert_eq!(
+        relink_mark(&fx, &root_name),
+        Some(sequence_at(&fx.world, &root_name)),
+        "the mark holds the signed sequence"
+    );
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    for scope in &header.scopes {
+        let manifest = scope.manifest.as_ref().expect("each scope has a manifest");
+        let root = scope_repoint(&fx.world, &scope.scope_id.0).current_root;
+        let pointer = scope_pointer_name(seed.as_bytes(), &scope.scope_id.0);
+        assert_eq!(manifest.final_root_name, root.as_str().as_bytes());
+        assert_eq!(manifest.pointer_name, pointer.as_str().as_bytes());
+        assert_eq!(
+            Some(manifest.head_cid.clone()),
+            published_head_cid(&fx.world, &root).map(String::into_bytes)
+        );
+        assert_eq!(
+            manifest.hold_until,
+            signed_eol_millis(&fx.world, &root).min(signed_eol_millis(&fx.world, &pointer)),
+            "the final records resolve until the earlier EOL"
+        );
+        assert!(holds_for_a_term_from(&fx.world, &root, scope.cut_time));
+        assert!(holds_for_a_term_from(&fx.world, &pointer, scope.cut_time));
+    }
+}
+
+/// A relink whose PUT lands at one endpoint with no ack, and that the
+/// endpoints then do not serve, publishes again above the sequence it
+/// signed. When the first bytes land late, they are below the second
+/// publish: no fork.
+#[test]
+fn a_relink_retry_signs_above_a_put_that_lands_late() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let folder = fx.folder;
+
+    let (signed, late) = relink_unacknowledged(&mut fx, folder, &root_name);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Relink, "no ack");
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    let resigned = sequence_at(&fx.world, &root_name);
+    assert!(resigned > signed, "the retry signs above its own mark");
+    assert_eq!(relink_mark(&fx, &root_name), Some(resigned));
+
+    let endpoints = fx.world.record_store.endpoints();
+    fx.world
+        .record_store
+        .seed_record(&endpoints[1], root_name.as_str(), late);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fork_events(&mut fx._events), 0, "no fork");
+    assert!(
+        vault_children(&fx)
+            .iter()
+            .any(|(id, ..)| *id == fx.standing_dissolve().new_root),
+        "the vault root names the copy"
+    );
+}
+
+/// A relink PUT that lands at every endpoint with no ack: the next tick reads
+/// the copy in the parent and moves on, with no second relink publish.
+#[test]
+fn a_relink_that_landed_unacknowledged_moves_on_when_the_parent_names_the_copy() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let endpoints = fx.world.record_store.endpoints();
+    for endpoint in &endpoints {
+        fx.world.record_store.land_puts_unacked_at(endpoint);
+    }
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Relink);
+    heal_every_put(&fx);
+    let puts = fx.world.record_store.put_count(root_name.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert_eq!(
+        fx.world.record_store.put_count(root_name.as_str()),
+        puts,
+        "no second relink"
+    );
+}
+
+/// The relink mark is durable before the PUT: a mark that the floor store
+/// does not take sends nothing. The header already holds the relink, and the
+/// next tick publishes it.
+#[test]
+fn a_relink_whose_mark_does_not_land_sends_nothing() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&relink_entry_key(fx.folder, &root_name)));
+    let puts = fx.world.record_store.put_count(root_name.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.world.record_store.put_count(root_name.as_str()),
+        puts,
+        "no PUT"
+    );
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Relink);
+    assert!(header.relink_sent);
+
+    fx.owner_device.floor_store.heal_floors();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert_eq!(
+        relink_mark(&fx, &root_name),
+        Some(sequence_at(&fx.world, &root_name))
+    );
+}
+
+/// ADR 0077 "Rotation primitives": a parent that names neither root, with
+/// no relink sent, proves that no relink left this device. The copy names
+/// retire, and the entry goes.
+#[test]
+fn a_dissolve_whose_root_moved_before_any_relink_retires_the_copy() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    sealed_dissolve(&mut fx);
+    let copies: Vec<String> = logged_names(&fx)
+        .into_iter()
+        .map(|(_, name)| String::from_utf8(name).expect("a name"))
+        .collect();
+    assert!(!copies.is_empty());
+    move_the_folder_elsewhere(&fx, other);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the entry goes");
+    let retired = retired(&fx.owner_device);
+    assert!(
+        copies.iter().all(|name| retired.contains(name)),
+        "each copy name retires"
+    );
+}
+
+/// ADR 0077 "Rotation primitives": once a relink may have left this device,
+/// a parent that names neither root parks the entry. The copy stays, and no
+/// name retires.
+#[test]
+fn a_dissolve_whose_root_moved_after_a_relink_was_sent_parks() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root_name.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.standing_dissolve().relink_sent);
+    fx.world.record_store.heal_put_for(root_name.as_str());
+    move_the_folder_elsewhere(&fx, other);
+    let retired_before = retired(&fx.owner_device).len();
+
+    ticks(&mut fx, 2);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Relink);
+    assert!(header.parked, "the entry parks");
+    assert_eq!(
+        retired(&fx.owner_device).len(),
+        retired_before,
+        "no name retires"
+    );
+    assert!(copy_at(&fx, header.new_root).is_some(), "the copy stays");
+}
+
+/// ADR 0066 D1: a same-sequence fork at the relink parent, after a relink was
+/// sent, parks the entry. One fork event goes out.
+#[test]
+fn a_fork_at_the_relink_parent_after_a_relink_was_sent_parks() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root_name.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.standing_dissolve().relink_sent);
+    fx.world.record_store.heal_put_for(root_name.as_str());
+    let tie = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes()),
+        &other_side(&fx, &root_name),
+        sequence_at(&fx.world, &root_name),
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoints = fx.world.record_store.endpoints();
+    fx.world
+        .record_store
+        .seed_record(&endpoints[1], root_name.as_str(), tie);
+    events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert!(header.parked, "the entry parks");
+    assert!(fork_events(&mut fx._events) >= 1, "the fork is reported");
+}
+
+/// ADR 0077 D1: a final record that resolves for less than one term from the
+/// cut holds the relink. The owner pass publishes it again under a fresh
+/// EOL, and the relink follows.
+#[test]
+fn a_final_record_short_of_one_term_is_published_again_before_the_relink() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let cut_time = fx.standing_dissolve().scopes[0].cut_time;
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    let pointer = folder_pointer(&fx);
+    let bytes = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], pointer.as_str())
+        .expect("the cut published the pointer");
+    let held = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(&pointer))
+        .expect("the pointer verifies");
+    let month = u64::try_from(30 * DAY.as_millis()).expect("a short span");
+    let short = IpnsRecord::create_v2(
+        &scope_pointer_signer(seed.as_bytes(), &fx.folder.0),
+        &held.value,
+        held.sequence + 1,
+        TTL_NANOS,
+        &eol_from(UnixMillis(cut_time.saturating_sub(month))),
+    )
+    .marshal();
+    seed_from(&fx, 0, &pointer, &short);
+    assert!(!holds_for_a_term_from(&fx.world, &pointer, cut_time));
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Seal,
+        "the relink waits"
+    );
+
+    ticks(&mut fx, 2);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(holds_for_a_term_from(&fx.world, &pointer, cut_time));
+    let manifest = header.scopes[0].manifest.as_ref().expect("a manifest");
+    assert!(manifest.hold_until >= cut_time + term_millis());
+}
+
+/// ADR 0077 D1: a scope that joins the dissolve after the copy started keeps
+/// its final records for one term from its own cut.
+#[test]
+fn a_scope_that_joins_late_keeps_a_term_from_its_own_cut() {
+    let mut fx = GrantScenario::new();
+    let (plain, _) = log_the_cut_subtree(&mut fx);
+    fx.world.scheduler.advance(DAY);
+    grant_to_recipient(&mut fx.engine, plain);
+
+    ticks(&mut fx, 8);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    let source = &header.scopes[0];
+    let joined = header
+        .scopes
+        .iter()
+        .find(|scope| scope.scope_id == plain)
+        .expect("the shared folder joins");
+    assert!(joined.cut_time > source.cut_time, "a later cut");
+    for scope in [source, joined] {
+        let manifest = scope.manifest.as_ref().expect("a manifest");
+        assert!(manifest.hold_until >= scope.cut_time + term_millis());
+    }
+}
+
+/// ADR 0077 D1: the confirm reads each source again after every row is
+/// sealed. A source folder that names a child the map does not hold returns
+/// the entry to its map step, and the copy then holds that child too.
+#[test]
+fn a_child_added_after_the_seal_returns_the_dissolve_to_its_map() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let sealed = fx.standing_dissolve();
+    assert_eq!(sealed.step, DissolveStep::Seal);
+
+    let late = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "late");
+    ticks(&mut fx, 4);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert_eq!(header.map_gen, sealed.map_gen + 1, "a new generation");
+    assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
+    let rows = dissolve_rows(&fx, &header);
+    let new_of = |old: NodeId| rows.iter().find(|row| row.old == old).expect("a row").new;
+    let (_, copy) = copy_at(&fx, new_of(plain)).expect("the copy of plain stands");
+    assert_eq!(
+        copy_children(&copy),
+        vec![(
+            new_of(late),
+            "late".to_owned(),
+            write_name(new_of(late)).as_str().as_bytes().to_vec()
+        )]
+    );
+}
+
+/// ADR 0077 D4: once a relink was sent, a write cut of the destination
+/// parks the entry. The parent does not name the copy at a name where no
+/// copy record stands.
+#[test]
+fn a_destination_write_cut_after_a_relink_was_sent_parks() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    let parent = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(parent.as_str());
+    for _ in 0..8 {
+        if header_at(&fx, inner).relink_sent {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let sent = header_at(&fx, inner);
+    assert!(sent.relink_sent, "the relink was sent");
+    assert_eq!(sent.binding.write_scope, folder, "the folder writes");
+    fx.world.record_store.heal_put_for(parent.as_str());
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, parent, "the write cut moved the folder root");
+    let puts = fx.world.record_store.put_count(moved.as_str());
+    ticks(&mut fx, 2);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Relink);
+    assert!(header.parked, "the entry parks");
+    assert_eq!(
+        fx.world.record_store.put_count(moved.as_str()),
+        puts,
+        "no relink publish"
+    );
+}
+
+/// Two dissolves relink at one parent name. Each relink signs above every
+/// sequence that a relink publish of this device signed at that name, so the
+/// two entries never sign one sequence with other bytes.
+#[test]
+fn two_relinks_at_one_parent_never_sign_one_sequence() {
+    let mut fx = GrantScenario::new();
+    let second = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "second");
+    grant_to_recipient(&mut fx.engine, second);
+    ticks(&mut fx, 2);
+    cut_dissolve_subtree(&mut fx);
+    assert_eq!(
+        fx.dissolve_into(second, ROOT, dissolve_binding()),
+        Ok(Some(DissolveStep::Map))
+    );
+    let root_name = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root_name.as_str());
+    let mut signed: [BTreeSet<u64>; 2] = Default::default();
+
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        for (at, root) in [fx.folder, second].into_iter().enumerate() {
+            signed[at].extend(relink_mark_of(&fx, root, &root_name));
+        }
+    }
+
+    assert!(
+        header_at(&fx, fx.folder).relink_sent && header_at(&fx, second).relink_sent,
+        "both relinks were sent"
+    );
+    assert!(!signed[0].is_empty() && !signed[1].is_empty());
+    assert!(
+        signed[0].is_disjoint(&signed[1]),
+        "no sequence is signed twice: {signed:?}"
+    );
+}
+
+/// ADR 0077 D4: the relink publishes under the write lease of each end of
+/// its chain, and reads each write floor again under them. While another
+/// publish holds the lease of the write scope, as a write wave holds it, no
+/// relink leaves this device. The next tick relinks.
+#[test]
+fn a_relink_waits_while_another_publish_holds_the_write_lease() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = log_inner_into_the_folder(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(header_at(&fx, inner).step, DissolveStep::Seal);
+    let parent = fx.granted_scope_repoint().current_root;
+    let puts = fx.world.record_store.put_count(parent.as_str());
+    let held = fx
+        .owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            0,
+        );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Relink, "the seal closes");
+    assert!(!header.relink_sent, "no relink left this device");
+    assert_eq!(
+        fx.world.record_store.put_count(parent.as_str()),
+        puts,
+        "no relink publish"
+    );
+
+    drop(held);
+    fx.owner_device.floor_store.heal_floors();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(header_at(&fx, inner).step, DissolveStep::Unindex);
+}
+
+/// ADR 0077 D4: before a relink left this device, an owner revoke on the
+/// destination sends the entry back to its seal. Each copy seals again at
+/// the new read epoch, and the relink follows.
+#[test]
+fn an_owner_revoke_on_the_destination_before_the_relink_seals_again() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let held = fx
+        .owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            0,
+        );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let closed = header_at(&fx, inner);
+    assert_eq!(closed.step, DissolveStep::Relink);
+    assert!(!closed.relink_sent);
+    drop(held);
+    fx.owner_device.floor_store.heal_floors();
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal, "the entry seals again");
+    assert!(header.scopes.iter().all(|scope| scope.manifest.is_none()));
+
+    ticks(&mut fx, 3);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.binding.base_cut > closed.binding.base_cut);
+    let epoch = folder_read_epoch(&fx);
+    assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
+}
+
+/// Design 3.2 step 5: a scope pointer that this device signed, and that no
+/// endpoint serves, proves no term, so the manifest waits. The wait
+/// publishes nothing and reports the owed work once. A new pointer publish
+/// that covers the term closes it.
+#[test]
+fn a_scope_pointer_that_no_endpoint_serves_holds_the_manifest() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let cut_time = fx.standing_dissolve().scopes[0].cut_time;
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    let pointer = folder_pointer(&fx);
+    let root = scope_repoint(&fx.world, &fx.folder.0).current_root;
+    let lapsed = fx
+        .world
+        .record_store
+        .lapse(pointer.as_str())
+        .expect("the cut published the pointer");
+    let puts = fx.world.record_store.put_count(root.as_str());
+    events_so_far(&mut fx._events);
+
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            fx.standing_dissolve().step,
+            DissolveStep::Seal,
+            "the manifest waits"
+        );
+    }
+
+    assert_eq!(
+        fx.world.record_store.put_count(root.as_str()),
+        puts,
+        "no final root publishes again"
+    );
+    let owed = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(event, Event::RotationWorkOwed { scope_root, detail, .. }
+                if *scope_root == fx.folder && detail == "dissolve-scope-pointer-lost")
+        })
+        .count();
+    assert_eq!(owed, 1, "one report of the owed work");
+
+    let held = IpnsRecord::unmarshal(&lapsed)
+        .and_then(|record| record.verify(&pointer))
+        .expect("the pointer verifies");
+    let fresh = IpnsRecord::create_v2(
+        &scope_pointer_signer(seed.as_bytes(), &fx.folder.0),
+        &held.value,
+        held.sequence + 1,
+        TTL_NANOS,
+        &eol_from(fx.world.scheduler.now()),
+    )
+    .marshal();
+    seed_from(&fx, 0, &pointer, &fresh);
+    ticks(&mut fx, 2);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    let manifest = header.scopes[0].manifest.as_ref().expect("a manifest");
+    assert!(manifest.hold_until >= cut_time + term_millis());
+}
+
+/// A body difference at the confirm that keeps each child seals the row
+/// again under the same map: a renamed child is a label in the body of its
+/// folder, and the copy names it.
+#[test]
+fn a_child_renamed_after_the_seal_seals_its_folder_again_under_the_same_map() {
+    let mut fx = GrantScenario::new();
+    let (inner, _, below) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let sealed = fx.standing_dissolve();
+    assert_eq!(sealed.step, DissolveStep::Seal);
+    move_from_a_second_device(&fx, below, inner, "renamed");
+
+    ticks(&mut fx, 3);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert_eq!(header.map_gen, sealed.map_gen, "the same map");
+    let rows = dissolve_rows(&fx, &header);
+    let new_of = |old: NodeId| rows.iter().find(|row| row.old == old).expect("a row").new;
+    let (_, copy) = copy_at(&fx, new_of(inner)).expect("the copy of inner stands");
+    assert_eq!(
+        copy_children(&copy),
+        vec![(
+            new_of(below),
+            "renamed".to_owned(),
+            write_name(new_of(below)).as_str().as_bytes().to_vec()
+        )]
+    );
+}
+
+/// The confirm reads each row again: a folder of the subtree shared after
+/// every row sealed sends the entry back to its map, the folder joins the
+/// dissolve, and the relink follows.
+#[test]
+fn a_folder_shared_after_the_seal_joins_before_the_relink() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let sealed = fx.standing_dissolve();
+    assert_eq!(sealed.step, DissolveStep::Seal);
+    grant_to_recipient(&mut fx.engine, plain);
+
+    ticks(&mut fx, 8);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(
+        header.scopes.iter().any(|scope| scope.scope_id == plain),
+        "the shared folder joins"
+    );
+    assert!(header.map_gen > sealed.map_gen, "a new generation");
+}
+
+/// ADR 0066 D1: after a relink PUT at sequence m that no endpoint
+/// acknowledged, an ordinary edit of the parent signs above m. When the
+/// relink bytes then land, no fork comes.
+#[test]
+fn an_ordinary_parent_edit_after_an_unacknowledged_relink_signs_above_it() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let folder = fx.folder;
+    let (signed, late) = relink_unacknowledged(&mut fx, folder, &root_name);
+    // The relink waits, so the next publish of the parent is the edit.
+    let held = fx
+        .owner_device
+        .floor_store
+        .hold_write_epoch_lease_on_read_after(
+            &floor_label(&write_epoch_floor_key(&ROOT.0)),
+            ROOT.0,
+            0,
+        );
+    events_so_far(&mut fx._events);
+
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "edit");
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Relink);
+    assert!(
+        sequence_at(&fx.world, &root_name) > signed,
+        "the edit signs above the relink"
+    );
+    drop(held);
+    fx.owner_device.floor_store.heal_floors();
+    let endpoints = fx.world.record_store.endpoints();
+    fx.world
+        .record_store
+        .seed_record(&endpoints[1], root_name.as_str(), late);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fork_events(&mut fx._events), 0, "no fork");
+}
+
+/// ADR 0077 D4: a sent relink parks on a change of the write scope only once
+/// two ticks in a row compute it, as a rebind of the seal does. One tick of
+/// it does not park the entry.
+#[test]
+fn a_write_scope_change_parks_a_sent_relink_only_on_the_second_tick() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let parent = fx.granted_scope_repoint().current_root;
+    fx.world.record_store.fail_put_for(parent.as_str());
+    for _ in 0..8 {
+        if header_at(&fx, inner).relink_sent {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let sent = header_at(&fx, inner);
+    assert!(sent.relink_sent, "the relink was sent");
+    assert_eq!(sent.binding.write_scope, ROOT);
+    fx.world.record_store.heal_put_for(parent.as_str());
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Relink);
+    assert!(!header.parked, "one tick does not park");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(header_at(&fx, inner).parked, "the second tick parks");
+}
+
+/// A relink PUT of `parent` lands at the first endpoint with no ack, and no
+/// endpoint serves it after the tick. Answers the sequence it signed and the
+/// bytes that landed.
+fn relink_unacknowledged(
+    fx: &mut GrantScenario,
+    root: NodeId,
+    parent: &IpnsName,
+) -> (u64, Vec<u8>) {
+    let endpoints = fx.world.record_store.endpoints();
+    let before = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], parent.as_str())
+        .expect("the parent stands");
+    fx.world.record_store.land_puts_unacked_at(&endpoints[0]);
+    for endpoint in &endpoints[1..] {
+        fx.world.record_store.fail_put_endpoint(endpoint);
+    }
+    fx.world
+        .record_store
+        .serve_after_put(parent.as_str(), 0, Some(before.clone()));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(header_at(fx, root).relink_sent, "the relink was sent");
+    let signed = relink_mark_of(fx, root, parent).expect("the relink signed");
+    let late = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], parent.as_str())
+        .expect("the PUT landed at one endpoint");
+    fx.world
+        .record_store
+        .seed_record(&endpoints[0], parent.as_str(), before);
+    fx.world
+        .record_store
+        .serve_gets_for_after(parent.as_str(), 0, 0, None);
+    heal_every_put(fx);
+    (signed, late)
+}
+
+/// ADR 0066 D1: after a relink of a granted folder root that no endpoint
+/// acknowledged, an owner revoke on that scope signs the root above the
+/// relink sequence.
+#[test]
+fn an_owner_revoke_after_an_unacknowledged_relink_signs_above_it() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let parent = fx.granted_scope_repoint().current_root;
+    let (signed, _) = relink_unacknowledged(&mut fx, inner, &parent);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(fx.granted_scope_repoint().current_root, parent);
+    assert!(
+        sequence_at(&fx.world, &parent) > signed,
+        "the revoke signs above the relink"
+    );
+}
+
+/// ADR 0066 D1: after a relink of the vault root that no endpoint
+/// acknowledged, a rotation of the vault root signs above the relink
+/// sequence.
+#[test]
+fn a_vault_rotation_after_an_unacknowledged_relink_signs_above_it() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let folder = fx.folder;
+    let (signed, _) = relink_unacknowledged(&mut fx, folder, &root_name);
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateNow { node: ROOT }),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert!(
+        sequence_at(&fx.world, &root_name) > signed,
+        "the rotation signs above the relink"
+    );
+}
+
+/// ADR 0061 D3: a relink mark of the vault root name with no ledger mark,
+/// as a session that stopped after the mark and before the PUT outcome
+/// leaves, holds the renewal walk of a later start: it signs above the mark.
+#[test]
+fn a_renewal_signs_above_a_relink_mark_that_no_ledger_mark_covers() {
+    let fx = GrantScenario::new();
+    let root_name = write_name(ROOT);
+    let relinked = sequence_at(&fx.world, &root_name) + 3;
+    let key = [
+        b"dissolve-relink-parent/".as_slice(),
+        root_name.as_str().as_bytes(),
+    ]
+    .concat();
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_sequence_floor(&key, relinked),
+    )
+    .expect("the mark lands");
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        owner_device,
+        ..
+    } = fx;
+
+    let (world, _events, _later) = start_later_on(world, &blocks, owner_device, (engine, _tasks));
+
+    assert!(
+        sequence_at(&world, &root_name) > relinked,
+        "the renewal signs above the relink mark"
+    );
+}
+
+/// Design 3.2 step 5: after a lost scope pointer held the close, a child
+/// that a second device adds under the source reaches the map before the
+/// relink. The confirm reads each source again after a close that did not
+/// commit.
+#[test]
+fn a_child_added_while_a_lost_pointer_holds_the_close_joins_the_map() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let sealed = fx.standing_dissolve();
+    assert_eq!(sealed.step, DissolveStep::Seal);
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    let pointer = scope_pointer_name(seed.as_bytes(), &fx.folder.0);
+    let lapsed = fx
+        .world
+        .record_store
+        .lapse(pointer.as_str())
+        .expect("the cut published the pointer");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Seal,
+        "the close waits"
+    );
+
+    // The second device reads through the pointer too, so the fresh pointer
+    // lands first. This device does not tick in between.
+    let held = IpnsRecord::unmarshal(&lapsed)
+        .and_then(|record| record.verify(&pointer))
+        .expect("the pointer verifies");
+    let fresh = IpnsRecord::create_v2(
+        &scope_pointer_signer(seed.as_bytes(), &fx.folder.0),
+        &held.value,
+        held.sequence + 1,
+        TTL_NANOS,
+        &eol_from(fx.world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, pointer.as_str(), fresh.clone());
+    }
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Create {
+        parent: plain,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    let before = sequence_at(&fx.world, &write_name(plain));
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+    assert!(
+        sequence_at(&fx.world, &write_name(plain)) > before,
+        "the second device adds the child"
+    );
+
+    ticks(&mut fx, 6);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
+}
+
+/// A confirm keeps the reads that its close takes: a subtree whose sweep
+/// fills the tick read share still closes, and the relink follows.
+#[test]
+fn a_confirm_that_fills_the_tick_read_share_still_closes() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let folder = fx.folder;
+    create_published_folders(&mut fx, folder, 78);
+    // Each sweep fetches the head block of each row.
+    serve_http(&fx.owner_device, &fx.blocks, 4096);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    let mut sealed = None;
+    for _ in 0..60 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let header = fx.standing_dissolve();
+        if header.step == DissolveStep::Seal
+            && dissolve_rows(&fx, &header)
+                .iter()
+                .all(|row| copy_at(&fx, row.new).is_some())
+        {
+            sealed = Some(header);
+            break;
+        }
+    }
+    assert_eq!(sealed.expect("every copy seals").rows, 79);
+
+    ticks(&mut fx, 6);
+
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Unindex,
+        "the seal closes and the relink follows"
+    );
+}
+
+/// A dissolve of the most scopes that a header holds, into a destination
+/// below the vault root, still closes: the tick read share holds the close
+/// of every scope with the confirm reads.
+#[test]
+fn a_dissolve_at_the_scope_cap_below_the_vault_root_closes() {
+    let mut fx = GrantScenario::new();
+    serve_http(&fx.owner_device, &fx.blocks, 1 << 20);
+    let outer = fx.grant_nested_folder("outer");
+    let inners: Vec<NodeId> = (1..MAX_DISSOLVED_SCOPES)
+        .map(|at| {
+            create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                outer,
+                &format!("in{at}"),
+            )
+        })
+        .collect();
+    for inner in inners {
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: inner,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done),
+        );
+        serve_http(&fx.owner_device, &fx.blocks, 1 << 20);
+    }
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(outer, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    assert_eq!(header_at(&fx, outer).scopes.len(), MAX_DISSOLVED_SCOPES);
+
+    ticks(&mut fx, 8);
+
+    assert_eq!(
+        header_at(&fx, outer).step,
+        DissolveStep::Unindex,
+        "the seal closes and the relink follows"
+    );
+}
+
+/// The relink signs above the mark of its entry: an entry raise that lands
+/// with a parent-name raise that does not sends nothing, and the retry signs
+/// above the entry mark.
+#[test]
+fn a_relink_retry_signs_above_an_entry_mark_whose_parent_mark_did_not_land() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let parent_key = [
+        b"dissolve-relink-parent/".as_slice(),
+        root_name.as_str().as_bytes(),
+    ]
+    .concat();
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&parent_key));
+    let puts = fx.world.record_store.put_count(root_name.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.world.record_store.put_count(root_name.as_str()),
+        puts,
+        "no PUT"
+    );
+    let entry = relink_mark(&fx, &root_name).expect("the entry mark landed");
+    fx.owner_device.floor_store.heal_floors();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert!(
+        sequence_at(&fx.world, &root_name) > entry,
+        "the retry signs above the entry mark"
+    );
 }

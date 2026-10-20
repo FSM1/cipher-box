@@ -257,6 +257,15 @@ pub async fn raise_vouched_floor<F: FloorStore>(
         .await
 }
 
+/// The floor-store key of the relink mark of the parent name `name`: the
+/// highest sequence that a dissolve relink signed there. Each signature at
+/// `name` goes above it ([`crate::net::publish::SignatureGate`]), so no
+/// publish of this device signs other bytes at a relink sequence that an
+/// endpoint did not acknowledge.
+pub(crate) fn relink_parent_mark_key(name: &[u8]) -> Vec<u8> {
+    [b"dissolve-relink-parent/".as_slice(), name].concat()
+}
+
 /// The durable per-name sequence floor, if ever raised.
 pub async fn sequence_floor<F: FloorStore>(
     floors: &F,

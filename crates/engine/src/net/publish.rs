@@ -487,6 +487,15 @@ pub(crate) enum PutMark<'a> {
     /// The sequence the record was signed at, for a caller that marks a PUT
     /// no endpoint acknowledged: its bytes can still have landed.
     Signed(&'a core::cell::Cell<Option<u64>>),
+    /// [`Self::Signed`], and a monotonic-max raise of each floor-store key
+    /// in `keys` to the signed sequence, which outlives the session. The
+    /// caller signs above the marks.
+    SignedDurable {
+        /// The floor-store keys the mark lives at.
+        keys: &'a [Vec<u8>],
+        /// The cell that takes the signed sequence.
+        signed: &'a core::cell::Cell<Option<u64>>,
+    },
 }
 
 /// The durable floors one signature is checked against, read last before it.
@@ -498,6 +507,9 @@ pub(crate) struct SignatureGate<'a> {
     observed: &'a Observed,
     bar: Option<(PublishBar, [u64; 3])>,
     sequence_floor: Option<u64>,
+    /// The relink mark of the name, which the signature clears and the
+    /// renewal skip does not compare.
+    relink_mark: Option<u64>,
 }
 
 impl<'a> SignatureGate<'a> {
@@ -511,6 +523,7 @@ impl<'a> SignatureGate<'a> {
         let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
             .await
             .map_err(PublishError::FloorRead)?;
+        let relink_mark = read_relink_mark(floors, observed).await?;
         let bar = match bar {
             Some(bar) => Some((bar, bar.read_floors(floors).await?)),
             None => None,
@@ -519,12 +532,14 @@ impl<'a> SignatureGate<'a> {
             observed,
             bar,
             sequence_floor,
+            relink_mark,
         })
     }
 
-    /// Renewal's exact-sequence skip must read the sequence after all epoch
-    /// awaits (ADR 0061 D3). The root bar authenticates an unchanged value,
-    /// including a lagging interior admitted under its ratchet (ADR 0021).
+    /// Renewal's exact-sequence skip must read the sequence after every other
+    /// await, the epoch floors and the relink mark (ADR 0061 D3). The root bar
+    /// authenticates an unchanged value, including a lagging interior
+    /// admitted under its ratchet (ADR 0021).
     pub(crate) async fn read_for_renewal<F: FloorStore>(
         floors: &F,
         observed: &'a Observed,
@@ -534,6 +549,7 @@ impl<'a> SignatureGate<'a> {
             Some(bar) => Some((bar, bar.read_floors(floors).await?)),
             None => None,
         };
+        let relink_mark = read_relink_mark(floors, observed).await?;
         let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
             .await
             .map_err(PublishError::FloorRead)?;
@@ -541,6 +557,7 @@ impl<'a> SignatureGate<'a> {
             observed,
             bar,
             sequence_floor,
+            relink_mark,
         })
     }
 
@@ -550,9 +567,9 @@ impl<'a> SignatureGate<'a> {
         self.sequence_floor
     }
 
-    /// Refuse a record below its bar, then sign `value` strictly above both
-    /// the durable sequence floor and the observed sequence. Returns the
-    /// marshalled record and the sequence it carries.
+    /// Refuse a record below its bar, then sign `value` strictly above the
+    /// durable sequence floor, the relink mark and the observed sequence.
+    /// Returns the marshalled record and the sequence it carries.
     pub(crate) fn sign(
         &self,
         signer: &Ed25519Signer,
@@ -579,6 +596,7 @@ impl<'a> SignatureGate<'a> {
         let sequence = self
             .sequence_floor
             .unwrap_or(0)
+            .max(self.relink_mark.unwrap_or(0))
             .max(self.observed.sequence)
             .max(held)
             .checked_add(1)
@@ -592,6 +610,17 @@ impl<'a> SignatureGate<'a> {
         }
         Ok((record_bytes, sequence))
     }
+}
+
+/// The relink mark of `observed`'s name ([`floor::relink_parent_mark_key`]).
+async fn read_relink_mark<F: FloorStore>(
+    floors: &F,
+    observed: &Observed,
+) -> Result<Option<u64>, PublishError> {
+    let key = floor::relink_parent_mark_key(observed.name.as_str().as_bytes());
+    floor::sequence_floor(floors, &key)
+        .await
+        .map_err(PublishError::FloorRead)
 }
 
 /// One record the pipeline is about to sign: the observed name, its signer,
@@ -759,17 +788,7 @@ where
     )?;
 
     match mark {
-        Some(PutMark::Durable { key, value }) => {
-            let stored = floors
-                .raise_sequence_floor(key, value)
-                .await
-                .map_err(PublishError::MarkUnrecorded)?;
-            if stored < value {
-                return Err(PublishError::MarkUnrecorded(SeamError::new(
-                    "the floor store did not take the mark",
-                )));
-            }
-        }
+        Some(PutMark::Durable { key, value }) => raise_mark(floors, key, value).await?,
         Some(PutMark::Sent { sent, signed }) => {
             sent.set(true);
             if let Some(signed) = signed {
@@ -777,6 +796,12 @@ where
             }
         }
         Some(PutMark::Signed(signed)) => signed.set(Some(sequence)),
+        Some(PutMark::SignedDurable { keys, signed }) => {
+            signed.set(Some(sequence));
+            for key in keys {
+                raise_mark(floors, key, sequence).await?;
+            }
+        }
         None => {}
     }
 
@@ -788,6 +813,20 @@ where
         sequence,
     )
     .await
+}
+
+/// Raise the floor-store mark at `key` to `value`, or refuse the PUT.
+async fn raise_mark<F: FloorStore>(floors: &F, key: &[u8], value: u64) -> Result<(), PublishError> {
+    let stored = floors
+        .raise_sequence_floor(key, value)
+        .await
+        .map_err(PublishError::MarkUnrecorded)?;
+    if stored < value {
+        return Err(PublishError::MarkUnrecorded(SeamError::new(
+            "the floor store did not take the mark",
+        )));
+    }
+    Ok(())
 }
 
 /// PUT the signed `record_bytes` at `sequence` to every endpoint, then confirm
@@ -981,19 +1020,41 @@ mod tests {
         );
     }
 
+    /// The read during which a concurrent adopt raises the floor of `name`.
+    #[derive(PartialEq)]
+    enum AdoptOn {
+        EpochRead,
+        RelinkMarkRead,
+    }
+
     struct ConcurrentAdopt {
         inner: InMemoryFloorStore,
         name: IpnsName,
+        on: AdoptOn,
+    }
+
+    impl ConcurrentAdopt {
+        async fn adopt(&self) -> SeamResult<()> {
+            self.inner
+                .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
+                .await
+                .map(drop)
+        }
     }
 
     impl FloorStore for ConcurrentAdopt {
         async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner
-                .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
-                .await?;
+            if self.on == AdoptOn::EpochRead {
+                self.adopt().await?;
+            }
             self.inner.epoch_floor(key).await
         }
         async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            if self.on == AdoptOn::RelinkMarkRead
+                && key == floor::relink_parent_mark_key(self.name.as_str().as_bytes())
+            {
+                self.adopt().await?;
+            }
             self.inner.sequence_floor(key).await
         }
         async fn raise_epoch_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
@@ -1014,6 +1075,7 @@ mod tests {
         let floors = ConcurrentAdopt {
             inner: InMemoryFloorStore::default(),
             name: name.clone(),
+            on: AdoptOn::EpochRead,
         };
         block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
@@ -1029,6 +1091,27 @@ mod tests {
             Some(bar),
         ))
         .unwrap();
+        assert_eq!(
+            gate.sequence_floor(),
+            Some(8),
+            "renewal skips the observation at 7"
+        );
+    }
+
+    #[test]
+    fn a_renewal_sees_a_sequence_advanced_during_its_relink_mark_read() {
+        let signer = Ed25519Signer::from_seed([0x54; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let floors = ConcurrentAdopt {
+            inner: InMemoryFloorStore::default(),
+            name: name.clone(),
+            on: AdoptOn::RelinkMarkRead,
+        };
+        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
+        let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
+
+        let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, None)).unwrap();
+
         assert_eq!(
             gate.sequence_floor(),
             Some(8),

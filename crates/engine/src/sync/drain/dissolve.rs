@@ -42,7 +42,7 @@ use crate::seams::{
 };
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError,
-    DissolvedScope, HeaderSlot, MAX_PAGE_ENTRIES, MapPage, MapRow,
+    DissolvedScope, HeaderSlot, MAX_DISSOLVED_SCOPES, MAX_PAGE_ENTRIES, MapPage, MapRow,
 };
 use crate::sync::kept_op::retain_pending;
 use crate::sync::model::Snapshot;
@@ -51,12 +51,22 @@ use crate::sync::rebase::decode_queue;
 use crate::sync::record::RecordReader;
 use crate::sync::tick::ResolveMode;
 
+mod relink;
 mod seal;
 
 pub(crate) use seal::DissolveSeal;
 
 /// The node records one tick reads for dissolve walks.
-const MAX_DISSOLVE_WALK_READS: usize = 128;
+const MAX_DISSOLVE_WALK_READS: usize = 160;
+
+/// The reads that `close_seal` takes for each scope: its final root and its
+/// pointer.
+const CLOSE_READS_PER_SCOPE: usize = 2;
+
+// A seal tick at the scope cap holds its close, its header (the destination
+// root and pointer, 2) and one confirm row (scope root, row and copy, 3).
+const _: () =
+    assert!(MAX_DISSOLVE_WALK_READS >= CLOSE_READS_PER_SCOPE * MAX_DISSOLVED_SCOPES + 2 + 3);
 
 /// The nodes one dissolve walk may hold. A walk past it stops the dissolve.
 const MAX_DISSOLVE_WALK_NODES: usize = 65_536;
@@ -477,9 +487,9 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Drive the map and the seal step of each dissolve entry this owner
-    /// holds over the tick's own `ends`, within one share of reads for the
-    /// tick. An entry the drive cannot move waits for the next tick.
+    /// Drive the map, the seal and the relink step of each dissolve entry
+    /// this owner holds over the tick's own `ends`, within one share of reads
+    /// for the tick. An entry the drive cannot move waits for the next tick.
     pub(super) async fn drive_dissolves(&self, passes: &[DrainScope<'_>], ends: &[ScopeEnd<'_>]) {
         let Some(owner) = passes.iter().find(|scope| !scope.is_grafted()) else {
             return;
@@ -496,6 +506,7 @@ where
         for root in roots {
             let _ = self.drive_map(owner, ends, &journal, root, &left).await;
             self.drive_seal(owner, ends, &journal, root, &left).await;
+            self.drive_relink(owner, ends, &journal, root, &left).await;
         }
     }
 

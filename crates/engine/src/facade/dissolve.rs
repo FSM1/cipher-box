@@ -83,9 +83,11 @@ where
             return;
         };
         for root in roots {
-            if let Err(EngineError::TrustViolation { message }) =
-                self.drive_dissolve_cut(sites, pointers, root).await
-            {
+            let driven = match self.drive_dissolve_cut(sites, pointers, root).await {
+                Ok(_) => self.republish_short_terms(sites, root).await,
+                Err(error) => Err(error),
+            };
+            if let Err(EngineError::TrustViolation { message }) = driven {
                 let _ = self.events.unbounded_send(Event::AttributableAbuse {
                     description: message,
                 });
@@ -173,6 +175,37 @@ where
                 Ok(None)
             }
         }
+    }
+
+    /// Publish again the final records of each scope that the drain found
+    /// short of one term for the dissolve at `root`: the root at the next
+    /// sequence with the same set, then the pointer, each under a fresh EOL.
+    /// A scope that does not publish is noted again by the next seal tick.
+    async fn republish_short_terms(
+        &self,
+        sites: &impl ConversionSites,
+        root: NodeId,
+    ) -> Result<(), EngineError> {
+        for scope in self.owed.dissolve().take_short_terms(root) {
+            let Some(_owed_hold) = self.owed.hold(scope) else {
+                continue;
+            };
+            let OwedScope { target, .. } = self
+                .owed_scope(sites, scope, "dissolve-term", true)
+                .await
+                .map_err(EngineError::from_owed_stop)?;
+            let name = parsed_scope_name(&target.scope.ipns_name)?;
+            self.republish_root(sites, &target, &name).await?;
+            republish_scope_pointer(
+                &self.net(&target, PointerConsultArm::Refused),
+                self.cut.owner_pointer_seed,
+                self.cut.held,
+                scope.0,
+            )
+            .await
+            .map_err(|error| EngineError::from_rotate(RotateError::Publish(error)))?;
+        }
+        Ok(())
     }
 
     /// Commit `header` with `change` over the header it holds.
