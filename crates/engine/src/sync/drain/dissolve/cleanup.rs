@@ -1,9 +1,10 @@
 //! The retire and the hold step of a dissolve (ADR 0077 D1; blueprint/api.md
 //! "Pin/name registry").
 //!
-//! Once the gated destination root shows the index removal, the old names of
-//! the map retire one page a tick, then each name that the copy published at
-//! and no row uses under the current write scope. The final records of each
+//! Once the gated root of the bound read scope shows the index removal, the
+//! old names of the map retire one page a tick, then each name that the copy
+//! published at and no row uses under the bound write scope, unless the link
+//! proof kept every copy name. The final records of each
 //! cut scope resolve until its own `hold_until`, and then retire.
 
 use core::cell::Cell;
@@ -65,9 +66,9 @@ where
     }
 
     /// One tick of the retire step: one map page, else one name log page,
-    /// else the commit at the hold step. Each runs only while the gated
-    /// destination root names no cut scope in its index and the write floors
-    /// read (ADR 0041 D3).
+    /// else the commit at the hold step. Each runs only while the bound read
+    /// and write scopes stand, the gated read scope root names no cut scope in
+    /// its index, and the write floors read (ADR 0041 D3).
     async fn retire_tick(
         &self,
         owner: &DrainScope<'_>,
@@ -78,8 +79,12 @@ where
         left: &Cell<usize>,
     ) -> Result<(), NotDriven> {
         let source = header.scopes[0].scope_id;
+        let bound = header.binding;
         let target = self
-            .destination_of(owner, ends, header.relink_parent)
+            .destination_of(owner, ends, bound.read_scope)
+            .filter(|target| {
+                target.chain[0].root == bound.read_scope && target.write.root == bound.write_scope
+            })
             .ok_or(NotDriven)?;
         let dest = target.chain[0];
         if !take_tick_read(left) {
@@ -127,7 +132,10 @@ where
             let vacated = page
                 .entries
                 .iter()
-                .filter(|entry| dest.write_name(&entry.id.0).as_str().as_bytes() != entry.name)
+                .filter(|entry| {
+                    !header.keep_names
+                        && dest.write_name(&entry.id.0).as_str().as_bytes() != entry.name
+                })
                 .map(|entry| &entry.name);
             let names = utf8(vacated).ok_or(NotDriven)?;
             if !names.is_empty() {
@@ -139,6 +147,7 @@ where
         }
         let mut next = header.clone();
         next.step = DissolveStep::Hold;
+        next.keep_names = false;
         next.map_pages = 0;
         next.rows = 0;
         next.retire_cursor = 0;

@@ -1357,6 +1357,13 @@ semantics as any move. The rotator detached-signs every seed-bearing structure
 it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a grantee re-wraps blobs for
 the committed tag set verbatim and can neither extend nor shrink it (FSM1/cipher-box-next#26 D5).
 
+A dissolve removes the source root from the index only after a gated link proof
+finds it unlinked (ADR 0077 D1). When the relink parent names neither root or
+both, a fence first needs each relink parent name to serve a signature-verified
+record above every relink mark, which proves that no late relink PUT can win; the
+fence reads no adoption gate, because the retire verdict comes only from the
+gated walk.
+
 ### sweep
 
 Idempotent lazy-wave advancement over a scope's **interior nodes** — not its

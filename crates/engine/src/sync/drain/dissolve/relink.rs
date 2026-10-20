@@ -244,7 +244,7 @@ where
     }
 
     /// Drive the relink step of the entry at `root` within the reads of
-    /// `left`. An entry that parked runs its link proof again in the next
+    /// `left`. An entry that parked reads its parent again in the next
     /// session.
     pub(super) async fn drive_relink(
         &self,
@@ -269,13 +269,6 @@ where
         let Some(hold) = self.cells.dissolve.hold(root) else {
             return;
         };
-        if header.parked {
-            if let Some(target) = self.destination_of(owner, ends, header.relink_parent) {
-                let _ =
-                    Box::pin(self.prove(owner, ends, journal, &hold, &header, &target, left)).await;
-            }
-            return;
-        }
         let _ = self
             .relink_tick(owner, ends, journal, &hold, header, left)
             .await;
@@ -312,14 +305,15 @@ where
             (false, false) => ParentNames::Neither,
             (true, true) => ParentNames::Both,
         };
-        if matches!(named, ParentNames::Copy | ParentNames::Source) {
+        if matches!(named, ParentNames::Source) {
             self.cells.dissolve_proofs.borrow_mut().remove(&source);
         }
         match named {
+            // Another device can link the source root elsewhere before the
+            // relink lands, so a proof runs before the index removal.
             ParentNames::Copy => {
-                let mut next = header.clone();
-                next.step = DissolveStep::Unindex;
-                Ok(journal.commit(hold, Some(&header), &next).await?)
+                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, false, left))
+                    .await
             }
             ParentNames::Source => {
                 let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
@@ -345,7 +339,7 @@ where
                 self.forsake(journal, hold, &header).await
             }
             ParentNames::Neither | ParentNames::Both => {
-                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, left)).await
+                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, true, left)).await
             }
         }
     }
@@ -449,7 +443,8 @@ where
 
     /// Publish the relink parent with the copy's root in place of the source
     /// root, under the write leases of `target`'s chain at `floors`. The
-    /// header holds `relink_sent` and the parent name first.
+    /// header holds `relink_sent` and the parent name first. A later tick
+    /// proves the link.
     #[expect(clippy::too_many_arguments, reason = "one relink publish")]
     async fn relink(
         &self,
@@ -474,7 +469,8 @@ where
             .lease_the_chain(target, floors)
             .await
             .map_err(|_| NotDriven)?;
-        let header = if header.relink_sent && header.relink_names.contains(&name) {
+        let header = if header.relink_sent && header.relink_names.contains(&name) && !header.parked
+        {
             header
         } else {
             if header.relink_names.len() >= MAX_RELINK_NAMES {
@@ -482,6 +478,7 @@ where
             }
             let mut sent = header.clone();
             sent.relink_sent = true;
+            sent.parked = false;
             if !sent.relink_names.contains(&name) {
                 sent.relink_names.push(name.clone());
             }
@@ -506,10 +503,8 @@ where
         let keys = relink_mark_keys(source, &name);
         self.publish_folder_marked(scope, &mut pass, parent, modified_at, None, Some(&keys))
             .await
-            .map_err(|_| NotDriven)?;
-        let mut next = header.clone();
-        next.step = DissolveStep::Unindex;
-        Ok(journal.commit(hold, Some(&header), &next).await?)
+            .map(|_| ())
+            .map_err(|_| NotDriven)
     }
 
     /// No relink left this device, and the parent names neither root: retire
@@ -546,6 +541,7 @@ where
     ) -> Result<(), NotDriven> {
         let mut next = header.clone();
         next.step = DissolveStep::Seal;
+        next.parked = false;
         for scope in &mut next.scopes {
             scope.manifest = None;
         }

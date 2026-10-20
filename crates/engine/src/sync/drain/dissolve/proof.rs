@@ -1,10 +1,10 @@
-//! The decision on a relink that may have left this device, and a parent
-//! that names neither root or both (ADR 0077 "Rotation primitives").
+//! The decision on a relink that left this device, before any old name
+//! retires (ADR 0077 "Rotation primitives").
 //!
-//! The fence comes first: at each parent name a relink published at, the
-//! endpoints must serve a record above each relink mark and the ADR 0076
-//! unacknowledged mark there, so no late PUT of the relink can land after the
-//! verdict. Then a two-sweep walk of each scope that shares the write scope
+//! When the parent names neither root or both, the fence comes first: at each
+//! parent name a relink published at, the endpoints must serve a record above
+//! each relink mark and the ADR 0076 unacknowledged mark there, so no late PUT
+//! of the relink can land after the verdict. Then a two-sweep walk of each scope that shares the write scope
 //! of the destination, the bin index, and each binned subtree under its held
 //! key finds which of the copy and the source root a folder names. A parked
 //! entry runs the proof again in the next session.
@@ -23,7 +23,7 @@ use super::super::{
 };
 use super::relink::relink_mark_keys;
 use super::seal::Destination;
-use super::{EndMark, MAX_DISSOLVE_READ_ATTEMPTS, MAX_DISSOLVE_WALK_NODES, NotDriven};
+use super::{EndMark, MAX_DISSOLVE_READ_ATTEMPTS, MAX_DISSOLVE_WALK_NODES, NotDriven, ReadShare};
 use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::net::gated_read::LeafRead;
@@ -34,6 +34,14 @@ use crate::seams::{
 use crate::sync::dissolve_journal::{DissolveHeader, DissolveHold, DissolveJournal, DissolveStep};
 use crate::sync::drain::owner_tag;
 use crate::sync::tick::ResolveMode;
+
+/// What the fence of a proof found.
+enum Fence {
+    Holds,
+    Fails,
+    /// The tick has too few reads left.
+    Waits,
+}
 
 /// Which roots the folders of a link proof name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,10 +85,12 @@ pub(crate) struct LinkProof {
     anchors: BTreeMap<NodeId, WalkAnchor>,
     copy: bool,
     source: bool,
+    /// The fence held before the walk started.
+    fenced: bool,
 }
 
 impl LinkProof {
-    fn new(write: &ScopeEnd<'_>) -> Self {
+    fn new(write: &ScopeEnd<'_>, fenced: bool) -> Self {
         let first = LinkKey::Node {
             node: write.root,
             scope: write.root,
@@ -95,6 +105,7 @@ impl LinkProof {
             anchors: BTreeMap::new(),
             copy: false,
             source: false,
+            fenced,
         }
     }
 
@@ -210,11 +221,11 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Decide the relink of `header`, sent, under `target`: the copy linked
-    /// moves on to the index removal; the source root linked alone retires
-    /// the copy; neither linked moves on and keeps every copy name; both
-    /// linked, a fence that does not hold or a walk that does not complete
-    /// parks the entry.
+    /// Decide the relink of `header` under `target`, after the fence when
+    /// `fence`: the copy linked moves on to the index removal; the source root
+    /// linked alone retires the copy after a fence; neither linked moves on
+    /// and keeps every copy name; both linked, a fence that does not hold or a
+    /// walk that does not complete parks the entry.
     #[expect(clippy::too_many_arguments, reason = "one proof of one entry")]
     pub(super) async fn prove(
         &self,
@@ -224,16 +235,21 @@ where
         hold: &DissolveHold<'_>,
         header: &DissolveHeader,
         target: &Destination<'_, '_>,
+        fence: bool,
         left: &Cell<usize>,
     ) -> Result<(), NotDriven> {
         let root = header.scopes[0].scope_id;
         let carried = self.cells.dissolve_proofs.borrow_mut().remove(&root);
-        let mut proof = match carried.filter(|proof| proof.write == EndMark::of(target.write)) {
+        let mut proof = match carried
+            .filter(|proof| proof.write == EndMark::of(target.write) && (proof.fenced || !fence))
+        {
             Some(proof) => proof,
-            None if self.fence_holds(owner, target.chain[0], header).await => {
-                LinkProof::new(target.write)
-            }
-            None => return self.park(journal, hold, header).await,
+            None if !fence => LinkProof::new(target.write, false),
+            None => match self.fence(owner, target.chain[0], header, left).await {
+                Fence::Holds => LinkProof::new(target.write, true),
+                Fence::Waits => return Ok(()),
+                Fence::Fails => return self.park(journal, hold, header).await,
+            },
         };
         let walked: BTreeSet<NodeId> = ends
             .iter()
@@ -288,17 +304,15 @@ where
         }
         match proof.linked() {
             Linked::Both => self.park(journal, hold, header).await,
+            // The parent named the copy when the walk started, so the next
+            // tick reads it again.
+            Linked::Source if !proof.fenced => Ok(()),
             Linked::Source => self.forsake(journal, hold, header).await,
             linked => {
-                // The copy may still be live where the walk does not read, so
-                // its names never retire on this path.
-                if linked == Linked::Neither {
-                    for page in journal.name_log(root).await? {
-                        journal.drop_log_page(hold, header, page.index).await?;
-                    }
-                }
                 let mut next = header.clone();
                 next.parked = false;
+                // The copy may still be live where the walk does not read.
+                next.keep_names = linked == Linked::Neither;
                 next.step = DissolveStep::Unindex;
                 Ok(journal.commit(hold, Some(header), &next).await?)
             }
@@ -307,35 +321,44 @@ where
 
     /// Whether each parent name that a relink of `header` published at serves
     /// a record above every mark there, with no same-sequence tie. A name
-    /// that holds no mark had no relink signed at it.
-    async fn fence_holds(
+    /// that holds no mark had no relink signed at it. Each fetch is one read
+    /// of `left`.
+    ///
+    /// A signed record above every mark proves that no late PUT of the relink
+    /// can win, so a signature-verified read suffices; the retire verdict
+    /// comes only from the gated walk.
+    async fn fence(
         &self,
         owner: &DrainScope<'_>,
         dest: &ScopeEnd<'_>,
         header: &DissolveHeader,
-    ) -> bool {
+        left: &Cell<usize>,
+    ) -> Fence {
+        let Some(share) = ReadShare::take(left, header.relink_names.len()) else {
+            return Fence::Waits;
+        };
         let floors = dest.floors(&self.seams.floors);
         let ledger = self.retire_ledger(owner);
         let tag = owner_tag(owner.enc_secret);
         for name in &header.relink_names {
             let Ok(parsed) = core::str::from_utf8(name).map(IpnsName::parse) else {
-                return false;
+                return Fence::Fails;
             };
             let Ok(parsed) = parsed else {
-                return false;
+                return Fence::Fails;
             };
             let mut bar = None;
             for key in relink_mark_keys(header.scopes[0].scope_id, name) {
                 match floor::sequence_floor(&floors, &key).await {
                     Ok(mark) => bar = bar.max(mark),
-                    Err(_) => return false,
+                    Err(_) => return Fence::Fails,
                 }
             }
             let Ok(unacked) = ledger
                 .unacknowledged(&tag, header.relink_parent.0, parsed.as_str())
                 .await
             else {
-                return false;
+                return Fence::Fails;
             };
             let marks = HeldMarks {
                 acked: bar.map_or(Acknowledged::Nothing, Acknowledged::At),
@@ -344,12 +367,15 @@ where
             if marks == HeldMarks::default() {
                 continue;
             }
+            if !take_tick_read(&share.left) {
+                return Fence::Waits;
+            }
             match LeafRead::fetch(&self.seams.transport, &parsed).await {
                 Ok(read) if read.tied.is_empty() && !marks.hold(read.pick.sequence) => {}
-                _ => return false,
+                _ => return Fence::Fails,
             }
         }
-        true
+        Fence::Holds
     }
 
     /// One read of a link proof: the bin index, a scope root through its own

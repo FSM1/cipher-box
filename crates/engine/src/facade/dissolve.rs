@@ -85,7 +85,7 @@ where
         for root in roots {
             let driven = match self.drive_dissolve_cut(sites, pointers, root).await {
                 Ok(Some(step)) if step >= DissolveStep::Unindex => {
-                    self.drive_dissolve_unindex(sites, root).await
+                    Box::pin(self.drive_dissolve_unindex(sites, root)).await
                 }
                 Ok(_) => self.republish_short_terms(sites, root).await,
                 Err(error) => Err(error),

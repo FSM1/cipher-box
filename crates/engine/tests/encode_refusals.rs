@@ -398,6 +398,14 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             DissolveCodecError::ParkedOutsideRelink,
         ),
         (
+            edit(DissolveStep::Relink, &|h| h.keep_names = true),
+            DissolveCodecError::KeptNamesOutsideCleanup,
+        ),
+        (
+            edit(DissolveStep::Hold, &|h| h.keep_names = true),
+            DissolveCodecError::KeptNamesOutsideCleanup,
+        ),
+        (
             edit(DissolveStep::Retire, &|h| {
                 h.scopes[0].manifest.as_mut().expect("a manifest").retired = true;
             }),
@@ -775,6 +783,48 @@ fn the_dissolve_journal_writer_keeps_each_final_record_from_the_index_removal() 
         dissolve_commit(&hold, &[], &edit(&hold, &|m| m.retired = true)),
         Ok(()),
         "a final record retires"
+    );
+}
+
+/// The neither verdict of a link proof lands with the index removal and
+/// stays until the hold step: the writer refuses each change of it between.
+#[test]
+fn the_dissolve_journal_writer_keeps_the_neither_verdict_to_the_hold() {
+    let kept = |step| {
+        let mut header = dissolve_header_at(step);
+        header.keep_names = true;
+        header
+    };
+    let changed = "dissolve-journal-kept-names-changed";
+    assert_eq!(
+        dissolve_commit(
+            &dissolve_header_at(DissolveStep::Relink),
+            &[],
+            &kept(DissolveStep::Unindex)
+        ),
+        Ok(()),
+        "the verdict lands with the index removal"
+    );
+    for (held, new) in [
+        (
+            kept(DissolveStep::Unindex),
+            dissolve_header_at(DissolveStep::Retire),
+        ),
+        (
+            kept(DissolveStep::Retire),
+            dissolve_header_at(DissolveStep::Retire),
+        ),
+        (
+            dissolve_header_at(DissolveStep::Unindex),
+            kept(DissolveStep::Retire),
+        ),
+    ] {
+        assert_eq!(dissolve_commit(&held, &[], &new), Err(changed.to_owned()));
+    }
+    assert_eq!(
+        encode_dissolve_header(&kept(DissolveStep::Retire), NodeId([0x51; 16]))
+            .and_then(|payload| decode_dissolve_header(&payload, NodeId([0x51; 16]))),
+        Ok(kept(DissolveStep::Retire))
     );
 }
 

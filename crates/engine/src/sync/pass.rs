@@ -2205,6 +2205,19 @@ fn grafted_write_passes(
         .collect()
 }
 
+/// Drop each scope of `scopes`, which a dissolve removed from its parent's
+/// index, from the session's root sets and seeds. The boundary walk reads the
+/// index, so no later walk proves it again.
+fn forget_dissolved_scopes(state: &SessionState, scopes: &BTreeSet<NodeId>) {
+    for scope in scopes {
+        state.descendant_scope_roots.borrow_mut().remove(scope);
+        state.minted_scope_roots.borrow_mut().remove(scope);
+        state.walked_read_epochs.borrow_mut().remove(scope);
+        state.scope_read_seeds.borrow_mut().remove(&scope.0);
+        state.scope_write_seeds.borrow_mut().remove(&scope.0);
+    }
+}
+
 /// Install what one walk proved: drop the seeds of every promotion it could not
 /// re-prove, then deposit and project the ones it did.
 ///
@@ -2220,19 +2233,6 @@ fn grafted_write_passes(
 /// Answers the children each scope root stopped naming, stamped at
 /// `observed_at`: an unlink a write grantee published at the root of the scope
 /// it holds, which the owner's capture bins (CONTEXT.md "Owner capture").
-/// Drop each scope of `scopes`, which a dissolve removed from its parent's
-/// index, from the session's root sets and seeds. The boundary walk reads the
-/// index, so no later walk proves it again.
-fn forget_dissolved_scopes(state: &SessionState, scopes: &BTreeSet<NodeId>) {
-    for scope in scopes {
-        state.descendant_scope_roots.borrow_mut().remove(scope);
-        state.minted_scope_roots.borrow_mut().remove(scope);
-        state.walked_read_epochs.borrow_mut().remove(scope);
-        state.scope_read_seeds.borrow_mut().remove(&scope.0);
-        state.scope_write_seeds.borrow_mut().remove(&scope.0);
-    }
-}
-
 fn install_descendant_scopes(
     known: &RefCell<BTreeSet<NodeId>>,
     read_seeds: &RefCell<ScopeSeeds>,
