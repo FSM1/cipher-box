@@ -29278,6 +29278,34 @@ fn an_outside_ref_that_stays_after_the_copy_started_parks_the_walk() {
     assert!(header.copy_started);
 }
 
+/// A nested cut scope whose end the tick cannot build, because its write
+/// epoch floor does not read, is an outage and not an off-tree shape. The
+/// walk starts again on each tick past the restart bound, the entry stays,
+/// and the map commits once the end comes back.
+#[test]
+fn an_absent_nested_end_does_not_count_against_the_restart_bound() {
+    let mut fx = GrantScenario::new();
+    let (inner, _, _) = cut_dissolve_subtree(&mut fx);
+    let inner_floor = floor_label(&write_epoch_floor_key(&inner.0));
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&inner_floor);
+
+    ticks(&mut fx, 6);
+
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the entry stays through the outage"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    ticks(&mut fx, 2);
+    assert!(
+        fx.standing_dissolve().step >= DissolveStep::Seal,
+        "the map commits"
+    );
+}
+
 /// A cut subtree whose plain folder holds a ref to `out`, a folder of the
 /// vault scope that the read-only cut scope shares the write seed of. Answers
 /// `out` and the plain folder.
@@ -30861,6 +30889,7 @@ fn a_restart_whose_walk_stops_before_it_names_the_destination_spends_no_slot() {
     assert!(header.prior_bindings.is_empty(), "no slot after the walk");
     assert_eq!(header.binding.read_scope, fx.folder);
 }
+
 /// ADR 0077 D4: a rebind past `MAX_PRIOR_BINDINGS` stops the seal before any
 /// copy. The header keeps its binding and its prior bindings, the host gets
 /// one event, and no copy publishes.
