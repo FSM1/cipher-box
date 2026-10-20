@@ -32310,6 +32310,7 @@ fn two_relinks_at_one_parent_never_sign_one_sequence() {
         header_at(&fx, fx.folder).relink_sent && header_at(&fx, second).relink_sent,
         "both relinks were sent"
     );
+    assert!(!signed[0].is_empty() && !signed[1].is_empty());
     assert!(
         signed[0].is_disjoint(&signed[1]),
         "no sequence is signed twice: {signed:?}"
@@ -32703,5 +32704,162 @@ fn a_renewal_signs_above_a_relink_mark_that_no_ledger_mark_covers() {
     assert!(
         sequence_at(&world, &root_name) > relinked,
         "the renewal signs above the relink mark"
+    );
+}
+
+/// Design 3.2 step 5: after a lost scope pointer held the close, a child
+/// that a second device adds under the source reaches the map before the
+/// relink. The confirm reads each source again after a close that did not
+/// commit.
+#[test]
+fn a_child_added_while_a_lost_pointer_holds_the_close_joins_the_map() {
+    let mut fx = GrantScenario::new();
+    let (_, plain, _) = cut_dissolve_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let sealed = fx.standing_dissolve();
+    assert_eq!(sealed.step, DissolveStep::Seal);
+    let seed = kdf::owner_pointer_seed(&SECRET);
+    let pointer = scope_pointer_name(seed.as_bytes(), &fx.folder.0);
+    let lapsed = fx
+        .world
+        .record_store
+        .lapse(pointer.as_str())
+        .expect("the cut published the pointer");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Seal,
+        "the close waits"
+    );
+
+    // The second device reads through the pointer too, so the fresh pointer
+    // lands first. This device does not tick in between.
+    let held = IpnsRecord::unmarshal(&lapsed)
+        .and_then(|record| record.verify(&pointer))
+        .expect("the pointer verifies");
+    let fresh = IpnsRecord::create_v2(
+        &scope_pointer_signer(seed.as_bytes(), &fx.folder.0),
+        &held.value,
+        held.sequence + 1,
+        TTL_NANOS,
+        &eol_from(fx.world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, pointer.as_str(), fresh.clone());
+    }
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Create {
+        parent: plain,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    let before = sequence_at(&fx.world, &write_name(plain));
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+    assert!(
+        sequence_at(&fx.world, &write_name(plain)) > before,
+        "the second device adds the child"
+    );
+
+    ticks(&mut fx, 6);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
+}
+
+/// A confirm that the read share splits over two ticks closes only on a
+/// sweep that reads the same sources again. A row confirmed in the first
+/// tick that changes before the second is read again, and its new child
+/// reaches the map before the relink.
+#[test]
+fn a_confirm_over_two_ticks_reads_a_row_that_changed_between_them() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let folder = fx.folder;
+    create_published_folders(&mut fx, folder, 70);
+    // Each sweep fetches the head block of each row.
+    serve_http(&fx.owner_device, &fx.blocks, 4096);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    let mut sealed = None;
+    for _ in 0..60 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let header = fx.standing_dissolve();
+        if header.step == DissolveStep::Seal
+            && dissolve_rows(&fx, &header)
+                .iter()
+                .all(|row| copy_at(&fx, row.new).is_some())
+        {
+            sealed = Some(header);
+            break;
+        }
+    }
+    let sealed = sealed.expect("every copy seals");
+    // The confirm reads the rows from the last one.
+    let last = dissolve_rows(&fx, &sealed).last().expect("a row").old;
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Seal,
+        "the confirm takes more than one tick"
+    );
+
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Create {
+        parent: last,
+        name: "late".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+
+    ticks(&mut fx, 12);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
+}
+
+/// The relink signs above the mark of its entry: an entry raise that lands
+/// with a parent-name raise that does not sends nothing, and the retry signs
+/// above the entry mark.
+#[test]
+fn a_relink_retry_signs_above_an_entry_mark_whose_parent_mark_did_not_land() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let parent_key = [
+        b"dissolve-relink-parent/".as_slice(),
+        root_name.as_str().as_bytes(),
+    ]
+    .concat();
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&parent_key));
+    let puts = fx.world.record_store.put_count(root_name.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.world.record_store.put_count(root_name.as_str()),
+        puts,
+        "no PUT"
+    );
+    let entry = relink_mark(&fx, &root_name).expect("the entry mark landed");
+    fx.owner_device.floor_store.heal_floors();
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert!(
+        sequence_at(&fx.world, &root_name) > entry,
+        "the retry signs above the entry mark"
     );
 }
