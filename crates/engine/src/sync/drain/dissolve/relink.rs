@@ -25,8 +25,8 @@ use cipherbox_core::seal::{ChildRef, PreservedFields};
 
 use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_read};
 use super::seal::{Destination, SealFault, restarted};
-use super::{NotDriven, cut_epoch_of, cut_overtaken};
-use crate::facade::{NodeId, emit_trust_violation};
+use super::{NotDriven, cut_epoch_of, cut_overtaken, parent_mark_key};
+use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
 use crate::net::publish::head_cid_from_value;
@@ -46,8 +46,8 @@ use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 /// The floor-store prefix of the relink mark of one entry.
 const RELINK_MARK_PREFIX: &[u8] = b"dissolve-relink/";
 
-/// The floor-store prefix of the relink mark of one parent name.
-const PARENT_MARK_PREFIX: &[u8] = b"dissolve-relink-parent/";
+/// The detail of the owed work that a lost scope pointer holds.
+const DISSOLVE_POINTER_LOST: &str = "dissolve-scope-pointer-lost";
 
 /// The floor-store keys of the relink marks of the dissolve of `source_root`
 /// at the parent name `name`: the mark of the entry, then the mark of the
@@ -55,7 +55,7 @@ const PARENT_MARK_PREFIX: &[u8] = b"dissolve-relink-parent/";
 fn relink_mark_keys(source_root: NodeId, name: &[u8]) -> [Vec<u8>; 2] {
     [
         [RELINK_MARK_PREFIX, &source_root.0, name].concat(),
-        [PARENT_MARK_PREFIX, name].concat(),
+        parent_mark_key(name),
     ]
 }
 
@@ -150,7 +150,8 @@ where
 
     /// The final records of `scope` under `end`, from gated reads: the root,
     /// which must hold no row at the cut epoch of the dissolve, and the
-    /// scope pointer. A scope with no pointer gives the root EOL.
+    /// scope pointer. A scope with no pointer and no sequence floor for it
+    /// gives the root EOL.
     async fn final_records(
         &self,
         owner: &DrainScope<'_>,
@@ -199,14 +200,23 @@ where
                 hold_until = hold_until.min(eol);
             }
             // A pointer that this device signed and that no endpoint serves
-            // proves no term.
+            // proves no term. Its repair needs an owner-vouched read floor,
+            // so the close waits for the owner.
             Ok(None) => {
                 if floor::sequence_floor(&floors, pointer_name.as_str().as_bytes())
                     .await
                     .map_err(|_| SealFault::Unanswered)?
                     .is_some()
                 {
-                    hold_until = 0;
+                    if self.cells.dissolve.note_lost_pointer(scope.scope_id) {
+                        let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                            scope_root: scope.scope_id,
+                            detail: DISSOLVE_POINTER_LOST.to_owned(),
+                            retryable: true,
+                            class: OwedWorkClass::Availability,
+                        });
+                    }
+                    return Err(SealFault::Unanswered);
                 }
             }
             Err(PointerConsultError::Unavailable) => return Err(SealFault::Unanswered),
@@ -321,7 +331,8 @@ where
     /// Whether the destination moved since the seal: another read or write
     /// scope, an owner cut of the read scope, or a write cut of the write
     /// scope (ADR 0077 D4). A grantee rise keeps the copy, which the lazy wave
-    /// carries after the relink. `None` while a read lags the header.
+    /// carries after the relink. `None` while a read lags the header, and
+    /// while a sent relink waits to confirm a change of scope.
     async fn destination_moved(
         &self,
         owner: &DrainScope<'_>,
@@ -333,8 +344,21 @@ where
     ) -> Option<bool> {
         let was = header.binding;
         let dest = target.chain[0];
-        if (dest.root, target.write.root) != (was.read_scope, was.write_scope) {
-            return Some(true);
+        let candidate = (dest.root, target.write.root);
+        if candidate != (was.read_scope, was.write_scope) {
+            if !header.relink_sent {
+                return Some(true);
+            }
+            // A park holds the entry, so it waits for the confirmation that a
+            // rebind of the seal waits for.
+            let seen = self.cells.dissolve.see_relink_rebind(
+                header.scopes[0].scope_id,
+                candidate,
+                self.inputs.tick,
+            );
+            return self
+                .rebind_confirmed(was.read_scope, candidate, seen)
+                .then_some(true);
         }
         let write_floor = target
             .chain

@@ -9829,10 +9829,19 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        let observed = self
+        let mut observed = self
             .reresolve_before_signing(scope, &plane, folder, &name, commitment.as_ref(), &built_on)
             .await
             .map_err(PublishHalt::before_the_put)?;
+        if mark.is_none() {
+            let key = dissolve::parent_mark_key(name.as_str().as_bytes());
+            observed = observed.clearing(
+                floor::sequence_floor(&plane.end.floors(&self.seams.floors), &key)
+                    .await
+                    .map_err(|error| PublishHalt::before_the_put(seam(error)))?
+                    .unwrap_or(0),
+            );
+        }
         let published = self
             .publish_node_marked(
                 scope,

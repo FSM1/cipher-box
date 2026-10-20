@@ -357,25 +357,11 @@ where
                 .unwrap_or_else(|| DissolveSeal::new(&header, mark.clone()));
             (header, run)
         } else {
-            // The write scope comes from the seeds of the ends, which can
-            // differ for one tick, so a change of it alone commits only when
-            // two ticks in a row compute it. A walk that did not finish, or
-            // did not prove the bound read scope, reads its nodes as its
-            // parent's, so no read rebind commits off it.
-            let confirmed = if dest.root == binding.read_scope {
-                carried
-                    .as_ref()
-                    .and_then(|run| run.rebind)
-                    .is_some_and(|(seen, at)| {
-                        seen == candidate && at.checked_add(1) == Some(self.inputs.tick)
-                    })
-            } else {
-                self.inputs.walk_complete
-                    && !self
-                        .inputs
-                        .unproved_scope_roots
-                        .contains(&binding.read_scope)
-            };
+            let confirmed = self.rebind_confirmed(
+                binding.read_scope,
+                candidate,
+                carried.as_ref().and_then(|run| run.rebind),
+            );
             let next = rebound(&header, dest.root, target.write.root).filter(|_| confirmed);
             let committed = match next {
                 Some(next) => journal
@@ -427,6 +413,30 @@ where
             floors.push(self.write_floor(end).await.ok()?);
         }
         Some(floors)
+    }
+
+    /// Whether this tick may act on `candidate`, the read scope and the write
+    /// scope that it computes in place of the bound `read_scope`. `seen` is
+    /// the candidate of an earlier tick, and the number of that tick.
+    ///
+    /// The write scope comes from the seeds of the ends, which can differ for
+    /// one tick, so a change of it alone holds only when two ticks in a row
+    /// compute it. A walk that did not finish, or did not prove the bound
+    /// read scope, reads its nodes as its parent's, so no read change holds
+    /// off it.
+    pub(super) fn rebind_confirmed(
+        &self,
+        read_scope: NodeId,
+        candidate: (NodeId, NodeId),
+        seen: Option<((NodeId, NodeId), u64)>,
+    ) -> bool {
+        if candidate.0 == read_scope {
+            seen.is_some_and(|(seen, at)| {
+                seen == candidate && at.checked_add(1) == Some(self.inputs.tick)
+            })
+        } else {
+            self.inputs.walk_complete && !self.inputs.unproved_scope_roots.contains(&read_scope)
+        }
     }
 
     /// The write lease of each end of `target`'s chain, taken once each write

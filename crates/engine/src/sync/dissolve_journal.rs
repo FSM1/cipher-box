@@ -938,13 +938,42 @@ pub struct DissolveCell {
     /// source root. The drain holds no pointer signer, so the owner pass
     /// publishes them again.
     short_terms: RefCell<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    /// The cut scopes whose pointer this device signed and no endpoint
+    /// serves, each reported once.
+    lost_pointers: RefCell<BTreeSet<NodeId>>,
+    /// The destination, read scope and write scope, that a relink tick
+    /// computed off the binding, and the number of that tick, by source root.
+    relink_rebinds: RefCell<BTreeMap<NodeId, RelinkRebind>>,
 }
+
+/// A destination that a relink tick computed, and the number of that tick.
+pub type RelinkRebind = ((NodeId, NodeId), u64);
 
 impl DissolveCell {
     /// Note that the final records of `scopes`, cut by the dissolve at
     /// `root`, hold for less than one term.
     pub fn note_short_terms(&self, root: NodeId, scopes: BTreeSet<NodeId>) {
         self.short_terms.borrow_mut().insert(root, scopes);
+    }
+
+    /// Note that no endpoint serves the pointer of `scope`, which this
+    /// device signed. `true` the first time.
+    pub fn note_lost_pointer(&self, scope: NodeId) -> bool {
+        self.lost_pointers.borrow_mut().insert(scope)
+    }
+
+    /// Note that the relink tick `tick` of the entry at `root` computed the
+    /// destination `candidate`, and answer the one that an earlier tick
+    /// computed.
+    pub fn see_relink_rebind(
+        &self,
+        root: NodeId,
+        candidate: (NodeId, NodeId),
+        tick: u64,
+    ) -> Option<RelinkRebind> {
+        self.relink_rebinds
+            .borrow_mut()
+            .insert(root, (candidate, tick))
     }
 
     /// Take the scopes that [`Self::note_short_terms`] noted for `root`.
