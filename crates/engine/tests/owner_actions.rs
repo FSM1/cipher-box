@@ -32914,3 +32914,315 @@ fn a_relink_retry_signs_above_an_entry_mark_whose_parent_mark_did_not_land() {
         "the retry signs above the entry mark"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Dissolve: the link proof, the index removal, the retire and the hold
+// (ADR 0077 D1)
+// ---------------------------------------------------------------------------
+
+/// One day in milliseconds.
+const DAY_MILLIS: u64 = 24 * 60 * 60 * 1_000;
+
+/// Tick until the entry at the folder reaches `step` or goes, at most
+/// `bound` ticks. Answers the header, `None` when the entry went.
+fn tick_until_step(
+    fx: &mut GrantScenario,
+    step: DissolveStep,
+    bound: usize,
+) -> Option<DissolveHeader> {
+    for _ in 0..bound {
+        match fx.dissolve_header() {
+            Some(header) if header.step < step => {}
+            other => return other,
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.dissolve_header()
+}
+
+/// The scope ids that the vault root's published index names.
+fn vault_index(fx: &GrantScenario) -> Vec<[u8; 16]> {
+    published_child_scope_index(&fx.world, &fx.blocks, ROOT, EPOCH)
+}
+
+/// The names of the name log of the entry at the folder.
+fn copy_names(fx: &GrantScenario) -> Vec<String> {
+    logged_names(fx)
+        .into_iter()
+        .map(|(_, name)| String::from_utf8(name).expect("a name"))
+        .collect()
+}
+
+/// The subtree of [`sealed_dissolve`] driven to its hold step. Answers the
+/// rows of its map, which the hold step drops, and the header at hold.
+fn held_dissolve(fx: &mut GrantScenario) -> (Vec<MapRow>, DissolveHeader) {
+    sealed_dissolve(fx);
+    let rows = dissolve_rows(fx, &fx.standing_dissolve());
+    assert!(
+        vault_index(fx).contains(&fx.folder.0),
+        "the index names the source root"
+    );
+    let header = tick_until_step(fx, DissolveStep::Hold, 16).expect("the entry stands");
+    assert_eq!(
+        header.step,
+        DissolveStep::Hold,
+        "the entry reaches its hold"
+    );
+    (rows, header)
+}
+
+/// The final record names of each cut scope of `header`, with its
+/// `hold_until`: the pointer name, the final root name and the head CID.
+fn final_records(header: &DissolveHeader) -> Vec<(u64, [String; 3])> {
+    header
+        .scopes
+        .iter()
+        .map(|scope| {
+            let manifest = scope.manifest.as_ref().expect("a manifest");
+            let names = [
+                &manifest.pointer_name,
+                &manifest.final_root_name,
+                &manifest.head_cid,
+            ]
+            .map(|name| String::from_utf8(name.clone()).expect("a name"));
+            (manifest.hold_until, names)
+        })
+        .collect()
+}
+
+/// ADR 0077 D1, blueprint/api.md "Pin/name registry": after the relink, the
+/// vault root's index drops the source root, and every old name retires
+/// except the root name of each cut scope, a final record.
+#[test]
+fn a_relinked_dissolve_unindexes_the_source_root_and_retires_its_old_names() {
+    let mut fx = GrantScenario::new();
+
+    let (rows, header) = held_dissolve(&mut fx);
+
+    assert!(
+        !vault_index(&fx).contains(&fx.folder.0),
+        "the index drops the source root"
+    );
+    assert!(
+        vault_children(&fx)
+            .iter()
+            .any(|(id, ..)| *id == header.new_root),
+        "the vault root names the copy"
+    );
+    let retired = retired(&fx.owner_device);
+    let cut: BTreeSet<NodeId> = header.scopes.iter().map(|scope| scope.scope_id).collect();
+    for row in &rows {
+        let name = String::from_utf8(row.old_name.clone()).expect("a name");
+        assert_eq!(
+            retired.contains(&name),
+            !cut.contains(&row.old),
+            "an interior old name retires, and a scope root name waits"
+        );
+    }
+    for (_, names) in final_records(&header) {
+        assert!(
+            names.iter().all(|name| !retired.contains(name)),
+            "a final record waits"
+        );
+    }
+    assert!(logged_names(&fx).is_empty(), "the name log goes");
+    assert_eq!((header.map_pages, header.rows), (0, 0), "the map goes");
+}
+
+/// ADR 0077 D1: each final record resolves until the `hold_until` of its
+/// scope, and then retires. The entry goes once every scope retired.
+#[test]
+fn each_final_record_resolves_until_its_hold_then_retires() {
+    let mut fx = GrantScenario::new();
+    let (_, header) = held_dissolve(&mut fx);
+    let finals = final_records(&header);
+    let first = finals.iter().map(|(at, _)| *at).min().expect("a scope");
+    let last = finals.iter().map(|(at, _)| *at).max().expect("a scope");
+
+    fx.world
+        .scheduler
+        .advance_to(UnixMillis(first - DAY_MILLIS));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let retired_now = retired(&fx.owner_device);
+    for (hold_until, names) in &finals {
+        for name in &names[..2] {
+            assert!(!retired_now.contains(name), "a final record waits");
+            let parsed = IpnsName::parse(name).expect("a name");
+            assert!(
+                signed_eol_millis(&fx.world, &parsed) >= *hold_until,
+                "and resolves until its hold"
+            );
+        }
+    }
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Hold);
+
+    fx.world.scheduler.advance_to(UnixMillis(last));
+    ticks(&mut fx, 2);
+
+    let retired_now = retired(&fx.owner_device);
+    for (_, names) in &finals {
+        assert!(
+            names.iter().all(|name| retired_now.contains(name)),
+            "each final record retires at its hold"
+        );
+    }
+    assert_eq!(fx.dissolve_header(), None, "the entry goes");
+}
+
+/// ADR 0077 D1: past the index removal, no renewal signs a final record of a
+/// cut scope again, so each lapses at the EOL that the cut gave it.
+#[test]
+fn no_renewal_signs_a_final_record_again_after_the_index_removal() {
+    let mut fx = GrantScenario::new();
+    let (_, header) = held_dissolve(&mut fx);
+    let finals = final_records(&header);
+    let names: Vec<IpnsName> = finals
+        .iter()
+        .flat_map(|(_, names)| names[..2].to_vec())
+        .map(|name| IpnsName::parse(&name).expect("a name"))
+        .collect();
+    let signed: Vec<u64> = names
+        .iter()
+        .map(|name| sequence_at(&fx.world, name))
+        .collect();
+    let first = finals.iter().map(|(at, _)| *at).min().expect("a scope");
+
+    // Inside the renewal window of each final record.
+    fx.world
+        .scheduler
+        .advance_to(UnixMillis(first - 2 * DAY_MILLIS));
+    ticks(&mut fx, 4);
+
+    let now: Vec<u64> = names
+        .iter()
+        .map(|name| sequence_at(&fx.world, name))
+        .collect();
+    assert_eq!(now, signed, "no final record is signed again");
+}
+
+/// A dissolve whose relink was sent with no ack anywhere, then whose source
+/// root another device moved into a new folder at the relink sequence: the
+/// fence does not hold, and the entry parks. Answers the copy names.
+fn parked_after_a_move(fx: &mut GrantScenario) -> Vec<String> {
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    sealed_dissolve(fx);
+    let root_name = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root_name.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.standing_dissolve().relink_sent);
+    fx.world.record_store.heal_put_for(root_name.as_str());
+    move_the_folder_elsewhere(fx, other);
+    ticks(fx, 2);
+    assert!(fx.standing_dissolve().parked, "the fence parks the entry");
+    copy_names(fx)
+}
+
+/// ADR 0077 "Rotation primitives": a parked entry runs its link proof again
+/// only in a later session. Once the vault root serves a record above the
+/// relink mark, the proof finds the source root linked and the copy not: the
+/// copy names retire, and the entry goes.
+#[test]
+fn a_parked_dissolve_proves_again_in_the_next_session_and_retires_a_lost_copy() {
+    let mut fx = GrantScenario::new();
+    let copies = parked_after_a_move(&mut fx);
+    assert!(!copies.is_empty());
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Create {
+        parent: ROOT,
+        name: "later".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+
+    ticks(&mut fx, 3);
+
+    assert!(
+        fx.standing_dissolve().parked,
+        "this session does not prove again"
+    );
+    let retired_before = retired(&fx.owner_device);
+    assert!(copies.iter().all(|name| !retired_before.contains(name)));
+
+    restart_owner(&mut fx);
+    ticks(&mut fx, 6);
+
+    assert_eq!(fx.dissolve_header(), None, "the entry goes");
+    let retired = retired(&fx.owner_device);
+    assert!(
+        copies.iter().all(|name| retired.contains(name)),
+        "each copy name retires"
+    );
+}
+
+/// A retire batch that the registry refuses keeps its map page: the cursor
+/// does not move, and a later tick retires the page and moves on.
+#[test]
+fn a_refused_retire_batch_keeps_its_page_until_it_lands() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    fx.blocks.refuse_retire(true);
+    let header = tick_until_step(&mut fx, DissolveStep::Retire, 8).expect("the entry stands");
+    assert_eq!(header.step, DissolveStep::Retire);
+
+    ticks(&mut fx, 2);
+
+    let header = fx.standing_dissolve();
+    assert_eq!(
+        (header.step, header.retire_cursor),
+        (DissolveStep::Retire, 0),
+        "the cursor holds the refused page"
+    );
+
+    fx.blocks.refuse_retire(false);
+    let header = tick_until_step(&mut fx, DissolveStep::Hold, 8).expect("the entry stands");
+
+    assert_eq!(header.step, DissolveStep::Hold, "the retire lands");
+}
+
+/// ADR 0077 "Rotation primitives": a relink that landed with no ack, and
+/// whose copy another device then binned, moves on: the bin index names the
+/// copy, so the source root leaves the index and no copy name retires.
+#[test]
+fn a_copy_that_another_device_binned_after_the_relink_moves_on() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world.record_store.land_puts_unacked_at(&endpoint);
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let header = fx.standing_dissolve();
+    assert!(header.relink_sent && header.step == DissolveStep::Relink);
+    heal_every_put(&fx);
+    let (mut phone, _events, mut tasks) = fx.second_owner_device();
+    for _ in 0..2 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+    block_on(phone.command(Command::Delete {
+        node: header.new_root,
+    }))
+    .expect("the delete stages");
+    for _ in 0..4 {
+        tick(&fx.world, &phone, &mut tasks);
+    }
+    assert!(
+        vault_children(&fx)
+            .iter()
+            .all(|(id, ..)| *id != header.new_root && *id != fx.folder),
+        "the vault root names neither root"
+    );
+    let copies = copy_names(&fx);
+
+    let header = tick_until_step(&mut fx, DissolveStep::Hold, 12).expect("the entry stands");
+
+    assert_eq!(header.step, DissolveStep::Hold, "the entry moves on");
+    assert!(!vault_index(&fx).contains(&fx.folder.0));
+    let retired = retired(&fx.owner_device);
+    assert!(
+        copies.iter().all(|name| !retired.contains(name)),
+        "no copy name retires"
+    );
+}

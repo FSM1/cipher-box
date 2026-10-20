@@ -744,6 +744,40 @@ fn the_dissolve_journal_writer_refuses_each_header_that_undoes_the_held_one() {
     );
 }
 
+/// From the index removal on, the writer refuses each header that changes a
+/// final record or clears a retired one, and admits a retire of one.
+#[test]
+fn the_dissolve_journal_writer_keeps_each_final_record_from_the_index_removal() {
+    let hold = dissolve_header_at(DissolveStep::Hold);
+    let edit = |held: &DissolveHeader, change: &dyn Fn(&mut Manifest)| {
+        let mut header = held.clone();
+        change(header.scopes[1].manifest.as_mut().expect("a manifest"));
+        header
+    };
+    let changed = "dissolve-journal-manifest-changed-after-relink";
+    for (held, new) in [
+        (hold.clone(), edit(&hold, &|m| m.hold_until += 1)),
+        (
+            hold.clone(),
+            edit(&hold, &|m| m.pointer_name = b"k51other".to_vec()),
+        ),
+        (
+            dissolve_header_at(DissolveStep::Retire),
+            edit(&dissolve_header_at(DissolveStep::Retire), &|m| {
+                m.final_root_name = b"k51other".to_vec();
+            }),
+        ),
+        (edit(&hold, &|m| m.retired = true), hold.clone()),
+    ] {
+        assert_eq!(dissolve_commit(&held, &[], &new), Err(changed.to_owned()));
+    }
+    assert_eq!(
+        dissolve_commit(&hold, &[], &edit(&hold, &|m| m.retired = true)),
+        Ok(()),
+        "a final record retires"
+    );
+}
+
 /// A scope joins a dissolve only as an uncut scope, in a commit that returns
 /// to the cut step after the copy started (ADR 0077 D4). The writer refuses
 /// each other append, and the codec refuses an uncut scope off the cut step,

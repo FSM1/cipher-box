@@ -522,9 +522,10 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Drive the map, the seal and the relink step of each dissolve entry
-    /// this owner holds over the tick's own `ends`, within one share of reads
-    /// for the tick. An entry the drive cannot move waits for the next tick.
+    /// Drive the map, the seal, the relink, the retire and the hold step of
+    /// each dissolve entry this owner holds over the tick's own `ends`,
+    /// within one share of reads for the tick. An entry the drive cannot move
+    /// waits for the next tick.
     pub(super) async fn drive_dissolves(&self, passes: &[DrainScope<'_>], ends: &[ScopeEnd<'_>]) {
         let Some(owner) = passes.iter().find(|scope| !scope.is_grafted()) else {
             return;

@@ -230,12 +230,24 @@ where
             let Some(hold) = self.owed.dissolve().hold(root) else {
                 return Ok(());
             };
-            let OwedScope {
-                target, current, ..
-            } = self
-                .owed_scope(sites, header.binding.read_scope, "dissolve-unindex", false)
-                .await
-                .map_err(EngineError::from_owed_stop)?;
+            let parent = header.binding.read_scope;
+            let (target, current) = if parent == self.cut.vault_root {
+                let target = sites.enclosing(parent).await?;
+                let current = self
+                    .net(&target, PointerConsultArm::Refused)
+                    .resolve_anchored(&target.scope)
+                    .await
+                    .map_err(|e| EngineError::from_resolve_failure(e, "dissolve-unindex"))?;
+                (target, current)
+            } else {
+                let OwedScope {
+                    target, current, ..
+                } = self
+                    .owed_scope(sites, parent, "dissolve-unindex", false)
+                    .await
+                    .map_err(EngineError::from_owed_stop)?;
+                (target, current)
+            };
             let index = &current.direct_child_scope_index;
             if index.iter().any(|child| child.scope_id == root.0) {
                 let resealed = reseal_with_index(
