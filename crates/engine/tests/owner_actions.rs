@@ -32773,16 +32773,14 @@ fn a_child_added_while_a_lost_pointer_holds_the_close_joins_the_map() {
     assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
 }
 
-/// A confirm that the read share splits over two ticks closes only on a
-/// sweep that reads the same sources again. A row confirmed in the first
-/// tick that changes before the second is read again, and its new child
-/// reaches the map before the relink.
+/// A confirm keeps the reads that its close takes: a subtree whose sweep
+/// fills the tick read share still closes, and the relink follows.
 #[test]
-fn a_confirm_over_two_ticks_reads_a_row_that_changed_between_them() {
+fn a_confirm_that_fills_the_tick_read_share_still_closes() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let folder = fx.folder;
-    create_published_folders(&mut fx, folder, 70);
+    create_published_folders(&mut fx, folder, 62);
     // Each sweep fetches the head block of each row.
     serve_http(&fx.owner_device, &fx.blocks, 4096);
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
@@ -32799,32 +32797,15 @@ fn a_confirm_over_two_ticks_reads_a_row_that_changed_between_them() {
             break;
         }
     }
-    let sealed = sealed.expect("every copy seals");
-    // The confirm reads the rows from the last one.
-    let last = dissolve_rows(&fx, &sealed).last().expect("a row").old;
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(sealed.expect("every copy seals").rows, 63);
+
+    ticks(&mut fx, 6);
+
     assert_eq!(
         fx.standing_dissolve().step,
-        DissolveStep::Seal,
-        "the confirm takes more than one tick"
+        DissolveStep::Unindex,
+        "the seal closes and the relink follows"
     );
-
-    let (mut phone, _events, mut tasks) = fx.second_owner_device();
-    block_on(phone.command(Command::Create {
-        parent: last,
-        name: "late".into(),
-        kind: NodeKind::Folder,
-    }))
-    .expect("the create stages");
-    for _ in 0..4 {
-        tick(&fx.world, &phone, &mut tasks);
-    }
-
-    ticks(&mut fx, 12);
-
-    let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
-    assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
 }
 
 /// The relink signs above the mark of its entry: an entry raise that lands

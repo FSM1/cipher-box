@@ -10,10 +10,10 @@
 //!
 //! Once every row is sealed, the confirm reads each row again: each source
 //! folder must name the children that the map places in it, and each copy
-//! must hold the body that its source gives now. A confirm sweep that reads
-//! every row in one tick, or that reads the same source sequences as the
-//! sweep before it, closes the seal (`close_seal`). Each sweep that closes
-//! nothing starts the next, so a source edit before the close is read.
+//! must hold the body that its source gives now. A confirm sweep that covers
+//! every row closes the seal (`close_seal`), and a close that does not commit
+//! starts a new sweep. An edit from another owner device after the sweep
+//! reads its row is not in the copy (design v6 section 6 item 8).
 
 use core::cell::Cell;
 use std::collections::btree_map::Entry;
@@ -56,11 +56,8 @@ pub(crate) struct DissolveSeal {
     done: BTreeSet<u32>,
     /// The rows of the confirm sweep that runs: each row that a read after
     /// every row was sealed found sealed, with a source that the map still
-    /// describes, and the sequence of that source.
-    confirmed: BTreeMap<u32, u64>,
-    /// The last complete confirm sweep that closed nothing. A sweep over more
-    /// than one tick closes only when it reads the same sources.
-    swept: Option<BTreeMap<u32, u64>>,
+    /// describes.
+    confirmed: BTreeSet<u32>,
     /// A gate refused a record, or the endpoints served a fork. The run
     /// publishes nothing more.
     refused: bool,
@@ -76,8 +73,7 @@ impl DissolveSeal {
             binding: header.binding,
             mark,
             done: BTreeSet::new(),
-            confirmed: BTreeMap::new(),
-            swept: None,
+            confirmed: BTreeSet::new(),
             refused: false,
             rebind: None,
         }
@@ -528,25 +524,32 @@ where
         let plane = dest.at(header.binding.read_epoch);
         // Once every row is sealed, each row is read again: the confirm.
         let confirming = run.done.len() == rows.len();
-        let mut read_now = 0;
+        // The confirm keeps the reads that the close takes: two for each scope.
+        let reserve = if confirming {
+            2 * header.scopes.len()
+        } else {
+            0
+        };
+        let row_reads = Cell::new(left.get().saturating_sub(reserve));
+        left.set(left.get() - row_reads.get());
         let mut source_roots: BTreeMap<NodeId, LoadedRoot> = BTreeMap::new();
         let mut jobs = Vec::new();
         let mut fault = None;
         for (at, (row, scope)) in rows.iter().zip(&scopes).enumerate().rev() {
             let at = u32::try_from(at).map_err(|_| SealFault::Unanswered)?;
             let held = if confirming {
-                run.confirmed.contains_key(&at)
+                &run.confirmed
             } else {
-                run.done.contains(&at)
+                &run.done
             };
-            if held {
+            if held.contains(&at) {
                 continue;
             }
             let Some(end) = end_of(*scope) else {
                 fault = Some(SealFault::Unanswered);
                 break;
             };
-            let (source, sequence) = match self
+            let source = match self
                 .seal_source(
                     owner,
                     ends,
@@ -554,12 +557,12 @@ where
                     end,
                     row.old,
                     &mut source_roots,
-                    left,
+                    &row_reads,
                     confirming,
                 )
                 .await
             {
-                Ok(Some(read)) => read,
+                Ok(Some(source)) => source,
                 Ok(None) => break,
                 Err(error) => {
                     fault = Some(error);
@@ -573,7 +576,7 @@ where
                 fault = Some(SealFault::Remap);
                 break;
             }
-            if !take_tick_read(left) {
+            if !take_tick_read(&row_reads) {
                 break;
             }
             let body = fresh_body(&source, at, &rows, &index, |id| dest.write_name(&id.0));
@@ -593,8 +596,7 @@ where
                 Ok(None) => {
                     run.done.insert(at);
                     if confirming {
-                        run.confirmed.insert(at, sequence);
-                        read_now += 1;
+                        run.confirmed.insert(at);
                     }
                 }
                 Ok(Some(basis)) => {
@@ -613,6 +615,7 @@ where
                 }
             }
         }
+        left.set(left.get() + row_reads.get());
         // A refusal holds the whole batch, so no later fault hides it.
         match fault {
             Some(SealFault::Refused) => return Err(SealFault::Refused),
@@ -657,14 +660,8 @@ where
         if let Some(fault) = fault {
             return Err(fault);
         }
-        if run.confirmed.len() != rows.len() {
-            return Ok(());
-        }
-        // A sweep read whole in this tick, or one that read the same sources
-        // as the sweep before it, holds the sources that the close names.
-        let closes = read_now == rows.len() || run.swept.as_ref() == Some(&run.confirmed);
-        run.swept = Some(core::mem::take(&mut run.confirmed));
-        if closes {
+        if run.confirmed.len() == rows.len() {
+            run.confirmed.clear();
             self.close_seal(owner, ends, journal, hold, &header, left)
                 .await?;
         }
@@ -699,11 +696,10 @@ where
         Some(Destination { ends, chain, write })
     }
 
-    /// The source body of the row at `node` under `end`, its scope, and the
-    /// sequence of the source record. A scope root reads through its own gate
-    /// once in a tick, into `roots`. In the confirm, its gated index may name
-    /// only the scopes that `header` cuts. `None` when the tick has no reads
-    /// left.
+    /// The source body of the row at `node` under `end`, its scope. A scope
+    /// root reads through its own gate once in a tick, into `roots`. In the
+    /// confirm, its gated index may name only the scopes that `header` cuts.
+    /// `None` when the tick has no reads left.
     #[expect(clippy::too_many_arguments, reason = "one source read of one row")]
     async fn seal_source(
         &self,
@@ -715,7 +711,7 @@ where
         roots: &mut BTreeMap<NodeId, LoadedRoot>,
         left: &Cell<usize>,
         confirming: bool,
-    ) -> Result<Option<(ReadBody, u64)>, SealFault> {
+    ) -> Result<Option<ReadBody>, SealFault> {
         let root = match roots.entry(end.root) {
             Entry::Occupied(slot) => slot.into_mut(),
             Entry::Vacant(slot) => {
@@ -751,15 +747,12 @@ where
         };
         if node == end.root {
             let state = &root.state;
-            return Ok(Some((
-                ReadBody::Folder {
-                    created_at: state.created_at,
-                    modified_at: state.modified_at,
-                    children: state.children.clone(),
-                    unknown: PreservedFields::new(),
-                },
-                state.observed.sequence(),
-            )));
+            return Ok(Some(ReadBody::Folder {
+                created_at: state.created_at,
+                modified_at: state.modified_at,
+                children: state.children.clone(),
+                unknown: PreservedFields::new(),
+            }));
         }
         if !take_tick_read(left) {
             return Ok(None);
@@ -768,7 +761,7 @@ where
             .gated_child(owner, ends, header, end, root.anchor(), node)
             .await
         {
-            Ok(loaded) => Ok(Some((loaded.body, loaded.observed.sequence()))),
+            Ok(loaded) => Ok(Some(loaded.body)),
             Err(ReadFault::Fatal(_)) => Err(SealFault::Remap),
             Err(fault) => Err(fault.into()),
         }
