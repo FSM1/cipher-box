@@ -33684,11 +33684,80 @@ fn a_write_cut_of_the_bound_read_scope_in_the_retire_step_reaches_the_hold() {
         live.iter().all(|name| !retired.contains(name)),
         "no live copy name retires"
     );
-    // The name wave of the cut retires a logged name at most once.
     assert!(
         logged
             .iter()
-            .all(|name| retired.iter().filter(|done| *done == name).count() <= 1),
-        "the retire step retires no logged name"
+            .all(|name| retired.iter().filter(|done| *done == name).count() == 1),
+        "the name wave of the cut retires each logged name once, and the retire step none"
+    );
+}
+
+/// The `RotationWorkOwed` events of a retire step whose bound read scope
+/// went, in `events`.
+fn read_scope_gone_events(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(event, Event::RotationWorkOwed { detail, .. }
+                if detail == "dissolve-read-scope-gone")
+        })
+        .count()
+}
+
+/// A retire step whose bound read scope another device dissolved stops: one
+/// event goes to the host, the entry stays at its retire step, and no name
+/// retires.
+#[test]
+fn a_retire_step_whose_read_scope_another_device_dissolved_stops_with_one_event() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    tick_until_step_at(&mut fx, inner, DissolveStep::Retire, 8);
+    assert_eq!(header_at(&fx, inner).step, DissolveStep::Retire);
+    events_so_far(&mut fx._events);
+    let (phone, _events, mut tasks) = fx.second_owner_device();
+    let cadence = phone.profile().poll_cadence;
+    {
+        let mut future = pin!(phone.dissolve_cut_for_test(fx.folder, ROOT, dissolve_binding()));
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut settled = false;
+        for _ in 0..64 {
+            if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
+                assert_eq!(outcome, Ok(Some(DissolveStep::Map)));
+                settled = true;
+                break;
+            }
+            fx.world.scheduler.advance(cadence);
+        }
+        assert!(settled, "the dissolve settles");
+    }
+    for _ in 0..12 {
+        if !vault_index(&fx).contains(&fx.folder.0) {
+            break;
+        }
+        tick(&fx.world, &phone, &mut tasks);
+    }
+    assert!(
+        vault_children(&fx).iter().all(|(id, ..)| *id != fx.folder)
+            && !vault_index(&fx).contains(&fx.folder.0),
+        "the other device relinked its copy and dropped the folder from the index"
+    );
+    let retired_before = retired(&fx.owner_device).len();
+
+    ticks(&mut fx, 3);
+
+    assert!(
+        !block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == fx.folder),
+        "this device no longer holds the folder"
+    );
+    assert_eq!(read_scope_gone_events(&events_so_far(&mut fx._events)), 1);
+    assert_eq!(header_at(&fx, inner).step, DissolveStep::Retire);
+    assert_eq!(
+        retired(&fx.owner_device).len(),
+        retired_before,
+        "no name retires"
     );
 }

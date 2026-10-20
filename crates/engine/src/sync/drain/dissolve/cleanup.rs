@@ -73,8 +73,8 @@ where
     /// One tick of the retire step: one map page, else one name log page,
     /// else the commit at the hold step. Each runs only while the bound read
     /// scope stands, its gated root names no cut scope in its index, and the
-    /// write floors read (ADR 0041 D3). A bound read scope that no longer
-    /// stands stops the entry, with one event.
+    /// write floors read (ADR 0041 D3). A bound read scope that the snapshot
+    /// no longer holds stops the entry, with one event.
     async fn retire_tick(
         &self,
         owner: &DrainScope<'_>,
@@ -86,13 +86,16 @@ where
     ) -> Result<(), NotDriven> {
         let source = header.scopes[0].scope_id;
         let bound = header.binding;
-        // A tick that holds no end on the path can be one failed seam read,
-        // so it waits with no event.
-        let target = self
+        let Some(target) = self
             .destination_of(owner, ends, bound.read_scope)
-            .ok_or(NotDriven)?;
-        if target.chain[0].root != bound.read_scope {
-            if self.cells.dissolve.note_retire_stopped(source) {
+            .filter(|target| target.chain[0].root == bound.read_scope)
+        else {
+            // A scope that the snapshot holds can lack an end for one tick.
+            let gone = {
+                let base = self.cells.base.borrow();
+                bound.read_scope != base.root && !base.contains(bound.read_scope)
+            };
+            if gone && self.cells.dissolve.note_retire_stopped(source) {
                 let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
                     scope_root: source,
                     detail: DISSOLVE_READ_SCOPE_GONE.to_owned(),
@@ -101,7 +104,7 @@ where
                 });
             }
             return Err(NotDriven);
-        }
+        };
         let dest = target.chain[0];
         if !take_tick_read(left) {
             return Err(NotDriven);
