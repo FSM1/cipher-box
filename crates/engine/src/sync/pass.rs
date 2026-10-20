@@ -448,9 +448,8 @@ where
             .assemble_scopes(state, &pass, &scopes, descendants, walk_complete)
             .await;
         lap();
-        let boundaries = self
-            .drain(state, &pass, &decision, &read_seed, &scopes, assembly)
-            .await;
+        let boundaries =
+            Box::pin(self.drain(state, &pass, &decision, &read_seed, &scopes, assembly)).await;
         lap();
         let pulled = self.pull_mailbox(state, &pass, &boundaries).await;
         lap();

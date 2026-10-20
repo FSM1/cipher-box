@@ -1453,6 +1453,62 @@ fn a_mount_write_inside_a_promoted_scope_root_publishes_on_a_non_minting_device(
     );
 }
 
+/// The stack a debug build's deepest tick path must fit in. It sits below the
+/// 2 MiB test thread that every other engine test ticks on, and the 2 MiB
+/// default of a spawned thread, so a frame growth on that path fails here first.
+const TICK_STACK_BUDGET: usize = 1792 * 1024;
+
+/// The mount deletes a folder inside a promoted scope root on a device that did
+/// not mint the grant. That delete is the deepest drain path, so the whole
+/// scenario runs on a thread of [`TICK_STACK_BUDGET`]. An overflow aborts the
+/// whole test binary, so the re-raise covers only a panic.
+#[test]
+fn a_mount_delete_inside_a_promoted_scope_root_drains_within_the_tick_stack_budget() {
+    std::thread::Builder::new()
+        .name("tick-stack-budget".to_owned())
+        .stack_size(TICK_STACK_BUDGET)
+        .spawn(a_mount_delete_inside_a_promoted_scope_root_drains)
+        .expect("the budget thread starts")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+}
+
+fn a_mount_delete_inside_a_promoted_scope_root_drains() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+
+    let mount = world.device(b"mounted-desktop");
+    let (mut engine_m, _events_m, mut tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
+
+    for name in ["kept-by-the-mount", "made-by-the-mount"] {
+        block_on(engine_m.command(Command::Create {
+            parent: shared,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .expect("a create inside the granted folder stages");
+    }
+    tick_n(&world, &engine_m, &mut tasks_m, 8);
+    assert_eq!(queued(&mount), 0, "the creates drain");
+    let gone = grafted_child(&engine_m, shared, "made-by-the-mount");
+    block_on(engine_m.command(Command::Delete { node: gone })).expect("the delete stages");
+    tick_n(&world, &engine_m, &mut tasks_m, 8);
+    assert_eq!(queued(&mount), 0, "the delete drains");
+    let scope_seed = owner_scope_seed(&world, &blocks, shared);
+    assert_eq!(
+        published_names(&world, &blocks, &scope_seed, shared),
+        ["kept-by-the-mount"],
+        "the promoted root drops the deleted child"
+    );
+}
+
 /// The read half on its own: the child predates the cut, so nothing has to
 /// publish below the promoted root for the second device to render it. Only the
 /// child-record read path stands between the mount and the folder's contents.

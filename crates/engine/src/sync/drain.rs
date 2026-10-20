@@ -3027,16 +3027,18 @@ where
             .filter(|scope| !scope.is_grafted())
             .map(|scope| scope.source)
             .collect();
+        // Boxed so the tick's state machine, and every debug-build frame that
+        // builds it, does not carry these legs inline.
         for scope in &passes {
-            let mut report = self.run_queue(scope, &ends, exits).await;
+            let mut report = Box::pin(self.run_queue(scope, &ends, exits)).await;
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
-        self.drive_dissolves(&passes, &ends).await;
+        Box::pin(self.drive_dissolves(&passes, &ends)).await;
         // The retire ledger is the identity's and reads under the vault root's
         // material, so only a tick that holds that root settles.
         if vault_held && let Some(vault) = passes.first() {
-            self.settle(vault, &passes, &journalled).await;
+            Box::pin(self.settle(vault, &passes, &journalled)).await;
         } else {
             // Settle sweeps staging on its own listing. Without it, an
             // abandoned write handle's residue still needs reclaiming at the
