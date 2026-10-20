@@ -325,9 +325,9 @@ struct Classified {
     hold_change: Option<HoldChange>,
     /// A record below the sequence floor while an endpoint failed.
     withheld: bool,
-    /// A verified commitment that leaves the personal tag out. An open is
-    /// known only after the gate adopts the record.
-    grant: Option<PersonalGrant>,
+    /// The cut epoch of a verified commitment that leaves the personal tag
+    /// out.
+    excluded: Option<u64>,
 }
 
 /// What a verified commitment says about this device's personal grant, at
@@ -360,7 +360,7 @@ impl Classified {
             link: None,
             hold_change: None,
             withheld: false,
-            grant: None,
+            excluded: None,
         }
     }
 
@@ -570,16 +570,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
 
+        let last_refreshed = |key: &BookmarkKey| verdicts.borrow().get(key).map(|held| held.at);
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
                 || render.deferred_raises.borrow().contains(key)
-                || on_access_refresh_due(
-                    now,
-                    verdicts.borrow().get(key).map(|held| held.at),
-                    profile,
-                )
+                || on_access_refresh_due(now, last_refreshed(key), profile)
         };
-        let last_refreshed = |key: &BookmarkKey| verdicts.borrow().get(key).map(|held| held.at);
         // A held bookmark spends one resolve on its scope pointer and one on
         // its scope root.
         let cost = |key: &BookmarkKey| {
@@ -607,25 +603,25 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut budget = prior.budget;
         let mut backfill_budget = prior.backfill_budget.min(budget);
         let mut backfill_due: Vec<BookmarkKey> = backfill.iter().copied().collect();
-        backfill_due.sort_by_key(last_refreshed);
+        backfill_due.sort_by_cached_key(last_refreshed);
         let backfilled: Vec<BookmarkKey> = backfill_due
             .into_iter()
             .map_while(|key| {
-                backfill_budget = backfill_budget.checked_sub(cost(&key))?;
-                budget -= cost(&key);
+                let spend = cost(&key);
+                backfill_budget = backfill_budget.checked_sub(spend)?;
+                budget -= spend;
                 Some(key)
             })
             .collect();
         // One budget, spent least recently refreshed first, so capped passes
-        // reach every bookmark in turn. A backfill member that the backfill
-        // did not reach goes after every other bookmark.
+        // reach every bookmark in turn.
         let mut due_keys: Vec<BookmarkKey> = fresh
             .iter()
             .copied()
             .filter(|key| !backfilled.contains(key))
             .filter(due)
             .collect();
-        due_keys.sort_by_key(|key| (backfill.contains(key), last_refreshed(key)));
+        due_keys.sort_by_cached_key(|key| (backfill.contains(key), last_refreshed(key)));
         let ordinary: Vec<BookmarkKey> = due_keys
             .into_iter()
             .map_while(|key| {
@@ -633,13 +629,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 Some(key)
             })
             .collect();
-        render.baseline_tried.borrow_mut().extend(
-            backfilled
-                .iter()
-                .chain(ordinary.iter().filter(|key| backfill.contains(key)))
-                .copied(),
-        );
         let scheduled: BTreeSet<BookmarkKey> = ordinary.into_iter().chain(backfilled).collect();
+        render
+            .baseline_tried
+            .borrow_mut()
+            .extend(scheduled.intersection(&backfill).copied());
         let (pointers, heals, pin_reads) = self
             .follow_held_pointers(&received, &by_identity, &scheduled, render)
             .await;
@@ -893,8 +887,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 link,
                 hold_change,
                 withheld,
-                mut grant,
+                excluded,
             } = classified;
+            let mut grant = excluded.map(PersonalGrant::Excluded);
             let reached_record = resolved.is_some();
             if let Some(hold) = hold.filter(|_| !personal) {
                 let deadline = match &hold_change {
@@ -1290,8 +1285,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             return Classified::unresolvable();
         }
         // The facts of the link path name the link tag, not the personal one.
-        let grant =
-            (link.is_none() && !facts.tag_committed).then_some(PersonalGrant::Excluded(cut_epoch));
+        let excluded = (link.is_none() && !facts.tag_committed).then_some(cut_epoch);
         let mut class = classify(&facts);
         let mut hold_change = None;
         if let (Some(invitee), Some(hold)) = (&link, hold) {
@@ -1316,7 +1310,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             link,
             hold_change,
             withheld: false,
-            grant,
+            excluded,
         }
     }
 
@@ -5660,11 +5654,11 @@ mod tests {
                 rows: Vec<GrantRow>,
                 cut: u64,
                 sequence: u64,
-                edit: impl FnOnce(&mut GrantSection),
+                edit: impl FnOnce(&mut Envelope, &mut GrantSection),
             ) {
                 serve_root(fx, rows, cut, sequence);
                 let signed = core::mem::replace(&mut fx.fixture, published(&sharer_signer(), &[]));
-                fx.fixture = reencoded(signed, |_, section| edit(section));
+                fx.fixture = reencoded(signed, edit);
                 seed_scope_root(&fx.records, &fx.fixture, sequence);
             }
 
@@ -5722,7 +5716,7 @@ mod tests {
             #[test]
             fn a_stripped_blob_sets_nothing() {
                 let mut fx = personal((None, Some(1)));
-                serve_edited(&mut fx, vec![personal_row()], 2, 1, |section| {
+                serve_edited(&mut fx, vec![personal_row()], 2, 1, |_, section| {
                     section.grant_blobs.clear();
                 });
 
@@ -5789,7 +5783,7 @@ mod tests {
                     "a blob that will not open"
                 );
 
-                serve_edited(&mut fx, vec![personal_row()], 3, 4, |section| {
+                serve_edited(&mut fx, vec![personal_row()], 3, 4, |_, section| {
                     for blob in &mut section.grant_blobs {
                         let last = blob.ciphertext.len() - 1;
                         blob.ciphertext[last] ^= 0x01;
@@ -5825,7 +5819,7 @@ mod tests {
             #[test]
             fn a_regrant_blob_the_gate_refuses_changes_no_mark() {
                 let mut fx = ended_at_2();
-                serve_edited(&mut fx, vec![personal_row()], 2, 3, |section| {
+                serve_edited(&mut fx, vec![personal_row()], 2, 3, |_, section| {
                     for blob in &mut section.grant_blobs {
                         blob.signature[0] ^= 0x01;
                     }
@@ -5841,9 +5835,7 @@ mod tests {
             #[test]
             fn a_signed_regrant_blob_over_other_seeds_changes_no_mark() {
                 let mut fx = ended_at_2();
-                serve_root(&mut fx, vec![personal_row()], 2, 3);
-                let served = core::mem::replace(&mut fx.fixture, published(&sharer_signer(), &[]));
-                fx.fixture = reencoded(served, |envelope, section| {
+                serve_edited(&mut fx, vec![personal_row()], 2, 3, |envelope, section| {
                     let aad = AadContext {
                         v: envelope.v,
                         id: envelope.id,
@@ -5879,7 +5871,6 @@ mod tests {
                         .to_bytes();
                     }
                 });
-                seed_scope_root(&fx.records, &fx.fixture, 3);
 
                 assert_eq!(fx.forced_pass(2_000), ResolutionClass::Unresolvable);
                 assert!(fx.reported.get(), "the refusal is a trust verdict");
