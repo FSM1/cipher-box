@@ -3,6 +3,9 @@ import { expect, type Download, type Locator, type Page } from '@playwright/test
 /** The accessible name a row's selection checkbox carries. */
 const SELECT_PREFIX = 'select ';
 
+/** A size or date cell with a value, not the `...` of an unresolved row. */
+const RESOLVED = /^(?!\.\.\.$).+/;
+
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
   constructor(readonly page: Page) {}
@@ -246,11 +249,24 @@ export class FilesPage {
     return shown;
   }
 
-  /** Raises the text editor on a row and waits for the file text to load into it. */
+  /**
+   * Raises the text editor on a row and waits for the file text to load into
+   * it. The dialog keeps the row of the click, and a row with no size yet opens
+   * on a refusal that never clears, so the click waits for the size.
+   */
   async openEditor(name: string): Promise<Locator> {
+    await expect(
+      this.row(name).locator('.file-list-item-size'),
+      `the listing resolves the size of ${name}`
+    ).toHaveText(RESOLVED, { timeout: 60_000 });
     await this.act(name, 'edit');
-    const field = this.page.getByTestId('text-editor-field');
-    await expect(field).toBeVisible({ timeout: 60_000 });
+    const dialog = this.page.getByRole('dialog', { name: `edit ${name}`, exact: true });
+    const field = dialog.getByTestId('text-editor-field');
+    const refusal = dialog.getByTestId('dialog-error');
+    await expect(field.or(refusal).first()).toBeVisible({ timeout: 60_000 });
+    if (await refusal.isVisible()) {
+      throw new Error(`the editor refused ${name}: ${await refusal.innerText()}`);
+    }
     return field;
   }
 
