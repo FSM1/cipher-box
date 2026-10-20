@@ -28,7 +28,7 @@ use super::{
     refuse_record, seal_open_failed, seam, seed_for_lagging, take_tick_read, walk_fault,
 };
 use crate::entropy::fresh_bytes;
-use crate::facade::{NodeId, emit_trust_violation};
+use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason, floor};
 use crate::net::fork::served_fork;
 use crate::net::gated_read::{LeafRead, LeafRefusal};
@@ -75,6 +75,21 @@ const MAX_DISSOLVE_WALK_NODES: usize = 65_536;
 /// before it starts again.
 const MAX_DISSOLVE_READ_ATTEMPTS: u8 = 3;
 
+/// The times a dissolve walk starts again on a ref outside the subtree, a
+/// second ref to a node, a nested root that its index does not name or that
+/// does not ascend from its parent, or a complete walk that misses a cut
+/// scope, before the dissolve stops. A restart for an end absent from the
+/// tick, a moved node, or an unanswered read does not count.
+const MAX_DISSOLVE_WALK_RESTARTS: u8 = 4;
+
+/// The detail of the one host event for a dissolve whose walk passed its
+/// restart bound after the copy started.
+const DISSOLVE_WALK_UNSETTLED: &str = "dissolve-walk-unsettled";
+
+/// The detail of the one host event for a dissolve whose walk passed its
+/// node bound after the copy started.
+const DISSOLVE_WALK_TOO_LARGE: &str = "dissolve-walk-too-large";
+
 /// One node of a dissolve walk: the node, the scope root whose end reads it,
 /// and the walk index of the folder that names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,7 +126,8 @@ pub(super) enum Unmapped {
     /// owed. The dissolve stops.
     NewScopeRoot,
     /// The child opens under another end of the tick that the dissolve does
-    /// not cut: a node outside the subtree. The walk starts again.
+    /// not cut: a node outside the subtree. The walk starts again, up to its
+    /// restart bound.
     Outside,
 }
 
@@ -134,6 +150,7 @@ impl EndMark {
 
 /// The map walk of one dissolve entry, carried across ticks.
 pub(crate) struct DissolveWalk {
+    source: NodeId,
     /// The scopes and the cut epochs of the header it walks. Another header
     /// starts the walk again.
     scopes: Vec<(NodeId, u64)>,
@@ -143,14 +160,17 @@ pub(crate) struct DissolveWalk {
     /// The material of each end whose root gave an anchor. Other material
     /// starts the walk again.
     marks: BTreeMap<NodeId, EndMark>,
-    /// A gate refused a record of the walk, or the endpoints served a
-    /// same-sequence fork. The walk reads no more until a new header or new
-    /// material of a marked end. A refusal at the first root read marks no
-    /// end, so that hold lasts until a new header.
-    refused: bool,
+    /// A gate refused a record of the walk, the endpoints served a
+    /// same-sequence fork, or the walk passed its restart bound after the
+    /// copy started. The walk reads no more until a new header or new
+    /// material of a marked end. A hold with no marked end lasts until a new
+    /// header.
+    held: bool,
     /// The copy started, so a scope that a gated index names and the
     /// dissolve does not cut joins the dissolve.
     joining: bool,
+    /// The off-tree restarts of the walk under this header and material.
+    restarts: u8,
 }
 
 /// Why a first-sweep visit stopped the walk.
@@ -163,6 +183,9 @@ enum MapHalt {
     Concurrent,
     /// The walk passed its node bound.
     TooLarge,
+    /// An end that the visit needs is absent from the tick: the next tick
+    /// walks again, and the restart does not count.
+    EndAbsent,
     /// A gated index names these scopes, which the dissolve does not cut,
     /// after the copy started.
     Joined(BTreeSet<NodeId>),
@@ -175,16 +198,50 @@ pub(super) enum MapStep {
     Unfinished,
     /// Every node read twice to the same record.
     Complete,
-    /// A node moved, a visit found a diamond or an unindexed root, or a read
-    /// went unanswered too long: the next tick walks again.
+    /// A node moved, a visit found a diamond or an unindexed root, a complete
+    /// walk missed a cut scope, or a read went unanswered too long: the next
+    /// tick walks again from the root. An off-tree cause, such as a missed cut
+    /// scope, counts against [`MAX_DISSOLVE_WALK_RESTARTS`].
     Restart,
     /// A gate refused a record, or the endpoints served a fork.
     Refused,
-    /// The dissolve stops before the copy.
+    /// A new scope root, or a concurrent cut on a cut scope: the dissolve
+    /// stops before the copy, and keeps the entry after it.
     Stop,
     /// Each scope that a gated index names and the dissolve does not cut
     /// joins the dissolve, which returns to its cut step (ADR 0077 D4).
     Join(Vec<NodeId>),
+    /// The walk passed [`MAX_DISSOLVE_WALK_RESTARTS`]: the dissolve stops
+    /// before the copy, and parks after it.
+    Unsettled,
+    /// The walk passed its node bound: the dissolve stops before the copy,
+    /// and parks after it.
+    TooLarge,
+}
+
+/// What the drive does with an entry whose map step stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum MapStopAction {
+    /// The entry goes: no copy exists yet.
+    Drop,
+    /// The entry and each copy stay, and the next tick walks again.
+    Keep,
+    /// The entry and each copy stay, the walk holds, and the host gets one
+    /// event with this detail.
+    Park(&'static str),
+}
+
+/// The action for `step`, a stop of the map. After the copy started, a walk
+/// past its restart bound or its node bound parks. The other stops are a new
+/// scope root, which joins the dissolve once its index lands, and a
+/// concurrent cut on a cut scope, which waits for the re-cut rule.
+fn map_stop_action(step: &MapStep, copy_started: bool) -> MapStopAction {
+    match step {
+        _ if !copy_started => MapStopAction::Drop,
+        MapStep::Unsettled => MapStopAction::Park(DISSOLVE_WALK_UNSETTLED),
+        MapStep::TooLarge => MapStopAction::Park(DISSOLVE_WALK_TOO_LARGE),
+        _ => MapStopAction::Keep,
+    }
 }
 
 fn scope_ids(header: &DissolveHeader) -> Vec<(NodeId, u64)> {
@@ -224,20 +281,42 @@ fn cut_epoch_of(header: &DissolveHeader, scope: NodeId) -> Option<u64> {
 
 impl DissolveWalk {
     pub(super) fn new(header: &DissolveHeader, source_root: NodeId) -> Self {
+        Self {
+            source: source_root,
+            scopes: scope_ids(header),
+            sweep: Self::first_sweep(source_root),
+            anchors: BTreeMap::new(),
+            indexes: BTreeMap::new(),
+            marks: BTreeMap::new(),
+            held: false,
+            joining: header.copy_started,
+            restarts: 0,
+        }
+    }
+
+    fn first_sweep(source_root: NodeId) -> TwoSweep<WalkKey> {
         let first = WalkKey {
             node: source_root,
             scope: source_root,
             parent: None,
         };
-        Self {
-            scopes: scope_ids(header),
-            sweep: TwoSweep::new(first, source_root),
-            anchors: BTreeMap::new(),
-            indexes: BTreeMap::new(),
-            marks: BTreeMap::new(),
-            refused: false,
-            joining: header.copy_started,
+        TwoSweep::new(first, source_root)
+    }
+
+    /// Start the walk again from its root. An off-tree restart counts
+    /// against [`MAX_DISSOLVE_WALK_RESTARTS`].
+    fn start_again(&mut self, off_tree: bool) -> MapStep {
+        if off_tree {
+            if self.restarts >= MAX_DISSOLVE_WALK_RESTARTS {
+                return MapStep::Unsettled;
+            }
+            self.restarts += 1;
         }
+        self.sweep = Self::first_sweep(self.source);
+        self.anchors.clear();
+        self.indexes.clear();
+        self.marks.clear();
+        MapStep::Restart
     }
 
     fn walks(&self, header: &DissolveHeader) -> bool {
@@ -266,12 +345,12 @@ impl DissolveWalk {
 
     /// Spend reads from `left` on the walk, through `read`. `ascends` answers
     /// whether the end of the second scope root takes its ascent authority from
-    /// the read seed of the first.
+    /// the read seed of the first, `None` when an end is absent from the tick.
     pub(super) async fn step(
         &mut self,
         left: &Cell<usize>,
         bound: usize,
-        ascends: &dyn Fn(NodeId, NodeId) -> bool,
+        ascends: &dyn Fn(NodeId, NodeId) -> Option<bool>,
         read: impl AsyncFn(&WalkKey, Option<Anchor<'_>>) -> Result<DissolveRead, ReadFault<Unmapped>>,
     ) -> MapStep {
         let Self {
@@ -303,15 +382,15 @@ impl DissolveWalk {
             )
             .await;
         let halt = policy.halt;
-        match swept {
-            Swept::Complete => {
-                // Each scope the header cuts is a node of the walked tree.
-                if scopes.iter().all(|(scope, _)| sweep.seen.contains(scope)) {
-                    MapStep::Complete
-                } else {
-                    MapStep::Stop
-                }
-            }
+        // Each scope the header cuts is a node of a complete walk.
+        let misses_a_cut = matches!(swept, Swept::Complete)
+            && !scopes.iter().all(|(scope, _)| sweep.seen.contains(scope));
+        let off_tree = misses_a_cut
+            || halt == Some(MapHalt::Restart)
+            || matches!(swept, Swept::Fault(ReadFault::Fatal(Unmapped::Outside)));
+        let step = match swept {
+            Swept::Complete if misses_a_cut => MapStep::Restart,
+            Swept::Complete => MapStep::Complete,
             Swept::Paused => MapStep::Unfinished,
             Swept::Moved => MapStep::Restart,
             Swept::Fault(ReadFault::Untrusted) => MapStep::Refused,
@@ -325,11 +404,16 @@ impl DissolveWalk {
                 }
             }
             Swept::Stopped(Overflow) => match halt {
-                Some(MapHalt::Restart) => MapStep::Restart,
+                Some(MapHalt::Restart | MapHalt::EndAbsent) => MapStep::Restart,
                 Some(MapHalt::Joined(scopes)) => MapStep::Join(scopes.into_iter().collect()),
-                Some(MapHalt::Concurrent | MapHalt::TooLarge) | None => MapStep::Stop,
+                Some(MapHalt::Concurrent) => MapStep::Stop,
+                Some(MapHalt::TooLarge) | None => MapStep::TooLarge,
             },
+        };
+        if step == MapStep::Restart {
+            return self.start_again(off_tree);
         }
+        step
     }
 
     /// The map rows in walk order, which is one rooted tree in pre-order. The
@@ -362,7 +446,7 @@ struct DissolvePolicy<'p> {
     scopes: &'p [(NodeId, u64)],
     anchors: &'p mut BTreeMap<NodeId, WalkAnchor>,
     indexes: &'p mut BTreeMap<NodeId, BTreeSet<NodeId>>,
-    ascends: &'p dyn Fn(NodeId, NodeId) -> bool,
+    ascends: &'p dyn Fn(NodeId, NodeId) -> Option<bool>,
     left: &'p Cell<usize>,
     bound: usize,
     joining: bool,
@@ -430,8 +514,13 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
                 return self.stop(MapHalt::Restart);
             }
             let scope = if self.cuts(id).is_some() {
-                if !index.contains(&id) || !(self.ascends)(key.scope, id) {
+                if !index.contains(&id) {
                     return self.stop(MapHalt::Restart);
+                }
+                match (self.ascends)(key.scope, id) {
+                    None => return self.stop(MapHalt::EndAbsent),
+                    Some(false) => return self.stop(MapHalt::Restart),
+                    Some(true) => {}
                 }
                 id
             } else {
@@ -543,15 +632,12 @@ where
         let mut walk = carried
             .filter(|walk| walk.walks(&header) && walk.keeps_material(mark_of))
             .unwrap_or_else(|| DissolveWalk::new(&header, root));
-        if walk.refused {
+        if walk.held {
             self.cells.dissolve_walks.borrow_mut().insert(root, walk);
             return Ok(());
         }
-        let ascends = |parent: NodeId, child: NodeId| {
-            end_of(parent)
-                .zip(end_of(child))
-                .is_some_and(|(parent, child)| ascends_from(parent, child))
-        };
+        let ascends =
+            |parent: NodeId, child: NodeId| Some(ascends_from(end_of(parent)?, end_of(child)?));
         let step = walk
             .step(
                 left,
@@ -562,19 +648,32 @@ where
             .await;
         walk.note_material(mark_of);
         match step {
-            MapStep::Unfinished => {
+            MapStep::Unfinished | MapStep::Restart => {
                 self.cells.dissolve_walks.borrow_mut().insert(root, walk);
                 Ok(())
             }
-            MapStep::Restart => Ok(()),
             MapStep::Refused => {
-                walk.refused = true;
+                walk.held = true;
                 self.cells.dissolve_walks.borrow_mut().insert(root, walk);
                 Ok(())
             }
-            // After the copy started, a stop keeps the entry and each copy.
-            MapStep::Stop if header.copy_started => Ok(()),
-            MapStep::Stop => Ok(journal.drop_entry(&hold, &header).await?),
+            MapStep::Stop | MapStep::Unsettled | MapStep::TooLarge => {
+                match map_stop_action(&step, header.copy_started) {
+                    MapStopAction::Drop => Ok(journal.drop_entry(&hold, &header).await?),
+                    MapStopAction::Keep => Ok(()),
+                    MapStopAction::Park(detail) => {
+                        walk.held = true;
+                        self.cells.dissolve_walks.borrow_mut().insert(root, walk);
+                        let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                            scope_root: root,
+                            detail: detail.to_owned(),
+                            retryable: false,
+                            class: OwedWorkClass::Capability,
+                        });
+                        Ok(())
+                    }
+                }
+            }
             MapStep::Join(scopes) => {
                 let mut joined = header.clone();
                 joined.step = DissolveStep::Cut;
@@ -1111,6 +1210,8 @@ mod tests {
         refused: bool,
         /// The root gate passes the node as a scope root.
         promoted: bool,
+        /// The node opens under another end, outside the subtree.
+        outside: bool,
     }
 
     fn folder(children: &[NodeId]) -> Node {
@@ -1120,6 +1221,7 @@ mod tests {
             sequence: 1,
             refused: false,
             promoted: false,
+            outside: false,
         }
     }
 
@@ -1182,7 +1284,8 @@ mod tests {
     struct Fake {
         tree: RefCell<BTreeMap<NodeId, Node>>,
         reads: RefCell<Vec<WalkKey>>,
-        ascends: bool,
+        /// `None` for an end absent from the tick.
+        ascends: Option<bool>,
     }
 
     impl Fake {
@@ -1190,7 +1293,7 @@ mod tests {
             Self {
                 tree: RefCell::new(tree),
                 reads: RefCell::new(Vec::new()),
-                ascends: true,
+                ascends: Some(true),
             }
         }
 
@@ -1207,6 +1310,9 @@ mod tests {
                 }
                 if node.promoted {
                     return Err(ReadFault::Fatal(Unmapped::NewScopeRoot));
+                }
+                if node.outside {
+                    return Err(ReadFault::Fatal(Unmapped::Outside));
                 }
                 let root = (key.node == key.scope)
                     .then(|| node.root.clone())
@@ -1328,7 +1434,7 @@ mod tests {
     #[test]
     fn a_nested_root_of_another_scope_pauses_the_walk() {
         let mut fake = Fake::new(tree());
-        fake.ascends = false;
+        fake.ascends = Some(false);
 
         assert_eq!(fake.run(&mut walk(&[S, N])), MapStep::Restart);
     }
@@ -1366,6 +1472,118 @@ mod tests {
         for tree in [diamond, cycle] {
             assert_eq!(Fake::new(tree).run(&mut walk(&[S, N])), MapStep::Restart);
         }
+    }
+
+    /// An outside ref or a second ref that stays starts the walk again from
+    /// its root up to the restart bound, and the next one stops the walk.
+    #[test]
+    fn an_off_tree_ref_that_stays_stops_the_walk_after_its_restarts() {
+        let mut outside = tree();
+        outside.insert(
+            OUTSIDE,
+            Node {
+                outside: true,
+                ..folder(&[])
+            },
+        );
+        outside.get_mut(&A).unwrap().children.push(OUTSIDE);
+        let mut diamond = tree();
+        diamond.insert(C, folder(&[]));
+        diamond.get_mut(&A).unwrap().children.push(C);
+        diamond.get_mut(&F).unwrap().children.push(C);
+
+        for tree in [outside, diamond] {
+            let fake = Fake::new(tree);
+            let mut walk = walk(&[S, N]);
+            let steps: Vec<MapStep> = (0..=MAX_DISSOLVE_WALK_RESTARTS)
+                .map(|_| fake.run(&mut walk))
+                .collect();
+
+            let mut expected: Vec<MapStep> = (0..MAX_DISSOLVE_WALK_RESTARTS)
+                .map(|_| MapStep::Restart)
+                .collect();
+            expected.push(MapStep::Unsettled);
+            assert_eq!(steps, expected);
+            let roots = fake
+                .reads
+                .borrow()
+                .iter()
+                .filter(|key| key.node == S)
+                .count();
+            assert_eq!(roots, steps.len(), "each walk starts again at the root");
+        }
+    }
+
+    /// An end absent from the tick starts the walk again, and the restart
+    /// does not count: an outage does not stop the dissolve.
+    #[test]
+    fn an_absent_end_does_not_count_against_the_restart_bound() {
+        let mut fake = Fake::new(tree());
+        fake.ascends = None;
+        let mut walk = walk(&[S, N]);
+
+        for _ in 0..=MAX_DISSOLVE_WALK_RESTARTS + 1 {
+            assert_eq!(fake.run(&mut walk), MapStep::Restart);
+        }
+        fake.ascends = Some(true);
+        assert_eq!(fake.run(&mut walk), MapStep::Complete);
+    }
+
+    /// A nested root that the index of its parent does not name counts even
+    /// while its end is absent.
+    #[test]
+    fn an_unindexed_root_with_an_absent_end_counts_against_the_restart_bound() {
+        let mut tree = tree();
+        tree.get_mut(&S).unwrap().root = Some((Vec::new(), false, 2));
+        let mut fake = Fake::new(tree);
+        fake.ascends = None;
+        let mut walk = walk(&[S, N]);
+
+        let steps: Vec<MapStep> = (0..=MAX_DISSOLVE_WALK_RESTARTS)
+            .map(|_| fake.run(&mut walk))
+            .collect();
+
+        assert_eq!(steps.last(), Some(&MapStep::Unsettled));
+    }
+
+    /// A read unanswered for its attempts starts the walk again, and the
+    /// restart does not count.
+    #[test]
+    fn an_unanswered_read_does_not_count_against_the_restart_bound() {
+        let mut tree = tree();
+        tree.get_mut(&A).unwrap().children.push(OUTSIDE);
+        let fake = Fake::new(tree);
+        let mut walk = walk(&[S, N]);
+        let runs =
+            usize::from(MAX_DISSOLVE_READ_ATTEMPTS) * (usize::from(MAX_DISSOLVE_WALK_RESTARTS) + 2);
+
+        let steps: Vec<MapStep> = (0..runs).map(|_| fake.run(&mut walk)).collect();
+
+        assert!(!steps.contains(&MapStep::Unsettled));
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| **step == MapStep::Restart)
+                .count(),
+            usize::from(MAX_DISSOLVE_WALK_RESTARTS) + 2
+        );
+    }
+
+    /// A walk that a moved node starts again does not count the restart.
+    #[test]
+    fn a_moved_node_does_not_count_against_the_restart_bound() {
+        let fake = Fake::new(tree());
+        let mut walk = walk(&[S, N]);
+        for sequence in 2..=u64::from(MAX_DISSOLVE_WALK_RESTARTS) + 2 {
+            assert_eq!(
+                fake.tick(&mut walk, 5, MAX_DISSOLVE_WALK_NODES),
+                MapStep::Unfinished
+            );
+            fake.tree.borrow_mut().get_mut(&F).unwrap().sequence = sequence;
+            assert_eq!(fake.run(&mut walk), MapStep::Restart);
+        }
+
+        assert_eq!(fake.run(&mut walk), MapStep::Complete);
     }
 
     /// A node read to another record on the second sweep moved during the
@@ -1414,23 +1632,53 @@ mod tests {
         assert_eq!(Fake::new(tree).run(&mut walk(&[S, N])), MapStep::Refused);
     }
 
+    /// Before the copy, each map stop drops the entry. After it, a walk past
+    /// its node bound or its restart bound parks with one event, and the
+    /// stops that a later step clears keep the entry.
+    #[test]
+    fn only_a_stop_that_no_later_step_clears_parks_after_the_copy() {
+        let stops = [MapStep::Stop, MapStep::Unsettled, MapStep::TooLarge];
+        for step in &stops {
+            assert_eq!(map_stop_action(step, false), MapStopAction::Drop);
+        }
+        assert_eq!(
+            stops.map(|step| map_stop_action(&step, true)),
+            [
+                MapStopAction::Keep,
+                MapStopAction::Park(DISSOLVE_WALK_UNSETTLED),
+                MapStopAction::Park(DISSOLVE_WALK_TOO_LARGE),
+            ]
+        );
+    }
+
     /// A walk past its node bound stops the dissolve.
     #[test]
     fn a_walk_past_its_node_bound_stops() {
         assert_eq!(
             Fake::new(tree()).tick(&mut walk(&[S, N]), 64, 3),
-            MapStep::Stop
+            MapStep::TooLarge
         );
     }
 
-    /// A cut scope that no folder of the walked tree names moved out of the
-    /// subtree: the dissolve stops.
+    /// A complete walk that does not reach a cut scope starts again, and each
+    /// restart counts: the walk stops past the restart bound.
     #[test]
     fn a_cut_scope_the_walk_does_not_reach_stops_it() {
         let mut tree = tree();
         tree.get_mut(&S).unwrap().children = vec![A];
+        let fake = Fake::new(tree);
+        let mut walk = walk(&[S, N]);
 
-        assert_eq!(Fake::new(tree).run(&mut walk(&[S, N])), MapStep::Stop);
+        let steps: Vec<MapStep> = (0..=MAX_DISSOLVE_WALK_RESTARTS)
+            .map(|_| fake.run(&mut walk))
+            .collect();
+
+        assert_eq!(steps.last(), Some(&MapStep::Unsettled));
+        assert!(
+            steps[..steps.len() - 1]
+                .iter()
+                .all(|step| *step == MapStep::Restart)
+        );
     }
 
     /// A walk belongs to one header: another cut epoch starts it again.
