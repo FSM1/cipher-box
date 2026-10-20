@@ -67,7 +67,7 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::dissolve_journal::{
     DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
-    MAX_DISSOLVED_SCOPES, MapRow,
+    MAX_DISSOLVED_SCOPES, MAX_PRIOR_BINDINGS, MapRow, PriorBinding,
 };
 use cipherbox_engine::sync::dissolve_reads::{
     CLOSE_READS_PER_SCOPE, MAX_DISSOLVE_WALK_READS, SEAL_HEADER_READS, SEAL_ROW_READS,
@@ -28788,6 +28788,46 @@ fn with_dissolve_journal<R>(
     block_on(read(&journal))
 }
 
+/// Commit `edit` of the dissolve header at `root` in one header write.
+fn edit_dissolve(fx: &GrantScenario, root: NodeId, edit: impl FnOnce(&mut DissolveHeader)) {
+    let held = header_at(fx, root);
+    let mut next = held.clone();
+    edit(&mut next);
+    with_dissolve_journal(fx, async |journal| {
+        let cell = DissolveCell::default();
+        let hold = cell.hold(root).expect("one hold");
+        journal.commit(&hold, Some(&held), &next).await
+    })
+    .expect("the header commits");
+}
+
+/// The `RotationWorkOwed` events with `detail` among the events so far.
+fn owed_events(events: &mut EventStream, detail: &str) -> usize {
+    owed_reports(events)
+        .iter()
+        .filter(|(_, sent, ..)| sent == detail)
+        .count()
+}
+
+/// Over five ticks the walk passes its restart bound and parks: the host gets
+/// one event, the walk reads no more of `plain_name`, and the entry stays.
+fn assert_walk_parks(fx: &mut GrantScenario, plain_name: &IpnsName) {
+    ticks(fx, 5);
+
+    assert_eq!(
+        owed_events(&mut fx._events, "dissolve-walk-unsettled"),
+        1,
+        "one event"
+    );
+    assert_eq!(tick_reads(fx, plain_name), 0, "the walk reads no more");
+    assert_eq!(owed_events(&mut fx._events, "dissolve-walk-unsettled"), 0);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the entry stays"
+    );
+}
+
 /// The rows of the live map of `header`, the entry at the folder.
 fn dissolve_rows(fx: &GrantScenario, header: &DissolveHeader) -> Vec<MapRow> {
     rows_of(fx, fx.folder, header)
@@ -29207,6 +29247,122 @@ fn a_ref_to_an_outside_folder_in_a_shared_write_scope_is_never_mapped() {
         DissolveStep::Map,
         "no map commits"
     );
+}
+
+/// ADR 0077 D3: an outside ref that stays starts the walk again on each
+/// tick, up to the restart bound. The next restart stops the dissolve before
+/// the copy, and its entry goes.
+#[test]
+fn an_outside_ref_that_stays_stops_the_dissolve_before_the_copy() {
+    let mut fx = GrantScenario::new();
+    outside_ref_fixture(&mut fx);
+
+    ticks(&mut fx, 4);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "each restart up to the bound keeps the entry"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.dissolve_header(), None, "the entry goes");
+}
+
+/// ADR 0077 D3: after the copy started, an outside ref that stays past the
+/// restart bound stops the walk. The entry stays, the host gets one event,
+/// and the walk reads no more.
+#[test]
+fn an_outside_ref_that_stays_after_the_copy_started_parks_the_walk() {
+    let mut fx = GrantScenario::new();
+    let (_, plain) = outside_ref_fixture(&mut fx);
+    let plain_name = cut_name(&fx, plain);
+    let folder = fx.folder;
+    edit_dissolve(&fx, folder, |header| header.copy_started = true);
+    events_so_far(&mut fx._events);
+
+    assert_walk_parks(&mut fx, &plain_name);
+    assert!(fx.standing_dissolve().copy_started);
+}
+
+/// A nested cut scope whose end the tick cannot build, because its write
+/// epoch floor does not read, is an outage and not an off-tree shape. The
+/// walk starts again on each tick past the restart bound, the entry stays,
+/// and the map commits once the end comes back.
+#[test]
+fn an_absent_nested_end_does_not_count_against_the_restart_bound() {
+    let mut fx = GrantScenario::new();
+    let (inner, _, _) = cut_dissolve_subtree(&mut fx);
+    let inner_floor = floor_label(&write_epoch_floor_key(&inner.0));
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&inner_floor);
+
+    ticks(&mut fx, 6);
+
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the entry stays through the outage"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    ticks(&mut fx, 2);
+    assert!(
+        fx.standing_dissolve().step >= DissolveStep::Seal,
+        "the map commits"
+    );
+}
+
+/// ADR 0077 D3: after the copy started, a complete walk that misses a cut
+/// scope starts again up to the restart bound, then parks. The entry stays,
+/// the host gets one event, and the walk reads no more.
+#[test]
+fn a_cut_scope_the_walk_misses_after_the_copy_started_parks_the_walk() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let inner = fx.grant_nested_folder("inner");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "plain");
+    block_on(fx.engine.command(Command::Move {
+        node: inner,
+        new_parent: plain,
+        new_name: "inner".into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    ticks(&mut fx, 2);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.standing_dissolve().copy_started, "the copy started");
+    let copies: Vec<NodeId> = new_ids(&fx).into_values().collect();
+    let root = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &root).expect("the cut root");
+    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
+    plant_node(
+        &fx,
+        &owner_write_seed(&fx, folder),
+        plain,
+        &folder_body(Vec::new()),
+        &read_key_under(&granted_override_seed(&fx, epoch), plain),
+        epoch,
+        true,
+    );
+    let plain_name = cut_name(&fx, plain);
+    for _ in 0..8 {
+        if fx.standing_dissolve().step == DissolveStep::Map {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the confirm remaps"
+    );
+    events_so_far(&mut fx._events);
+
+    assert_walk_parks(&mut fx, &plain_name);
+    for copy in copies {
+        assert!(copy_at(&fx, copy).is_some(), "each copy stays");
+    }
 }
 
 /// A cut subtree whose plain folder holds a ref to `out`, a folder of the
@@ -30792,6 +30948,68 @@ fn a_restart_whose_walk_stops_before_it_names_the_destination_spends_no_slot() {
     assert!(header.prior_bindings.is_empty(), "no slot after the walk");
     assert_eq!(header.binding.read_scope, fx.folder);
 }
+
+/// ADR 0077 D4: a rebind past `MAX_PRIOR_BINDINGS` stops the seal before any
+/// copy. The header keeps its binding and its prior bindings, the host gets
+/// one event, and no copy publishes.
+#[test]
+fn a_rebind_past_the_prior_binding_cap_stops_the_seal() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "below");
+    assert_eq!(
+        fx.dissolve_into(inner, fx.folder, dissolve_binding()),
+        Ok(Some(DissolveStep::Map))
+    );
+    let other = DissolveBinding {
+        read_scope: NodeId([0x77; 16]),
+        ..dissolve_binding()
+    };
+    for at in 0..MAX_PRIOR_BINDINGS {
+        edit_dissolve(&fx, inner, |header| {
+            let was = header.binding;
+            header.prior_bindings.push(PriorBinding {
+                read_scope: was.read_scope,
+                read_root: was.read_scope,
+                read_epoch: was.read_epoch,
+                restart_floor: was.restart_floor,
+                write_scope: was.write_scope,
+                write_epoch: was.write_epoch,
+            });
+            header.binding = if at % 2 == 0 {
+                other
+            } else {
+                dissolve_binding()
+            };
+        });
+    }
+    events_so_far(&mut fx._events);
+
+    ticks(&mut fx, 3);
+
+    assert_eq!(
+        owed_events(&mut fx._events, "dissolve-rebind-bound"),
+        1,
+        "one event"
+    );
+    let header = header_at(&fx, inner);
+    assert_eq!(header.step, DissolveStep::Seal, "the entry stays");
+    assert_eq!(header.prior_bindings.len(), MAX_PRIOR_BINDINGS);
+    assert_eq!(header.binding, dissolve_binding(), "no rebind commits");
+    assert_eq!(
+        folder_copy_puts(&fx, inner),
+        vec![0; 2],
+        "no copy publishes"
+    );
+    assert_eq!(
+        fx.world
+            .record_store
+            .put_count(write_name(header.new_root).as_str()),
+        0,
+        "no copy publishes under the former destination"
+    );
+}
+
 /// ADR 0077 D4: no rebind commits on a tick where a write cut is owed on the
 /// chain from the destination to the vault root.
 #[test]

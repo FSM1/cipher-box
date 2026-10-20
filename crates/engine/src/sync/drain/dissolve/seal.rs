@@ -31,7 +31,7 @@ use super::{
     CLOSE_READS_PER_SCOPE, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS, cut_epoch_of,
     cut_overtaken,
 };
-use crate::facade::{NodeId, emit_trust_violation};
+use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::gated_read::{LeafRead, Unserved};
 use crate::net::{ChildAdopter, Observed, PointerConsult, PointerConsultError};
@@ -47,6 +47,10 @@ use crate::sync::dissolve_journal::{
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::tick::scope_root_of;
+
+/// The detail of the one host event for a dissolve that a rebind past
+/// [`MAX_PRIOR_BINDINGS`] stopped.
+const DISSOLVE_REBIND_BOUND: &str = "dissolve-rebind-bound";
 
 /// The seal of one dissolve entry, carried across ticks.
 pub(crate) struct DissolveSeal {
@@ -67,6 +71,9 @@ pub(crate) struct DissolveSeal {
     /// The read scope and the write scope that a tick computed for a rebind
     /// that waits, and the number of that tick.
     rebind: Option<RelinkRebind>,
+    /// The host heard that a rebind past [`MAX_PRIOR_BINDINGS`] stopped the
+    /// run.
+    bound_sent: bool,
 }
 
 impl DissolveSeal {
@@ -79,6 +86,7 @@ impl DissolveSeal {
             confirmed: BTreeSet::new(),
             refused: false,
             rebind: None,
+            bound_sent: false,
         }
     }
 
@@ -164,7 +172,7 @@ pub(super) fn restarted(
 /// `header` (ADR 0077 D4): the former binding goes to `prior_bindings`, and
 /// the D4 check of the tick reads the epochs of the new one. A new read scope
 /// restarts every copy. `None` at a rebind past [`MAX_PRIOR_BINDINGS`], which
-/// waits.
+/// stops the seal.
 fn rebound(
     header: &DissolveHeader,
     read_scope: NodeId,
@@ -368,19 +376,30 @@ where
                 candidate,
                 carried.as_ref().and_then(|run| run.rebind),
             );
-            let next = rebound(&header, dest.root, target.write.root).filter(|_| confirmed);
+            let next = confirmed.then(|| rebound(&header, dest.root, target.write.root));
+            let past_bound = matches!(next, Some(None));
             let committed = match next {
-                Some(next) => journal
+                Some(Some(next)) => journal
                     .commit(&hold, Some(&header), &next)
                     .await
                     .is_ok()
                     .then_some(next),
-                None => None,
+                _ => None,
             };
             let Some(next) = committed else {
-                // The run of the bound destination waits as it stands.
+                // The run of the bound destination waits as it stands. Past
+                // the bound, the entry and each copy stay (ADR 0077 D4).
                 let mut run = carried.unwrap_or_else(|| DissolveSeal::new(&header, mark));
                 run.rebind = Some((candidate, self.inputs.tick));
+                if past_bound && !run.bound_sent {
+                    run.bound_sent = true;
+                    let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                        scope_root: root,
+                        detail: DISSOLVE_REBIND_BOUND.to_owned(),
+                        retryable: false,
+                        class: OwedWorkClass::Capability,
+                    });
+                }
                 self.cells.dissolve_seals.borrow_mut().insert(root, run);
                 return;
             };
@@ -1181,9 +1200,9 @@ mod tests {
 
     /// A rebind keeps the former binding. A new read scope starts its
     /// epochs at zero for the D4 check to read, a new write scope alone keeps
-    /// the read binding, and a rebind past the cap waits.
+    /// the read binding, and no rebind passes the cap.
     #[test]
-    fn a_rebind_keeps_the_former_binding_and_waits_past_the_cap() {
+    fn a_rebind_keeps_the_former_binding_and_none_passes_the_cap() {
         let held = header();
         let was = held.binding;
         let other = NodeId([0x02; 16]);
@@ -1220,10 +1239,7 @@ mod tests {
         );
         let mut full = held;
         full.prior_bindings = vec![former; MAX_PRIOR_BINDINGS];
-        assert!(
-            rebound(&full, other, other).is_none(),
-            "a fifth rebind waits"
-        );
+        assert!(rebound(&full, other, other).is_none(), "no fifth rebind");
     }
 
     #[test]
