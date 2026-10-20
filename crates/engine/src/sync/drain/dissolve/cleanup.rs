@@ -60,7 +60,7 @@ where
             self.retire_tick(owner, ends, journal, &hold, &header, left)
                 .await
         } else {
-            self.hold_tick(owner, ends, journal, &hold, &header).await
+            self.hold_tick(ends, journal, &hold, &header).await
         };
     }
 
@@ -151,16 +151,19 @@ where
     /// their names. The entry goes when every scope retired.
     async fn hold_tick(
         &self,
-        owner: &DrainScope<'_>,
         ends: &[ScopeEnd<'_>],
         journal: &DissolveJournal<'_, St>,
         hold: &DissolveHold<'_>,
         header: &DissolveHeader,
     ) -> Result<(), NotDriven> {
-        let target = self
-            .destination_of(owner, ends, header.relink_parent)
-            .ok_or(NotDriven)?;
-        let floors = target.chain[0].floors(&self.seams.floors);
+        // The vault root end stands in each session, whatever became of the
+        // destination over the term.
+        let vault_root = self.cells.base.borrow().root;
+        let floors = ends
+            .iter()
+            .find(|end| end.root == vault_root)
+            .ok_or(NotDriven)?
+            .floors(&self.seams.floors);
         let now = self.seams.scheduler.now().0;
         let mut next = header.clone();
         for scope in &mut next.scopes {

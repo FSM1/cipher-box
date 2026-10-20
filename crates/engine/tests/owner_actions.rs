@@ -31807,9 +31807,9 @@ fn a_joined_scope_cannot_leave_the_subtree_so_the_join_completes() {
         "the joined scope stays in the subtree"
     );
     fx.world.record_store.heal_put_for(plain_pointer.as_str());
-    ticks(&mut fx, 6);
-    let header = fx.standing_dissolve();
-    assert!(header.step >= DissolveStep::Seal, "the map committed");
+    // The retire step drops the map, so the ids read at the seal.
+    let header = tick_until_step(&mut fx, DissolveStep::Seal, 6).expect("the entry stands");
+    assert_eq!(header.step, DissolveStep::Seal, "the map committed");
     let joined = header
         .scopes
         .iter()
@@ -31848,6 +31848,16 @@ fn relink_mark_of(fx: &GrantScenario, root: NodeId, name: &IpnsName) -> Option<u
             .sequence_floor(&relink_entry_key(root, name)),
     )
     .expect("the floor store reads")
+}
+
+/// The sequence of the relink publish at the vault root `name`: the record
+/// that it serves, less the one index removal published over it after the
+/// relink.
+fn relinked_at(fx: &GrantScenario, name: &IpnsName) -> u64 {
+    let unindexed = fx
+        .dissolve_header()
+        .is_none_or(|header| header.step > DissolveStep::Unindex);
+    sequence_at(&fx.world, name) - u64::from(unindexed)
 }
 
 /// One EOL term in milliseconds, less the second that the signed EOL drops.
@@ -31907,7 +31917,7 @@ fn a_confirmed_dissolve_relinks_the_copy_in_place_of_the_source_root() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink landed");
+    assert!(header.step >= DissolveStep::Unindex, "the relink landed");
     assert!(header.relink_sent);
     assert_eq!(
         header.relink_names,
@@ -31926,7 +31936,7 @@ fn a_confirmed_dissolve_relinks_the_copy_in_place_of_the_source_root() {
     assert!(children.contains(&copy), "it names the copy");
     assert_eq!(
         relink_mark(&fx, &root_name),
-        Some(sequence_at(&fx.world, &root_name)),
+        Some(relinked_at(&fx, &root_name)),
         "the mark holds the signed sequence"
     );
     let seed = kdf::owner_pointer_seed(&SECRET);
@@ -31968,8 +31978,8 @@ fn a_relink_retry_signs_above_a_put_that_lands_late() {
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
-    let resigned = sequence_at(&fx.world, &root_name);
+    assert!(fx.standing_dissolve().step >= DissolveStep::Unindex);
+    let resigned = relinked_at(&fx, &root_name);
     assert!(resigned > signed, "the retry signs above its own mark");
     assert_eq!(relink_mark(&fx, &root_name), Some(resigned));
 
@@ -32004,16 +32014,12 @@ fn a_relink_that_landed_unacknowledged_moves_on_when_the_parent_names_the_copy()
 
     assert_eq!(fx.standing_dissolve().step, DissolveStep::Relink);
     heal_every_put(&fx);
-    let puts = fx.world.record_store.put_count(root_name.as_str());
+    let mark = relink_mark(&fx, &root_name);
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
-    assert_eq!(
-        fx.world.record_store.put_count(root_name.as_str()),
-        puts,
-        "no second relink"
-    );
+    assert!(fx.standing_dissolve().step >= DissolveStep::Unindex);
+    assert_eq!(relink_mark(&fx, &root_name), mark, "no second relink");
 }
 
 /// The relink mark is durable before the PUT: a mark that the floor store
@@ -32043,10 +32049,10 @@ fn a_relink_whose_mark_does_not_land_sends_nothing() {
     fx.owner_device.floor_store.heal_floors();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert!(fx.standing_dissolve().step >= DissolveStep::Unindex);
     assert_eq!(
         relink_mark(&fx, &root_name),
-        Some(sequence_at(&fx.world, &root_name))
+        Some(relinked_at(&fx, &root_name))
     );
 }
 
@@ -32177,7 +32183,7 @@ fn a_final_record_short_of_one_term_is_published_again_before_the_relink() {
     ticks(&mut fx, 2);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert!(holds_for_a_term_from(&fx.world, &pointer, cut_time));
     let manifest = header.scopes[0].manifest.as_ref().expect("a manifest");
     assert!(manifest.hold_until >= cut_time + term_millis());
@@ -32195,7 +32201,7 @@ fn a_scope_that_joins_late_keeps_a_term_from_its_own_cut() {
     ticks(&mut fx, 8);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     let source = &header.scopes[0];
     let joined = header
         .scopes
@@ -32224,7 +32230,7 @@ fn a_child_added_after_the_seal_returns_the_dissolve_to_its_map() {
     ticks(&mut fx, 4);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert_eq!(header.map_gen, sealed.map_gen + 1, "a new generation");
     assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
     let rows = dissolve_rows(&fx, &header);
@@ -32458,7 +32464,7 @@ fn a_scope_pointer_that_no_endpoint_serves_holds_the_manifest() {
     ticks(&mut fx, 2);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     let manifest = header.scopes[0].manifest.as_ref().expect("a manifest");
     assert!(manifest.hold_until >= cut_time + term_millis());
 }
@@ -32478,7 +32484,7 @@ fn a_child_renamed_after_the_seal_seals_its_folder_again_under_the_same_map() {
     ticks(&mut fx, 3);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert_eq!(header.map_gen, sealed.map_gen, "the same map");
     let rows = dissolve_rows(&fx, &header);
     let new_of = |old: NodeId| rows.iter().find(|row| row.old == old).expect("a row").new;
@@ -32508,7 +32514,7 @@ fn a_folder_shared_after_the_seal_joins_before_the_relink() {
     ticks(&mut fx, 8);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert!(
         header.scopes.iter().any(|scope| scope.scope_id == plain),
         "the shared folder joins"
@@ -32772,7 +32778,7 @@ fn a_child_added_while_a_lost_pointer_holds_the_close_joins_the_map() {
     ticks(&mut fx, 6);
 
     let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert_eq!(header.rows, sealed.rows + 1, "the late folder is a row");
 }
 
@@ -32908,7 +32914,7 @@ fn a_relink_retry_signs_above_an_entry_mark_whose_parent_mark_did_not_land() {
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(fx.standing_dissolve().step, DissolveStep::Unindex);
+    assert!(fx.standing_dissolve().step >= DissolveStep::Unindex);
     assert!(
         sequence_at(&fx.world, &root_name) > entry,
         "the retry signs above the entry mark"
