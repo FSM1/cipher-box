@@ -27,7 +27,10 @@ use super::super::{
     Anchor, Drain, DrainScope, LoadedRoot, LostWinner, ScopeEnd, SealPlane, checked_content_cid,
     encode_content_cid_str, refuse_record, seal_open_failed, take_tick_read,
 };
-use super::{CLOSE_READS_PER_SCOPE, EndMark, cut_epoch_of, cut_overtaken};
+use super::{
+    CLOSE_READS_PER_SCOPE, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS, cut_epoch_of,
+    cut_overtaken,
+};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::gated_read::{LeafRead, Unserved};
@@ -490,7 +493,10 @@ where
             .zip(held_floors)
             .find_map(|(end, floor)| (end.root == target.write.root).then_some(*floor))
             .ok_or(SealFault::Unanswered)?;
-        if !take_tick_read(left) {
+        let Some(header_reads) = ReadShare::take(left, SEAL_HEADER_READS) else {
+            return Ok(());
+        };
+        if !take_tick_read(&header_reads.left) {
             return Ok(());
         }
         let (dest_root, _) = self.dissolve_root::<()>(owner, dest).await?;
@@ -499,7 +505,10 @@ where
             .commitment
             .as_ref()
             .map_or(0, |commitment| commitment.cut_epoch);
-        let vouched = self.vouched_read_epoch(owner, dest, left).await?;
+        let vouched = self
+            .vouched_read_epoch(owner, dest, &header_reads.left)
+            .await?;
+        drop(header_reads);
         let next = restarted(&header, dest_root.epoch, cut_epoch, vouched, write_floor)
             .ok_or(SealFault::Unanswered)?;
         if next != header {
@@ -549,6 +558,9 @@ where
                 fault = Some(SealFault::Unanswered);
                 break;
             };
+            let Some(row_share) = ReadShare::take(&row_reads, SEAL_ROW_READS) else {
+                break;
+            };
             let source = match self
                 .seal_source(
                     owner,
@@ -557,7 +569,7 @@ where
                     end,
                     row.old,
                     &mut source_roots,
-                    &row_reads,
+                    &row_share.left,
                     confirming,
                 )
                 .await
@@ -576,7 +588,7 @@ where
                 fault = Some(SealFault::Remap);
                 break;
             }
-            if !take_tick_read(&row_reads) {
+            if !take_tick_read(&row_share.left) {
                 break;
             }
             let body = fresh_body(&source, at, &rows, &index, |id| dest.write_name(&id.0));

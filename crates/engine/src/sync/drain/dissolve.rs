@@ -51,22 +51,57 @@ use crate::sync::rebase::decode_queue;
 use crate::sync::record::RecordReader;
 use crate::sync::tick::ResolveMode;
 
+mod cleanup;
+mod proof;
 mod relink;
 mod seal;
 
+pub(crate) use proof::LinkProof;
 pub(crate) use seal::DissolveSeal;
 
 /// The node records one tick reads for dissolve walks.
-const MAX_DISSOLVE_WALK_READS: usize = 160;
+pub const MAX_DISSOLVE_WALK_READS: usize = 160;
 
 /// The reads that `close_seal` takes for each scope: its final root and its
 /// pointer.
-const CLOSE_READS_PER_SCOPE: usize = 2;
+pub const CLOSE_READS_PER_SCOPE: usize = 2;
 
-// A seal tick at the scope cap holds its close, its header (the destination
-// root and pointer, 2) and one confirm row (scope root, row and copy, 3).
-const _: () =
-    assert!(MAX_DISSOLVE_WALK_READS >= CLOSE_READS_PER_SCOPE * MAX_DISSOLVED_SCOPES + 2 + 3);
+/// The reads that each seal tick takes first: the destination root and its
+/// pointer.
+pub const SEAL_HEADER_READS: usize = 2;
+
+/// The reads of one seal or confirm row: its scope root, the row and the copy.
+pub const SEAL_ROW_READS: usize = 3;
+
+// A seal tick at the scope cap holds its close, its header and one row.
+const _: () = assert!(
+    MAX_DISSOLVE_WALK_READS
+        >= CLOSE_READS_PER_SCOPE * MAX_DISSOLVED_SCOPES + SEAL_HEADER_READS + SEAL_ROW_READS
+);
+
+/// Reads that one step takes from a tick's share at once. The step spends
+/// them through `left`, and the drop gives back what it did not spend, so a
+/// step that reads more than its share stops.
+struct ReadShare<'a> {
+    from: &'a Cell<usize>,
+    left: Cell<usize>,
+}
+
+impl<'a> ReadShare<'a> {
+    fn take(from: &'a Cell<usize>, reads: usize) -> Option<Self> {
+        from.set(from.get().checked_sub(reads)?);
+        Some(Self {
+            from,
+            left: Cell::new(reads),
+        })
+    }
+}
+
+impl Drop for ReadShare<'_> {
+    fn drop(&mut self) {
+        self.from.set(self.from.get() + self.left.get());
+    }
+}
 
 /// The nodes one dissolve walk may hold. A walk past it stops the dissolve.
 const MAX_DISSOLVE_WALK_NODES: usize = 65_536;
@@ -507,6 +542,7 @@ where
             let _ = self.drive_map(owner, ends, &journal, root, &left).await;
             self.drive_seal(owner, ends, &journal, root, &left).await;
             self.drive_relink(owner, ends, &journal, root, &left).await;
+            Box::pin(self.drive_cleanup(owner, ends, &journal, root, &left)).await;
         }
     }
 

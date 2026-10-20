@@ -147,7 +147,11 @@ mod dissolve;
 mod keyless_kept;
 mod walker;
 
-pub(crate) use dissolve::{DissolveSeal, DissolveWalk};
+#[cfg(any(test, feature = "test-kit"))]
+pub use dissolve::{
+    CLOSE_READS_PER_SCOPE, MAX_DISSOLVE_WALK_READS, SEAL_HEADER_READS, SEAL_ROW_READS,
+};
+pub(crate) use dissolve::{DissolveSeal, DissolveWalk, LinkProof};
 
 use walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
 
@@ -2209,6 +2213,9 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) dissolve_walks: &'a RefCell<BTreeMap<NodeId, DissolveWalk>>,
     /// The seals of dissolve entries, by source root. In memory only.
     pub(crate) dissolve_seals: &'a RefCell<BTreeMap<NodeId, DissolveSeal>>,
+    /// The link proofs of dissolve entries that a tick left unfinished, by
+    /// source root. In memory only.
+    pub(crate) dissolve_proofs: &'a RefCell<BTreeMap<NodeId, LinkProof>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.

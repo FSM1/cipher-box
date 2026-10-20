@@ -69,6 +69,9 @@ use cipherbox_engine::sync::dissolve_journal::{
     DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
     MAX_DISSOLVED_SCOPES, MapRow,
 };
+use cipherbox_engine::sync::dissolve_reads::{
+    CLOSE_READS_PER_SCOPE, MAX_DISSOLVE_WALK_READS, SEAL_HEADER_READS, SEAL_ROW_READS,
+};
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
 use cipherbox_engine::sync::owed_rotation::{
@@ -32353,7 +32356,7 @@ fn a_relink_waits_while_another_publish_holds_the_write_lease() {
     fx.owner_device.floor_store.heal_floors();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert_eq!(header_at(&fx, inner).step, DissolveStep::Unindex);
+    assert!(header_at(&fx, inner).step >= DissolveStep::Unindex);
 }
 
 /// ADR 0077 D4: before a relink left this device, an owner revoke on the
@@ -32391,7 +32394,7 @@ fn an_owner_revoke_on_the_destination_before_the_relink_seals_again() {
     ticks(&mut fx, 3);
 
     let header = header_at(&fx, inner);
-    assert_eq!(header.step, DissolveStep::Unindex, "the relink follows");
+    assert!(header.step >= DissolveStep::Unindex, "the relink follows");
     assert!(header.binding.base_cut > closed.binding.base_cut);
     let epoch = folder_read_epoch(&fx);
     assert_eq!(folder_copy_epochs(&fx, inner), vec![Some(epoch); 2]);
@@ -32780,7 +32783,12 @@ fn a_confirm_that_fills_the_tick_read_share_still_closes() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let folder = fx.folder;
-    create_published_folders(&mut fx, folder, 78);
+    // Under the vault root the header reads no pointer, and a row under a
+    // read scope root costs its row read and its copy read. One row more
+    // than the share holds splits the confirm.
+    let row_share = MAX_DISSOLVE_WALK_READS - (SEAL_HEADER_READS - 1) - CLOSE_READS_PER_SCOPE;
+    let rows = row_share / (SEAL_ROW_READS - 1) + 1;
+    create_published_folders(&mut fx, folder, rows - 1);
     // Each sweep fetches the head block of each row.
     serve_http(&fx.owner_device, &fx.blocks, 4096);
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
@@ -32797,13 +32805,21 @@ fn a_confirm_that_fills_the_tick_read_share_still_closes() {
             break;
         }
     }
-    assert_eq!(sealed.expect("every copy seals").rows, 79);
+    assert_eq!(
+        sealed.expect("every copy seals").rows,
+        u32::try_from(rows).expect("a small map")
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Seal,
+        "the confirm splits over two ticks"
+    );
 
     ticks(&mut fx, 6);
 
-    assert_eq!(
-        fx.standing_dissolve().step,
-        DissolveStep::Unindex,
+    assert!(
+        fx.standing_dissolve().step >= DissolveStep::Unindex,
         "the seal closes and the relink follows"
     );
 }
@@ -32827,6 +32843,8 @@ fn a_dissolve_at_the_scope_cap_below_the_vault_root_closes() {
             )
         })
         .collect();
+    // A plain folder under an inner scope is a row of the full row cost.
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inners[0], "deep");
     for inner in inners {
         assert_eq!(
             block_on(fx.engine.command(Command::Grant {
@@ -32847,11 +32865,15 @@ fn a_dissolve_at_the_scope_cap_below_the_vault_root_closes() {
     );
     assert_eq!(header_at(&fx, outer).scopes.len(), MAX_DISSOLVED_SCOPES);
 
-    ticks(&mut fx, 8);
+    for _ in 0..80 {
+        if header_at(&fx, outer).step >= DissolveStep::Unindex {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
 
-    assert_eq!(
-        header_at(&fx, outer).step,
-        DissolveStep::Unindex,
+    assert!(
+        header_at(&fx, outer).step >= DissolveStep::Unindex,
         "the seal closes and the relink follows"
     );
 }

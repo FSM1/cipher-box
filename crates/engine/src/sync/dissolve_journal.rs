@@ -821,6 +821,24 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     if held.step >= DissolveStep::Relink && new.step < held.step && !reseal {
         return Err("dissolve-journal-step-back-after-relink");
     }
+    // The final records that the hold step retires are fixed once the copy
+    // is named, and a retired record stays retired.
+    if held.step >= DissolveStep::Unindex
+        && held.scopes.iter().zip(&new.scopes).any(|(was, now)| {
+            match (&was.manifest, &now.manifest) {
+                (Some(was), Some(now)) => {
+                    (was.retired && !now.retired)
+                        || Manifest {
+                            retired: was.retired,
+                            ..now.clone()
+                        } != *was
+                }
+                _ => true,
+            }
+        })
+    {
+        return Err("dissolve-journal-manifest-changed-after-relink");
+    }
     // A re-cut returns to the cut step, and only before the copy is named.
     if new.step != DissolveStep::Cut
         && held
@@ -944,6 +962,12 @@ pub struct DissolveCell {
     /// The destination, read scope and write scope, that a relink tick
     /// computed off the binding, and the number of that tick, by source root.
     relink_rebinds: RefCell<BTreeMap<NodeId, RelinkRebind>>,
+    /// The source roots whose entry parked in this session. A parked entry
+    /// runs its link proof again only in a later session.
+    parked: RefCell<BTreeSet<NodeId>>,
+    /// The cut scopes of each entry past its index removal, which the
+    /// session's root sets and held records drop.
+    unindexed: RefCell<BTreeSet<NodeId>>,
 }
 
 /// A destination that a relink tick computed, and the number of that tick.
@@ -980,6 +1004,26 @@ impl DissolveCell {
         self.relink_rebinds
             .borrow_mut()
             .insert(root, (candidate, tick))
+    }
+
+    /// Note that the entry at `root` parked in this session.
+    pub fn note_parked(&self, root: NodeId) {
+        self.parked.borrow_mut().insert(root);
+    }
+
+    /// Whether the entry at `root` parked in this session.
+    pub fn parked_now(&self, root: NodeId) -> bool {
+        self.parked.borrow().contains(&root)
+    }
+
+    /// Note `scopes`, the cut scopes of an entry past its index removal.
+    pub fn note_unindexed(&self, scopes: impl IntoIterator<Item = NodeId>) {
+        self.unindexed.borrow_mut().extend(scopes);
+    }
+
+    /// Take the scopes that [`Self::note_unindexed`] noted.
+    pub fn take_unindexed(&self) -> BTreeSet<NodeId> {
+        core::mem::take(&mut self.unindexed.borrow_mut())
     }
 
     /// Take the scopes that [`Self::note_short_terms`] noted for `root`.
@@ -1294,6 +1338,24 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
             pages.push(decode_name_log_page(&payload, index).map_err(DissolveWriteError::Codec)?);
         }
         Ok(pages)
+    }
+
+    /// Remove the name log page at `index` of the entry at the root of
+    /// `hold` whose header is `held`.
+    pub async fn drop_log_page(
+        &self,
+        hold: &DissolveHold<'_>,
+        held: &DissolveHeader,
+        index: u32,
+    ) -> Result<(), DissolveWriteError> {
+        let _writer = self.cell.writer.lock().await;
+        if self.standing(hold.root).await?.as_ref() != Some(held) {
+            return Err(DissolveWriteError::Stale);
+        }
+        Ok(self
+            .journal
+            .remove(hold.root, &Self::log_part(index), DISSOLVE_CALLER)
+            .await?)
     }
 
     /// Drop the entry at the root of `hold` whose header is `held`: each
