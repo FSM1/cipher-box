@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { loadInPage } from '../inPageLoad';
 
 /**
  * The `/invite` route. The panel carries where the page stands on `data-state`
@@ -52,19 +53,16 @@ export class InvitePage {
 
   /**
    * A document load carries the fragment; a client-side navigation drops it.
-   * The load runs in the page, not through `page.goto`: a goto step title and
-   * its call log print the URL, and the fragment is a bearer capability.
+   * {@link loadInPage} runs the load, so no error or call log prints the URL.
+   * A URL on the current path and query with only a new fragment is a
+   * same-document navigation and fires no `load`.
    *
    * The fragment still reaches the trace of a local run. It may: the link names
    * one folder of a vault the run cold-started, on a record store reachable only
    * from inside the job.
    */
   async open(url: URL, timeout?: number): Promise<void> {
-    // A locator wait that spans the load logs `navigated to <url>`, so the
-    // panel wait starts only after the load.
-    const loaded = this.page.waitForEvent('load', { timeout });
-    await this.page.evaluate((href) => window.location.assign(href), url.href);
-    await loaded;
+    await loadInPage(this.page, url, timeout);
     await expect(this.panel).toBeVisible({ timeout });
   }
 

@@ -66,7 +66,9 @@ const signedIn = {} as Locator;
 
 function page() {
   const calls = {
-    reload: vi.fn(),
+    // `loadInPage` runs a reload as a page `evaluate` behind a `load` wait.
+    evaluate: vi.fn(),
+    waitForEvent: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     getByRole: () => ({ click: vi.fn() }),
@@ -132,7 +134,7 @@ describe('the wallet login retry flow', () => {
         return harness.refusal.mock.calls.length < 14 ? POLY_FAILURE : null;
       });
       await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(6_000);
-      expect(opened.calls.reload).toHaveBeenCalledTimes(13);
+      expect(opened.calls.evaluate).toHaveBeenCalledTimes(13);
       expect(harness.refusal.mock.calls.every(([locator]) => locator === signedIn)).toBe(true);
       expect(records()).toEqual([
         {
@@ -150,7 +152,11 @@ describe('the wallet login retry flow', () => {
       return null;
     });
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(2_000);
-    expect(opened.calls.reload).toHaveBeenCalledTimes(1);
+    // A reload (no target URL), not `page.reload`, whose call log prints the URL.
+    expect(opened.calls.evaluate).toHaveBeenCalledExactlyOnceWith(expect.any(Function), null);
+    expect(opened.calls.waitForEvent).toHaveBeenCalledExactlyOnceWith('load', {
+      timeout: expect.any(Number),
+    });
     expect(records()).toEqual([
       { faults: [{ fault: 'node-busy', attempt: 1 }], result: 'recovered' },
     ]);
@@ -246,7 +252,7 @@ describe('the wallet login retry flow', () => {
     harness.refusal.mockResolvedValueOnce(NODE_FAILURE);
     harness.resumed.mockResolvedValueOnce(null);
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(0);
-    expect(opened.calls.reload).toHaveBeenCalledTimes(1);
+    expect(opened.calls.evaluate).toHaveBeenCalledTimes(1);
     expect(harness.walletClick).toHaveBeenCalledTimes(1);
     expect(harness.resumed).toHaveBeenCalledExactlyOnceWith(
       signedIn,
@@ -263,7 +269,7 @@ describe('the wallet login retry flow', () => {
     harness.refusal.mockResolvedValueOnce(NODE_FAILURE).mockResolvedValueOnce(null);
     harness.resumed.mockResolvedValueOnce(POLY_FAILURE);
     await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(0);
-    expect(opened.calls.reload).toHaveBeenCalledTimes(2);
+    expect(opened.calls.evaluate).toHaveBeenCalledTimes(2);
     expect(harness.walletClick).toHaveBeenCalledTimes(2);
     expect(harness.refusal).toHaveBeenCalledTimes(2);
     expect(records()).toEqual([
@@ -283,7 +289,7 @@ describe('the wallet login retry flow', () => {
     await expect(signInWithWallet(opened.page, signedIn, POLY_FAILURE)).resolves.toBe(0);
     expect(harness.walletClick).not.toHaveBeenCalled();
     expect(opened.calls.waitForTimeout).toHaveBeenCalledExactlyOnceWith(15_000);
-    expect(opened.calls.reload).toHaveBeenCalledTimes(1);
+    expect(opened.calls.evaluate).toHaveBeenCalledTimes(1);
     expect(records()).toEqual([
       { faults: [{ fault: 'poly-commits', attempt: 1 }], result: 'recovered' },
     ]);
