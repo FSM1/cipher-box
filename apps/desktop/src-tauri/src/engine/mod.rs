@@ -55,6 +55,10 @@ const UNENDED: &str = "the session did not answer; restart CipherBox and sign ou
 /// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
 const MAX_WARNINGS: usize = 8;
 
+/// The engine thread's stack. A debug build's deepest tick path needs close to
+/// the 2 MiB default, so the thread gets four times that.
+const ENGINE_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 /// The kind of the stranded-scope notice.
 const SCOPE_ROOT_STRANDED: &str = "scopeRootStranded";
 
@@ -483,6 +487,7 @@ impl EngineHost {
             let account_dir = account_dir.clone();
             std::thread::Builder::new()
                 .name("cipherbox-engine".to_owned())
+                .stack_size(ENGINE_STACK_BYTES)
                 .spawn(move || {
                     host_engine(secret, identity_token, session, account_dir, inbox, verdict)
                 })
