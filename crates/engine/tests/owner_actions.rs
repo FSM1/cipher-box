@@ -29306,6 +29306,76 @@ fn an_absent_nested_end_does_not_count_against_the_restart_bound() {
     );
 }
 
+/// ADR 0077 D3: after the copy started, a complete walk that misses a cut
+/// scope starts again up to the restart bound, then parks. The entry stays,
+/// the host gets one event, and the walk reads no more.
+#[test]
+fn a_cut_scope_the_walk_misses_after_the_copy_started_parks_the_walk() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let inner = fx.grant_nested_folder("inner");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "plain");
+    block_on(fx.engine.command(Command::Move {
+        node: inner,
+        new_parent: plain,
+        new_name: "inner".into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    ticks(&mut fx, 2);
+    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.standing_dissolve().copy_started, "the copy started");
+    let copies: Vec<NodeId> = new_ids(&fx).into_values().collect();
+    let root = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &root).expect("the cut root");
+    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
+    plant_node(
+        &fx,
+        &owner_write_seed(&fx, folder),
+        plain,
+        &folder_body(Vec::new()),
+        &read_key_under(&granted_override_seed(&fx, epoch), plain),
+        epoch,
+        true,
+    );
+    let plain_name = cut_name(&fx, plain);
+    for _ in 0..8 {
+        if fx.standing_dissolve().step == DissolveStep::Map {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the confirm remaps"
+    );
+    events_so_far(&mut fx._events);
+
+    ticks(&mut fx, 5);
+
+    assert_eq!(
+        owed_events(&mut fx._events, "dissolve-walk-unsettled"),
+        1,
+        "one event"
+    );
+    assert_eq!(
+        tick_reads(&mut fx, &plain_name),
+        0,
+        "the walk reads no more"
+    );
+    assert_eq!(owed_events(&mut fx._events, "dissolve-walk-unsettled"), 0);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the entry stays"
+    );
+    for copy in copies {
+        assert!(copy_at(&fx, copy).is_some(), "each copy stays");
+    }
+}
+
 /// A cut subtree whose plain folder holds a ref to `out`, a folder of the
 /// vault scope that the read-only cut scope shares the write seed of. Answers
 /// `out` and the plain folder.

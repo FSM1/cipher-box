@@ -76,9 +76,10 @@ const MAX_DISSOLVE_WALK_NODES: usize = 65_536;
 const MAX_DISSOLVE_READ_ATTEMPTS: u8 = 3;
 
 /// The times a dissolve walk starts again on a ref outside the subtree, a
-/// second ref to a node, or a nested root that its index does not name or
-/// that does not ascend from its parent, before the dissolve stops. A
-/// restart for an end absent from the tick does not count.
+/// second ref to a node, a nested root that its index does not name or that
+/// does not ascend from its parent, or a complete walk that misses a cut
+/// scope, before the dissolve stops. A restart for an end absent from the
+/// tick does not count.
 const MAX_DISSOLVE_WALK_RESTARTS: u8 = 4;
 
 /// The detail of the one host event for a dissolve whose walk passed its
@@ -227,10 +228,10 @@ enum MapStopAction {
     Park(&'static str),
 }
 
-/// The action for `step`, a stop of the map. After the copy started, only a
-/// stop that no later step of the dissolve clears parks the walk. A new
-/// scope root joins the dissolve once its index lands, and a concurrent cut
-/// on a cut scope waits for the re-cut rule.
+/// The action for `step`, a stop of the map. After the copy started, a walk
+/// past its restart bound or its node bound parks. The other stops are a new
+/// scope root, which joins the dissolve once its index lands, and a
+/// concurrent cut on a cut scope, which waits for the re-cut rule.
 fn map_stop_action(step: &MapStep, copy_started: bool) -> MapStopAction {
     match step {
         _ if !copy_started => MapStopAction::Drop,
@@ -378,17 +379,15 @@ impl DissolveWalk {
             )
             .await;
         let halt = policy.halt;
-        let off_tree = halt == Some(MapHalt::Restart)
+        // Each scope the header cuts is a node of a complete walk.
+        let misses_a_cut = matches!(swept, Swept::Complete)
+            && !scopes.iter().all(|(scope, _)| sweep.seen.contains(scope));
+        let off_tree = misses_a_cut
+            || halt == Some(MapHalt::Restart)
             || matches!(swept, Swept::Fault(ReadFault::Fatal(Unmapped::Outside)));
         let step = match swept {
-            Swept::Complete => {
-                // Each scope the header cuts is a node of the walked tree.
-                if scopes.iter().all(|(scope, _)| sweep.seen.contains(scope)) {
-                    MapStep::Complete
-                } else {
-                    MapStep::Stop
-                }
-            }
+            Swept::Complete if misses_a_cut => MapStep::Restart,
+            Swept::Complete => MapStep::Complete,
             Swept::Paused => MapStep::Unfinished,
             Swept::Moved => MapStep::Restart,
             Swept::Fault(ReadFault::Untrusted) => MapStep::Refused,
@@ -512,12 +511,13 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
                 return self.stop(MapHalt::Restart);
             }
             let scope = if self.cuts(id).is_some() {
+                if !index.contains(&id) {
+                    return self.stop(MapHalt::Restart);
+                }
                 match (self.ascends)(key.scope, id) {
                     None => return self.stop(MapHalt::EndAbsent),
-                    Some(ascends) if !ascends || !index.contains(&id) => {
-                        return self.stop(MapHalt::Restart);
-                    }
-                    Some(_) => {}
+                    Some(false) => return self.stop(MapHalt::Restart),
+                    Some(true) => {}
                 }
                 id
             } else {
@@ -1526,6 +1526,23 @@ mod tests {
         assert_eq!(fake.run(&mut walk), MapStep::Complete);
     }
 
+    /// A nested root that the index of its parent does not name counts even
+    /// while its end is absent.
+    #[test]
+    fn an_unindexed_root_with_an_absent_end_counts_against_the_restart_bound() {
+        let mut tree = tree();
+        tree.get_mut(&S).unwrap().root = Some((Vec::new(), false, 2));
+        let mut fake = Fake::new(tree);
+        fake.ascends = None;
+        let mut walk = walk(&[S, N]);
+
+        let steps: Vec<MapStep> = (0..=MAX_DISSOLVE_WALK_RESTARTS)
+            .map(|_| fake.run(&mut walk))
+            .collect();
+
+        assert_eq!(steps.last(), Some(&MapStep::Unsettled));
+    }
+
     /// A read unanswered for its attempts starts the walk again, and the
     /// restart does not count.
     #[test]
@@ -1640,14 +1657,25 @@ mod tests {
         );
     }
 
-    /// A cut scope that no folder of the walked tree names moved out of the
-    /// subtree: the dissolve stops.
+    /// A complete walk that no folder of names a cut scope starts again, and
+    /// the restart counts: the walk stops past the restart bound.
     #[test]
     fn a_cut_scope_the_walk_does_not_reach_stops_it() {
         let mut tree = tree();
         tree.get_mut(&S).unwrap().children = vec![A];
+        let fake = Fake::new(tree);
+        let mut walk = walk(&[S, N]);
 
-        assert_eq!(Fake::new(tree).run(&mut walk(&[S, N])), MapStep::Stop);
+        let steps: Vec<MapStep> = (0..=MAX_DISSOLVE_WALK_RESTARTS)
+            .map(|_| fake.run(&mut walk))
+            .collect();
+
+        assert_eq!(steps.last(), Some(&MapStep::Unsettled));
+        assert!(
+            steps[..steps.len() - 1]
+                .iter()
+                .all(|step| *step == MapStep::Restart)
+        );
     }
 
     /// A walk belongs to one header: another cut epoch starts it again.
