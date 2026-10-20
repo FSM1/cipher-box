@@ -12,7 +12,7 @@
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) (a durable record reads the
   previous release)
 - **Implemented by:** [#2476](https://github.com/FSM1/cipher-box/pull/2476) (the reader of `ended`
-  and `grantCut`). The writer is not landed.
+  and `grantCut`), [#2500](https://github.com/FSM1/cipher-box/pull/2500) (the writer)
 - **Amends:** —
 
 ## Context
@@ -37,7 +37,7 @@ key. A link-held bookmark keeps its revoke path.
 **D2 — The engine sets the mark only above an opened-grant baseline, never from the cut-epoch
 floor.** The bookmark gets a second optional unsigned key `grantCut`: the cut epoch of the latest
 verified commitment in which this device opened its personal grant blob. The engine writes it in
-the same bookmark persist as the open (`accept_share`, `refresh`, `follow_from`). The engine sets
+the same bookmark persist as the open (`accept_share` and the refresh). The engine sets
 `ended` only when the commitment verifies, the personal tag is not in it, `grantCut` is present,
 and the cut epoch of the commitment is above `grantCut`. A bookmark with no `grantCut` never gets
 the mark. The bar is strictly above, because an append adds a row at the same cut epoch: a

@@ -446,6 +446,9 @@ pub(crate) struct SessionState {
     /// [`ScopeRender::deferred_raises`](crate::grants::received_status::ScopeRender).
     /// In-memory.
     pub(crate) deferred_raises: Rc<RefCell<BTreeSet<BookmarkKey>>>,
+    /// [`ScopeRender::baseline_tried`](crate::grants::received_status::ScopeRender).
+    /// In-memory, so each session starts the backfill again.
+    pub(crate) baseline_tried: Rc<RefCell<BTreeSet<BookmarkKey>>>,
     /// Held across every load, change and persist of the received-shares list,
     /// so the join, the accept and the refresh never overwrite each other.
     pub(crate) received_shares_lock: Rc<ReceivedSharesLock>,
@@ -796,6 +799,7 @@ impl SessionState {
             withheld_pins: Rc::new(RefCell::new(BTreeMap::new())),
             pointer_pins: Rc::new(RefCell::new(BTreeMap::new())),
             deferred_raises: Rc::new(RefCell::new(BTreeSet::new())),
+            baseline_tried: Rc::new(RefCell::new(BTreeSet::new())),
             received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
             grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
             bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),

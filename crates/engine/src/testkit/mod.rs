@@ -99,6 +99,24 @@ pub fn plant_marked_bookmark<S: crate::seams::StagingStore>(
     key
 }
 
+/// Set `marks` on the bookmark under `key` in the list that `enc_secret`
+/// seals in `staging`, as a later pass writes them.
+pub fn mark_bookmark<S: crate::seams::StagingStore>(
+    staging: &S,
+    enc_secret: &cipherbox_core::suite::x25519::X25519Secret,
+    key: &crate::grants::BookmarkKey,
+    marks: (Option<u64>, Option<u64>),
+) {
+    use crate::grants::ReceivedShareStore;
+    let entropy = core::cell::RefCell::new(SeededEntropy::new(0x5c));
+    let store = crate::grants::received_share_store::StagingReceivedShareStore::new(
+        staging, enc_secret, &entropy,
+    );
+    let mut list = block_on(store.load()).expect("the stored list reads");
+    list.mark_for_test(key, marks);
+    block_on(store.persist(&list)).expect("the marked list persists");
+}
+
 /// The write-epoch lease of one scope, held for a test as a publish of this
 /// device holds it, so a sighting raise of that scope defers until the drop.
 pub struct HeldWriteEpochLease {
