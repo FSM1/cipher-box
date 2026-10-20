@@ -381,7 +381,7 @@ where
                     .await
                     .is_ok()
                     .then_some(next),
-                Some(None) | None => None,
+                _ => None,
             };
             let Some(next) = committed else {
                 // The run of the bound destination waits as it stands. Past

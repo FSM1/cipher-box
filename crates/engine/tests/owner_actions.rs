@@ -28800,12 +28800,29 @@ fn edit_dissolve(fx: &GrantScenario, root: NodeId, edit: impl FnOnce(&mut Dissol
 
 /// The `RotationWorkOwed` events with `detail` among the events so far.
 fn owed_events(events: &mut EventStream, detail: &str) -> usize {
-    events_so_far(events)
+    owed_reports(events)
         .iter()
-        .filter(
-            |event| matches!(event, Event::RotationWorkOwed { detail: sent, .. } if sent == detail),
-        )
+        .filter(|(_, sent, ..)| sent == detail)
         .count()
+}
+
+/// Over five ticks the walk passes its restart bound and parks: the host gets
+/// one event, the walk reads no more of `plain_name`, and the entry stays.
+fn assert_walk_parks(fx: &mut GrantScenario, plain_name: &IpnsName) {
+    ticks(fx, 5);
+
+    assert_eq!(
+        owed_events(&mut fx._events, "dissolve-walk-unsettled"),
+        1,
+        "one event"
+    );
+    assert_eq!(tick_reads(fx, plain_name), 0, "the walk reads no more");
+    assert_eq!(owed_events(&mut fx._events, "dissolve-walk-unsettled"), 0);
+    assert_eq!(
+        fx.standing_dissolve().step,
+        DissolveStep::Map,
+        "the entry stays"
+    );
 }
 
 /// The rows of the live map of `header`, the entry at the folder.
@@ -29260,22 +29277,8 @@ fn an_outside_ref_that_stays_after_the_copy_started_parks_the_walk() {
     edit_dissolve(&fx, folder, |header| header.copy_started = true);
     events_so_far(&mut fx._events);
 
-    ticks(&mut fx, 5);
-
-    assert_eq!(
-        owed_events(&mut fx._events, "dissolve-walk-unsettled"),
-        1,
-        "one event"
-    );
-    assert_eq!(
-        tick_reads(&mut fx, &plain_name),
-        0,
-        "the walk reads no more"
-    );
-    assert_eq!(owed_events(&mut fx._events, "dissolve-walk-unsettled"), 0);
-    let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Map, "the entry stays");
-    assert!(header.copy_started);
+    assert_walk_parks(&mut fx, &plain_name);
+    assert!(fx.standing_dissolve().copy_started);
 }
 
 /// A nested cut scope whose end the tick cannot build, because its write
@@ -29353,24 +29356,7 @@ fn a_cut_scope_the_walk_misses_after_the_copy_started_parks_the_walk() {
     );
     events_so_far(&mut fx._events);
 
-    ticks(&mut fx, 5);
-
-    assert_eq!(
-        owed_events(&mut fx._events, "dissolve-walk-unsettled"),
-        1,
-        "one event"
-    );
-    assert_eq!(
-        tick_reads(&mut fx, &plain_name),
-        0,
-        "the walk reads no more"
-    );
-    assert_eq!(owed_events(&mut fx._events, "dissolve-walk-unsettled"), 0);
-    assert_eq!(
-        fx.standing_dissolve().step,
-        DissolveStep::Map,
-        "the entry stays"
-    );
+    assert_walk_parks(&mut fx, &plain_name);
     for copy in copies {
         assert!(copy_at(&fx, copy).is_some(), "each copy stays");
     }

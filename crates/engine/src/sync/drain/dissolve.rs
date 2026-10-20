@@ -79,7 +79,7 @@ const MAX_DISSOLVE_READ_ATTEMPTS: u8 = 3;
 /// second ref to a node, a nested root that its index does not name or that
 /// does not ascend from its parent, or a complete walk that misses a cut
 /// scope, before the dissolve stops. A restart for an end absent from the
-/// tick does not count.
+/// tick, a moved node, or an unanswered read does not count.
 const MAX_DISSOLVE_WALK_RESTARTS: u8 = 4;
 
 /// The detail of the one host event for a dissolve whose walk passed its
@@ -198,12 +198,15 @@ pub(super) enum MapStep {
     Unfinished,
     /// Every node read twice to the same record.
     Complete,
-    /// A node moved, a visit found a diamond or an unindexed root, or a read
-    /// went unanswered too long: the next tick walks again from the root.
+    /// A node moved, a visit found a diamond or an unindexed root, a complete
+    /// walk missed a cut scope, or a read went unanswered too long: the next
+    /// tick walks again from the root. An off-tree cause, such as a missed cut
+    /// scope, counts against [`MAX_DISSOLVE_WALK_RESTARTS`].
     Restart,
     /// A gate refused a record, or the endpoints served a fork.
     Refused,
-    /// The dissolve stops before the copy.
+    /// A new scope root, or a concurrent cut on a cut scope: the dissolve
+    /// stops before the copy, and keeps the entry after it.
     Stop,
     /// Each scope that a gated index names and the dissolve does not cut
     /// joins the dissolve, which returns to its cut step (ADR 0077 D4).
@@ -1657,8 +1660,8 @@ mod tests {
         );
     }
 
-    /// A complete walk that no folder of names a cut scope starts again, and
-    /// the restart counts: the walk stops past the restart bound.
+    /// A complete walk that does not reach a cut scope starts again, and each
+    /// restart counts: the walk stops past the restart bound.
     #[test]
     fn a_cut_scope_the_walk_does_not_reach_stops_it() {
         let mut tree = tree();
