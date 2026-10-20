@@ -157,6 +157,20 @@ fn an_omitted_scope_root_is_repaired_and_flagged_with_no_node_resealed() {
 }
 
 #[test]
+fn an_ascent_repair_at_a_moved_name_repairs_the_index_to_that_name() {
+    let net = FakeNet::new(5, &[0x0a])
+        .scope_root(0x0a, true)
+        .ascent_moved_to(0x0a, b"moved");
+
+    let outcome = run(&net, 0x00).expect("sweep");
+    assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+    assert_eq!(
+        net.state.borrow().repaired_index.clone().expect("repaired"),
+        vec![ChildScopeRef::new(id(0x0a), b"moved".to_vec())]
+    );
+}
+
+#[test]
 fn a_non_canonical_index_is_republished_canonical_with_nothing_omitted() {
     // The other half of the #38 D6 invariant: crash residue in the stored
     // index is repaired on the walk result too, with no scope root missing.
@@ -1087,4 +1101,43 @@ fn the_check_surface_matches_the_variants_in_order() {
     .map(SweepError::check)
     .collect();
     assert_eq!(named, SweepError::CHECKS);
+}
+
+// --- The ascent re-seal of indexed scope roots (ADR 0080) ---
+
+/// A residual a retry can clear keeps the scope unsettled, and one it cannot
+/// settles it. Either way the root counts as not proved at the epoch.
+#[test]
+fn only_a_retryable_ascent_residual_keeps_the_scope_unsettled() {
+    let cases = [
+        (
+            AscentResidual::Retry(RotationPublishError::NotPublished),
+            true,
+        ),
+        (
+            AscentResidual::Owed {
+                epoch: 3,
+                error: RotationPublishError::LostRace,
+            },
+            true,
+        ),
+        (AscentResidual::Superseded, true),
+        (AscentResidual::OutOfReach, false),
+        (AscentResidual::NotResealable, false),
+        (AscentResidual::Rejected, false),
+    ];
+    for (residual, unsettled) in cases {
+        let outcome = SweepOutcome {
+            scope_read_epoch: 5,
+            unrepaired_ascents: vec![(id(0x07), residual.clone())],
+            ..SweepOutcome::default()
+        };
+        assert_eq!(outcome.worth_another_pass(), unsettled, "{residual:?}");
+        assert_eq!(
+            outcome.settled_epoch(),
+            (!unsettled).then_some(5),
+            "{residual:?}"
+        );
+        assert_eq!(outcome.old_epoch_nodes(), 1, "{residual:?}");
+    }
 }

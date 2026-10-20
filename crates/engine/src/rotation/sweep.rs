@@ -338,6 +338,52 @@ pub trait SweepPublisher {
         scope: &ChildScopeRef,
         index: &[ChildScopeRef],
     ) -> Result<(), RotationPublishError>;
+
+    /// Republish `child`, a scope root `scope` indexes, with its ascent link
+    /// sealed under the current seed of `scope` where the published link opens
+    /// only under an earlier seed on the ratchet of `scope` (ADR 0080).
+    /// Metadata-only: the existing seed of `child` at its current epoch.
+    /// Answers the name the child gated current at, which the index must
+    /// carry.
+    async fn reseal_child_ascent(
+        &self,
+        scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Result<ChildScopeRef, AscentResidual>;
+}
+
+/// Why an indexed child does not open under the current seed of its scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AscentResidual {
+    /// The child could not be read, or the read could not finish.
+    Retry(RotationPublishError),
+    /// The link opens under the seed of `epoch`, and the re-seal did not land.
+    Owed {
+        /// The epoch of the scope whose seed opens the link.
+        epoch: u64,
+        /// Why the re-seal did not land.
+        error: RotationPublishError,
+    },
+    /// The indexed name is superseded, and no current name was reached.
+    Superseded,
+    /// No seed in the carried window of the scope opens the link.
+    OutOfReach,
+    /// The child root leaves no room for its own re-seal, or is at an envelope
+    /// version this build does not author.
+    NotResealable,
+    /// The adoption gate rejected the child: a trust violation.
+    Rejected,
+}
+
+impl AscentResidual {
+    /// Whether another pass could clear this.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Retry(_) | Self::Superseded => true,
+            Self::Owed { error, .. } => error.is_retryable(),
+            Self::OutOfReach | Self::NotResealable | Self::Rejected => false,
+        }
+    }
 }
 
 /// A completed sweep pass. Every node the walk reached is accounted for in
@@ -376,6 +422,9 @@ pub struct SweepOutcome {
     /// The index repair re-seals the scope root over its grant section budget
     /// ([`RotationPublishError::NotResealable`]), so the root keeps its index.
     pub index_repair_not_resealable: bool,
+    /// Indexed scope roots whose ascent link this pass did not prove under
+    /// the current seed of the scope.
+    pub unrepaired_ascents: Vec<([u8; 16], AscentResidual)>,
 }
 
 impl SweepOutcome {
@@ -387,6 +436,10 @@ impl SweepOutcome {
     pub(crate) fn worth_another_pass(&self) -> bool {
         self.index_repair_lost_race
             || !self.dropped_lost_race.is_empty()
+            || self
+                .unrepaired_ascents
+                .iter()
+                .any(|(_, residual)| residual.is_retryable())
             || self
                 .unreachable
                 .iter()
@@ -405,7 +458,7 @@ impl SweepOutcome {
     /// or already there. A lower bound when not zero: the run does not count
     /// the nodes below a node it could not read.
     pub fn old_epoch_nodes(&self) -> usize {
-        self.dropped_lost_race.len() + self.unreachable.len()
+        self.dropped_lost_race.len() + self.unreachable.len() + self.unrepaired_ascents.len()
     }
 
     /// The nodes this pass could not read, without the verdicts — what a caller
@@ -747,6 +800,17 @@ where
         frontier = canonicalize_frontier(next);
     }
 
+    if from.is_none() {
+        omitted.extend(
+            reseal_child_ascents(
+                publisher,
+                scope_ref,
+                &swept.direct_child_scope_index,
+                &mut outcome.unrepaired_ascents,
+            )
+            .await,
+        );
+    }
     // The self-heal runs on the walk result, before any epoch comparison is
     // acted on, so it lands whether or not this pass re-seals a node (#38 D6,
     // ADR 0003 D3). It repairs the whole invariant: the index the scope commits
@@ -798,6 +862,45 @@ where
     }
 
     Ok(outcome)
+}
+
+/// Run [`SweepPublisher::reseal_child_ascent`] over every root `index` names,
+/// and answer each child that gated current at a name the index does not
+/// carry. A child that fails is recorded and does not stop the others.
+async fn reseal_child_ascents<P: SweepPublisher>(
+    publisher: &P,
+    scope_ref: &ChildScopeRef,
+    index: &[ChildScopeRef],
+    residuals: &mut Vec<([u8; 16], AscentResidual)>,
+) -> Vec<ChildScopeRef> {
+    let mut moved = Vec::new();
+    for child in canonicalize(index).iter() {
+        match publisher.reseal_child_ascent(scope_ref, child).await {
+            Ok(at) if &at != child => moved.push(at),
+            Ok(_) => {}
+            Err(residual) => residuals.push((child.scope_id, residual)),
+        }
+    }
+    moved
+}
+
+/// Re-seal the ascent links of the roots `scope` indexes, outside a sweep
+/// pass: what a flat cut runs on each side of its publish. Answers the read
+/// epoch of `scope` and what the re-seal left.
+pub(crate) async fn reseal_child_ascents_of<N: SweepResolver + SweepPublisher>(
+    net: &N,
+    scope: &ChildScopeRef,
+) -> Result<(u64, Vec<([u8; 16], AscentResidual)>), SweepResolveFailure> {
+    let (scope_ref, swept) = resolve_scope_current(net, scope).await?;
+    let mut residuals = Vec::new();
+    reseal_child_ascents(
+        net,
+        &scope_ref,
+        &swept.direct_child_scope_index,
+        &mut residuals,
+    )
+    .await;
+    Ok((swept.current_read_epoch, residuals))
 }
 
 /// Bind each ref's `node_id -> ipnsName` into `labels`, aborting on the C2
@@ -884,6 +987,7 @@ impl Cumulative {
             unreachable: last.unreachable,
             index_repair_lost_race: last.index_repair_lost_race,
             index_repair_not_resealable: last.index_repair_not_resealable,
+            unrepaired_ascents: last.unrepaired_ascents,
         }
     }
 }
@@ -904,11 +1008,12 @@ impl Cumulative {
 ///
 /// # Caller contract
 ///
-/// An `Ok` outcome is convergence-complete **only when both
-/// [`SweepOutcome::dropped_lost_race`] and [`SweepOutcome::unreachable`] are
-/// empty**. The buckets aggregate across passes per [`Cumulative`]. An `Err`
-/// reports no outcome at all: earlier passes' work is durable on the network,
-/// but the run makes no convergence claim over it.
+/// An `Ok` outcome is convergence-complete **only when
+/// [`SweepOutcome::dropped_lost_race`], [`SweepOutcome::unreachable`] and
+/// [`SweepOutcome::unrepaired_ascents`] are empty**. The buckets aggregate
+/// across passes per [`Cumulative`]. An `Err` reports no outcome at all:
+/// earlier passes' work is durable on the network, but the run makes no
+/// convergence claim over it.
 pub async fn run_sweep<S, R, P>(
     scheduler: &S,
     resolver: &R,

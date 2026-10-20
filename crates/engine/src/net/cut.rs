@@ -207,6 +207,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            ascent_reports: self.root_reports,
             refused: RefusedRoot::default(),
             root_fallback: Some(
                 RootFallback::new(self.scope_id, self.root_wait, self.root_reports)
