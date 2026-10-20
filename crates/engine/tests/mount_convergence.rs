@@ -1453,25 +1453,24 @@ fn a_mount_write_inside_a_promoted_scope_root_publishes_on_a_non_minting_device(
     );
 }
 
-/// The stack a debug build's deepest tick path must fit in. The path needs
-/// about 1.69 MiB, and the desktop engine thread has 8 MiB, so a frame growth
-/// on it fails here before it can overflow a host.
+/// The stack a debug build's deepest tick path must fit in. It sits below the
+/// 2 MiB test thread that every other engine test ticks on, and the 2 MiB
+/// default of a spawned thread, so a frame growth on that path fails here first.
 const TICK_STACK_BUDGET: usize = 1792 * 1024;
 
 /// The mount deletes a folder inside a promoted scope root on a device that did
 /// not mint the grant. That delete is the deepest drain path, so the whole
-/// scenario runs on a thread of [`TICK_STACK_BUDGET`].
+/// scenario runs on a thread of [`TICK_STACK_BUDGET`]. An overflow aborts the
+/// whole test binary, so the re-raise covers only a panic.
 #[test]
 fn a_mount_delete_inside_a_promoted_scope_root_drains_within_the_tick_stack_budget() {
-    let ran = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("tick-stack-budget".to_owned())
         .stack_size(TICK_STACK_BUDGET)
         .spawn(a_mount_delete_inside_a_promoted_scope_root_drains)
         .expect("the budget thread starts")
-        .join();
-    if let Err(panic) = ran {
-        std::panic::resume_unwind(panic);
-    }
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 }
 
 fn a_mount_delete_inside_a_promoted_scope_root_drains() {
@@ -1496,19 +1495,11 @@ fn a_mount_delete_inside_a_promoted_scope_root_drains() {
         }))
         .expect("a create inside the granted folder stages");
     }
-    for _ in 0..8 {
-        tick(&world, &engine_m, &mut tasks_m);
-    }
+    tick_n(&world, &engine_m, &mut tasks_m, 8);
     assert_eq!(queued(&mount), 0, "the creates drain");
-    let gone = listed(&engine_m, shared)
-        .into_iter()
-        .find(|(name, _)| name == "made-by-the-mount")
-        .expect("the folder lists")
-        .1;
+    let gone = grafted_child(&engine_m, shared, "made-by-the-mount");
     block_on(engine_m.command(Command::Delete { node: gone })).expect("the delete stages");
-    for _ in 0..8 {
-        tick(&world, &engine_m, &mut tasks_m);
-    }
+    tick_n(&world, &engine_m, &mut tasks_m, 8);
     assert_eq!(queued(&mount), 0, "the delete drains");
     let scope_seed = owner_scope_seed(&world, &blocks, shared);
     assert_eq!(

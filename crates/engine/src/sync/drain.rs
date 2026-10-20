@@ -3020,8 +3020,8 @@ where
             .filter(|scope| !scope.is_grafted())
             .map(|scope| scope.source)
             .collect();
-        // The legs are boxed: a debug build holds an inline future's state in
-        // every poll frame above it, and the tick runs on a bounded thread stack.
+        // Boxed so the tick's state machine, and every debug-build frame that
+        // builds it, does not carry these legs inline.
         for scope in &passes {
             let mut report = Box::pin(self.run_queue(scope, &ends, exits)).await;
             journalled.append(&mut report.journalled_deletes);
