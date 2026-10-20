@@ -2865,8 +2865,7 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     owner_identity: &'a EcdsaVerifier,
     /// The scope root whose PUT raises the flag ([`RootFallback`]).
     put_sent: Option<([u8; 16], &'a Cell<bool>)>,
-    /// Takes the sequence of each signed record that `put_sent` does not
-    /// mark, landed or not.
+    /// Takes the sequence of each signed record, landed or not.
     signed: Option<&'a Cell<Option<u64>>>,
 }
 
@@ -2951,7 +2950,10 @@ where
         let mark = self
             .put_sent
             .filter(|(scope_id, _)| *scope_id == record.scope_id)
-            .map(|(_, sent)| PutMark::Sent(sent))
+            .map(|(_, sent)| PutMark::Sent {
+                sent,
+                signed: self.signed,
+            })
             .or(self.signed.map(PutMark::Signed));
         let receipt = publish_record(
             self.transport,
@@ -4325,6 +4327,10 @@ where
         };
         if epoch == source.read_epoch {
             return Ok(child.clone());
+        }
+        // The gate passed a record at a version this build does not author.
+        if root.observed.is_err() {
+            return Err(AscentResidual::NotResealable);
         }
         // What no retry clears is the child's own record: a trust violation.
         let owed = |error: RotationPublishError| match error {
@@ -9193,6 +9199,26 @@ mod tests {
         (harness, root, cut)
     }
 
+    /// A cut root PUT that `put_sent` marks and that no endpoint acknowledged
+    /// still spends its sequence, so the next publish at that name in the net
+    /// signs above it.
+    #[test]
+    fn a_marked_cut_root_put_spends_its_sequence() {
+        let (harness, root, cut) = staged_cut();
+        let reported = RootReports::default();
+        let sent = Cell::new(false);
+        let mut net = harness.net(&[]);
+        net.root_fallback =
+            Some(RootFallback::new(SCOPE, RootWait::Command, &reported).noting_root_puts(&sent));
+
+        harness.store.fail_put_for(root.name.as_str());
+        assert!(block_on(net.publish_scope_root(&cut)).is_err());
+        assert!(sent.get(), "the PUT is marked as sent");
+        harness.store.heal_put_for(root.name.as_str());
+        block_on(net.publish_scope_root(&cut)).expect("the cut lands");
+        assert_eq!(sequence_at(&harness, &root.name), Some(3));
+    }
+
     #[test]
     fn a_restarted_owner_supplies_the_durable_copy_to_the_rotation_fallback() {
         use crate::grants::OwnerSeedCache;
@@ -11628,7 +11654,30 @@ mod tests {
         ChildScopeRef,
         ChildScopeRef,
     ) {
-        let (_, child, child_ref) = owner_tree();
+        a_child_at_version_owed_a_reseal(ENVELOPE_V)
+    }
+
+    /// [`a_child_owed_a_reseal`] with the child at envelope version `v`.
+    fn a_child_at_version_owed_a_reseal(
+        v: u64,
+    ) -> (
+        Harness<InMemoryRecordStore>,
+        OwnerRootFixture,
+        ChildScopeRef,
+        ChildScopeRef,
+    ) {
+        let child_parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+        let child = owner_scope_root_at(
+            v,
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            OWNER_ROOT_EPOCH,
+            Some(&child_parent_seed),
+            &[],
+            Vec::new(),
+            None,
+        );
+        let child_ref = child_ref(CHILD_SCOPE, &child);
         let root = owner_scope_root_at(
             ENVELOPE_V,
             SCOPE,
@@ -11647,6 +11696,24 @@ mod tests {
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
         let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
         (harness, child, scope, child_ref)
+    }
+
+    /// A child that opens only under an earlier seed of P, at an envelope
+    /// version this build reads but does not author, passed the gate. It is a
+    /// settled residual and not a trust event.
+    #[test]
+    fn a_child_at_a_version_this_build_does_not_author_is_not_resealable() {
+        let (harness, child, scope, child_ref) = a_child_at_version_owed_a_reseal(ENVELOPE_V + 1);
+        let before = sequence_at(&harness, &child.name);
+        let net = harness.net(core::slice::from_ref(&child_ref));
+        block_on(net.resolve_scope(&scope)).expect("the parent resolves");
+
+        assert_eq!(
+            block_on(net.reseal_child_ascent(&scope, &child_ref)).err(),
+            Some(AscentResidual::NotResealable),
+        );
+        assert_eq!(abuse_events(&harness.events(), ASCENT_EVENT), 0);
+        assert_eq!(sequence_at(&harness, &child.name), before);
     }
 
     /// Each PUT of `child` lands, and each read after it serves the staged

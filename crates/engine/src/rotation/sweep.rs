@@ -368,7 +368,8 @@ pub enum AscentResidual {
     Superseded,
     /// No seed in the carried window of the scope opens the link.
     OutOfReach,
-    /// The child root leaves no room for its own re-seal.
+    /// The child root leaves no room for its own re-seal, or is at an envelope
+    /// version this build does not author.
     NotResealable,
     /// The adoption gate rejected the child: a trust violation.
     Rejected,
