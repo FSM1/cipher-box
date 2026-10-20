@@ -67,7 +67,7 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::dissolve_journal::{
     DissolveBinding, DissolveCell, DissolveHeader, DissolveJournal, DissolveStep, DissolvedScope,
-    MapRow,
+    MAX_DISSOLVED_SCOPES, MapRow,
 };
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::op::{Op, OpKind, ScopeCrossing};
@@ -32780,7 +32780,7 @@ fn a_confirm_that_fills_the_tick_read_share_still_closes() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let folder = fx.folder;
-    create_published_folders(&mut fx, folder, 62);
+    create_published_folders(&mut fx, folder, 78);
     // Each sweep fetches the head block of each row.
     serve_http(&fx.owner_device, &fx.blocks, 4096);
     assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Map)));
@@ -32797,12 +32797,60 @@ fn a_confirm_that_fills_the_tick_read_share_still_closes() {
             break;
         }
     }
-    assert_eq!(sealed.expect("every copy seals").rows, 63);
+    assert_eq!(sealed.expect("every copy seals").rows, 79);
 
     ticks(&mut fx, 6);
 
     assert_eq!(
         fx.standing_dissolve().step,
+        DissolveStep::Unindex,
+        "the seal closes and the relink follows"
+    );
+}
+
+/// A dissolve of the most scopes that a header holds, into a destination
+/// below the vault root, still closes: the tick read share holds the close
+/// of every scope with the confirm reads.
+#[test]
+fn a_dissolve_at_the_scope_cap_below_the_vault_root_closes() {
+    let mut fx = GrantScenario::new();
+    serve_http(&fx.owner_device, &fx.blocks, 1 << 20);
+    let outer = fx.grant_nested_folder("outer");
+    let inners: Vec<NodeId> = (1..MAX_DISSOLVED_SCOPES)
+        .map(|at| {
+            create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                outer,
+                &format!("in{at}"),
+            )
+        })
+        .collect();
+    for inner in inners {
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: inner,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done),
+        );
+        serve_http(&fx.owner_device, &fx.blocks, 1 << 20);
+    }
+    let binding = folder_binding(&fx);
+    assert_eq!(
+        fx.dissolve_into(outer, fx.folder, binding),
+        Ok(Some(DissolveStep::Map))
+    );
+    assert_eq!(header_at(&fx, outer).scopes.len(), MAX_DISSOLVED_SCOPES);
+
+    ticks(&mut fx, 8);
+
+    assert_eq!(
+        header_at(&fx, outer).step,
         DissolveStep::Unindex,
         "the seal closes and the relink follows"
     );

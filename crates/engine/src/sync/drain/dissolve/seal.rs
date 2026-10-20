@@ -27,7 +27,7 @@ use super::super::{
     Anchor, Drain, DrainScope, LoadedRoot, LostWinner, ScopeEnd, SealPlane, checked_content_cid,
     encode_content_cid_str, refuse_record, seal_open_failed, take_tick_read,
 };
-use super::{EndMark, cut_epoch_of, cut_overtaken};
+use super::{CLOSE_READS_PER_SCOPE, EndMark, cut_epoch_of, cut_overtaken};
 use crate::facade::{NodeId, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::gated_read::{LeafRead, Unserved};
@@ -524,9 +524,9 @@ where
         let plane = dest.at(header.binding.read_epoch);
         // Once every row is sealed, each row is read again: the confirm.
         let confirming = run.done.len() == rows.len();
-        // The confirm keeps the reads that the close takes: two for each scope.
+        // The confirm keeps the reads that the close takes.
         let reserve = if confirming {
-            2 * header.scopes.len()
+            CLOSE_READS_PER_SCOPE * header.scopes.len()
         } else {
             0
         };
