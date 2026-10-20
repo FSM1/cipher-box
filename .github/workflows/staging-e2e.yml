@@ -87,8 +87,11 @@ jobs:
           done
           if [ "${#dirs[@]}" -eq 0 ]; then exit 0; fi
           find "${dirs[@]}" -type f -name '*.md' -exec perl -0pi -e 's/^```yaml\n.*?^```[ \t]*(?:\n|\z)//msg' {} +
-          if grep -rl --include='*.md' '^```yaml' "${dirs[@]}"; then
-            echo 'A fenced yaml block is still in the files above.' >&2
+          # Only status 1 is clean: 0 is a match, and 2 is a read error.
+          found=0
+          grep -rl --include='*.md' '^```yaml' "${dirs[@]}" || found=$?
+          if [ "${found}" -ne 1 ]; then
+            echo 'A fenced yaml block is still in the files above, or grep could not read a file.' >&2
             exit 1
           fi
 
