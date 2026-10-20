@@ -18064,6 +18064,48 @@ fn a_bookmark_with_the_ended_mark_reports_the_ended_state() {
     );
 }
 
+/// ADR 0079 D1: a link hold over an `ended` mark keeps the verdict of the link
+/// read on its row.
+#[test]
+fn a_link_hold_over_an_ended_mark_reports_the_link_verdict() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    poll_tasks_until_parked(&mut holder_tasks);
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let joined = (owner_identity().verifying_key().to_sec1(), fx.folder.0);
+    cipherbox_engine::testkit::mark_bookmark(
+        &fx.recipient_device.staging_store,
+        &enc,
+        &joined,
+        (Some(2), Some(1)),
+    );
+    let personal = cipherbox_engine::testkit::plant_marked_bookmark(
+        &fx.recipient_device.staging_store,
+        &enc,
+        [0x6e; 16],
+        (Some(2), Some(1)),
+    );
+
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    let row = |scope: [u8; 16]| {
+        shares
+            .iter()
+            .find(|share| share.scope.0 == scope)
+            .expect("the share")
+    };
+    assert!(row(joined.1).via_link);
+    assert_eq!(row(joined.1).resolution, Some(ResolutionClass::Granted));
+    assert_eq!(
+        row(personal.1).resolution,
+        Some(ResolutionClass::RevocationSignal)
+    );
+}
+
 /// ADR 0024 D2, D4: a write conversion runs a real write wave that moves the
 /// scope root. A holder that still reads through the link follows the scope
 /// pointer to the moved root, and the converted claimant holds write there.

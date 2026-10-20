@@ -496,6 +496,13 @@ impl ReceivedSharesList {
         }
     }
 
+    /// Whether the bookmark under `key` reads as ended: it holds the `ended`
+    /// mark and no link hold. A link hold keeps its own revoke path, so the
+    /// mark speaks only for a personal bookmark (ADR 0079 D1).
+    pub(crate) fn ended(&self, key: &BookmarkKey) -> bool {
+        self.link_hold(key).is_none() && self.find(key).is_some_and(|share| share.ended.is_some())
+    }
+
     /// Put back the `(ended, grantCut)` values that
     /// [`note_grant_opened`](Self::note_grant_opened) replaced.
     fn restore_marks(&mut self, key: &BookmarkKey, (ended, grant_cut): (Option<u64>, Option<u64>)) {

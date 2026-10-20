@@ -50,6 +50,9 @@ use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on, 
 const VAULT_ROOT_SCOPE: [u8; 16] = [0u8; 16];
 
 const V: u64 = 1;
+/// The cut epoch of the fixture's commitment. Not zero, so a baseline that
+/// a constant writes reads apart from the cut the accept opened.
+const CUT_EPOCH: u64 = 3;
 /// The recipient device's login secret — the `contact-label-seed` input its
 /// durable sharer-scoped floor keys are labelled under.
 const RECIPIENT_LOGIN_SECRET: [u8; 32] = [0x4c; 32];
@@ -224,7 +227,7 @@ impl GrantFixture {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-            cut_epoch: 0,
+            cut_epoch: CUT_EPOCH,
             entries: vec![GrantSetEntry::new(
                 &POINTER_READ_KEY,
                 tag,
@@ -1489,7 +1492,7 @@ fn an_added_bookmark_keeps_the_marks_of_the_bookmarks_held() {
                 .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
                 .unwrap()
         ),
-        (None, Some(0)),
+        (None, Some(CUT_EPOCH)),
         "the accept writes the cut epoch of the commitment it opened"
     );
 }
@@ -1533,7 +1536,7 @@ fn an_accept_whose_floor_commit_fails_keeps_the_grant_cut_it_persisted() {
                 .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
                 .unwrap()
         ),
-        (None, Some(0))
+        (None, Some(CUT_EPOCH))
     );
 }
 
@@ -1581,23 +1584,23 @@ fn an_opened_regrant_clears_the_ended_mark_at_or_below_its_cut() {
     let mut received = ReceivedSharesList::new();
     accept(1, &mut received).expect("the share accepts");
 
-    received.mark_for_test(&key, (Some(1), Some(0)));
+    received.mark_for_test(&key, (Some(CUT_EPOCH + 1), Some(CUT_EPOCH)));
     block_on(recipient.received_share_store.persist(&received)).expect("the mark persists");
     accept(2, &mut received).expect("the re-grant accepts");
     assert_eq!(
         stored_marks(),
-        (Some(1), Some(0)),
+        (Some(CUT_EPOCH + 1), Some(CUT_EPOCH)),
         "a mark above the cut stays"
     );
 
-    received.mark_for_test(&key, (Some(0), Some(0)));
+    received.mark_for_test(&key, (Some(CUT_EPOCH), Some(CUT_EPOCH)));
     block_on(recipient.received_share_store.persist(&received)).expect("the mark persists");
     recipient.received_share_store.set_failing(true);
     let err = accept(3, &mut received).unwrap_err();
     assert!(matches!(err, AcceptError::Persist(_)), "got {err}");
     assert_eq!(
         bookmark_marks(received.find(&key).unwrap()),
-        (Some(0), Some(0)),
+        (Some(CUT_EPOCH), Some(CUT_EPOCH)),
         "a failed persist puts the mark back"
     );
 
@@ -1622,7 +1625,7 @@ fn an_opened_regrant_clears_the_ended_mark_at_or_below_its_cut() {
     .expect("the re-grant accepts");
     assert_eq!(
         stored_marks(),
-        (None, Some(0)),
+        (None, Some(CUT_EPOCH)),
         "the mark at the cut clears"
     );
 }

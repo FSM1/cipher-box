@@ -279,17 +279,24 @@ scenario fails the meta-test):
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)
   and the withheld-update escalation;
 - the `ended` mark (ADR 0079): a first open writes `grantCut` and a later cut
-  sets the mark; an exclusion at `grantCut`, a stripped blob, a baseline with
-  no cut-epoch floor below the cut, a bookmark with no `grantCut`, and a
-  link-held read set nothing; an unavailable read, an absent root, a blob that
-  does not open and a forged blob do not clear it; an opened re-grant clears
-  it; a retired pointer of an ended share escalates nothing, and the custody
-  keys stay; a link hold over a mark still escalates a withheld pointer; the backfill reaches four baseline-less bookmarks per pass and
-  leaves the ordinary refresh its half, and a restart repeats it for the
-  bookmarks with no baseline only (`grants::received_status` `ended_mark`);
-  the accept writes `grantCut` before the floor commit and clears the mark at
-  or below its cut (`tests/grants_mailbox.rs`); the `/shared` row reports the
-  mark before any pass (`tests/owner_actions.rs`);
+  sets the mark; an exclusion at a cut equal to `grantCut` sets nothing, and
+  an exclusion at a higher cut sets the mark, also with no cut-epoch floor; a
+  later exclusion keeps the first mark; a stripped blob, a bookmark with no
+  `grantCut` and a link-held read set nothing; an unavailable read, an absent
+  root, a blob that does not open, a forged blob, a blob whose structure
+  signature the gate refuses and a signed blob over other seeds do not clear
+  it; an opened re-grant clears it; a retired pointer of an ended share
+  escalates nothing, and the custody keys stay; a link hold over a mark still
+  escalates a withheld pointer; the backfill reaches four baseline-less
+  bookmarks per pass and leaves the ordinary refresh its half, the ordinary
+  refresh spends its spare share on the members left, and a restart repeats
+  the backfill for the bookmarks with no baseline only
+  (`grants::received_status` `ended_mark`); both keys survive each writer of
+  the list, and the reader decodes the bookmark list of the release before it
+  (`grants::accept`); the accept writes `grantCut` before the floor commit and
+  clears the mark at or below its cut (`tests/grants_mailbox.rs`); the
+  `/shared` row reports the mark before any pass, and a link hold over a mark
+  reports the link verdict (`tests/owner_actions.rs`);
 - the offline queue — FIFO replay through rebase, dead-letter on
   revoked-while-offline with staged bytes preserved, staging-budget
   fail-fast;
