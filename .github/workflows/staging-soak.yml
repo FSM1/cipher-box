@@ -165,8 +165,9 @@ jobs:
         if: always()
         run: pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"
 
-      # The result lines only. The Playwright report stays on the runner: a
-      # soak page can show a bearer link URL.
+      # The result lines only. The Playwright report and `test-results/` stay
+      # on the runner: a soak page can show a bearer link URL, and a failed
+      # matcher writes an ARIA snapshot of the page into `error-context.md`.
       - name: Upload the result lines
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -177,8 +178,6 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-      # No `test-results/` upload: its `error-context.md` can hold an ARIA
-      # snapshot of the page, with the ledger text and its bearer link URL.
       - name: Upload the result lines of this attempt
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -236,8 +235,6 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-      # No `test-results/` upload: its `error-context.md` can hold an ARIA
-      # snapshot of the page, with the ledger text and its bearer link URL.
       - name: Upload the result lines of this attempt
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

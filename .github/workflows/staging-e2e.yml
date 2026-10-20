@@ -40,8 +40,9 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-    # Without a page snapshot in `error-context.md`: the uploaded
-    # `test-results/` is public, and a snapshot lists each link on the page.
+    # The uploaded report and `test-results/` are public, and an ARIA snapshot
+    # lists each link and field value on the page. This drops the page snapshot;
+    # the strip step drops the snapshot a failed matcher writes.
     env:
       PLAYWRIGHT_NO_COPY_PROMPT: '1'
 
@@ -74,8 +75,25 @@ jobs:
         env:
           E2E_BASE_URL: ${{ inputs.base-url }}
 
-      - name: Upload the Playwright report and the measured timings
+      - name: Strip the ARIA snapshots from the Markdown error context
+        id: strip
         if: always()
+        working-directory: tests/web-e2e
+        run: |
+          set -euo pipefail
+          dirs=()
+          for dir in test-results playwright-report/data; do
+            if [ -d "${dir}" ]; then dirs+=("${dir}"); fi
+          done
+          if [ "${#dirs[@]}" -eq 0 ]; then exit 0; fi
+          find "${dirs[@]}" -type f -name '*.md' -exec perl -0pi -e 's/^```yaml\n.*?^```[ \t]*(?:\n|\z)//msg' {} +
+          if grep -rl --include='*.md' '^```yaml' "${dirs[@]}"; then
+            echo 'A fenced yaml block is still in the files above.' >&2
+            exit 1
+          fi
+
+      - name: Upload the Playwright report and the measured timings
+        if: always() && steps.strip.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: staging-e2e-report-${{ matrix.project }}

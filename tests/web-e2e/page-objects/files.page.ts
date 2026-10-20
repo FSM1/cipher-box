@@ -3,7 +3,7 @@ import { expect, type Download, type Locator, type Page } from '@playwright/test
 /** The accessible name a row's selection checkbox carries. */
 const SELECT_PREFIX = 'select ';
 
-/** A size or date cell with a value, not the `...` of an unresolved row. */
+/** A size cell with a value, not the `...` of an unresolved row. */
 const RESOLVED = /^(?!\.\.\.$).+/;
 
 /** The vault browser route and the chrome around it. */
@@ -257,7 +257,7 @@ export class FilesPage {
   async openEditor(name: string): Promise<Locator> {
     await expect(
       this.row(name).locator('.file-list-item-size'),
-      `the listing resolves the size of ${name}`
+      `the size of ${name} did not resolve`
     ).toHaveText(RESOLVED, { timeout: 60_000 });
     await this.act(name, 'edit');
     const dialog = this.page.getByRole('dialog', { name: `edit ${name}`, exact: true });
