@@ -32893,12 +32893,7 @@ fn a_dissolve_at_the_scope_cap_below_the_vault_root_closes() {
     );
     assert_eq!(header_at(&fx, outer).scopes.len(), MAX_DISSOLVED_SCOPES);
 
-    for _ in 0..80 {
-        if header_at(&fx, outer).step >= DissolveStep::Unindex {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_step_at(&mut fx, outer, DissolveStep::Unindex, 80);
 
     assert!(
         header_at(&fx, outer).step >= DissolveStep::Unindex,
@@ -32949,7 +32944,7 @@ fn a_relink_retry_signs_above_an_entry_mark_whose_parent_mark_did_not_land() {
 // ---------------------------------------------------------------------------
 
 /// One day in milliseconds.
-const DAY_MILLIS: u64 = 24 * 60 * 60 * 1_000;
+const DAY_MILLIS: u64 = DAY.as_secs() * 1_000;
 
 /// Tick until the entry at the folder reaches `step` or goes, at most
 /// `bound` ticks. Answers the header, `None` when the entry went.
@@ -32958,14 +32953,28 @@ fn tick_until_step(
     step: DissolveStep,
     bound: usize,
 ) -> Option<DissolveHeader> {
+    let folder = fx.folder;
+    tick_until_step_at(fx, folder, step, bound)
+}
+
+/// [`tick_until_step`] for the entry at `root`.
+fn tick_until_step_at(
+    fx: &mut GrantScenario,
+    root: NodeId,
+    step: DissolveStep,
+    bound: usize,
+) -> Option<DissolveHeader> {
+    let header = |fx: &GrantScenario| {
+        block_on(fx.engine.dissolve_header_for_test(root)).expect("the journal reads")
+    };
     for _ in 0..bound {
-        match fx.dissolve_header() {
+        match header(fx) {
             Some(header) if header.step < step => {}
             other => return other,
         }
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    fx.dissolve_header()
+    header(fx)
 }
 
 /// The scope ids that the vault root's published index names.
@@ -32975,7 +32984,12 @@ fn vault_index(fx: &GrantScenario) -> Vec<[u8; 16]> {
 
 /// The names of the name log of the entry at the folder.
 fn copy_names(fx: &GrantScenario) -> Vec<String> {
-    logged_names(fx)
+    copy_names_of(fx, fx.folder)
+}
+
+/// The names of the name log of the entry at `root`.
+fn copy_names_of(fx: &GrantScenario, root: NodeId) -> Vec<String> {
+    logged_of(fx, root)
         .into_iter()
         .map(|(_, name)| String::from_utf8(name).expect("a name"))
         .collect()
@@ -33441,12 +33455,7 @@ fn a_relink_parent_moved_into_another_write_scope_retires_no_copy_name() {
         fx.dissolve_into(shared, parent, dissolve_binding()),
         Ok(Some(DissolveStep::Map))
     );
-    for _ in 0..8 {
-        if header_at(&fx, shared).step >= DissolveStep::Retire {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_step_at(&mut fx, shared, DissolveStep::Retire, 8);
     let header = header_at(&fx, shared);
     assert_eq!(header.step, DissolveStep::Retire);
     let copy = header.new_root;
@@ -33454,10 +33463,7 @@ fn a_relink_parent_moved_into_another_write_scope_retires_no_copy_name() {
         folder_children(&fx, parent).contains(&copy),
         "the relink landed"
     );
-    let copies: Vec<String> = logged_of(&fx, shared)
-        .into_iter()
-        .map(|(_, name)| String::from_utf8(name).expect("a name"))
-        .collect();
+    let copies = copy_names_of(&fx, shared);
     assert!(!copies.is_empty(), "the log still stands");
     for (node, new_parent, new_name) in [(copy, sibling, "s"), (parent, folder, "parent")] {
         block_on(fx.engine.command(Command::Move {
@@ -33469,13 +33475,7 @@ fn a_relink_parent_moved_into_another_write_scope_retires_no_copy_name() {
         .expect("the move stages");
     }
 
-    for _ in 0..16 {
-        let header = block_on(fx.engine.dissolve_header_for_test(shared)).expect("the journal");
-        if header.is_none_or(|header| header.step >= DissolveStep::Hold) {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_step_at(&mut fx, shared, DissolveStep::Hold, 16);
 
     assert_eq!(
         header_at(&fx, shared).step,
@@ -33658,14 +33658,10 @@ fn a_proof_started_on_neither_does_not_retire_once_the_copy_comes_back() {
 fn a_write_cut_of_the_bound_read_scope_in_the_retire_step_reaches_the_hold() {
     let mut fx = GrantScenario::new();
     let (inner, _) = seal_inner_into_the_folder(&mut fx);
-    for _ in 0..8 {
-        if header_at(&fx, inner).step >= DissolveStep::Retire {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_step_at(&mut fx, inner, DissolveStep::Retire, 8);
     assert_eq!(header_at(&fx, inner).step, DissolveStep::Retire);
-    assert!(!logged_of(&fx, inner).is_empty(), "the log still stands");
+    let logged = copy_names_of(&fx, inner);
+    assert!(!logged.is_empty(), "the log still stands");
     let folder = fx.folder;
     assert_eq!(
         command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
@@ -33676,12 +33672,7 @@ fn a_write_cut_of_the_bound_read_scope_in_the_retire_step_reaches_the_hold() {
         .map(|name| name.as_str().to_owned())
         .collect();
 
-    for _ in 0..16 {
-        if header_at(&fx, inner).step >= DissolveStep::Hold {
-            break;
-        }
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
+    tick_until_step_at(&mut fx, inner, DissolveStep::Hold, 16);
 
     assert_eq!(
         header_at(&fx, inner).step,
@@ -33692,5 +33683,12 @@ fn a_write_cut_of_the_bound_read_scope_in_the_retire_step_reaches_the_hold() {
     assert!(
         live.iter().all(|name| !retired.contains(name)),
         "no live copy name retires"
+    );
+    // The name wave of the cut retires a logged name at most once.
+    assert!(
+        logged
+            .iter()
+            .all(|name| retired.iter().filter(|done| *done == name).count() <= 1),
+        "the retire step retires no logged name"
     );
 }

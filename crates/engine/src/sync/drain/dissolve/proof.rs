@@ -13,7 +13,6 @@
 use core::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::secret::ct_eq;
 
@@ -22,13 +21,14 @@ use super::super::{
     Anchor, ChildFault, Drain, DrainScope, RecordMark, ScopeEnd, WalkAnchor, refuse_record,
     take_tick_read,
 };
-use super::relink::relink_mark_keys;
+use super::relink::{ParentNames, relink_mark_keys};
 use super::seal::Destination;
 use super::{EndMark, MAX_DISSOLVE_READ_ATTEMPTS, MAX_DISSOLVE_WALK_NODES, NotDriven, ReadShare};
 use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::net::gated_read::LeafRead;
 use crate::net::retire::{Acknowledged, HeldMarks};
+use crate::net::rotation::scope_name;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, StagingStore,
 };
@@ -42,15 +42,6 @@ enum Fence {
     Fails,
     /// The tick has too few reads left.
     Waits,
-}
-
-/// Which roots the folders of a link proof name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Linked {
-    Copy,
-    Source,
-    Neither,
-    Both,
 }
 
 /// One read of a link proof.
@@ -87,7 +78,7 @@ pub(crate) struct LinkProof {
     copy: bool,
     source: bool,
     /// The fence held before the walk started. A proof resumes only under the
-    /// same parent verdict, which a fence marks.
+    /// same fence mode.
     fenced: bool,
 }
 
@@ -111,12 +102,12 @@ impl LinkProof {
         }
     }
 
-    fn linked(&self) -> Linked {
+    fn linked(&self) -> ParentNames {
         match (self.copy, self.source) {
-            (true, false) => Linked::Copy,
-            (false, true) => Linked::Source,
-            (false, false) => Linked::Neither,
-            (true, true) => Linked::Both,
+            (true, false) => ParentNames::Copy,
+            (false, true) => ParentNames::Source,
+            (false, false) => ParentNames::Neither,
+            (true, true) => ParentNames::Both,
         }
     }
 }
@@ -223,11 +214,12 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
-    /// Decide the relink of `header` under `target`, after the fence when
-    /// `fence`: the copy linked moves on to the index removal; the source root
-    /// linked alone retires the copy after a fence; neither linked moves on
-    /// and keeps every copy name; both linked, a fence that does not hold or a
-    /// walk that does not complete parks the entry.
+    /// Decide the relink of `header` under `target`, after the fence unless
+    /// `parent` names the copy alone: the copy linked moves on to the index
+    /// removal; the source root linked alone retires the copy when `parent`
+    /// names neither root; neither linked moves on and keeps every copy name;
+    /// both linked, a fence that does not hold or a walk that does not
+    /// complete parks the entry.
     #[expect(clippy::too_many_arguments, reason = "one proof of one entry")]
     pub(super) async fn prove(
         &self,
@@ -237,10 +229,11 @@ where
         hold: &DissolveHold<'_>,
         header: &DissolveHeader,
         target: &Destination<'_, '_>,
-        fence: bool,
+        parent: ParentNames,
         left: &Cell<usize>,
     ) -> Result<(), NotDriven> {
         let root = header.scopes[0].scope_id;
+        let fence = parent != ParentNames::Copy;
         let carried = self.cells.dissolve_proofs.borrow_mut().remove(&root);
         let mut proof = match carried
             .filter(|proof| proof.write == EndMark::of(target.write) && proof.fenced == fence)
@@ -305,16 +298,16 @@ where
             Swept::Fault(_) | Swept::Stopped(_) => return self.park(journal, hold, header).await,
         }
         match proof.linked() {
-            Linked::Both => self.park(journal, hold, header).await,
+            ParentNames::Both => self.park(journal, hold, header).await,
             // The parent named the copy at this tick's read, so the next tick
             // reads it again.
-            Linked::Source if !(fence && proof.fenced) => Ok(()),
-            Linked::Source => self.forsake(journal, hold, header).await,
+            ParentNames::Source if parent != ParentNames::Neither => Ok(()),
+            ParentNames::Source => self.forsake(journal, hold, header).await,
             linked => {
                 let mut next = header.clone();
                 next.parked = false;
                 // The copy may still be live where the walk does not read.
-                next.keep_names = linked == Linked::Neither;
+                next.keep_names = linked == ParentNames::Neither;
                 next.step = DissolveStep::Unindex;
                 Ok(journal.commit(hold, Some(header), &next).await?)
             }
@@ -343,10 +336,7 @@ where
         let ledger = self.retire_ledger(owner);
         let tag = owner_tag(owner.enc_secret);
         for name in &header.relink_names {
-            let Ok(parsed) = core::str::from_utf8(name).map(IpnsName::parse) else {
-                return Fence::Fails;
-            };
-            let Ok(parsed) = parsed else {
+            let Ok(parsed) = scope_name(name) else {
                 return Fence::Fails;
             };
             let mut bar = None;

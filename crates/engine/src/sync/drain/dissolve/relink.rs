@@ -78,8 +78,10 @@ fn signed_eol(name: &IpnsName, bytes: &[u8]) -> Option<(VerifiedRecord, u64)> {
     Some((record, eol))
 }
 
-/// What the gated relink parent names.
-enum ParentNames {
+/// Which of the copy's root and the source root the gated relink parent, or
+/// the folders of a link proof, name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ParentNames {
     /// The copy's root, and not the source root.
     Copy,
     /// The source root, and not the copy's root.
@@ -305,17 +307,9 @@ where
             (false, false) => ParentNames::Neither,
             (true, true) => ParentNames::Both,
         };
-        if matches!(named, ParentNames::Source) {
-            self.cells.dissolve_proofs.borrow_mut().remove(&source);
-        }
         match named {
-            // Another device can link the source root elsewhere before the
-            // relink lands, so a proof runs before the index removal.
-            ParentNames::Copy => {
-                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, false, left))
-                    .await
-            }
             ParentNames::Source => {
+                self.cells.dissolve_proofs.borrow_mut().remove(&source);
                 let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
                 match self
                     .destination_moved(owner, &header, &target, &floors, &pass, left)
@@ -338,8 +332,12 @@ where
             ParentNames::Neither if !header.relink_sent => {
                 self.forsake(journal, hold, &header).await
             }
-            ParentNames::Neither | ParentNames::Both => {
-                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, true, left)).await
+            // A parent that names the copy proves no unlink of the source
+            // root: another device can link it elsewhere before the relink
+            // lands.
+            ParentNames::Copy | ParentNames::Neither | ParentNames::Both => {
+                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, named, left))
+                    .await
             }
         }
     }

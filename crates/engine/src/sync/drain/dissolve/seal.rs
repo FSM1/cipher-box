@@ -496,9 +496,7 @@ where
         let Some(header_reads) = ReadShare::take(left, SEAL_HEADER_READS) else {
             return Ok(());
         };
-        if !take_tick_read(&header_reads.left) {
-            return Ok(());
-        }
+        let _ = take_tick_read(&header_reads.left);
         let (dest_root, _) = self.dissolve_root::<()>(owner, dest).await?;
         let cut_epoch = dest_root
             .state

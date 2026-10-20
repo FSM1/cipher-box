@@ -4,8 +4,9 @@
 //! Once the gated root of the bound read scope shows the index removal, the
 //! old names of the map retire one page a tick, then each name that the copy
 //! published at and no row uses under the bound write scope, unless the link
-//! proof kept every copy name or the bound write scope no longer derives them. The final records of each
-//! cut scope resolve until its own `hold_until`, and then retire.
+//! proof kept every copy name or the bound write scope no longer derives
+//! them. The final records of each cut scope resolve until its own
+//! `hold_until`, and then retire.
 
 use core::cell::Cell;
 
@@ -85,10 +86,12 @@ where
     ) -> Result<(), NotDriven> {
         let source = header.scopes[0].scope_id;
         let bound = header.binding;
-        let Some(target) = self
+        // A tick that holds no end on the path can be one failed seam read,
+        // so it waits with no event.
+        let target = self
             .destination_of(owner, ends, bound.read_scope)
-            .filter(|target| target.chain[0].root == bound.read_scope)
-        else {
+            .ok_or(NotDriven)?;
+        if target.chain[0].root != bound.read_scope {
             if self.cells.dissolve.note_retire_stopped(source) {
                 let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
                     scope_root: source,
@@ -98,7 +101,7 @@ where
                 });
             }
             return Err(NotDriven);
-        };
+        }
         let dest = target.chain[0];
         if !take_tick_read(left) {
             return Err(NotDriven);
@@ -119,13 +122,6 @@ where
             return Err(NotDriven);
         }
         let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
-        // After a write cut of the bound write scope, the logged names are no
-        // longer the ones that it derives, so none is proved vacated.
-        let derives =
-            target.write.root == bound.write_scope
-                && target.chain.iter().zip(&floors).any(|(end, floor)| {
-                    end.root == bound.write_scope && *floor == bound.write_epoch
-                });
         let pages = journal.map(source, header).await?;
         if let Some(page) = pages.get(usize::from(header.retire_cursor)) {
             // The root name of each cut scope is a final record, which the
@@ -149,13 +145,18 @@ where
             return Ok(journal.commit(hold, Some(header), &next).await?);
         }
         if let Some(page) = journal.name_log(source).await?.first() {
+            // After a write cut of the bound write scope, the logged names are
+            // no longer the ones that it derives, so none is proved vacated.
+            let vacates = !header.keep_names
+                && target.write.root == bound.write_scope
+                && target.chain.iter().zip(&floors).any(|(end, floor)| {
+                    end.root == bound.write_scope && *floor == bound.write_epoch
+                });
             let vacated = page
                 .entries
                 .iter()
                 .filter(|entry| {
-                    derives
-                        && !header.keep_names
-                        && dest.write_name(&entry.id.0).as_str().as_bytes() != entry.name
+                    vacates && dest.write_name(&entry.id.0).as_str().as_bytes() != entry.name
                 })
                 .map(|entry| &entry.name);
             let names = utf8(vacated).ok_or(NotDriven)?;
