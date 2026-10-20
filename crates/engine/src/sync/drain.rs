@@ -3531,7 +3531,7 @@ where
         for (root, detail) in still_owed {
             let _ = self.seams.events.unbounded_send(Event::ScopeExitCutOwed {
                 scope_root: root,
-                detail: detail.to_owned(),
+                detail,
             });
         }
     }

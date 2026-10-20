@@ -63,7 +63,7 @@ use crate::net::author::ENVELOPE_V;
 /// is the deepest epoch lag a backward walk can cover; a node past it is
 /// readable by nobody, and the sweep reports it unreachable rather than
 /// re-sealing it forward.
-const MAX_RETAINED_HISTORY_LINKS: usize = 64;
+pub(crate) const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 
 // Under the decode bound, or a re-seal mints sections the decoder refuses; at
 // least one, or `keep` below underflows and disables the prune in release.

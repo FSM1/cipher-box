@@ -814,6 +814,14 @@ impl SweepPublisher for ScriptedSweep {
     ) -> Result<(), RotationPublishError> {
         self.repair.clone()
     }
+
+    async fn reseal_child_ascent(
+        &self,
+        _scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Result<ChildScopeRef, crate::rotation::AscentResidual> {
+        Ok(child.clone())
+    }
 }
 
 const SWEEP_CHILD: [u8; 16] = [0x0c; 16];

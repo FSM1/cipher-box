@@ -1730,6 +1730,14 @@ impl SweepPublisher for LocalNet {
     ) -> Result<(), RotationPublishError> {
         Ok(())
     }
+
+    async fn reseal_child_ascent(
+        &self,
+        _scope: &ChildScopeRef,
+        child: &ChildScopeRef,
+    ) -> Result<ChildScopeRef, cipherbox_engine::rotation::AscentResidual> {
+        Ok(child.clone())
+    }
 }
 
 impl CascadeResealResolver for LocalNet {

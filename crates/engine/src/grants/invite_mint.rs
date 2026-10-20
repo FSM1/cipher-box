@@ -440,6 +440,14 @@ mod tests {
         ) -> Result<(), RotationPublishError> {
             Ok(())
         }
+
+        async fn reseal_child_ascent(
+            &self,
+            _scope: &ChildScopeRef,
+            child: &ChildScopeRef,
+        ) -> Result<ChildScopeRef, crate::rotation::AscentResidual> {
+            Ok(child.clone())
+        }
     }
 
     impl CascadeResealResolver for FakeNet {

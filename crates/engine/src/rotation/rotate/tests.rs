@@ -500,6 +500,7 @@ fn the_check_surface_matches_the_variants_in_order() {
         RotateError::Publish(RotationPublishError::NotPublished),
         RotateError::Floor(SeamError::new("floor store unavailable")),
         RotateError::EpochExhausted,
+        RotateError::NestedRootOwed { child: [0; 16] },
     ]
     .iter()
     .map(RotateError::check)

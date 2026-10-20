@@ -476,8 +476,14 @@ pub(crate) enum PutMark<'a> {
         /// The value it is raised to.
         value: u64,
     },
-    /// A note for the caller's own call, which nothing keeps.
-    Sent(&'a core::cell::Cell<bool>),
+    /// A note for the caller's own call, which nothing keeps, and the
+    /// [`Self::Signed`] cell when the caller also asks for one.
+    Sent {
+        /// Raised before the PUT.
+        sent: &'a core::cell::Cell<bool>,
+        /// Takes the sequence the record was signed at.
+        signed: Option<&'a core::cell::Cell<Option<u64>>>,
+    },
     /// The sequence the record was signed at, for a caller that marks a PUT
     /// no endpoint acknowledged: its bytes can still have landed.
     Signed(&'a core::cell::Cell<Option<u64>>),
@@ -764,7 +770,12 @@ where
                 )));
             }
         }
-        Some(PutMark::Sent(sent)) => sent.set(true),
+        Some(PutMark::Sent { sent, signed }) => {
+            sent.set(true);
+            if let Some(signed) = signed {
+                signed.set(Some(sequence));
+            }
+        }
         Some(PutMark::Signed(signed)) => signed.set(Some(sequence)),
         None => {}
     }

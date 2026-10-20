@@ -34,6 +34,7 @@
 //! same [`reseal_scope_root`] helper in [`cascade`](super::cascade).
 
 use cipherbox_core::codec::RedactedBytes;
+use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
 use core::fmt;
@@ -272,6 +273,13 @@ pub enum RotateError {
     /// would reuse the epoch with fresh key material, violating key-regression
     /// monotonicity, so nothing is minted or published. Unreachable in practice.
     EpochExhausted,
+    /// A flat cut would drop from the history window the seed that the ascent
+    /// link of this indexed child still opens under, and its re-seal did not
+    /// land (ADR 0080). Nothing was cut; retry once the re-seal lands.
+    NestedRootOwed {
+        /// The child scope root that holds the cut.
+        child: [u8; 16],
+    },
 }
 
 impl core::fmt::Display for RotateError {
@@ -282,6 +290,11 @@ impl core::fmt::Display for RotateError {
             RotateError::Publish(e) => write!(f, "publish failed: {e}"),
             RotateError::Floor(e) => write!(f, "epoch-floor raise failed: {e}"),
             RotateError::EpochExhausted => f.write_str("read epoch exhausted (u64::MAX)"),
+            RotateError::NestedRootOwed { child } => write!(
+                f,
+                "the cut would drop the history link that nested scope root [{}] needs",
+                hex_lower(child)
+            ),
         }
     }
 }
@@ -298,6 +311,7 @@ impl RotateError {
         "rot-read-publish-failed",
         "rot-read-floor-raise-failed",
         "rot-read-epoch-exhausted",
+        "rot-read-nested-root-owed",
     ];
 
     /// A stable, key-material-free classification name.
@@ -308,6 +322,19 @@ impl RotateError {
             RotateError::Publish(_) => "rot-read-publish-failed",
             RotateError::Floor(_) => "rot-read-floor-raise-failed",
             RotateError::EpochExhausted => "rot-read-epoch-exhausted",
+            RotateError::NestedRootOwed { .. } => "rot-read-nested-root-owed",
+        }
+    }
+
+    /// [`Self::check`], with the child scope root a
+    /// [`Self::NestedRootOwed`] names, so a host can tell the member which
+    /// folder holds the cut.
+    pub fn detail(&self) -> String {
+        match self {
+            RotateError::NestedRootOwed { child } => {
+                format!("{}:{}", self.check(), hex_lower(child))
+            }
+            other => other.check().to_owned(),
         }
     }
 
@@ -320,6 +347,7 @@ impl RotateError {
             RotateError::Publish(error) => error.class(),
             RotateError::Floor(_) => "availability",
             RotateError::EpochExhausted => "over-cap",
+            RotateError::NestedRootOwed { .. } => "availability",
         }
     }
 
@@ -345,6 +373,7 @@ impl RotateError {
             RotateError::Publish(error) => error.is_retryable(),
             RotateError::Floor(_) => true,
             RotateError::EpochExhausted => false,
+            RotateError::NestedRootOwed { .. } => true,
         }
     }
 }
