@@ -507,6 +507,9 @@ pub(crate) struct SignatureGate<'a> {
     observed: &'a Observed,
     bar: Option<(PublishBar, [u64; 3])>,
     sequence_floor: Option<u64>,
+    /// The relink mark of the name, which the signature clears and the
+    /// renewal skip does not compare.
+    relink_mark: Option<u64>,
 }
 
 impl<'a> SignatureGate<'a> {
@@ -520,6 +523,7 @@ impl<'a> SignatureGate<'a> {
         let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
             .await
             .map_err(PublishError::FloorRead)?;
+        let relink_mark = read_relink_mark(floors, observed).await?;
         let bar = match bar {
             Some(bar) => Some((bar, bar.read_floors(floors).await?)),
             None => None,
@@ -528,6 +532,7 @@ impl<'a> SignatureGate<'a> {
             observed,
             bar,
             sequence_floor,
+            relink_mark,
         })
     }
 
@@ -546,10 +551,12 @@ impl<'a> SignatureGate<'a> {
         let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
             .await
             .map_err(PublishError::FloorRead)?;
+        let relink_mark = read_relink_mark(floors, observed).await?;
         Ok(Self {
             observed,
             bar,
             sequence_floor,
+            relink_mark,
         })
     }
 
@@ -588,6 +595,7 @@ impl<'a> SignatureGate<'a> {
         let sequence = self
             .sequence_floor
             .unwrap_or(0)
+            .max(self.relink_mark.unwrap_or(0))
             .max(self.observed.sequence)
             .max(held)
             .checked_add(1)
@@ -601,6 +609,17 @@ impl<'a> SignatureGate<'a> {
         }
         Ok((record_bytes, sequence))
     }
+}
+
+/// The relink mark of `observed`'s name ([`floor::relink_parent_mark_key`]).
+async fn read_relink_mark<F: FloorStore>(
+    floors: &F,
+    observed: &Observed,
+) -> Result<Option<u64>, PublishError> {
+    let key = floor::relink_parent_mark_key(observed.name.as_str().as_bytes());
+    floor::sequence_floor(floors, &key)
+        .await
+        .map_err(PublishError::FloorRead)
 }
 
 /// One record the pipeline is about to sign: the observed name, its signer,

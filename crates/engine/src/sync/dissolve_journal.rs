@@ -962,6 +962,12 @@ impl DissolveCell {
         self.lost_pointers.borrow_mut().insert(scope)
     }
 
+    /// Note that an endpoint serves the pointer of `scope` again, so a later
+    /// loss is reported again.
+    pub fn found_pointer(&self, scope: NodeId) {
+        self.lost_pointers.borrow_mut().remove(&scope);
+    }
+
     /// Note that the relink tick `tick` of the entry at `root` computed the
     /// destination `candidate`, and answer the one that an earlier tick
     /// computed.

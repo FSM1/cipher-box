@@ -178,13 +178,6 @@ pub(super) enum MapStep {
     Join(Vec<NodeId>),
 }
 
-/// The floor-store key of the relink mark of the parent name `name`: the
-/// highest sequence that a relink publish signed there. Each folder publish
-/// at `name` signs above it, so none signs other bytes at a relink sequence.
-pub(super) fn parent_mark_key(name: &[u8]) -> Vec<u8> {
-    [b"dissolve-relink-parent/".as_slice(), name].concat()
-}
-
 fn scope_ids(header: &DissolveHeader) -> Vec<(NodeId, u64)> {
     header
         .scopes

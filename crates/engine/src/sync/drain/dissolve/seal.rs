@@ -37,7 +37,7 @@ use crate::seams::{
 use crate::sync::dissolve_journal::{
     DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep,
     DissolveWriteError, HeaderSlot, LoggedName, MAX_PRIOR_BINDINGS, MapRow, NameLogPage,
-    PriorBinding,
+    PriorBinding, RelinkRebind,
 };
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
@@ -60,7 +60,7 @@ pub(crate) struct DissolveSeal {
     refused: bool,
     /// The read scope and the write scope that a tick computed for a rebind
     /// that waits, and the number of that tick.
-    rebind: Option<((NodeId, NodeId), u64)>,
+    rebind: Option<RelinkRebind>,
 }
 
 impl DissolveSeal {
@@ -428,7 +428,7 @@ where
         &self,
         read_scope: NodeId,
         candidate: (NodeId, NodeId),
-        seen: Option<((NodeId, NodeId), u64)>,
+        seen: Option<RelinkRebind>,
     ) -> bool {
         if candidate.0 == read_scope {
             seen.is_some_and(|(seen, at)| {

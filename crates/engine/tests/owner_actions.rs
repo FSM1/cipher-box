@@ -32574,3 +32574,75 @@ fn a_write_scope_change_parks_a_sent_relink_only_on_the_second_tick() {
 
     assert!(header_at(&fx, inner).parked, "the second tick parks");
 }
+
+/// A relink PUT of `parent` lands at the first endpoint with no ack, and no
+/// endpoint serves it after the tick. Answers the sequence it signed.
+fn relink_unacknowledged(fx: &mut GrantScenario, root: NodeId, parent: &IpnsName) -> u64 {
+    let endpoints = fx.world.record_store.endpoints();
+    let before = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], parent.as_str())
+        .expect("the parent stands");
+    fx.world.record_store.land_puts_unacked_at(&endpoints[0]);
+    for endpoint in &endpoints[1..] {
+        fx.world.record_store.fail_put_endpoint(endpoint);
+    }
+    fx.world
+        .record_store
+        .serve_after_put(parent.as_str(), 0, Some(before.clone()));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(header_at(fx, root).relink_sent, "the relink was sent");
+    fx.world
+        .record_store
+        .seed_record(&endpoints[0], parent.as_str(), before);
+    fx.world
+        .record_store
+        .serve_gets_for_after(parent.as_str(), 0, 0, None);
+    heal_every_put(fx);
+    relink_mark_of(fx, root, parent).expect("the relink signed")
+}
+
+/// ADR 0066 D1: after a relink of a granted folder root that no endpoint
+/// acknowledged, an owner revoke on that scope signs the root above the
+/// relink sequence.
+#[test]
+fn an_owner_revoke_after_an_unacknowledged_relink_signs_above_it() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    let parent = fx.granted_scope_repoint().current_root;
+    let signed = relink_unacknowledged(&mut fx, inner, &parent);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(fx.granted_scope_repoint().current_root, parent);
+    assert!(
+        sequence_at(&fx.world, &parent) > signed,
+        "the revoke signs above the relink"
+    );
+}
+
+/// ADR 0066 D1: after a relink of the vault root that no endpoint
+/// acknowledged, a rotation of the vault root signs above the relink
+/// sequence.
+#[test]
+fn a_vault_rotation_after_an_unacknowledged_relink_signs_above_it() {
+    let mut fx = GrantScenario::new();
+    sealed_dissolve(&mut fx);
+    let root_name = write_name(ROOT);
+    let folder = fx.folder;
+    let signed = relink_unacknowledged(&mut fx, folder, &root_name);
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateNow { node: ROOT }),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert!(
+        sequence_at(&fx.world, &root_name) > signed,
+        "the rotation signs above the relink"
+    );
+}

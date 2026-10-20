@@ -25,7 +25,7 @@ use cipherbox_core::seal::{ChildRef, PreservedFields};
 
 use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_read};
 use super::seal::{Destination, SealFault, restarted};
-use super::{NotDriven, cut_epoch_of, cut_overtaken, parent_mark_key};
+use super::{NotDriven, cut_epoch_of, cut_overtaken};
 use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
@@ -55,7 +55,7 @@ const DISSOLVE_POINTER_LOST: &str = "dissolve-scope-pointer-lost";
 fn relink_mark_keys(source_root: NodeId, name: &[u8]) -> [Vec<u8>; 2] {
     [
         [RELINK_MARK_PREFIX, &source_root.0, name].concat(),
-        parent_mark_key(name),
+        floor::relink_parent_mark_key(name),
     ]
 }
 
@@ -198,6 +198,7 @@ where
                 let (_, eol) =
                     signed_eol(&pointer_name, &read.record_bytes).ok_or(SealFault::Unanswered)?;
                 hold_until = hold_until.min(eol);
+                self.cells.dissolve.found_pointer(scope.scope_id);
             }
             // A pointer that this device signed and that no endpoint serves
             // proves no term. Its repair needs an owner-vouched read floor,
