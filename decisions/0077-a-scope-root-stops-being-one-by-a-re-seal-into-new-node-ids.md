@@ -3,7 +3,7 @@
 - **Status:** Accepted on 2026-10-17
 - **Date:** 2026-10-17
 - **Relates to:** [#2298](https://github.com/FSM1/cipher-box/issues/2298), [#2241](https://github.com/FSM1/cipher-box/issues/2241), [ADR 0012](./0012-the-drain-carries-the-write-wave-forward.md), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md), [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md), [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
-- **Implemented by:** not landed
+- **Implemented by:** [#2476](https://github.com/FSM1/cipher-box/pull/2476) (the D3 kind and its readers), [#2483](https://github.com/FSM1/cipher-box/pull/2483) (the D3 journal grammar and store), [#2484](https://github.com/FSM1/cipher-box/pull/2484) (the D1 cut and final records), [#2490](https://github.com/FSM1/cipher-box/pull/2490) (the D3 walk and id map), [#2491](https://github.com/FSM1/cipher-box/pull/2491) and [#2497](https://github.com/FSM1/cipher-box/pull/2497) (the D1 re-seal and the D4 rules). The relink, the cleanup, the D2 command and the restore across scopes are not landed.
 - **Amends:** ADR 0012 D2 (the count of sanctioned readers below the read-epoch floor)
 
 ## Context
@@ -38,7 +38,8 @@ as the drain's re-author does (ADR 0012), under the same four conditions. The di
 node a new id, random from the injected entropy, so no KDF edge is new, and sheds every carried
 field. The restore of FSM1/cipher-box#2241 keeps each id and every carried field (`blueprint/core.md`
 "Carried unknown fields"), and refuses by name a structure that is not safe across a scope change.
-The walk refuses, release-active, a ref to a node outside the source subtree. Before the cut, the
+The walk maps no node outside the source subtree: a child that opens under another scope starts
+the walk again, and a gate refusal is a trust violation. Before the cut, the
 engine writes one entry under a new owner-local kind: the source scope, the destination read scope
 and the destination write scope bound separately, their epochs, the step still owed, and the map
 from old to new ids. The dissolve fills the map after the cut, durably before the first re-seal
