@@ -469,17 +469,17 @@ where
             .lease_the_chain(target, floors)
             .await
             .map_err(|_| NotDriven)?;
-        let header = if header.relink_sent && header.relink_names.contains(&name) && !header.parked
-        {
+        let listed = header.relink_names.contains(&name);
+        let header = if header.relink_sent && listed && !header.parked {
             header
         } else {
-            if header.relink_names.len() >= MAX_RELINK_NAMES {
+            if !listed && header.relink_names.len() >= MAX_RELINK_NAMES {
                 return self.park(journal, hold, &header).await;
             }
             let mut sent = header.clone();
             sent.relink_sent = true;
             sent.parked = false;
-            if !sent.relink_names.contains(&name) {
+            if !listed {
                 sent.relink_names.push(name.clone());
             }
             journal.commit(hold, Some(&header), &sent).await?;

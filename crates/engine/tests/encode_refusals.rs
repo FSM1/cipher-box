@@ -406,6 +406,20 @@ fn a_dissolve_header_the_decoder_refuses_is_refused_at_encode() {
             DissolveCodecError::KeptNamesOutsideCleanup,
         ),
         (
+            edit(DissolveStep::Unindex, &|h| {
+                h.keep_names = true;
+                h.relink_sent = false;
+            }),
+            DissolveCodecError::KeptNamesOutsideCleanup,
+        ),
+        (
+            edit(DissolveStep::Retire, &|h| {
+                h.keep_names = true;
+                h.relink_sent = false;
+            }),
+            DissolveCodecError::KeptNamesOutsideCleanup,
+        ),
+        (
             edit(DissolveStep::Retire, &|h| {
                 h.scopes[0].manifest.as_mut().expect("a manifest").retired = true;
             }),

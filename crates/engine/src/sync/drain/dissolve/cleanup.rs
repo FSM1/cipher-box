@@ -4,14 +4,14 @@
 //! Once the gated root of the bound read scope shows the index removal, the
 //! old names of the map retire one page a tick, then each name that the copy
 //! published at and no row uses under the bound write scope, unless the link
-//! proof kept every copy name. The final records of each
+//! proof kept every copy name or the bound write scope no longer derives them. The final records of each
 //! cut scope resolve until its own `hold_until`, and then retire.
 
 use core::cell::Cell;
 
 use super::super::{Drain, DrainScope, ScopeEnd, take_tick_read};
 use super::{NotDriven, cut_epoch_of};
-use crate::facade::NodeId;
+use crate::facade::{Event, NodeId, OwedWorkClass};
 use crate::gate::floor;
 use crate::net::liveness::HeldKey;
 use crate::net::retire::retire;
@@ -21,6 +21,10 @@ use crate::seams::{
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, HeaderSlot,
 };
+
+/// The `RotationWorkOwed` detail of a retire step whose bound read scope no
+/// longer stands.
+const DISSOLVE_READ_SCOPE_GONE: &str = "dissolve-read-scope-gone";
 
 /// Each name of `names` as a string, or `None` when one is not UTF-8.
 fn utf8<'n>(names: impl IntoIterator<Item = &'n Vec<u8>>) -> Option<Vec<String>> {
@@ -67,8 +71,9 @@ where
 
     /// One tick of the retire step: one map page, else one name log page,
     /// else the commit at the hold step. Each runs only while the bound read
-    /// and write scopes stand, the gated read scope root names no cut scope in
-    /// its index, and the write floors read (ADR 0041 D3).
+    /// scope stands, its gated root names no cut scope in its index, and the
+    /// write floors read (ADR 0041 D3). A bound read scope that no longer
+    /// stands stops the entry, with one event.
     async fn retire_tick(
         &self,
         owner: &DrainScope<'_>,
@@ -80,12 +85,20 @@ where
     ) -> Result<(), NotDriven> {
         let source = header.scopes[0].scope_id;
         let bound = header.binding;
-        let target = self
+        let Some(target) = self
             .destination_of(owner, ends, bound.read_scope)
-            .filter(|target| {
-                target.chain[0].root == bound.read_scope && target.write.root == bound.write_scope
-            })
-            .ok_or(NotDriven)?;
+            .filter(|target| target.chain[0].root == bound.read_scope)
+        else {
+            if self.cells.dissolve.note_retire_stopped(source) {
+                let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                    scope_root: source,
+                    detail: DISSOLVE_READ_SCOPE_GONE.to_owned(),
+                    retryable: false,
+                    class: OwedWorkClass::Capability,
+                });
+            }
+            return Err(NotDriven);
+        };
         let dest = target.chain[0];
         if !take_tick_read(left) {
             return Err(NotDriven);
@@ -105,7 +118,14 @@ where
         {
             return Err(NotDriven);
         }
-        self.guards_hold(&target).await.ok_or(NotDriven)?;
+        let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
+        // After a write cut of the bound write scope, the logged names are no
+        // longer the ones that it derives, so none is proved vacated.
+        let derives =
+            target.write.root == bound.write_scope
+                && target.chain.iter().zip(&floors).any(|(end, floor)| {
+                    end.root == bound.write_scope && *floor == bound.write_epoch
+                });
         let pages = journal.map(source, header).await?;
         if let Some(page) = pages.get(usize::from(header.retire_cursor)) {
             // The root name of each cut scope is a final record, which the
@@ -133,7 +153,8 @@ where
                 .entries
                 .iter()
                 .filter(|entry| {
-                    !header.keep_names
+                    derives
+                        && !header.keep_names
                         && dest.write_name(&entry.id.0).as_str().as_bytes() != entry.name
                 })
                 .map(|entry| &entry.name);

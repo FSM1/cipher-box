@@ -987,6 +987,9 @@ pub struct DissolveCell {
     /// The cut scopes of each entry past its index removal, which the
     /// session's root sets and held records drop.
     unindexed: RefCell<BTreeSet<NodeId>>,
+    /// The source roots whose retire step stopped in this session, each
+    /// reported once.
+    retire_stopped: RefCell<BTreeSet<NodeId>>,
 }
 
 /// A destination that a relink tick computed, and the number of that tick.
@@ -1003,6 +1006,12 @@ impl DissolveCell {
     /// device signed. `true` the first time.
     pub fn note_lost_pointer(&self, scope: NodeId) -> bool {
         self.lost_pointers.borrow_mut().insert(scope)
+    }
+
+    /// Note that the retire step of the entry at `root` stopped. Answers
+    /// whether this is the first note in the session.
+    pub fn note_retire_stopped(&self, root: NodeId) -> bool {
+        self.retire_stopped.borrow_mut().insert(root)
     }
 
     /// Note that an endpoint serves the pointer of `scope` again, so a later

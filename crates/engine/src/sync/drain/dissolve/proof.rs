@@ -4,10 +4,11 @@
 //! When the parent names neither root or both, the fence comes first: at each
 //! parent name a relink published at, the endpoints must serve a record above
 //! each relink mark and the ADR 0076 unacknowledged mark there, so no late PUT
-//! of the relink can land after the verdict. Then a two-sweep walk of each scope that shares the write scope
-//! of the destination, the bin index, and each binned subtree under its held
-//! key finds which of the copy and the source root a folder names. A parked
-//! entry runs the proof again in the next session.
+//! of the relink can land after the verdict. Then a two-sweep walk of each
+//! scope that shares the write scope of the destination, the bin index, and
+//! each binned subtree under its held key finds which of the copy and the
+//! source root a folder names. A parked entry runs the proof again in the
+//! next session.
 
 use core::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,7 +86,8 @@ pub(crate) struct LinkProof {
     anchors: BTreeMap<NodeId, WalkAnchor>,
     copy: bool,
     source: bool,
-    /// The fence held before the walk started.
+    /// The fence held before the walk started. A proof resumes only under the
+    /// same parent verdict, which a fence marks.
     fenced: bool,
 }
 
@@ -241,7 +243,7 @@ where
         let root = header.scopes[0].scope_id;
         let carried = self.cells.dissolve_proofs.borrow_mut().remove(&root);
         let mut proof = match carried
-            .filter(|proof| proof.write == EndMark::of(target.write) && (proof.fenced || !fence))
+            .filter(|proof| proof.write == EndMark::of(target.write) && proof.fenced == fence)
         {
             Some(proof) => proof,
             None if !fence => LinkProof::new(target.write, false),
@@ -304,9 +306,9 @@ where
         }
         match proof.linked() {
             Linked::Both => self.park(journal, hold, header).await,
-            // The parent named the copy when the walk started, so the next
-            // tick reads it again.
-            Linked::Source if !proof.fenced => Ok(()),
+            // The parent named the copy at this tick's read, so the next tick
+            // reads it again.
+            Linked::Source if !(fence && proof.fenced) => Ok(()),
             Linked::Source => self.forsake(journal, hold, header).await,
             linked => {
                 let mut next = header.clone();
@@ -367,9 +369,7 @@ where
             if marks == HeldMarks::default() {
                 continue;
             }
-            if !take_tick_read(&share.left) {
-                return Fence::Waits;
-            }
+            let _ = take_tick_read(&share.left);
             match LeafRead::fetch(&self.seams.transport, &parsed).await {
                 Ok(read) if read.tied.is_empty() && !marks.hold(read.pick.sequence) => {}
                 _ => return Fence::Fails,

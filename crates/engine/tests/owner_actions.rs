@@ -32372,8 +32372,19 @@ fn a_relink_waits_while_another_publish_holds_the_write_lease() {
     fx.owner_device.floor_store.heal_floors();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    assert!(header_at(&fx, inner).relink_sent);
+    let header = header_at(&fx, inner);
+    assert!(header.relink_sent);
     assert!(fx.world.record_store.put_count(parent.as_str()) > puts);
+    let named: Vec<NodeId> = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .map(|child| child.id)
+        .collect();
+    assert!(
+        named.contains(&header.new_root) && !named.contains(&inner),
+        "the folder names the copy"
+    );
 }
 
 /// ADR 0077 D4: before a relink left this device, an owner revoke on the
@@ -33575,5 +33586,111 @@ fn a_neither_verdict_keeps_every_copy_name_across_a_stop() {
     assert!(
         copies.iter().all(|name| !retired.contains(name)),
         "no copy name retires"
+    );
+}
+
+/// The folders under one plain folder that make a link proof walk span two
+/// ticks: its first sweep fits one tick's reads, and both sweeps do not.
+const SLOW_WALK_FOLDERS: usize = 100;
+
+/// A proof resumes only under the parent verdict it started under. A proof
+/// that a parent naming neither root started pauses in its second sweep,
+/// after the parent read. The copy then comes back into the parent, so the
+/// next tick reads the copy there: a new proof finds both roots, and no copy
+/// name retires.
+#[test]
+fn a_proof_started_on_neither_does_not_retire_once_the_copy_comes_back() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    let away = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "away");
+    grant_to_recipient(&mut fx.engine, away);
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: away }),
+        Ok(CommandOutcome::Done)
+    );
+    let wide = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "wide");
+    create_published_folders(&mut fx, wide, SLOW_WALK_FOLDERS);
+    let (mut phone, mut tasks) = moved_in_the_relink_gap(&mut fx, other);
+    let copy = fx.standing_dissolve().new_root;
+    let copies = copy_names(&fx);
+    let mut move_copy = |phone: &mut Engine<FakeSeamTypes>, new_parent| {
+        block_on(phone.command(Command::Move {
+            node: copy,
+            new_parent,
+            new_name: "shared".into(),
+            replacing: None,
+        }))
+        .expect("the move stages");
+        for _ in 0..4 {
+            tick(&fx.world, phone, &mut tasks);
+        }
+    };
+    move_copy(&mut phone, away);
+    assert!(
+        vault_children(&fx).iter().all(|(id, ..)| *id != copy),
+        "the vault root names neither root"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let header = fx.standing_dissolve();
+    assert!(header.step == DissolveStep::Relink && !header.parked);
+    move_copy(&mut phone, ROOT);
+    assert!(relinked(&fx), "the copy is back in the vault root");
+
+    ticks(&mut fx, 6);
+
+    let retired = retired(&fx.owner_device);
+    assert!(
+        copies.iter().all(|name| !retired.contains(name)),
+        "no copy name retires"
+    );
+    assert!(
+        fx.standing_dissolve().parked,
+        "the new proof finds both roots"
+    );
+}
+
+/// A write cut of the bound read scope in the retire step: the logged copy
+/// names are no longer the ones that the scope derives, so the step drops the
+/// log with no retire, keeps each live copy name and reaches the hold.
+#[test]
+fn a_write_cut_of_the_bound_read_scope_in_the_retire_step_reaches_the_hold() {
+    let mut fx = GrantScenario::new();
+    let (inner, _) = seal_inner_into_the_folder(&mut fx);
+    for _ in 0..8 {
+        if header_at(&fx, inner).step >= DissolveStep::Retire {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(header_at(&fx, inner).step, DissolveStep::Retire);
+    assert!(!logged_of(&fx, inner).is_empty(), "the log still stands");
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+    let live: Vec<String> = folder_copy_names(&fx, inner)
+        .iter()
+        .map(|name| name.as_str().to_owned())
+        .collect();
+
+    for _ in 0..16 {
+        if header_at(&fx, inner).step >= DissolveStep::Hold {
+            break;
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        header_at(&fx, inner).step,
+        DissolveStep::Hold,
+        "the entry reaches its hold"
+    );
+    let retired = retired(&fx.owner_device);
+    assert!(
+        live.iter().all(|name| !retired.contains(name)),
+        "no live copy name retires"
     );
 }
