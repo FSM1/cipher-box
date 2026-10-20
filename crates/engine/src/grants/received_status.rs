@@ -5647,8 +5647,8 @@ mod tests {
             }
 
             /// Serve the scope root committing `rows` at cut epoch `cut`,
-            /// with `edit` applied to its grant section after the owner signed
-            /// the commitment.
+            /// with `edit` applied to its envelope and grant section after the
+            /// owner signed the commitment.
             fn serve_edited(
                 fx: &mut RenderedScope,
                 rows: Vec<GrantRow>,
