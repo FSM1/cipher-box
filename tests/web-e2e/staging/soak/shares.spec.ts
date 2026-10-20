@@ -94,14 +94,9 @@ async function readEpochs(share: SharePage): Promise<Epochs> {
   return parseEpochs((await row.textContent()) ?? '');
 }
 
-/**
- * A document load of `link`, through the page and not `page.goto`: a goto step
- * title and its call log print the URL, and the fragment is a bearer capability.
- */
 async function openLink(page: Page, link: URL): Promise<InvitePage> {
-  await page.evaluate((href) => window.location.assign(href), link.href);
   const invite = new InvitePage(page);
-  await expect(invite.panel).toBeVisible({ timeout: PAGE_MS });
+  await invite.open(link, PAGE_MS);
   return invite;
 }
 
