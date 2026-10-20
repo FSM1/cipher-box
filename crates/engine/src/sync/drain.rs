@@ -10072,7 +10072,13 @@ where
         };
         let observed = observed.clearing(signed_over.cleared_by(floor));
         let mut observed = observed;
-        for key in mark.unwrap_or_default() {
+        // The signature gate reads the relink mark of the name itself.
+        let parent_mark = floor::relink_parent_mark_key(name.as_str().as_bytes());
+        for key in mark
+            .unwrap_or_default()
+            .iter()
+            .filter(|key| **key != parent_mark)
+        {
             observed = observed.clearing(
                 floor::sequence_floor(&plane.end.floors(&self.seams.floors), key)
                     .await

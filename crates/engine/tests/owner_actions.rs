@@ -32646,3 +32646,39 @@ fn a_vault_rotation_after_an_unacknowledged_relink_signs_above_it() {
         "the rotation signs above the relink"
     );
 }
+
+/// ADR 0061 D3: a relink mark of the vault root name with no ledger mark,
+/// as a session that stopped after the mark and before the PUT outcome
+/// leaves, holds the renewal walk of a later start: it signs above the mark.
+#[test]
+fn a_renewal_signs_above_a_relink_mark_that_no_ledger_mark_covers() {
+    let fx = GrantScenario::new();
+    let root_name = write_name(ROOT);
+    let relinked = sequence_at(&fx.world, &root_name) + 3;
+    let key = [
+        b"dissolve-relink-parent/".as_slice(),
+        root_name.as_str().as_bytes(),
+    ]
+    .concat();
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_sequence_floor(&key, relinked),
+    )
+    .expect("the mark lands");
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        owner_device,
+        ..
+    } = fx;
+
+    let (world, _events, _later) = start_later_on(world, &blocks, owner_device, (engine, _tasks));
+
+    assert!(
+        sequence_at(&world, &root_name) > relinked,
+        "the renewal signs above the relink mark"
+    );
+}
