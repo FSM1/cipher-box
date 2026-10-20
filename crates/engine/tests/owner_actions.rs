@@ -31826,22 +31826,25 @@ fn relink_mark(fx: &GrantScenario, name: &IpnsName) -> Option<u64> {
     relink_mark_of(fx, fx.folder, name)
 }
 
-/// The relink mark of the dissolve at `root`, at the parent name `name`.
-fn relink_mark_of(fx: &GrantScenario, root: NodeId, name: &IpnsName) -> Option<u64> {
-    let key = [
+/// The floor key of the relink mark of the dissolve at `root`, at the parent
+/// name `name`.
+fn relink_entry_key(root: NodeId, name: &IpnsName) -> Vec<u8> {
+    [
         b"dissolve-relink/".as_slice(),
         root.0.as_slice(),
         name.as_str().as_bytes(),
     ]
-    .concat();
-    let label = floor_label(&key);
-    let stored = fx
-        .owner_device
-        .floor_store
-        .sequence_keys()
-        .into_iter()
-        .find(|stored| stored.ends_with(&label))?;
-    block_on(fx.owner_device.floor_store.sequence_floor(&stored)).expect("the floor store reads")
+    .concat()
+}
+
+/// The relink mark of the dissolve at `root`, at the parent name `name`.
+fn relink_mark_of(fx: &GrantScenario, root: NodeId, name: &IpnsName) -> Option<u64> {
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .sequence_floor(&relink_entry_key(root, name)),
+    )
+    .expect("the floor store reads")
 }
 
 /// One EOL term in milliseconds, less the second that the signed EOL drops.
@@ -31862,20 +31865,26 @@ fn vault_children(fx: &GrantScenario) -> Vec<(NodeId, String, Vec<u8>)> {
     copy_children(&copy_at(fx, ROOT).expect("the vault root stands").1)
 }
 
-/// Move the folder into `other` from a second owner device, and publish the
-/// move.
-fn move_the_folder_elsewhere(fx: &GrantScenario, other: NodeId) {
+/// Move `node` into `new_parent` as `new_name` from a second owner device,
+/// and publish the move.
+fn move_from_a_second_device(fx: &GrantScenario, node: NodeId, new_parent: NodeId, new_name: &str) {
     let (mut phone, _events, mut tasks) = fx.second_owner_device();
     block_on(phone.command(Command::Move {
-        node: fx.folder,
-        new_parent: other,
-        new_name: "shared".into(),
+        node,
+        new_parent,
+        new_name: new_name.into(),
         replacing: None,
     }))
     .expect("the move stages");
     for _ in 0..4 {
         tick(&fx.world, &phone, &mut tasks);
     }
+}
+
+/// Move the folder into `other` from a second owner device, and publish the
+/// move.
+fn move_the_folder_elsewhere(fx: &GrantScenario, other: NodeId) {
+    move_from_a_second_device(fx, fx.folder, other, "shared");
     assert!(
         vault_children(fx).iter().all(|(id, ..)| *id != fx.folder),
         "the vault root no longer names the folder"
@@ -31947,40 +31956,11 @@ fn a_relink_retry_signs_above_a_put_that_lands_late() {
     let mut fx = GrantScenario::new();
     sealed_dissolve(&mut fx);
     let root_name = write_name(ROOT);
-    let endpoints = fx.world.record_store.endpoints();
-    let before = fx
-        .world
-        .record_store
-        .record_at(&endpoints[0], root_name.as_str())
-        .expect("the vault root stands");
-    fx.world.record_store.land_puts_unacked_at(&endpoints[0]);
-    for endpoint in &endpoints[1..] {
-        fx.world.record_store.fail_put_endpoint(endpoint);
-    }
-    // No read sees the PUT yet.
-    fx.world
-        .record_store
-        .serve_after_put(root_name.as_str(), 0, Some(before.clone()));
+    let folder = fx.folder;
 
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (signed, late) = relink_unacknowledged(&mut fx, folder, &root_name);
 
-    let header = fx.standing_dissolve();
-    assert_eq!(header.step, DissolveStep::Relink, "no ack");
-    assert!(header.relink_sent, "the header holds the relink first");
-    let signed = relink_mark(&fx, &root_name).expect("the mark holds the signed sequence");
-    let late = fx
-        .world
-        .record_store
-        .record_at(&endpoints[0], root_name.as_str())
-        .expect("the PUT landed at one endpoint");
-    // The PUT has not reached the endpoints yet.
-    fx.world
-        .record_store
-        .seed_record(&endpoints[0], root_name.as_str(), before);
-    fx.world
-        .record_store
-        .serve_gets_for_after(root_name.as_str(), 0, 0, None);
-    heal_every_put(&fx);
+    assert_eq!(fx.standing_dissolve().step, DissolveStep::Relink, "no ack");
     events_so_far(&mut fx._events);
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -31990,6 +31970,7 @@ fn a_relink_retry_signs_above_a_put_that_lands_late() {
     assert!(resigned > signed, "the retry signs above its own mark");
     assert_eq!(relink_mark(&fx, &root_name), Some(resigned));
 
+    let endpoints = fx.world.record_store.endpoints();
     fx.world
         .record_store
         .seed_record(&endpoints[1], root_name.as_str(), late);
@@ -32040,15 +32021,9 @@ fn a_relink_whose_mark_does_not_land_sends_nothing() {
     let mut fx = GrantScenario::new();
     sealed_dissolve(&mut fx);
     let root_name = write_name(ROOT);
-    let key = [
-        b"dissolve-relink/".as_slice(),
-        fx.folder.0.as_slice(),
-        root_name.as_str().as_bytes(),
-    ]
-    .concat();
     fx.owner_device
         .floor_store
-        .fail_floor_raises_for(&floor_label(&key));
+        .fail_floor_raises_for(&floor_label(&relink_entry_key(fx.folder, &root_name)));
     let puts = fx.world.record_store.put_count(root_name.as_str());
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -32167,7 +32142,7 @@ fn a_final_record_short_of_one_term_is_published_again_before_the_relink() {
     sealed_dissolve(&mut fx);
     let cut_time = fx.standing_dissolve().scopes[0].cut_time;
     let seed = kdf::owner_pointer_seed(&SECRET);
-    let pointer = scope_pointer_name(seed.as_bytes(), &fx.folder.0);
+    let pointer = folder_pointer(&fx);
     let bytes = fx
         .world
         .record_store
@@ -32185,11 +32160,7 @@ fn a_final_record_short_of_one_term_is_published_again_before_the_relink() {
         &eol_from(UnixMillis(cut_time.saturating_sub(month))),
     )
     .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world
-            .record_store
-            .seed_record(&endpoint, pointer.as_str(), short.clone());
-    }
+    seed_from(&fx, 0, &pointer, &short);
     assert!(!holds_for_a_term_from(&fx.world, &pointer, cut_time));
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -32435,7 +32406,7 @@ fn a_scope_pointer_that_no_endpoint_serves_holds_the_manifest() {
     sealed_dissolve(&mut fx);
     let cut_time = fx.standing_dissolve().scopes[0].cut_time;
     let seed = kdf::owner_pointer_seed(&SECRET);
-    let pointer = scope_pointer_name(seed.as_bytes(), &fx.folder.0);
+    let pointer = folder_pointer(&fx);
     let root = scope_repoint(&fx.world, &fx.folder.0).current_root;
     let lapsed = fx
         .world
@@ -32479,11 +32450,7 @@ fn a_scope_pointer_that_no_endpoint_serves_holds_the_manifest() {
         &eol_from(fx.world.scheduler.now()),
     )
     .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world
-            .record_store
-            .seed_record(&endpoint, pointer.as_str(), fresh.clone());
-    }
+    seed_from(&fx, 0, &pointer, &fresh);
     ticks(&mut fx, 2);
 
     let header = fx.standing_dissolve();
@@ -32502,17 +32469,7 @@ fn a_child_renamed_after_the_seal_seals_its_folder_again_under_the_same_map() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let sealed = fx.standing_dissolve();
     assert_eq!(sealed.step, DissolveStep::Seal);
-    let (mut phone, _events, mut tasks) = fx.second_owner_device();
-    block_on(phone.command(Command::Move {
-        node: below,
-        new_parent: inner,
-        new_name: "renamed".into(),
-        replacing: None,
-    }))
-    .expect("the rename stages");
-    for _ in 0..4 {
-        tick(&fx.world, &phone, &mut tasks);
-    }
+    move_from_a_second_device(&fx, below, inner, "renamed");
 
     ticks(&mut fx, 3);
 
@@ -32563,34 +32520,8 @@ fn an_ordinary_parent_edit_after_an_unacknowledged_relink_signs_above_it() {
     let mut fx = GrantScenario::new();
     sealed_dissolve(&mut fx);
     let root_name = write_name(ROOT);
-    let endpoints = fx.world.record_store.endpoints();
-    let before = fx
-        .world
-        .record_store
-        .record_at(&endpoints[0], root_name.as_str())
-        .expect("the vault root stands");
-    fx.world.record_store.land_puts_unacked_at(&endpoints[0]);
-    for endpoint in &endpoints[1..] {
-        fx.world.record_store.fail_put_endpoint(endpoint);
-    }
-    fx.world
-        .record_store
-        .serve_after_put(root_name.as_str(), 0, Some(before.clone()));
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert!(fx.standing_dissolve().relink_sent);
-    let signed = relink_mark(&fx, &root_name).expect("the relink signed");
-    let late = fx
-        .world
-        .record_store
-        .record_at(&endpoints[0], root_name.as_str())
-        .expect("the PUT landed at one endpoint");
-    fx.world
-        .record_store
-        .seed_record(&endpoints[0], root_name.as_str(), before);
-    fx.world
-        .record_store
-        .serve_gets_for_after(root_name.as_str(), 0, 0, None);
-    heal_every_put(&fx);
+    let folder = fx.folder;
+    let (signed, late) = relink_unacknowledged(&mut fx, folder, &root_name);
     // The relink waits, so the next publish of the parent is the edit.
     let held = fx
         .owner_device
@@ -32611,6 +32542,7 @@ fn an_ordinary_parent_edit_after_an_unacknowledged_relink_signs_above_it() {
     );
     drop(held);
     fx.owner_device.floor_store.heal_floors();
+    let endpoints = fx.world.record_store.endpoints();
     fx.world
         .record_store
         .seed_record(&endpoints[1], root_name.as_str(), late);
@@ -32656,8 +32588,13 @@ fn a_write_scope_change_parks_a_sent_relink_only_on_the_second_tick() {
 }
 
 /// A relink PUT of `parent` lands at the first endpoint with no ack, and no
-/// endpoint serves it after the tick. Answers the sequence it signed.
-fn relink_unacknowledged(fx: &mut GrantScenario, root: NodeId, parent: &IpnsName) -> u64 {
+/// endpoint serves it after the tick. Answers the sequence it signed and the
+/// bytes that landed.
+fn relink_unacknowledged(
+    fx: &mut GrantScenario,
+    root: NodeId,
+    parent: &IpnsName,
+) -> (u64, Vec<u8>) {
     let endpoints = fx.world.record_store.endpoints();
     let before = fx
         .world
@@ -32673,6 +32610,12 @@ fn relink_unacknowledged(fx: &mut GrantScenario, root: NodeId, parent: &IpnsName
         .serve_after_put(parent.as_str(), 0, Some(before.clone()));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(header_at(fx, root).relink_sent, "the relink was sent");
+    let signed = relink_mark_of(fx, root, parent).expect("the relink signed");
+    let late = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], parent.as_str())
+        .expect("the PUT landed at one endpoint");
     fx.world
         .record_store
         .seed_record(&endpoints[0], parent.as_str(), before);
@@ -32680,7 +32623,7 @@ fn relink_unacknowledged(fx: &mut GrantScenario, root: NodeId, parent: &IpnsName
         .record_store
         .serve_gets_for_after(parent.as_str(), 0, 0, None);
     heal_every_put(fx);
-    relink_mark_of(fx, root, parent).expect("the relink signed")
+    (signed, late)
 }
 
 /// ADR 0066 D1: after a relink of a granted folder root that no endpoint
@@ -32691,7 +32634,7 @@ fn an_owner_revoke_after_an_unacknowledged_relink_signs_above_it() {
     let mut fx = GrantScenario::new();
     let (inner, _) = seal_inner_into_the_folder(&mut fx);
     let parent = fx.granted_scope_repoint().current_root;
-    let signed = relink_unacknowledged(&mut fx, inner, &parent);
+    let (signed, _) = relink_unacknowledged(&mut fx, inner, &parent);
 
     assert_eq!(
         fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
@@ -32714,7 +32657,7 @@ fn a_vault_rotation_after_an_unacknowledged_relink_signs_above_it() {
     sealed_dissolve(&mut fx);
     let root_name = write_name(ROOT);
     let folder = fx.folder;
-    let signed = relink_unacknowledged(&mut fx, folder, &root_name);
+    let (signed, _) = relink_unacknowledged(&mut fx, folder, &root_name);
 
     assert_eq!(
         command_across_retries(&mut fx, Command::RotateNow { node: ROOT }),

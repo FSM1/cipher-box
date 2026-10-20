@@ -537,8 +537,9 @@ impl<'a> SignatureGate<'a> {
     }
 
     /// Renewal's exact-sequence skip must read the sequence after every other
-    /// await, the epoch floors and the relink mark (ADR 0061 D3). The root bar authenticates an unchanged value,
-    /// including a lagging interior admitted under its ratchet (ADR 0021).
+    /// await, the epoch floors and the relink mark (ADR 0061 D3). The root bar
+    /// authenticates an unchanged value, including a lagging interior
+    /// admitted under its ratchet (ADR 0021).
     pub(crate) async fn read_for_renewal<F: FloorStore>(
         floors: &F,
         observed: &'a Observed,
@@ -1019,19 +1020,41 @@ mod tests {
         );
     }
 
+    /// The read during which a concurrent adopt raises the floor of `name`.
+    #[derive(PartialEq)]
+    enum AdoptOn {
+        EpochRead,
+        RelinkMarkRead,
+    }
+
     struct ConcurrentAdopt {
         inner: InMemoryFloorStore,
         name: IpnsName,
+        on: AdoptOn,
+    }
+
+    impl ConcurrentAdopt {
+        async fn adopt(&self) -> SeamResult<()> {
+            self.inner
+                .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
+                .await
+                .map(drop)
+        }
     }
 
     impl FloorStore for ConcurrentAdopt {
         async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner
-                .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
-                .await?;
+            if self.on == AdoptOn::EpochRead {
+                self.adopt().await?;
+            }
             self.inner.epoch_floor(key).await
         }
         async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            if self.on == AdoptOn::RelinkMarkRead
+                && key == floor::relink_parent_mark_key(self.name.as_str().as_bytes())
+            {
+                self.adopt().await?;
+            }
             self.inner.sequence_floor(key).await
         }
         async fn raise_epoch_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
@@ -1052,6 +1075,7 @@ mod tests {
         let floors = ConcurrentAdopt {
             inner: InMemoryFloorStore::default(),
             name: name.clone(),
+            on: AdoptOn::EpochRead,
         };
         block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
@@ -1074,43 +1098,14 @@ mod tests {
         );
     }
 
-    /// An adopt that raises the floor of `name` while the relink mark of
-    /// `name` reads.
-    struct AdoptOnMarkRead {
-        inner: InMemoryFloorStore,
-        name: IpnsName,
-    }
-
-    impl FloorStore for AdoptOnMarkRead {
-        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner.epoch_floor(key).await
-        }
-        async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            if key == floor::relink_parent_mark_key(self.name.as_str().as_bytes()) {
-                self.inner
-                    .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
-                    .await?;
-            }
-            self.inner.sequence_floor(key).await
-        }
-        async fn raise_epoch_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
-            self.inner.raise_epoch_floor(key, value).await
-        }
-        async fn raise_sequence_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
-            self.inner.raise_sequence_floor(key, value).await
-        }
-        async fn clear(&self) -> SeamResult<()> {
-            self.inner.clear().await
-        }
-    }
-
     #[test]
     fn a_renewal_sees_a_sequence_advanced_during_its_relink_mark_read() {
         let signer = Ed25519Signer::from_seed([0x54; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        let floors = AdoptOnMarkRead {
+        let floors = ConcurrentAdopt {
             inner: InMemoryFloorStore::default(),
             name: name.clone(),
+            on: AdoptOn::RelinkMarkRead,
         };
         block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();

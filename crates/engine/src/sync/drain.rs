@@ -10070,21 +10070,19 @@ where
         } else {
             None
         };
-        let observed = observed.clearing(signed_over.cleared_by(floor));
-        let mut observed = observed;
-        // The signature gate reads the relink mark of the name itself.
-        let parent_mark = floor::relink_parent_mark_key(name.as_str().as_bytes());
-        for key in mark
-            .unwrap_or_default()
-            .iter()
-            .filter(|key| **key != parent_mark)
-        {
-            observed = observed.clearing(
-                floor::sequence_floor(&plane.end.floors(&self.seams.floors), key)
-                    .await
-                    .map_err(|error| PublishHalt::before_the_put(seam(error)))?
-                    .unwrap_or(0),
-            );
+        let mut observed = observed.clearing(signed_over.cleared_by(floor));
+        if let Some(keys) = mark {
+            // The signature gate reads the relink mark of the name itself.
+            let parent_mark = floor::relink_parent_mark_key(name.as_str().as_bytes());
+            let floors = plane.end.floors(&self.seams.floors);
+            for key in keys.iter().filter(|key| **key != parent_mark) {
+                observed = observed.clearing(
+                    floor::sequence_floor(&floors, key)
+                        .await
+                        .map_err(|error| PublishHalt::before_the_put(seam(error)))?
+                        .unwrap_or(0),
+                );
+            }
         }
         let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone(), mark)
