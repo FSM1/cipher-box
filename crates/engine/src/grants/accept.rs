@@ -199,6 +199,23 @@ impl ReceivedShare {
         (self.sharer_identity_pk, self.scope_id)
     }
 
+    /// Whether a personal grant open in a verified commitment at `cut_epoch`
+    /// raises `grantCut` or clears `ended` (ADR 0079 D2, D3).
+    pub(crate) fn open_moves_marks(&self, cut_epoch: u64) -> bool {
+        self.grant_cut.is_none_or(|grant_cut| grant_cut < cut_epoch)
+            || self.ended.is_some_and(|ended| ended <= cut_epoch)
+    }
+
+    /// Whether a verified commitment at `cut_epoch` that leaves the personal
+    /// tag out sets `ended`. The bar is strictly above `grantCut`, as an
+    /// append adds a row at the same cut epoch (ADR 0079 D2).
+    pub(crate) fn exclusion_ends(&self, cut_epoch: u64) -> bool {
+        self.ended.is_none()
+            && self
+                .grant_cut
+                .is_some_and(|grant_cut| cut_epoch > grant_cut)
+    }
+
     /// Whether two bookmarks for the same scope carry identical authority and
     /// discovery bytes — the "true no-op re-accept" test. A drift in the
     /// re-pointed scope-root name, the committed permission, the rotated
@@ -442,6 +459,53 @@ impl ReceivedSharesList {
         key: &BookmarkKey,
         (ended, grant_cut): (Option<u64>, Option<u64>),
     ) {
+        if let Some(at) = self.position(key) {
+            self.entries[at].ended = ended;
+            self.entries[at].grant_cut = grant_cut;
+        }
+    }
+
+    /// Record a personal grant open in a verified commitment at `cut_epoch` on
+    /// the bookmark under `key`: raise `grantCut` to it, and clear an `ended`
+    /// mark at or below it. Answers the `(ended, grantCut)` values it
+    /// replaced, or `None` when nothing changed.
+    pub(crate) fn note_grant_opened(
+        &mut self,
+        key: &BookmarkKey,
+        cut_epoch: u64,
+    ) -> Option<(Option<u64>, Option<u64>)> {
+        let at = self.position(key)?;
+        let entry = &mut self.entries[at];
+        if !entry.open_moves_marks(cut_epoch) {
+            return None;
+        }
+        let replaced = (entry.ended, entry.grant_cut);
+        entry.grant_cut = entry.grant_cut.max(Some(cut_epoch));
+        entry.ended = entry.ended.filter(|ended| *ended > cut_epoch);
+        Some(replaced)
+    }
+
+    /// Set the `ended` mark of the bookmark under `key` from a verified
+    /// commitment at `cut_epoch` that leaves the personal tag out, when
+    /// [`ReceivedShare::exclusion_ends`] holds.
+    pub(crate) fn mark_ended(&mut self, key: &BookmarkKey, cut_epoch: u64) {
+        if let Some(at) = self.position(key)
+            && self.entries[at].exclusion_ends(cut_epoch)
+        {
+            self.entries[at].ended = Some(cut_epoch);
+        }
+    }
+
+    /// Whether the bookmark under `key` reads as ended: it holds the `ended`
+    /// mark and no link hold. A link hold keeps its own revoke path, so the
+    /// mark speaks only for a personal bookmark (ADR 0079 D1).
+    pub(crate) fn ended(&self, key: &BookmarkKey) -> bool {
+        self.link_hold(key).is_none() && self.find(key).is_some_and(|share| share.ended.is_some())
+    }
+
+    /// Put back the `(ended, grantCut)` values that
+    /// [`note_grant_opened`](Self::note_grant_opened) replaced.
+    fn restore_marks(&mut self, key: &BookmarkKey, (ended, grant_cut): (Option<u64>, Option<u64>)) {
         if let Some(at) = self.position(key) {
             self.entries[at].ended = ended;
             self.entries[at].grant_cut = grant_cut;
@@ -1391,17 +1455,22 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         permission,
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
         scope_pointer_name: pointer.scope_pointer_name.clone(),
-        grant_cut: None,
+        grant_cut: Some(candidate.grant_section.commitment.cut_epoch),
         ended: None,
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
+    let replaced_marks =
+        received.note_grant_opened(&bookmark_key, candidate.grant_section.commitment.cut_epoch);
     // A personal blob opened, so the link keys go (ADR 0024 D2).
     let dropped_link = received.drop_link(&bookmark_key);
 
     // Persist durably BEFORE the floor advance and the ack; a failure rolls the
     // in-memory bookmark back and returns un-acked, so the item redelivers.
-    if reconciled.is_durable_change() || dropped_link.is_some() {
+    if reconciled.is_durable_change() || replaced_marks.is_some() || dropped_link.is_some() {
         if let Err(e) = store.persist(received).await {
+            if let Some(marks) = replaced_marks {
+                received.restore_marks(&bookmark_key, marks);
+            }
             received.revert(&bookmark_key, reconciled);
             if let Some(hold) = dropped_link {
                 received.hold_link(bookmark_key, hold);

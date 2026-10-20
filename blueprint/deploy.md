@@ -155,7 +155,9 @@ record lands in two steps: one release adds its prefix to the bookkeeping list
 (`is_bookkeeping`), and a later release writes the first entry. A one-release rollback then keeps
 the record ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md),
 ADR 0063). The `owed-rotation` prefix (`cbx/or/`) enters the list one release before the engine
-writes its first entry.
+writes its first entry. A new key in the received-shares bookmark list follows the same rule: the
+release before the reader refuses the whole list at an unknown key, so the reader ships in a tagged
+release before the code that writes the key merges (ADR 0079).
 
 ## Staging pipeline
 

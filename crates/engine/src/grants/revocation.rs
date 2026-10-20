@@ -69,6 +69,10 @@ pub struct ResolutionFacts {
     pub owner_signed_record: bool,
     /// A grant blob is present at your self-located tag in that record.
     pub blob_present: bool,
+    /// The verified commitment names your tag. A committed writer can strip
+    /// a blob but cannot change the commitment, so only this fact, not
+    /// [`blob_present`](Self::blob_present), shows an owner exclusion.
+    pub tag_committed: bool,
     /// The record's epoch tag. A producer that unsealed the body has it
     /// AAD-confirmed; the `/shared` read reaches no unseal, so there it is the
     /// envelope's plaintext tag on a record already held to its name.
@@ -106,6 +110,7 @@ mod tests {
         ResolutionFacts {
             owner_signed_record: owner_signed,
             blob_present: blob,
+            tag_committed: blob,
             record_epoch: epoch,
             epoch_floor: floor,
         }
