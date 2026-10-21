@@ -336,6 +336,22 @@ where
             // root: another device can link it elsewhere before the relink
             // lands.
             ParentNames::Copy | ParentNames::Neither | ParentNames::Both => {
+                // The proof must walk the write scope that the index removal
+                // and the retire read, so a parent that left it parks the
+                // entry once two ticks agree.
+                let bound = header.binding;
+                if target.write.root != bound.write_scope {
+                    let candidate = (bound.read_scope, target.write.root);
+                    let seen =
+                        self.cells
+                            .dissolve
+                            .see_relink_rebind(source, candidate, self.inputs.tick);
+                    if !self.rebind_confirmed(bound.read_scope, candidate, seen) {
+                        return Err(NotDriven);
+                    }
+                    self.cells.dissolve_proofs.borrow_mut().remove(&source);
+                    return self.park(journal, hold, &header).await;
+                }
                 Box::pin(self.prove(owner, ends, journal, hold, &header, &target, named, left))
                     .await
             }

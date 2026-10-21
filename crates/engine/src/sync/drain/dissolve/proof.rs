@@ -13,7 +13,7 @@
 use core::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::seal::ReadBody;
+use cipherbox_core::seal::{NodeKind, ReadBody};
 use cipherbox_core::suite::secret::ct_eq;
 
 use super::super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
@@ -61,10 +61,10 @@ pub(super) enum LinkKey {
 /// What one read gives the proof.
 pub(super) struct LinkRead {
     mark: RecordMark,
-    /// The children of a folder.
-    children: Vec<NodeId>,
-    /// Each bin entry: its node, its scope and its deletion time.
-    entries: Vec<(NodeId, NodeId, u64)>,
+    /// The children of a folder, with their kinds.
+    children: Vec<(NodeId, NodeKind)>,
+    /// Each bin entry: its node, its scope, its deletion time and its kind.
+    entries: Vec<(NodeId, NodeId, u64, NodeKind)>,
     /// Set when the node is a scope root.
     anchor: Option<WalkAnchor>,
 }
@@ -121,7 +121,12 @@ struct LinkPolicy<'p> {
     walked: &'p BTreeSet<NodeId>,
     /// Every scope root of the owner. The walk stops at one it does not read.
     roots: &'p BTreeSet<NodeId>,
+    /// The scope roots that have an end this tick.
+    ended: &'p BTreeSet<NodeId>,
     left: &'p Cell<usize>,
+    /// The walk reached a scope root with no end this tick, which can share
+    /// the write seed, so the tick decides nothing.
+    absent: bool,
 }
 
 impl LinkPolicy<'_> {
@@ -142,7 +147,8 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
     }
 
     /// Note each child and bin entry that is the copy or the source root, and
-    /// queue each one a walked scope holds. A node named twice stops the walk.
+    /// queue each folder that a walked scope holds. A node named again in
+    /// another plane stops the walk; a file names no root.
     fn visit(
         &mut self,
         sweep: &mut TwoSweep<LinkKey>,
@@ -152,14 +158,20 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
         let mut next = Vec::new();
         match key {
             LinkKey::Bin => {
-                for (node, scope, deleted_at) in read.entries {
+                for (node, scope, deleted_at, kind) in read.entries {
                     self.note(node);
+                    if kind == NodeKind::File {
+                        continue;
+                    }
                     if self.walked.contains(&scope) {
                         next.push(LinkKey::Node {
                             node,
                             scope,
                             binned: Some((node, deleted_at)),
                         });
+                    } else if self.roots.contains(&scope) && !self.ended.contains(&scope) {
+                        self.absent = true;
+                        return Err(Overflow);
                     }
                 }
             }
@@ -171,8 +183,11 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
                 if let Some(anchor) = read.anchor {
                     self.anchors.insert(*node, anchor);
                 }
-                for child in read.children {
+                for (child, kind) in read.children {
                     self.note(child);
+                    if kind == NodeKind::File {
+                        continue;
+                    }
                     if !self.roots.contains(&child) {
                         next.push(LinkKey::Node {
                             node: child,
@@ -185,18 +200,30 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
                             scope: child,
                             binned: None,
                         });
+                    } else if !self.ended.contains(&child) {
+                        self.absent = true;
+                        return Err(Overflow);
                     }
                 }
             }
         }
-        for key in &next {
+        for key in next {
             if let LinkKey::Node { node, .. } = key
-                && !sweep.seen.insert(*node)
+                && !sweep.seen.insert(node)
             {
+                // A second link in the same plane, such as a move whose
+                // source publish did not land, reads the same record.
+                let queued = sweep
+                    .pending
+                    .iter()
+                    .chain(sweep.read.iter().map(|(read, _)| read));
+                if queued.into_iter().any(|queued| *queued == key) {
+                    continue;
+                }
                 return Err(Overflow);
             }
+            sweep.pending.push(key);
         }
-        sweep.pending.extend(next);
         if sweep.seen.len() > MAX_DISSOLVE_WALK_NODES {
             return Err(Overflow);
         }
@@ -252,6 +279,7 @@ where
             .map(|end| end.root)
             .collect();
         let roots: BTreeSet<NodeId> = owner.scope_roots.iter().copied().collect();
+        let ended: BTreeSet<NodeId> = ends.iter().map(|end| end.root).collect();
         let LinkProof {
             sweep,
             anchors,
@@ -265,7 +293,9 @@ where
             source: (root, source),
             walked: &walked,
             roots: &roots,
+            ended: &ended,
             left,
+            absent: false,
         };
         let swept = sweep
             .step(
@@ -282,6 +312,9 @@ where
                 },
             )
             .await;
+        if policy.absent {
+            return Ok(());
+        }
         match swept {
             Swept::Complete => {}
             Swept::Moved => return Ok(()),
@@ -396,6 +429,7 @@ where
                         NodeId(entry.node_id),
                         NodeId(entry.scope_id),
                         entry.deleted_at,
+                        entry.kind,
                     ));
                 }
                 return Ok(LinkRead {
@@ -425,7 +459,12 @@ where
                     sequence: root.state.observed.sequence(),
                     digest: hash(&root.state.record),
                 },
-                children: root.state.children.iter().map(|c| NodeId(c.id)).collect(),
+                children: root
+                    .state
+                    .children
+                    .iter()
+                    .map(|child| (NodeId(child.id), child.kind))
+                    .collect(),
                 entries: Vec::new(),
                 anchor: Some(WalkAnchor {
                     epoch: root.epoch,
@@ -469,9 +508,10 @@ where
                 digest: hash(&loaded.record),
             },
             children: match loaded.body {
-                ReadBody::Folder { children, .. } => {
-                    children.iter().map(|child| NodeId(child.id)).collect()
-                }
+                ReadBody::Folder { children, .. } => children
+                    .iter()
+                    .map(|child| (NodeId(child.id), child.kind))
+                    .collect(),
                 ReadBody::File { .. } => Vec::new(),
             },
             entries: Vec::new(),
