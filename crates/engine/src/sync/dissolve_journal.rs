@@ -990,6 +990,9 @@ pub struct DissolveCell {
     /// The source roots whose retire step stopped in this session, each
     /// reported once.
     retire_stopped: RefCell<BTreeSet<NodeId>>,
+    /// The source roots whose relink parent left the bound write scope in
+    /// this session, each reported once.
+    parent_moved: RefCell<BTreeSet<NodeId>>,
 }
 
 /// A destination that a relink tick computed, and the number of that tick.
@@ -1012,6 +1015,12 @@ impl DissolveCell {
     /// whether this is the first note in the session.
     pub fn note_retire_stopped(&self, root: NodeId) -> bool {
         self.retire_stopped.borrow_mut().insert(root)
+    }
+
+    /// Note that the relink parent of the entry at `root` left the bound
+    /// write scope. Answers whether this is the first note in the session.
+    pub fn note_parent_moved(&self, root: NodeId) -> bool {
+        self.parent_moved.borrow_mut().insert(root)
     }
 
     /// Note that an endpoint serves the pointer of `scope` again, so a later
