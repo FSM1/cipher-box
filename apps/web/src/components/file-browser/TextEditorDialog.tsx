@@ -4,7 +4,7 @@
  * are framed and sealed by the engine and never by this layer.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fromHex, toHex } from '@cipherbox/client';
 import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import { errorMessage } from '../../lib/errorMessage';
@@ -16,14 +16,14 @@ import { Modal } from '../ui/Modal';
 const CHUNK_BYTES = 1024 * 1024;
 
 interface TextEditorDialogProps {
-  /** The live row, or the last one seen once it left the listing. */
+  /** The live row, or the row the editor opened on once it left the listing. */
   row: ListingRow;
   /** False once the row left the listing. */
   present: boolean;
   onClose: () => void;
 }
 
-/** The read a draft starts from: its row, its text, and the version it was read under. */
+/** The read a draft starts from: its row, its text, and the CID its row showed. */
 interface Basis {
   row: ListingRow;
   text: string;
@@ -45,19 +45,28 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // The row of the last committed render, which the read in flight started
+  // from: a read result and a new row can land in one render.
+  const readRow = useRef(source);
 
   useEffect(() => {
     if (basis !== null || loaded.status !== 'text') return;
-    setBasis({ row, text: loaded.text, version: loaded.version });
+    setBasis({ row: readRow.current, text: loaded.text, version: loaded.version });
     setDraft(loaded.text);
-  }, [basis, loaded, row]);
+  }, [basis, loaded]);
+
+  // Declared after the adoption, so the adoption reads the previous row.
+  useEffect(() => {
+    readRow.current = source;
+  });
 
   const dirty = basis !== null && draft !== null && draft !== basis.text;
 
-  // A dirty draft outlives its row, so its save meets the engine's refusal.
+  // A dirty draft outlives its row: the engine writes a moved file by its id
+  // and refuses a deleted one.
   useEffect(() => {
-    if (!present && !dirty && !saving) onClose();
-  }, [present, dirty, saving, onClose]);
+    if (!present && !dirty) onClose();
+  }, [present, dirty, onClose]);
 
   const save = async (): Promise<void> => {
     if (client === null || draft === null) return;

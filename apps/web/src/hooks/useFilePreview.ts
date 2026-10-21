@@ -32,8 +32,8 @@ export type FilePreview =
  * @param key the file's node id as lowercase hex, so the read keys on a value
  * @param size the engine's byte count, which caps the buffered read before it
  * decrypts a file too large to show; `null` while the projection is resolving
- * @param version the content CID as lowercase hex: a new one restarts the read,
- * and a text result carries the one it was read under
+ * @param version the row's content CID as lowercase hex: a new one restarts the
+ * read, and a text result carries the one the row showed when its read started
  */
 export function useFilePreview(
   key: string,
