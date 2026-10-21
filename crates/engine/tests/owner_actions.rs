@@ -28857,6 +28857,11 @@ fn prefix_of(root: NodeId) -> Vec<u8> {
     .concat()
 }
 
+/// The staging key of the dissolve header at `root`.
+fn header_key_of(root: NodeId) -> Vec<u8> {
+    [prefix_of(root).as_slice(), b"h"].concat()
+}
+
 /// The journal parts of the entry at the folder.
 fn dissolve_parts(fx: &GrantScenario) -> BTreeSet<Vec<u8>> {
     parts_of(fx, fx.folder)
@@ -34124,10 +34129,13 @@ fn parent_moved_events(events: &[Event]) -> usize {
 
 /// Another device links the source root `S` in a folder of the bound write
 /// scope before the relink lands, then moves the relink parent with the copy
-/// into a scope with a write seed of its own. Answers `S` and its names.
+/// into a scope with a write seed of its own. Each of `more` other source
+/// roots under the parent relinks in the same tick. Answers each source root
+/// with its names, `S` first.
 fn relink_parent_moved_out_of_the_bound_write_scope(
     fx: &mut GrantScenario,
-) -> (NodeId, Vec<String>) {
+    more: usize,
+) -> Vec<(NodeId, Vec<String>)> {
     let folder = fx.folder;
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     assert_eq!(
@@ -34136,15 +34144,26 @@ fn relink_parent_moved_out_of_the_bound_write_scope(
     );
     let parent = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "parent");
     let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
-    let shared = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, "s");
-    grant_to_recipient(&mut fx.engine, shared);
+    let mut sources = Vec::new();
+    for n in 0..=more {
+        let name = format!("s{n}");
+        let source =
+            create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, &name);
+        grant_to_recipient(&mut fx.engine, source);
+        sources.push(source);
+    }
+    let shared = sources[0];
     ticks(fx, 2);
-    assert_eq!(
-        fx.dissolve_into(shared, parent, dissolve_binding()),
-        Ok(Some(DissolveStep::Map))
-    );
+    for &source in &sources {
+        assert_eq!(
+            fx.dissolve_into(source, parent, dissolve_binding()),
+            Ok(Some(DissolveStep::Map))
+        );
+    }
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(header_at(fx, shared).step, DissolveStep::Seal);
+    for &source in &sources {
+        assert_eq!(header_at(fx, source).step, DissolveStep::Seal);
+    }
     drop(moved_in_the_relink_gap_at(
         fx,
         shared,
@@ -34152,8 +34171,14 @@ fn relink_parent_moved_out_of_the_bound_write_scope(
         other,
         &[parent],
     ));
-    let copy = header_at(fx, shared).new_root;
-    let names = source_names_of(fx, shared);
+    let copies: BTreeSet<NodeId> = sources
+        .iter()
+        .map(|&source| header_at(fx, source).new_root)
+        .collect();
+    let entries: Vec<(NodeId, Vec<String>)> = sources
+        .iter()
+        .map(|&source| (source, source_names_of(fx, source)))
+        .collect();
     // A device that boots after the relink seals P from the relinked body.
     let device = fx.world.device(b"the owner's third device");
     let (mut laptop, _laptop_events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &device);
@@ -34162,9 +34187,11 @@ fn relink_parent_moved_out_of_the_bound_write_scope(
         .expect("the laptop opens the parent");
     tick(&fx.world, &laptop, &mut tasks);
     assert_eq!(
-        folder_children(fx, parent),
-        vec![copy],
-        "the parent names the copy"
+        folder_children(fx, parent)
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        copies,
+        "the parent names the copies"
     );
     assert!(
         folder_children(fx, other).contains(&shared),
@@ -34192,16 +34219,16 @@ fn relink_parent_moved_out_of_the_bound_write_scope(
     let head = published_head(&fx.world, &fx.blocks, &moved_name).expect("the moved P");
     let envelope = decode_envelope(&head).expect("the moved P decodes");
     let body = open_read_body(&envelope, &read_key_under(&seed, parent)).expect("P opens");
-    let moved: Vec<NodeId> = copy_children(&body)
+    let moved: BTreeSet<NodeId> = copy_children(&body)
         .into_iter()
         .map(|(id, ..)| id)
         .collect();
-    assert_eq!(moved, vec![copy], "the moved P names the copy and not S");
+    assert_eq!(moved, copies, "the moved P names the copies and not S");
     // The owner's own seal of the moved P adds S back from its tree, so its
     // put fails here: the proof reads the P that names the copy alone.
     fx.world.record_store.fail_put_for(moved_name.as_str());
     events_so_far(&mut fx._events);
-    (shared, names)
+    entries
 }
 
 /// The proof walks only the bound write scope. A walk from a relink parent
@@ -34210,7 +34237,7 @@ fn relink_parent_moved_out_of_the_bound_write_scope(
 #[test]
 fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
     let mut fx = GrantScenario::new();
-    let (shared, names) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx);
+    let (shared, names) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx, 0).remove(0);
 
     ticks(&mut fx, 6);
 
@@ -34239,17 +34266,34 @@ fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
     assert!(names.iter().all(|name| !retired.contains(name)));
 }
 
+/// Asserts that the index keeps `source` and that no name of it retires.
+fn assert_source_kept(fx: &GrantScenario, source: NodeId, names: &[String]) {
+    assert!(
+        vault_index(fx).contains(&source.0),
+        "the index keeps the source root"
+    );
+    let retired = retired(&fx.owner_device);
+    assert!(
+        names.iter().all(|name| !retired.contains(name)),
+        "no name of the source root retires"
+    );
+}
+
+/// Makes each commit of the dissolve header at `source` fail.
+fn fail_header_commits(fx: &GrantScenario, source: NodeId) {
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&header_key_of(source));
+}
+
 /// A park whose commit fails sends the moved-parent event once in the
 /// session, and a later commit parks the entry.
 #[test]
 fn a_moved_parent_park_whose_commit_fails_sends_one_event() {
     let mut fx = GrantScenario::new();
-    let (shared, _) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx);
-    let header_key = [prefix_of(shared).as_slice(), b"h"].concat();
-    fx.owner_device
-        .staging_store
-        .inner()
-        .fail_staged_writes_at(&header_key);
+    let (shared, names) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx, 0).remove(0);
+    fail_header_commits(&fx, shared);
 
     ticks(&mut fx, 6);
 
@@ -34259,12 +34303,67 @@ fn a_moved_parent_park_whose_commit_fails_sends_one_event() {
         "the park does not commit"
     );
     assert_eq!(parent_moved_events(&events_so_far(&mut fx._events)), 1);
+    assert_source_kept(&fx, shared, &names);
 
     fx.owner_device.staging_store.inner().heal_staged_writes();
     ticks(&mut fx, 2);
 
     assert!(header_at(&fx, shared).parked, "the entry parks");
     assert_eq!(parent_moved_events(&events_so_far(&mut fx._events)), 0);
+    assert_source_kept(&fx, shared, &names);
+}
+
+/// A restart while the park commit still fails sends the moved-parent event
+/// once in the new session.
+#[test]
+fn a_restart_while_the_moved_parent_park_fails_sends_one_event_again() {
+    let mut fx = GrantScenario::new();
+    let (shared, names) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx, 0).remove(0);
+    fail_header_commits(&fx, shared);
+    ticks(&mut fx, 6);
+    assert_eq!(parent_moved_events(&events_so_far(&mut fx._events)), 1);
+
+    restart_owner(&mut fx);
+    ticks(&mut fx, 4);
+
+    let header = header_at(&fx, shared);
+    assert!(
+        header.step == DissolveStep::Relink && !header.parked,
+        "the park still does not commit"
+    );
+    assert_eq!(
+        parent_moved_events(&events_so_far(&mut fx._events)),
+        1,
+        "one event in the next session"
+    );
+    assert_source_kept(&fx, shared, &names);
+}
+
+/// Two entries under one moved relink parent each send their own event once
+/// in the session.
+#[test]
+fn two_entries_under_a_moved_relink_parent_each_send_one_event() {
+    let mut fx = GrantScenario::new();
+    let entries = relink_parent_moved_out_of_the_bound_write_scope(&mut fx, 1);
+
+    ticks(&mut fx, 6);
+
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(parent_moved_events(&events), 2);
+    let roots: BTreeSet<NodeId> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::RotationWorkOwed {
+                scope_root, detail, ..
+            } if detail == "dissolve-relink-parent-moved" => Some(*scope_root),
+            _ => None,
+        })
+        .collect();
+    for (source, names) in &entries {
+        assert!(roots.contains(source), "each entry sends its own event");
+        assert!(header_at(&fx, *source).parked, "each entry parks");
+        assert_source_kept(&fx, *source, names);
+    }
 }
 
 /// A child's kind comes from its own gated body, not from the ref that names
