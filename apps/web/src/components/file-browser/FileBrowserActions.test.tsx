@@ -687,10 +687,39 @@ describe('the vault browser read path over the facade', () => {
 
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toBe(
-        'size not known yet - preview it again in a moment'
+        'size not known yet - the preview loads when it arrives'
       )
     );
     expect(engine.reads.download).not.toHaveBeenCalled();
+  });
+
+  it('loads an open preview once the engine projects the size', async () => {
+    const engine = fakeEngine(() => Promise.resolve(bytes('to do: nothing')));
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt', { size: null })] }));
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('preview');
+    await screen.findByRole('alert');
+
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt')] }));
+
+    expect((await screen.findByTestId('preview-text')).textContent).toBe('to do: nothing');
+    expect(engine.reads.download).toHaveBeenCalledWith(NOTE);
+  });
+
+  it('closes an open preview when its row leaves the listing', async () => {
+    const engine = fakeEngine(() => Promise.resolve(bytes('to do: nothing')));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('preview');
+    await screen.findByTestId('preview-text');
+
+    await landSnapshot(engine, folderView({ children: [folder(DOCS, 'documents')] }));
+
+    expect(screen.queryByTestId('file-preview-dialog')).toBeNull();
   });
 
   it('retires a failed download from the banner once an action dispatches', async () => {
@@ -1123,6 +1152,50 @@ describe('the text editor', () => {
     const [, chunk] = engine.facade.pushChunk.mock.calls[0];
     expect(new TextDecoder().decode(chunk)).toBe('to do: everything');
     await waitFor(() => expect(screen.queryByTestId('text-editor-dialog')).toBeNull());
+  });
+
+  it('loads an open editor once the engine projects the size', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt', { size: null })] }));
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    await screen.findByTestId('dialog-error');
+
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt')] }));
+
+    expect(((await screen.findByTestId('text-editor-field')) as HTMLTextAreaElement).value).toBe(
+      'to do: nothing'
+    );
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+  });
+
+  it('saves against the version the draft was read from, not a later one', async () => {
+    const READ = new Uint8Array([1]);
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: READ })] })
+    );
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    const field = await screen.findByTestId('text-editor-field');
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([2]) })] })
+    );
+    fireEvent.change(field, { target: { value: 'to do: everything' } });
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+
+    await waitFor(() =>
+      expect(engine.facade.beginWrite).toHaveBeenCalledWith(
+        { node: NOTE, expectedVersion: READ },
+        17
+      )
+    );
   });
 
   it('refuses to dismiss while the save is in flight', async () => {

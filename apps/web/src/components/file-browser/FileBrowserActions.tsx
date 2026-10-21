@@ -31,7 +31,9 @@ const saveRequest = (row: ListingRow): SaveRequest => ({
 
 type Dialog =
   | { kind: 'create' }
-  | { kind: 'rename' | 'details' | 'preview' | 'edit' | 'share'; row: ListingRow }
+  | { kind: 'rename' | 'details' | 'share'; row: ListingRow }
+  // A read dialog follows the live row, so a size that lands later reaches it.
+  | { kind: 'preview' | 'edit'; rowKey: string }
   | { kind: 'move' | 'delete'; rows: ListingRow[] };
 
 /** The dialogs whose confirm dispatches a write. The rest only read. */
@@ -81,6 +83,9 @@ export function FileBrowserActions({
   // reach one the user opened while the scope was still writable. The state goes
   // with it, so a scope that turns writable again raises nothing of its own.
   if (dialog !== null && !writable && MUTATIONS.has(dialog.kind)) setDialog(null);
+  const rowKey = dialog?.kind === 'preview' || dialog?.kind === 'edit' ? dialog.rowKey : null;
+  const liveRow = rowKey === null ? undefined : rows.find((row) => row.key === rowKey);
+  if (rowKey !== null && liveRow === undefined) setDialog(null);
 
   const close = () => setDialog(null);
   /**
@@ -130,10 +135,13 @@ export function FileBrowserActions({
     if (row.kind === 'file') {
       const kind = previewKind(row.storedName);
       if (kind !== 'none') {
-        items.push({ label: 'preview', onSelect: () => setDialog({ kind: 'preview', row }) });
+        items.push({
+          label: 'preview',
+          onSelect: () => setDialog({ kind: 'preview', rowKey: row.key }),
+        });
       }
       if (kind === 'text' && writable) {
-        items.push({ label: 'edit', onSelect: () => setDialog({ kind: 'edit', row }) });
+        items.push({ label: 'edit', onSelect: () => setDialog({ kind: 'edit', rowKey: row.key }) });
       }
       items.push({
         label: 'download',
@@ -274,12 +282,14 @@ export function FileBrowserActions({
           onClose={close}
         />
       )}
-      {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
-      {dialog?.kind === 'preview' && (
+      {dialog?.kind === 'edit' && liveRow !== undefined && (
+        <TextEditorDialog row={liveRow} onClose={close} />
+      )}
+      {dialog?.kind === 'preview' && liveRow !== undefined && (
         <FilePreviewDialog
-          row={dialog.row}
+          row={liveRow}
           onClose={close}
-          onDownload={() => void downloads.save(saveRequest(dialog.row))}
+          onDownload={() => void downloads.save(saveRequest(liveRow))}
         />
       )}
     </>

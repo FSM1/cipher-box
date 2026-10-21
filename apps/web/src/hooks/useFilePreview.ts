@@ -51,7 +51,10 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     // Reading first and measuring after would decrypt the whole file into the
     // tab before the budget could refuse it, so an unprojected size refuses now.
     if (size === null) {
-      setPreview({ status: 'error', message: 'size not known yet - preview it again in a moment' });
+      setPreview({
+        status: 'error',
+        message: 'size not known yet - the preview loads when it arrives',
+      });
       return;
     }
 

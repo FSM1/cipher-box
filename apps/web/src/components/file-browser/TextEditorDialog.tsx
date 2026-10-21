@@ -23,14 +23,19 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
   const client = useEngine();
   const loaded = useFilePreview(row.key, row.storedName, row.bytes);
   const [draft, setDraft] = useState<string | null>(null);
+  // The version the draft was read from: the row is live, so a remote write
+  // that lands mid-edit must still fail the save's version check.
+  const [basis, setBasis] = useState<Uint8Array | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   // Adopted once: a snapshot landing mid-edit re-reads the file, and a second
   // adoption would throw away what has been typed since.
   useEffect(() => {
-    setDraft((current) => (current === null && loaded.status === 'text' ? loaded.text : current));
-  }, [loaded]);
+    if (draft !== null || loaded.status !== 'text') return;
+    setDraft(loaded.text);
+    setBasis(row.contentCid);
+  }, [loaded, draft, row.contentCid]);
 
   const dirty = loaded.status === 'text' && draft !== null && draft !== loaded.text;
 
@@ -44,7 +49,7 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
     let handle: bigint | null = null;
     try {
       handle = await facade.beginWrite(
-        { node: row.id, expectedVersion: row.contentCid ?? undefined },
+        { node: row.id, expectedVersion: basis ?? undefined },
         bytes.byteLength
       );
       for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_BYTES) {
