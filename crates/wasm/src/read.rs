@@ -112,6 +112,13 @@ pub enum Read {
         #[tsify(type = "Uint8Array")]
         content_cid: Vec<u8>,
     },
+    /// One file's current plaintext and the version it is.
+    ServedContent {
+        /// The file.
+        #[serde(deserialize_with = "cipherbox_engine::wire::node_id::deserialize")]
+        #[tsify(type = "Uint8Array")]
+        node: NodeId,
+    },
 }
 
 /// A rendezvous step carries secrets that serde would buffer unwiped, so the
@@ -174,4 +181,19 @@ pub enum ReadAnswer {
         #[tsify(type = "Uint8Array")]
         Zeroizing<Vec<u8>>,
     ),
+    /// The plaintext, as for `download`, and the version it is.
+    ServedContent(ServedContentView),
+}
+
+/// The engine's [`ServedContent`](cipherbox_engine::ServedContent) on the wire.
+#[derive(Serialize, tsify::Tsify)]
+pub struct ServedContentView {
+    /// The plaintext.
+    #[serde(serialize_with = "as_bytes")]
+    #[tsify(type = "Uint8Array")]
+    pub bytes: Zeroizing<Vec<u8>>,
+    /// The version's content root CID.
+    #[serde(serialize_with = "as_bytes")]
+    #[tsify(type = "Uint8Array")]
+    pub version: Vec<u8>,
 }

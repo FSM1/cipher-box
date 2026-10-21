@@ -32,12 +32,12 @@ import {
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
-import { isBuffer, wipeTransfer } from './buffers.js';
+import { wipeTransfer } from './buffers.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import { commandTransfer, rendezvousTransfer, wipeRendezvousSecrets } from './worker/protocol.js';
+import { answerTransfer, commandTransfer, wipeRendezvousSecrets } from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -466,9 +466,7 @@ export class LeaderRelay {
   ): Promise<void> {
     try {
       const result = await step();
-      // A rendezvous result carries the opened factor key, which is secret in
-      // the same way a download window is: both move rather than clone.
-      const transfer = isBuffer(result) ? [result as Transferable] : rendezvousTransfer(result);
+      const transfer = answerTransfer(result);
       if (this.closed || !this.ports.has(entry)) {
         // The port went away while the read ran, so nobody will receive this
         // result: wipe it rather than leave plaintext for the collector

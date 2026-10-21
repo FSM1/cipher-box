@@ -507,6 +507,15 @@ pub struct VersionEntry {
     pub modified_at: u64,
 }
 
+/// One file's current plaintext and the version it is: the anchor an edit of
+/// these bytes hands back on [`WriteTarget::Version::expected_version`].
+pub struct ServedContent {
+    /// The plaintext.
+    pub bytes: Vec<u8>,
+    /// The content root CID of the version served, staged or published.
+    pub version: Vec<u8>,
+}
+
 impl VersionEntry {
     fn of(version: &Version) -> Self {
         Self {
@@ -11590,7 +11599,10 @@ where {
                                 check: "expected-version-is-not-a-content-cid",
                             });
                         }
-                        Some(expected) => Some(expected.clone()),
+                        Some(expected) => {
+                            self.refuse_superseded_anchor(*node, expected).await?;
+                            Some(expected.clone())
+                        }
                         None => self.write_anchor(*node).await?,
                     },
                     None => return Err(EngineError::UnknownNode),
@@ -11864,6 +11876,15 @@ where {
         // see the same free one.
         if let WriteTarget::NewFile { parent, .. } = &target {
             refuse_full_parent(&rendered, *parent, None, None, &scope_roots)?;
+        }
+        // Re-checked here too: another handle can stage a version between this
+        // handle's open and its commit.
+        if let WriteTarget::Version {
+            expected_version: Some(anchor),
+            ..
+        } = &target
+        {
+            self.refuse_superseded_anchor(node, anchor).await?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -12690,12 +12711,17 @@ where {
     /// failure; on success folds the head version's size/mtime into the base
     /// snapshot, emitting [`Event::SnapshotUpdated`] only when they changed.
     pub async fn read_content(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+        Ok(self.read_served_content(node).await?.bytes)
+    }
+
+    /// [`read_content`](Engine::read_content), with the version it served.
+    pub async fn read_served_content(&self, node: NodeId) -> Result<ServedContent, EngineError> {
         self.live_session()?;
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
         match self.read_whole(node).await {
-            Ok(plaintext) => {
+            Ok(served) => {
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
-                Ok(plaintext)
+                Ok(served)
             }
             Err(err) => {
                 self.emit_op_progress(node, OpPhase::DownloadFailed, Some(err.to_string()));
@@ -12789,8 +12815,9 @@ where {
         .map_err(|error| staged_open_error(None, error))
     }
 
-    /// [`read_content`](Engine::read_content) without its progress phases.
-    async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+    /// [`read_served_content`](Engine::read_served_content) without its
+    /// progress phases.
+    async fn read_whole(&self, node: NodeId) -> Result<ServedContent, EngineError> {
         let PinnedVersion {
             version,
             staged_op,
@@ -12809,7 +12836,10 @@ where {
         .await
         .map_err(|error| staged_open_error(staged_op, error))?;
         self.project_pinned_head(node, &version, version_count);
-        Ok(bytes)
+        Ok(ServedContent {
+            bytes,
+            version: version.content_cid,
+        })
     }
 
     /// The block sources a content read runs over: this device's staging store,
@@ -13421,6 +13451,32 @@ where {
                 (None, _) => Ok(None),
             },
         }
+    }
+
+    /// Refuse an anchor that is not the newest version this device knows of for
+    /// `node`, staged or projected: the drain can only dead-letter that write as
+    /// `BaseSuperseded`.
+    async fn refuse_superseded_anchor(
+        &self,
+        node: NodeId,
+        anchor: &[u8],
+    ) -> Result<(), EngineError> {
+        let superseded = match self.staged_version_cid(node).await? {
+            Some(staged) => staged != anchor,
+            None => self
+                .state
+                .snapshot
+                .borrow()
+                .node(node)
+                .and_then(|meta| meta.content_version.and(meta.head_content_cid.as_deref()))
+                .is_some_and(|head| head != anchor),
+        };
+        if superseded {
+            return Err(EngineError::UnsupportedTarget {
+                check: "expected-version-is-not-the-newest",
+            });
+        }
+        Ok(())
     }
 
     /// The version the read plane pins for `node` when the queue has staged one,

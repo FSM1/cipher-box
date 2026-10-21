@@ -10,11 +10,10 @@
  * order with no drops.
  */
 
-import { isBuffer } from '../buffers.js';
 import { errorMessage } from '../errorMessage.js';
 import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
-import { rendezvousTransfer } from './protocol.js';
+import { answerTransfer } from './protocol.js';
 import type { WorkerMessage, WorkerRequest } from './protocol.js';
 
 /** A request driving an already-open write handle, ordered per handle. */
@@ -75,14 +74,7 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         }
         case 'read': {
           const result = await host.read(request.read);
-          // A plaintext download and an opened factor key are transferred, not
-          // cloned: a copy left in this realm would outlive the call with no
-          // owner to erase it.
-          if (isBuffer(result)) {
-            postOwned(request.id, result);
-            return;
-          }
-          post({ type: 'response', id: request.id, ok: true, result }, rendezvousTransfer(result));
+          post({ type: 'response', id: request.id, ok: true, result }, answerTransfer(result));
           return;
         }
         case 'openContentStream': {

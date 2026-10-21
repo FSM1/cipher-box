@@ -31,38 +31,61 @@ function row(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
-function fakeClient() {
+/**
+ * An engine that holds one newest version per file and refuses a save against
+ * any other, as the handle does. A commit stages the next version; the row's
+ * CID, the published head, does not move until a drain.
+ */
+function fakeClient(newest: Uint8Array = READ_AT) {
   const opened: { node: Uint8Array; expectedVersion?: Uint8Array }[] = [];
+  const committed: Uint8Array[] = [];
+  /** The bytes each opened write received, in push order. */
+  const written: number[][] = [];
+  const current = () => committed.at(-1) ?? newest;
+  const bytes = () => new TextEncoder().encode(LOADED).buffer;
   const client = {
     facade: {
       subscribe: () => () => undefined,
       read: fakeRead({
         snapshot: () => new Promise(() => undefined),
-        download: () => Promise.resolve(new TextEncoder().encode(LOADED).buffer),
+        download: () => Promise.resolve(bytes()),
+        servedContent: () => Promise.resolve({ bytes: bytes(), version: current() }),
       }),
       setFocus: () => Promise.resolve(),
       beginWrite: (target: { node: Uint8Array; expectedVersion?: Uint8Array }) => {
         opened.push(target);
+        const anchor = target.expectedVersion;
+        if (anchor !== undefined && anchor.join() !== current().join()) {
+          return Promise.reject(new Error('expected-version-is-not-the-newest'));
+        }
+        written.push([]);
         return Promise.resolve(1n);
       },
-      pushChunk: () => Promise.resolve(),
-      commitWrite: () => Promise.resolve(7n),
+      pushChunk: (_handle: bigint, chunk: ArrayBuffer) => {
+        written.at(-1)?.push(...new Uint8Array(chunk));
+        return Promise.resolve();
+      },
+      commitWrite: () => {
+        committed.push(Uint8Array.of(0xc2, committed.length));
+        return Promise.resolve(7n);
+      },
       abortWrite: () => Promise.resolve(),
     },
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
-  return { client, opened };
+  return { client, opened, committed, written };
 }
 
-async function edited(listing: ListingRow, client: EngineClient) {
-  render(
+async function edited(listing: ListingRow, client: EngineClient, text = 'edited text') {
+  const view = render(
     <EngineProvider createClient={() => client}>
       <TextEditorDialog row={listing} present onClose={() => undefined} />
     </EngineProvider>
   );
   const field = await screen.findByTestId('text-editor-field');
-  fireEvent.change(field, { target: { value: 'edited text' } });
+  fireEvent.change(field, { target: { value: text } });
   fireEvent.click(screen.getByTestId('text-editor-save'));
+  return view;
 }
 
 describe('the text editor', () => {
@@ -75,12 +98,27 @@ describe('the text editor', () => {
     expect(opened[0]).toEqual({ node: NODE, expectedVersion: READ_AT });
   });
 
-  it('leaves the anchor to the engine when the row has no projected version', async () => {
-    const { client, opened } = fakeClient();
+  it('saves a queued file against the version the read served', async () => {
+    const queued = Uint8Array.of(0xb0, 0x0b);
+    const { client, opened, committed } = fakeClient(queued);
 
     await edited(row({ contentCid: null }), client);
 
-    await waitFor(() => expect(opened).toHaveLength(1));
-    expect(opened[0]).toEqual({ node: NODE, expectedVersion: undefined });
+    await waitFor(() => expect(committed).toHaveLength(1));
+    expect(opened[0]).toEqual({ node: NODE, expectedVersion: queued });
+  });
+
+  it('applies a second edit made before the drain publishes the first', async () => {
+    const { client, opened, committed, written } = fakeClient();
+
+    const first = await edited(row(), client, 'first edit');
+    await waitFor(() => expect(committed).toHaveLength(1));
+    first.unmount();
+
+    await edited(row(), client, 'second edit');
+
+    await waitFor(() => expect(committed).toHaveLength(2));
+    expect(opened[1]).toEqual({ node: NODE, expectedVersion: committed[0] });
+    expect(new TextDecoder().decode(Uint8Array.from(written[1]))).toBe('second edit');
   });
 });

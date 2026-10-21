@@ -83,6 +83,8 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
       return FAKE_SIWE_NONCE;
     case 'download':
       return new Uint8Array([1, 2, 3]).buffer;
+    case 'servedContent':
+      return { bytes: new Uint8Array([1, 2, 3]).buffer, version: Uint8Array.of(4) };
     case 'invitePreview':
       return {
         scope: new Uint8Array(16),

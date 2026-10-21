@@ -30,6 +30,7 @@ import type {
   VersionEntryDescriptor,
   ReceivedShareDescriptor,
   RegisteredDeviceDescriptor,
+  ServedContent,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -535,6 +536,8 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve('0000 0000 0000 0000 0000');
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
+  respondServedContent: (node: Uint8Array) => Promise<ServedContent> = () =>
+    Promise.resolve({ bytes: new ArrayBuffer(0), version: new Uint8Array(0) });
   respondFileVersions: (node: Uint8Array) => Promise<VersionEntryDescriptor[]> = () =>
     Promise.resolve([]);
   respondDownloadVersion: (node: Uint8Array, contentCid: Uint8Array) => Promise<ArrayBuffer> = () =>
@@ -645,6 +648,9 @@ export class FakeEngineTransport implements EngineTransport {
       case 'downloadVersion':
         this.versionDownloads.push({ node: read.node, contentCid: read.contentCid });
         return this.respondDownloadVersion(read.node, read.contentCid);
+      case 'servedContent':
+        this.downloads.push(read.node);
+        return this.respondServedContent(read.node);
       default:
         // As the engine's own decode refuses a kind it does not serve.
         return Promise.reject(new Error('the read does not decode'));

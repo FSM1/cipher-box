@@ -23,11 +23,11 @@ interface TextEditorDialogProps {
   onClose: () => void;
 }
 
-/** The read a draft starts from: its row, its text, and the CID its row showed. */
+/** The read a draft starts from: its row, its text, and the version the read served. */
 interface Basis {
   row: ListingRow;
   text: string;
-  version: string | null;
+  version: string;
 }
 
 export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProps) {
@@ -56,7 +56,7 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
   }, [present, dirty, onClose]);
 
   const save = async (): Promise<void> => {
-    if (client === null || draft === null) return;
+    if (client === null || basis === null || draft === null) return;
     setSaving(true);
     setFailure(null);
 
@@ -65,10 +65,7 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
     let handle: bigint | null = null;
     try {
       handle = await facade.beginWrite(
-        {
-          node: source.id,
-          expectedVersion: basis?.version ? fromHex(basis.version) : undefined,
-        },
+        { node: source.id, expectedVersion: fromHex(basis.version) },
         bytes.byteLength
       );
       for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_BYTES) {

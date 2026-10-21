@@ -30,6 +30,8 @@ const NOTE = new Uint8Array(16).fill(3);
 const LONG_NAME = 'a'.repeat(200);
 const SHOWN_LONG_NAME = 'a'.repeat(96) + '…';
 const PICTURE = new Uint8Array(16).fill(5);
+/** The version a read serves of a file whose row shows no content CID. */
+const UNPROJECTED = Uint8Array.of(0xb0);
 
 type Child = SnapshotDescriptor['children'][number];
 
@@ -85,6 +87,9 @@ function fakeEngine(
     }),
     download: vi.fn((_node: Uint8Array) => download()),
   };
+  // The version a read serves: the named node's CID in the last snapshot landed,
+  // taken when the read starts. Both byte reads answer from the one plaintext stub.
+  const served: { children: Child[] } = { children: [] };
   const facade = {
     subscribe(listener: (event: EventDescriptor) => void) {
       listeners.add(listener);
@@ -93,6 +98,12 @@ function fakeEngine(
     read: fakeRead({
       snapshot: ({ folder }) => reads.snapshot(folder),
       download: ({ node }) => reads.download(node),
+      servedContent: ({ node }) => {
+        const version =
+          served.children.find((child) => toHex(child.id) === toHex(node))?.contentCid ??
+          UNPROJECTED;
+        return reads.download(node).then((bytes) => ({ bytes, version }));
+      },
       vaultStorage: () => Promise.resolve(FAKE_VAULT_STORAGE),
     }),
     setFocus: vi.fn((_node: Uint8Array | null) => Promise.resolve()),
@@ -118,6 +129,7 @@ function fakeEngine(
     facade,
     reads,
     pulls,
+    served,
     emit: (event: EventDescriptor) => {
       for (const listener of listeners) listener(event);
     },
@@ -142,6 +154,7 @@ function renderBrowser(engine: Engine, path = '/files') {
 
 async function landSnapshot(engine: Engine, view: SnapshotDescriptor): Promise<void> {
   await act(async () => {
+    engine.served.children = view.children;
     engine.emit({ kind: 'snapshotUpdated' });
     engine.pulls[engine.pulls.length - 1].resolve(view);
     await Promise.resolve();
@@ -1195,7 +1208,10 @@ describe('the text editor', () => {
     fireEvent.click(screen.getByTestId('text-editor-save'));
 
     await waitFor(() => expect(engine.facade.commitWrite).toHaveBeenCalledWith(9n));
-    expect(engine.facade.beginWrite).toHaveBeenCalledWith({ node: NOTE }, 17);
+    expect(engine.facade.beginWrite).toHaveBeenCalledWith(
+      { node: NOTE, expectedVersion: UNPROJECTED },
+      17
+    );
     const [, chunk] = engine.facade.pushChunk.mock.calls[0];
     expect(new TextDecoder().decode(chunk)).toBe('to do: everything');
     await waitFor(() => expect(screen.queryByTestId('text-editor-dialog')).toBeNull());
@@ -1284,7 +1300,7 @@ describe('the text editor', () => {
     fireEvent.change(await screen.findByTestId('text-editor-field'), {
       target: { value: 'changed' },
     });
-    await landSnapshot(engine, noteAt(new Uint8Array([2]), 'notes.bin'));
+    await landSnapshot(engine, noteAt(READ, 'notes.bin'));
 
     expect(screen.queryByTestId('dialog-error')).toBeNull();
     expect(screen.getByRole('dialog', { name: 'edit notes.txt' })).toBeDefined();

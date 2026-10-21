@@ -24,7 +24,7 @@ export type FilePreview =
   | { status: 'error'; message: string }
   | { status: 'image'; url: string }
   | { status: 'pdf'; url: string }
-  | { status: 'text'; text: string; version: string | null }
+  | { status: 'text'; text: string; version: string }
   | { status: 'audio'; url: string }
   | { status: 'video'; url: string };
 
@@ -32,8 +32,9 @@ export type FilePreview =
  * @param key the file's node id as lowercase hex, so the read keys on a value
  * @param size the engine's byte count, which caps the buffered read before it
  * decrypts a file too large to show; `null` while the projection is resolving
- * @param contentCid the row's content CID: a new one restarts the read, and a
- * text result carries, as lowercase hex, the one the row showed when its read started
+ * @param contentCid the row's content CID: a new one restarts the read. A text
+ * result carries, as lowercase hex, the version the read served, which can be a
+ * staged one the row does not show
  */
 export function useFilePreview(
   key: string,
@@ -41,7 +42,7 @@ export function useFilePreview(
   size: bigint | null,
   contentCid: Uint8Array | null
 ): FilePreview {
-  const version = contentCid === null ? null : toHex(contentCid);
+  const head = contentCid === null ? null : toHex(contentCid);
   const client = useEngine();
   const media = useMediaService();
   const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });
@@ -94,15 +95,15 @@ export function useFilePreview(
     let live = true;
     setPreview({ status: 'loading' });
 
-    client.facade.read({ kind: 'download', node }).then(
-      (bytes) => {
+    client.facade.read({ kind: 'servedContent', node }).then(
+      ({ bytes, version }) => {
         if (!live) return;
         // The projection can lag the file, so the bytes get the last word.
         if (BigInt(bytes.byteLength) > MAX_BUFFERED_BYTES) {
           setPreview({ status: 'error', message: TOO_LARGE });
           return;
         }
-        const rendered = render(kind, bytes, name, version);
+        const rendered = render(kind, bytes, name, toHex(version));
         if (rendered.status === 'image' || rendered.status === 'pdf') url = rendered.url;
         setPreview(rendered);
       },
@@ -115,7 +116,7 @@ export function useFilePreview(
       live = false;
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, [key, name, size, version, client, media]);
+  }, [key, name, size, head, client, media]);
 
   return preview;
 }
@@ -124,7 +125,7 @@ function render(
   kind: 'image' | 'pdf' | 'text',
   bytes: ArrayBuffer,
   name: string,
-  version: string | null
+  version: string
 ): FilePreview {
   if (kind === 'text') {
     try {

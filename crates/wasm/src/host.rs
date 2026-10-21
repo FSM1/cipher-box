@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 use crate::boundary::{
     decode_command, decode_read, decode_write_target, encode_event, encode_outcome, encode_view,
 };
-use crate::read::{Read, ReadAnswer};
+use crate::read::{Read, ReadAnswer, ServedContentView};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
@@ -551,6 +551,17 @@ async fn serve(read: Read, engine: Option<&SharedEngine>) -> Result<ReadAnswer, 
                 .await
                 .map_err(engine_error)?,
         )),
+        Read::ServedContent { node } => {
+            let served = started(engine)
+                .await?
+                .read_served_content(node)
+                .await
+                .map_err(engine_error)?;
+            ReadAnswer::ServedContent(ServedContentView {
+                bytes: Zeroizing::new(served.bytes),
+                version: served.version,
+            })
+        }
     })
 }
 

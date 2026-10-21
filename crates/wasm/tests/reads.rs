@@ -10,7 +10,7 @@ use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_wasm::boundary::{
     decode_command, decode_read, decode_rendezvous_step, decode_write_target, encode_view,
 };
-use cipherbox_wasm::read::{Read, ReadAnswer};
+use cipherbox_wasm::read::{Read, ReadAnswer, ServedContentView};
 use cipherbox_wasm::read_unstarted;
 use cipherbox_wasm::rendezvous::DeviceRendezvousStep;
 use js_sys::{Function, Object, Reflect, Uint8Array};
@@ -110,6 +110,11 @@ fn a_read_decodes_from_its_generated_shape() {
         }
         _ => panic!("a version download decodes as one"),
     }
+    let served = object(&[("kind", text("servedContent")), ("node", bytes(&[4; 16]))]);
+    assert!(matches!(
+        decode_read(&served).unwrap(),
+        Read::ServedContent { node } if node == NodeId([4; 16])
+    ));
 }
 
 #[wasm_bindgen_test]
@@ -207,6 +212,20 @@ fn an_answer_crosses_under_the_kind_of_its_read() {
         .dyn_into::<Uint8Array>()
         .expect("a byte answer is a Uint8Array");
     assert_eq!(value.to_vec(), vec![1, 2, 3]);
+
+    let served = encode_view(&ReadAnswer::ServedContent(ServedContentView {
+        bytes: Zeroizing::new(vec![4, 5]),
+        version: vec![6; 3],
+    }))
+    .unwrap();
+    assert_eq!(get(&served, "kind"), text("servedContent"));
+    let value = get(&served, "value");
+    for (field, expected) in [("bytes", vec![4, 5]), ("version", vec![6; 3])] {
+        let field = get(&value, field)
+            .dyn_into::<Uint8Array>()
+            .expect("a byte field is a Uint8Array");
+        assert_eq!(field.to_vec(), expected);
+    }
 
     let nonce = encode_view(&ReadAnswer::SiweChallenge("n0nce".into())).unwrap();
     assert_eq!(get(&nonce, "kind"), text("siweChallenge"));

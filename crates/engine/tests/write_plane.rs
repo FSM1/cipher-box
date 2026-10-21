@@ -18102,9 +18102,9 @@ fn an_edit_anchors_on_the_version_its_handle_opened_on() {
 /// version, a refresh advances this device's view past it, and only then does
 /// the caller open its handle. The engine's derivation would call the newer
 /// version the one the caller wrote against. The version the caller read is the
-/// anchor when the caller names it.
+/// anchor when the caller names it, so the handle refuses it as superseded.
 #[test]
-fn a_caller_supplied_version_anchors_the_write_the_caller_actually_read() {
+fn a_caller_supplied_version_the_view_moved_past_is_refused_at_the_handle() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -18131,25 +18131,21 @@ fn a_caller_supplied_version_anchors_the_write_the_caller_actually_read() {
         alices
     );
 
-    let op_id = write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: Some(read_at),
-        },
-        &bobs,
-    )
-    .expect("the write commits, and its fate is decided on the drain");
-
-    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
     assert_eq!(
-        dead_letters,
-        vec![DeadLetter {
-            op_id,
-            reason: DeadLetterReason::BaseSuperseded
-        }],
+        write_file(
+            &mut engine_b,
+            WriteTarget::Version {
+                node,
+                expected_version: Some(read_at),
+            },
+            &bobs,
+        ),
+        Err(EngineError::UnsupportedTarget {
+            check: "expected-version-is-not-the-newest"
+        }),
         "a write derived from a superseded version does not clobber the newer one"
     );
+    tick(&world, &engine_b, &mut tasks_b);
     assert_eq!(
         block_on(engine_b.read_content(node)).expect("the head still reads"),
         alices,
@@ -18184,6 +18180,143 @@ fn an_expected_version_that_is_not_a_content_cid_is_refused_at_the_handle() {
             bogus.len()
         );
     }
+}
+
+/// A read names the version it served, so an editor saves against the bytes it
+/// holds: a staged edit, not the published head the row shows.
+#[test]
+fn a_read_names_the_staged_version_it_served_and_an_edit_of_it_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (first, bobs, alices) = contested_bodies();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &first,
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "notes.txt");
+    write_file(&mut engine, version(node), &bobs).expect("the first edit commits");
+
+    let served = block_on(engine.read_served_content(node)).expect("the staged version reads");
+    assert_eq!(served.bytes, bobs, "the read serves the staged bytes");
+    assert_eq!(
+        Some(served.version.clone()),
+        block_on(engine.rendered_version_cid(node)).unwrap(),
+        "the read names the staged version, not the published head"
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::Version {
+            node,
+            expected_version: Some(served.version),
+        },
+        &alices,
+    )
+    .expect("an edit of the served version commits");
+    settles_on_head(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        node,
+        &alices,
+        "an edit of the staged version follows it on the drain",
+    );
+    assert!(block_on(alice.pending_ops()).unwrap().is_empty());
+}
+
+/// A save against a version the queue already superseded can only dead-letter
+/// on the drain, so the handle refuses it while the editor is still open.
+#[test]
+fn a_save_against_a_version_the_queue_superseded_is_refused_at_the_handle() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine, _events, _tasks, node) = publish_clip(&world, &blocks, &first);
+    let head = block_on(engine.rendered_version_cid(node))
+        .unwrap()
+        .expect("the published head");
+    write_file(&mut engine, version(node), &bobs).expect("the first edit commits");
+
+    assert_eq!(
+        block_on(engine.begin_write(
+            WriteTarget::Version {
+                node,
+                expected_version: Some(head),
+            },
+            alices.len() as u64,
+        )),
+        Err(EngineError::UnsupportedTarget {
+            check: "expected-version-is-not-the-newest"
+        })
+    );
+}
+
+/// Two editors of one queued file read the same version. The second save must
+/// not overwrite the first editor's staged edit, so the newest version is
+/// decided again at commit.
+#[test]
+fn a_save_whose_version_another_editor_superseded_is_refused_at_commit() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let (first, bobs, alices) = contested_bodies();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &first,
+    )
+    .expect("the queued create commits");
+    let node = child_id(&engine, ROOT, "notes.txt");
+    let read = block_on(engine.rendered_version_cid(node))
+        .unwrap()
+        .expect("the queued create's version");
+
+    let slow = block_on(engine.begin_write(
+        WriteTarget::Version {
+            node,
+            expected_version: Some(read.clone()),
+        },
+        alices.len() as u64,
+    ))
+    .expect("the first editor opens its save");
+    block_on(engine.push_chunk(slow, &alices)).expect("the first editor's bytes stage");
+    write_file(
+        &mut engine,
+        WriteTarget::Version {
+            node,
+            expected_version: Some(read),
+        },
+        &bobs,
+    )
+    .expect("the second editor's save commits");
+
+    assert_eq!(
+        block_on(engine.commit_write(slow)),
+        Err(EngineError::UnsupportedTarget {
+            check: "expected-version-is-not-the-newest"
+        })
+    );
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the staged edit reads"),
+        bobs,
+        "the second editor's edit stands"
+    );
 }
 
 /// A device that never read the file has no head to anchor on, so `beginWrite`
