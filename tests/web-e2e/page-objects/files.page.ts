@@ -256,7 +256,11 @@ export class FilesPage {
     const field = dialog.getByTestId('text-editor-field');
     // The size refusal clears by itself when the size lands; any other is final.
     const refusal = dialog.getByTestId('dialog-error').filter({ hasNotText: SIZE_PENDING });
-    await expect(field.or(refusal).first()).toBeVisible({ timeout: 60_000 });
+    // One budget covers the size projection and the read after it.
+    await expect(
+      field.or(refusal).first(),
+      `the editor did not load ${name} or refuse it`
+    ).toBeVisible({ timeout: 120_000 });
     if (await refusal.isVisible()) {
       throw new Error(`the editor refused ${name}: ${await refusal.innerText()}`);
     }

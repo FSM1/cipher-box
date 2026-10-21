@@ -1,3 +1,4 @@
+import { toHex } from '@cipherbox/client';
 import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import type { ListingRow } from '../../vault/listing';
 import { Modal } from '../ui/Modal';
@@ -11,7 +12,12 @@ interface FilePreviewDialogProps {
 
 /** Shows one file's plaintext in the shapes the browser can render safely. */
 export function FilePreviewDialog({ row, onClose, onDownload }: FilePreviewDialogProps) {
-  const preview = useFilePreview(row.key, row.storedName, row.bytes);
+  const preview = useFilePreview(
+    row.key,
+    row.storedName,
+    row.bytes,
+    row.contentCid === null ? null : toHex(row.contentCid)
+  );
 
   return (
     <Modal onClose={onClose} title={row.name} className="modal-backdrop--wide">

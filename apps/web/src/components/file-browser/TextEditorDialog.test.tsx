@@ -57,7 +57,7 @@ function fakeClient() {
 async function edited(listing: ListingRow, client: EngineClient) {
   render(
     <EngineProvider createClient={() => client}>
-      <TextEditorDialog row={listing} onClose={() => undefined} />
+      <TextEditorDialog row={listing} present onClose={() => undefined} />
     </EngineProvider>
   );
   const field = await screen.findByTestId('text-editor-field');

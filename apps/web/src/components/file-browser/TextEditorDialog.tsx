@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { fromHex, toHex } from '@cipherbox/client';
 import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import { errorMessage } from '../../lib/errorMessage';
 import { useEngine } from '../../providers/EngineProvider';
@@ -15,29 +16,48 @@ import { Modal } from '../ui/Modal';
 const CHUNK_BYTES = 1024 * 1024;
 
 interface TextEditorDialogProps {
+  /** The live row, or the last one seen once it left the listing. */
   row: ListingRow;
+  /** False once the row left the listing. */
+  present: boolean;
   onClose: () => void;
 }
 
-export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
+/** The read a draft starts from: its row, its text, and the version it was read under. */
+interface Basis {
+  row: ListingRow;
+  text: string;
+  version: string | null;
+}
+
+export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProps) {
   const client = useEngine();
-  const loaded = useFilePreview(row.key, row.storedName, row.bytes);
+  const [basis, setBasis] = useState<Basis | null>(null);
+  // The live row reaches the editor only until its text loads: a later rename
+  // or write must not change what the draft is compared and saved against.
+  const source = basis?.row ?? row;
+  const loaded = useFilePreview(
+    source.key,
+    source.storedName,
+    source.bytes,
+    source.contentCid === null ? null : toHex(source.contentCid)
+  );
   const [draft, setDraft] = useState<string | null>(null);
-  // The version the draft was read from: the row is live, so a remote write
-  // that lands mid-edit must still fail the save's version check.
-  const [basis, setBasis] = useState<Uint8Array | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
-  // Adopted once: a snapshot landing mid-edit re-reads the file, and a second
-  // adoption would throw away what has been typed since.
   useEffect(() => {
-    if (draft !== null || loaded.status !== 'text') return;
+    if (basis !== null || loaded.status !== 'text') return;
+    setBasis({ row, text: loaded.text, version: loaded.version });
     setDraft(loaded.text);
-    setBasis(row.contentCid);
-  }, [loaded, draft, row.contentCid]);
+  }, [basis, loaded, row]);
 
-  const dirty = loaded.status === 'text' && draft !== null && draft !== loaded.text;
+  const dirty = basis !== null && draft !== null && draft !== basis.text;
+
+  // A dirty draft outlives its row, so its save meets the engine's refusal.
+  useEffect(() => {
+    if (!present && !dirty && !saving) onClose();
+  }, [present, dirty, saving, onClose]);
 
   const save = async (): Promise<void> => {
     if (client === null || draft === null) return;
@@ -49,7 +69,10 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
     let handle: bigint | null = null;
     try {
       handle = await facade.beginWrite(
-        { node: row.id, expectedVersion: basis ?? undefined },
+        {
+          node: source.id,
+          expectedVersion: basis?.version ? fromHex(basis.version) : undefined,
+        },
         bytes.byteLength
       );
       for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_BYTES) {
@@ -68,13 +91,15 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
   return (
     <Modal
       onClose={onClose}
-      title={`edit ${row.name}`}
+      title={`edit ${source.name}`}
       className="modal-backdrop--wide"
-      error={failure ?? refusal(loaded)}
+      error={failure ?? (basis === null ? refusal(loaded) : null)}
       busy={saving}
     >
       <div className="dialog-content" data-testid="text-editor-dialog">
-        {loaded.status === 'loading' && <p className="preview-status">{'// decrypting...'}</p>}
+        {basis === null && loaded.status === 'loading' && (
+          <p className="preview-status">{'// decrypting...'}</p>
+        )}
         {draft !== null && (
           <>
             <label className="dialog-label" htmlFor="text-editor-body">

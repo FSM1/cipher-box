@@ -1198,6 +1198,90 @@ describe('the text editor', () => {
     );
   });
 
+  it('saves against the version of the text it shows when a write lands during the read', async () => {
+    const READ = new Uint8Array([1]);
+    const REMOTE = new Uint8Array([2]);
+    let release: () => void = () => undefined;
+    const held = new Promise<ArrayBuffer>((resolve) => {
+      release = () => resolve(new TextEncoder().encode('to do: nothing').buffer as ArrayBuffer);
+    });
+    const reads = [() => held, text('to do: remote!')];
+    const engine = fakeEngine(() => (reads.shift() ?? text('unexpected'))());
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: READ })] })
+    );
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: REMOTE })] })
+    );
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+
+    const field = (await screen.findByTestId('text-editor-field')) as HTMLTextAreaElement;
+    await waitFor(() => expect(field.value).toBe('to do: remote!'));
+    fireEvent.change(field, { target: { value: 'to do: mine' } });
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+
+    await waitFor(() =>
+      expect(engine.facade.beginWrite).toHaveBeenCalledWith(
+        { node: NOTE, expectedVersion: REMOTE },
+        11
+      )
+    );
+  });
+
+  it('keeps the save open on a draft whose file is renamed remotely', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    fireEvent.change(await screen.findByTestId('text-editor-field'), {
+      target: { value: 'changed' },
+    });
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.bin')] }));
+
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+    await waitFor(() => expect(engine.facade.commitWrite).toHaveBeenCalledWith(9n));
+  });
+
+  it('keeps a dirty draft up when its row leaves the listing', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    fireEvent.change(await screen.findByTestId('text-editor-field'), {
+      target: { value: 'changed' },
+    });
+    await landSnapshot(engine, folderView({ children: [folder(DOCS, 'documents')] }));
+
+    expect((screen.getByTestId('text-editor-field') as HTMLTextAreaElement).value).toBe('changed');
+  });
+
+  it('closes a clean editor when its row leaves the listing', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    await screen.findByTestId('text-editor-field');
+    await landSnapshot(engine, folderView({ children: [folder(DOCS, 'documents')] }));
+
+    await waitFor(() => expect(screen.queryByTestId('text-editor-dialog')).toBeNull());
+  });
+
   it('refuses to dismiss while the save is in flight', async () => {
     const engine = fakeEngine(text('to do: nothing'));
     let release: () => void = () => undefined;
