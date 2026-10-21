@@ -39,7 +39,9 @@ function row(overrides: Partial<ListingRow> = {}): ListingRow {
 function fakeClient(newest: Uint8Array = READ_AT) {
   const opened: { node: Uint8Array; expectedVersion?: Uint8Array }[] = [];
   const committed: Uint8Array[] = [];
-  let current = newest;
+  /** The bytes each opened write received, in push order. */
+  const written: number[][] = [];
+  const current = () => committed.at(-1) ?? newest;
   const bytes = () => new TextEncoder().encode(LOADED).buffer;
   const client = {
     facade: {
@@ -47,38 +49,41 @@ function fakeClient(newest: Uint8Array = READ_AT) {
       read: fakeRead({
         snapshot: () => new Promise(() => undefined),
         download: () => Promise.resolve(bytes()),
-        servedContent: () => Promise.resolve({ bytes: bytes(), version: current }),
+        servedContent: () => Promise.resolve({ bytes: bytes(), version: current() }),
       }),
       setFocus: () => Promise.resolve(),
       beginWrite: (target: { node: Uint8Array; expectedVersion?: Uint8Array }) => {
         opened.push(target);
         const anchor = target.expectedVersion;
-        if (anchor !== undefined && anchor.join() !== current.join()) {
+        if (anchor !== undefined && anchor.join() !== current().join()) {
           return Promise.reject(new Error('expected-version-is-not-the-newest'));
         }
+        written.push([]);
         return Promise.resolve(1n);
       },
-      pushChunk: () => Promise.resolve(),
+      pushChunk: (_handle: bigint, chunk: ArrayBuffer) => {
+        written.at(-1)?.push(...new Uint8Array(chunk));
+        return Promise.resolve();
+      },
       commitWrite: () => {
-        current = Uint8Array.of(0xc2, committed.length);
-        committed.push(current);
+        committed.push(Uint8Array.of(0xc2, committed.length));
         return Promise.resolve(7n);
       },
       abortWrite: () => Promise.resolve(),
     },
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
-  return { client, opened, committed };
+  return { client, opened, committed, written };
 }
 
-async function edited(listing: ListingRow, client: EngineClient) {
+async function edited(listing: ListingRow, client: EngineClient, text = 'edited text') {
   const view = render(
     <EngineProvider createClient={() => client}>
       <TextEditorDialog row={listing} present onClose={() => undefined} />
     </EngineProvider>
   );
   const field = await screen.findByTestId('text-editor-field');
-  fireEvent.change(field, { target: { value: 'edited text' } });
+  fireEvent.change(field, { target: { value: text } });
   fireEvent.click(screen.getByTestId('text-editor-save'));
   return view;
 }
@@ -104,15 +109,16 @@ describe('the text editor', () => {
   });
 
   it('applies a second edit made before the drain publishes the first', async () => {
-    const { client, opened, committed } = fakeClient();
+    const { client, opened, committed, written } = fakeClient();
 
-    const first = await edited(row(), client);
+    const first = await edited(row(), client, 'first edit');
     await waitFor(() => expect(committed).toHaveLength(1));
     first.unmount();
 
-    await edited(row(), client);
+    await edited(row(), client, 'second edit');
 
     await waitFor(() => expect(committed).toHaveLength(2));
     expect(opened[1]).toEqual({ node: NODE, expectedVersion: committed[0] });
+    expect(new TextDecoder().decode(Uint8Array.from(written[1]))).toBe('second edit');
   });
 });

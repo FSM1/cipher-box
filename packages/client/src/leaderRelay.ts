@@ -466,8 +466,6 @@ export class LeaderRelay {
   ): Promise<void> {
     try {
       const result = await step();
-      // A rendezvous result carries the opened factor key, which is secret in
-      // the same way a download window is: both move rather than clone.
       const transfer = answerTransfer(result);
       if (this.closed || !this.ports.has(entry)) {
         // The port went away while the read ran, so nobody will receive this

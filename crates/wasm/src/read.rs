@@ -185,8 +185,7 @@ pub enum ReadAnswer {
     ServedContent(ServedContentView),
 }
 
-/// One file's plaintext and the content root CID of the version served: the
-/// `expectedVersion` an edit of these bytes saves against.
+/// The engine's [`ServedContent`](cipherbox_engine::ServedContent) on the wire.
 #[derive(Serialize, tsify::Tsify)]
 pub struct ServedContentView {
     /// The plaintext.

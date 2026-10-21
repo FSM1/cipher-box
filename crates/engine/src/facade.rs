@@ -12838,7 +12838,7 @@ where {
         self.project_pinned_head(node, &version, version_count);
         Ok(ServedContent {
             bytes,
-            version: version.content_cid.clone(),
+            version: version.content_cid,
         })
     }
 
@@ -13461,21 +13461,22 @@ where {
         node: NodeId,
         anchor: &[u8],
     ) -> Result<(), EngineError> {
-        let newest = match self.staged_version_cid(node).await? {
-            Some(staged) => Some(staged),
+        let superseded = match self.staged_version_cid(node).await? {
+            Some(staged) => staged != anchor,
             None => self
                 .state
                 .snapshot
                 .borrow()
                 .node(node)
-                .and_then(|meta| meta.content_version.and(meta.head_content_cid.clone())),
+                .and_then(|meta| meta.content_version.and(meta.head_content_cid.as_deref()))
+                .is_some_and(|head| head != anchor),
         };
-        match newest {
-            Some(newest) if newest != anchor => Err(EngineError::UnsupportedTarget {
+        if superseded {
+            return Err(EngineError::UnsupportedTarget {
                 check: "expected-version-is-not-the-newest",
-            }),
-            _ => Ok(()),
+            });
         }
+        Ok(())
     }
 
     /// The version the read plane pins for `node` when the queue has staged one,

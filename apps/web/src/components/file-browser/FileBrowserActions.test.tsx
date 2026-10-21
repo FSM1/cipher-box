@@ -87,9 +87,9 @@ function fakeEngine(
     }),
     download: vi.fn((_node: Uint8Array) => download()),
   };
-  // The version a read serves: the head of the last snapshot landed, taken when
-  // the read starts. Both byte reads answer from the one plaintext stub.
-  const served: { version: Uint8Array } = { version: UNPROJECTED };
+  // The version a read serves: the named node's CID in the last snapshot landed,
+  // taken when the read starts. Both byte reads answer from the one plaintext stub.
+  const served: { children: Child[] } = { children: [] };
   const facade = {
     subscribe(listener: (event: EventDescriptor) => void) {
       listeners.add(listener);
@@ -99,7 +99,9 @@ function fakeEngine(
       snapshot: ({ folder }) => reads.snapshot(folder),
       download: ({ node }) => reads.download(node),
       servedContent: ({ node }) => {
-        const version = served.version;
+        const version =
+          served.children.find((child) => toHex(child.id) === toHex(node))?.contentCid ??
+          UNPROJECTED;
         return reads.download(node).then((bytes) => ({ bytes, version }));
       },
       vaultStorage: () => Promise.resolve(FAKE_VAULT_STORAGE),
@@ -152,8 +154,7 @@ function renderBrowser(engine: Engine, path = '/files') {
 
 async function landSnapshot(engine: Engine, view: SnapshotDescriptor): Promise<void> {
   await act(async () => {
-    engine.served.version =
-      view.children.find((child) => child.contentCid !== null)?.contentCid ?? UNPROJECTED;
+    engine.served.children = view.children;
     engine.emit({ kind: 'snapshotUpdated' });
     engine.pulls[engine.pulls.length - 1].resolve(view);
     await Promise.resolve();
@@ -1299,7 +1300,7 @@ describe('the text editor', () => {
     fireEvent.change(await screen.findByTestId('text-editor-field'), {
       target: { value: 'changed' },
     });
-    await landSnapshot(engine, noteAt(new Uint8Array([2]), 'notes.bin'));
+    await landSnapshot(engine, noteAt(READ, 'notes.bin'));
 
     expect(screen.queryByTestId('dialog-error')).toBeNull();
     expect(screen.getByRole('dialog', { name: 'edit notes.txt' })).toBeDefined();

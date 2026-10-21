@@ -704,6 +704,18 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(moved.byteLength).toBe(0);
   });
 
+  it('rejects a served read that an older leader engine does not decode, and writes nothing', async () => {
+    const { engine, follower } = wire();
+    // As the default arm of an engine that predates the kind.
+    engine.respondServedContent = () => Promise.reject(new Error('the read does not decode'));
+
+    await expect(
+      follower.read({ kind: 'servedContent', node: new Uint8Array(16) })
+    ).rejects.toThrow('the read does not decode');
+    expect(engine.beginWrites).toEqual([]);
+    expect(engine.commits).toEqual([]);
+  });
+
   it('serves a follower SIWE challenge off the leader engine', async () => {
     const { engine, follower } = wire();
     engine.respondSiweChallenge = () => Promise.resolve('leaderNonce12345');

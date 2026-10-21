@@ -371,11 +371,7 @@ export type ReadDescriptor = Read;
 /** What one read answered, under the read's `kind`: the engine `ReadAnswer`. */
 export type { ReadAnswer };
 
-/**
- * A file's plaintext and the version it is: the engine `ServedContentView`, its
- * plaintext crossed as for `download`. `version` is the `expectedVersion` an edit
- * of these bytes saves against.
- */
+/** The engine `ServedContentView`, its plaintext crossed as for `download`. */
 export type ServedContent = Omit<ServedContentView, 'bytes'> & { bytes: ArrayBuffer };
 
 /**

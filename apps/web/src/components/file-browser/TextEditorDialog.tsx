@@ -56,7 +56,7 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
   }, [present, dirty, onClose]);
 
   const save = async (): Promise<void> => {
-    if (client === null || draft === null) return;
+    if (client === null || basis === null || draft === null) return;
     setSaving(true);
     setFailure(null);
 
@@ -65,10 +65,7 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
     let handle: bigint | null = null;
     try {
       handle = await facade.beginWrite(
-        {
-          node: source.id,
-          expectedVersion: basis === null ? undefined : fromHex(basis.version),
-        },
+        { node: source.id, expectedVersion: fromHex(basis.version) },
         bytes.byteLength
       );
       for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_BYTES) {

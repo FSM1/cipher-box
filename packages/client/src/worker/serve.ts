@@ -74,9 +74,6 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         }
         case 'read': {
           const result = await host.read(request.read);
-          // A plaintext download and an opened factor key are transferred, not
-          // cloned: a copy left in this realm would outlive the call with no
-          // owner to erase it.
           post({ type: 'response', id: request.id, ok: true, result }, answerTransfer(result));
           return;
         }
