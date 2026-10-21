@@ -525,6 +525,19 @@ describe('EngineHost reads', () => {
     }
   );
 
+  it('answers a served read with its plaintext as a buffer and its version as is', async () => {
+    const version = Uint8Array.of(1, 2, 3);
+    const { host } = await startedReading(() =>
+      Promise.resolve({ bytes: Uint8Array.of(0, 7, 8, 9).subarray(1), version })
+    );
+
+    const answer = await host.read({ kind: 'servedContent', node: new Uint8Array(16) });
+
+    expect(answer.bytes).toBeInstanceOf(ArrayBuffer);
+    expect(new Uint8Array(answer.bytes)).toEqual(Uint8Array.of(7, 8, 9));
+    expect(answer.version).toEqual(version);
+  });
+
   it('answers a byte view with only the bytes it spans', async () => {
     const { host } = await startedReading(() =>
       Promise.resolve(Uint8Array.of(0, 1, 2, 3).subarray(1, 3))

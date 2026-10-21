@@ -101,6 +101,9 @@ const ANSWER_CHECKS: {
 /** The answer's value, checked, with plaintext bytes as a transferable buffer. */
 function crossed(answer: ReadAnswer): ReadResultValue {
   (ANSWER_CHECKS[answer.kind] as ((value: unknown) => unknown) | undefined)?.(answer.value);
+  if (answer.kind === 'servedContent') {
+    return { bytes: ownedBuffer(answer.value.bytes), version: answer.value.version };
+  }
   return answer.value instanceof Uint8Array ? ownedBuffer(answer.value) : answer.value;
 }
 

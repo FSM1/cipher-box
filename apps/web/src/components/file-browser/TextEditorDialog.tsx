@@ -23,11 +23,11 @@ interface TextEditorDialogProps {
   onClose: () => void;
 }
 
-/** The read a draft starts from: its row, its text, and the CID its row showed. */
+/** The read a draft starts from: its row, its text, and the version the read served. */
 interface Basis {
   row: ListingRow;
   text: string;
-  version: string | null;
+  version: string;
 }
 
 export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProps) {
@@ -67,7 +67,7 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
       handle = await facade.beginWrite(
         {
           node: source.id,
-          expectedVersion: basis?.version ? fromHex(basis.version) : undefined,
+          expectedVersion: basis === null ? undefined : fromHex(basis.version),
         },
         bytes.byteLength
       );

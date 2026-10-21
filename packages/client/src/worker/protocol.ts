@@ -57,6 +57,7 @@ import type {
   ResolutionClass,
   ScopeEpochs,
   ScopeSharing,
+  ServedContentView,
   SettingsHoldCheck,
   SettingsOrigin,
   SharingContact,
@@ -371,10 +372,21 @@ export type ReadDescriptor = Read;
 export type { ReadAnswer };
 
 /**
+ * A file's plaintext and the version it is: the engine `ServedContentView`, its
+ * plaintext crossed as for `download`. `version` is the `expectedVersion` an edit
+ * of these bytes saves against.
+ */
+export type ServedContent = Omit<ServedContentView, 'bytes'> & { bytes: ArrayBuffer };
+
+/**
  * A byte answer crosses the worker boundary as an `ArrayBuffer`, so every hop
  * can transfer it rather than clone the plaintext.
  */
-type Crossed<T> = T extends Uint8Array ? ArrayBuffer : T;
+type Crossed<T> = T extends Uint8Array
+  ? ArrayBuffer
+  : T extends ServedContentView
+    ? ServedContent
+    : T;
 
 /** The answer a given read descriptor resolves with. */
 export type ReadResult<D extends ReadDescriptor> = Crossed<
@@ -393,6 +405,16 @@ export type ReadResultValue = Crossed<ReadAnswer['value']>;
 export function readTransfer(read: unknown): Transferable[] {
   const held = read as { kind?: unknown; step?: unknown } | null;
   return held?.kind === 'deviceRendezvous' ? rendezvousTransfer(held.step) : [];
+}
+
+/**
+ * The secret buffers a read answer moves rather than clones: its plaintext, as
+ * the answer itself or as a served read's `bytes`, else a rendezvous result's.
+ */
+export function answerTransfer(result: unknown): Transferable[] {
+  if (isBuffer(result)) return [result];
+  const bytes = (result as { bytes?: unknown } | null)?.bytes;
+  return isBuffer(bytes) ? [bytes] : rendezvousTransfer(result);
 }
 
 /** A UI → worker request. `id` correlates the eventual response. */

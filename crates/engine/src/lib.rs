@@ -98,9 +98,10 @@ pub use facade::{
     LinkPreviewState, LoginSecret, MAX_CONTACT_CODE_BYTES, MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS,
     MAX_FOLDER_CHILDREN, MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind,
     OpPhase, OverBudgetCause, OwedWorkClass, Permission, PreviewEntry, PreviewNames, QuotaView,
-    ReceivedShareRow, RefusedBudget, ScopeEpochs, ScopeSharing, SessionStatus, SharingContact,
-    SharingGrant, SharingInviteLink, SharingView, SiweIntent, SnapshotChild, SnapshotView,
-    Staleness, StatFs, StreamHandle, VaultStorageView, VersionEntry, WriteHandle, WriteTarget,
+    ReceivedShareRow, RefusedBudget, ScopeEpochs, ScopeSharing, ServedContent, SessionStatus,
+    SharingContact, SharingGrant, SharingInviteLink, SharingView, SiweIntent, SnapshotChild,
+    SnapshotView, Staleness, StatFs, StreamHandle, VaultStorageView, VersionEntry, WriteHandle,
+    WriteTarget,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,

@@ -138,6 +138,8 @@ class ReadHost extends StubEngineHost {
       case 'download':
         this.downloads.push(read.node);
         return this.respondDownload();
+      case 'servedContent':
+        return this.respondDownload().then((bytes) => ({ bytes, version: Uint8Array.of(5, 5) }));
       default:
         return Promise.reject(new Error(`read ${read.kind} not stubbed`));
     }
@@ -251,6 +253,21 @@ describe('serveEngine read requests', () => {
     );
     expect(response).toBeDefined();
     expect(response!.transfer).toEqual([content]);
+  });
+
+  it('serves a served read with its plaintext buffer in the transfer list', async () => {
+    const { scope, worker, toUi } = loopback();
+    serveEngine(scope, new ReadHost());
+    const transport = new LocalTransport(worker);
+
+    const served = await transport.read({ kind: 'servedContent', node: new Uint8Array(16) });
+    expect([...new Uint8Array(served.bytes)]).toEqual([9, 8, 7]);
+    expect([...served.version]).toEqual([5, 5]);
+
+    const response = toUi.find(
+      (entry) => entry.message.type === 'response' && 'result' in entry.message
+    );
+    expect(response!.transfer).toEqual([served.bytes]);
   });
 
   it('serves a stream window with its args and the plaintext buffer transferred', async () => {

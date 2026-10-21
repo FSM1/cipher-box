@@ -690,6 +690,20 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(moved.byteLength).toBe(0);
   });
 
+  it('moves the plaintext of a follower served read and clones its version', async () => {
+    const { engine, follower, ports } = wire();
+    const version = Uint8Array.of(4, 4);
+    engine.respondServedContent = () =>
+      Promise.resolve({ bytes: Uint8Array.of(1, 2, 3).buffer, version });
+
+    const served = await follower.read({ kind: 'servedContent', node: new Uint8Array(16) });
+    expect([...new Uint8Array(served.bytes)]).toEqual([1, 2, 3]);
+    expect([...served.version]).toEqual([4, 4]);
+    const moved = ports.transfers.at(-1)?.[0] as ArrayBuffer;
+    expect(moved).toBeInstanceOf(ArrayBuffer);
+    expect(moved.byteLength).toBe(0);
+  });
+
   it('serves a follower SIWE challenge off the leader engine', async () => {
     const { engine, follower } = wire();
     engine.respondSiweChallenge = () => Promise.resolve('leaderNonce12345');
