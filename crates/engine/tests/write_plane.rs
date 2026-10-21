@@ -19861,23 +19861,53 @@ fn restoring_a_prior_version_publishes_it_as_the_new_head_and_keeps_the_history(
     );
 }
 
-/// A queued restore replaces the head it was read against, so an edit of that
+/// Two published versions of `clip.bin`, with the head and the prior version's
+/// `contentCid`s.
+fn file_of_two_versions(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    salt: u8,
+) -> (NodeId, Vec<CoreVersion>) {
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..30u8).map(|byte| byte ^ (version + salt)).collect())
+        .collect();
+    let file = file_with_history(world, engine, tasks, &bodies);
+    (file, published_versions(&world.record_store, blocks, file))
+}
+
+fn queue_restore(engine: &mut Engine<FakeSeamTypes>, file: NodeId, content_cid: &[u8]) {
+    block_on(engine.command(Command::RestoreVersion {
+        node: file,
+        content_cid: content_cid.to_vec(),
+    }))
+    .expect("the restore queues");
+}
+
+fn no_dead_letters(engine: &Engine<FakeSeamTypes>) -> bool {
+    block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .is_empty()
+}
+
+const RESTORE_QUEUED: EngineError = EngineError::UnsupportedTarget {
+    check: "a-restore-of-the-file-is-queued",
+};
+
+/// A queued restore replaces the head the editor read, so a save against that
 /// head can only dead-letter after the restore publishes. The handle refuses it
-/// instead, and once the restore publishes a read serves the version an edit
-/// then saves against.
+/// instead, and once the restore publishes a read serves the version a save
+/// then passes against.
 #[test]
-fn an_edit_while_a_restore_is_queued_is_refused_at_the_handle() {
+fn a_save_while_a_restore_is_queued_is_refused_at_the_handle() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-
-    let bodies: Vec<Vec<u8>> = (0..2u8)
-        .map(|version| (0..30u8).map(|byte| byte ^ (version + 5)).collect())
-        .collect();
-    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
-    let history = published_versions(&world.record_store, &blocks, file);
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 5);
     let prior = history[1].content_cid.clone();
     let served = block_on(engine.read_served_content(file)).expect("the head reads");
     assert_eq!(
@@ -19885,37 +19915,22 @@ fn an_edit_while_a_restore_is_queued_is_refused_at_the_handle() {
         "the read serves the head"
     );
 
-    block_on(engine.command(Command::RestoreVersion {
-        node: file,
-        content_cid: prior.clone(),
-    }))
-    .expect("the restore queues");
-
-    for target in [
-        WriteTarget::Version {
-            node: file,
-            expected_version: Some(served.version.clone()),
-        },
-        version(file),
-    ] {
-        assert_eq!(
-            block_on(engine.begin_write(target, 8)),
-            Err(EngineError::UnsupportedTarget {
-                check: "a-restore-of-the-file-is-queued"
-            }),
-        );
-    }
+    queue_restore(&mut engine, file, &prior);
+    assert_eq!(
+        block_on(engine.begin_write(
+            WriteTarget::Version {
+                node: file,
+                expected_version: Some(served.version),
+            },
+            8,
+        )),
+        Err(RESTORE_QUEUED),
+    );
 
     for _ in 0..4 {
         tick(&world, &engine, &mut tasks);
     }
-    assert!(
-        block_on(engine.snapshot(ROOT))
-            .unwrap()
-            .dead_letters
-            .is_empty(),
-        "nothing dead-letters",
-    );
+    assert!(no_dead_letters(&engine), "nothing dead-letters");
     let restored = block_on(engine.read_served_content(file)).expect("the restored head reads");
     assert_eq!(
         restored.version, prior,
@@ -19929,71 +19944,141 @@ fn an_edit_while_a_restore_is_queued_is_refused_at_the_handle() {
         },
         b"an edit of the restored version",
     )
-    .expect("an edit of the served version commits");
+    .expect("a save against the served version commits");
     for _ in 0..4 {
         tick(&world, &engine, &mut tasks);
     }
-    assert!(
-        block_on(engine.snapshot(ROOT))
-            .unwrap()
-            .dead_letters
-            .is_empty(),
-        "the edit publishes over the restored version",
-    );
-    assert_eq!(
-        block_on(engine.read_content(file)).expect("the edit reads"),
-        b"an edit of the restored version",
-    );
+    assert!(no_dead_letters(&engine), "the save does not dead-letter");
+    assert!(block_on(alice.pending_ops()).unwrap().is_empty());
+    let published = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(published.len(), 3, "the save publishes a version");
+    assert_eq!(published[1].content_cid, prior, "over the restored version");
 }
 
-/// A handle opened before a restore queues was anchored on the head the
-/// restore replaces, so its commit refuses rather than parking the write.
+/// A save handle opened before a restore queues names the head the restore
+/// replaces, so its commit refuses rather than parking the write.
 #[test]
-fn a_write_opened_before_a_restore_queues_is_refused_at_commit() {
+fn a_save_opened_before_a_restore_queues_is_refused_at_commit() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-
-    let bodies: Vec<Vec<u8>> = (0..2u8)
-        .map(|version| (0..30u8).map(|byte| byte ^ (version + 9)).collect())
-        .collect();
-    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
-    let prior = published_versions(&world.record_store, &blocks, file)[1]
-        .content_cid
-        .clone();
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 9);
     let edit = b"opened against the head";
-    let handle = block_on(engine.begin_write(version(file), edit.len() as u64))
-        .expect("the handle opens against the head");
+    let handle = block_on(engine.begin_write(
+        WriteTarget::Version {
+            node: file,
+            expected_version: Some(history[0].content_cid.clone()),
+        },
+        edit.len() as u64,
+    ))
+    .expect("the handle opens against the head");
     block_on(engine.push_chunk(handle, edit)).expect("the bytes stage");
 
-    block_on(engine.command(Command::RestoreVersion {
-        node: file,
-        content_cid: prior,
-    }))
-    .expect("the restore queues");
+    queue_restore(&mut engine, file, &history[1].content_cid);
 
-    assert_eq!(
-        block_on(engine.commit_write(handle)),
-        Err(EngineError::UnsupportedTarget {
-            check: "a-restore-of-the-file-is-queued"
-        }),
-    );
+    assert_eq!(block_on(engine.commit_write(handle)), Err(RESTORE_QUEUED));
     for _ in 0..4 {
         tick(&world, &engine, &mut tasks);
     }
-    assert!(
-        block_on(engine.snapshot(ROOT))
-            .unwrap()
-            .dead_letters
-            .is_empty(),
-        "nothing dead-letters",
-    );
+    assert!(no_dead_letters(&engine), "nothing dead-letters");
+}
+
+/// The newest op that sets the head decides: a restore queued after a staged
+/// edit supersedes the edit too.
+#[test]
+fn a_save_against_a_staged_edit_a_later_restore_replaces_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 13);
+    write_file(&mut engine, version(file), b"a staged edit").expect("the edit stages");
+    let staged = block_on(engine.read_served_content(file))
+        .expect("the staged edit reads")
+        .version;
+
+    queue_restore(&mut engine, file, &history[1].content_cid);
+
     assert_eq!(
-        block_on(engine.read_content(file)).expect("the restored head reads"),
-        bodies[0],
+        block_on(engine.begin_write(
+            WriteTarget::Version {
+                node: file,
+                expected_version: Some(staged),
+            },
+            8,
+        )),
+        Err(RESTORE_QUEUED),
     );
+}
+
+/// A write that names no version (a mount close, a parked-write recover) has
+/// no editor to refuse to, so it queues as before and keeps its bytes.
+#[test]
+fn a_write_with_no_version_queues_while_a_restore_is_queued() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 17);
+    queue_restore(&mut engine, file, &history[1].content_cid);
+
+    let op_id = write_file(&mut engine, version(file), b"a mount close")
+        .expect("a write with no version commits");
+    assert!(
+        block_on(alice.pending_ops())
+            .unwrap()
+            .iter()
+            .any(|(id, _)| *id == op_id),
+        "the write queues",
+    );
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }],
+        "the write parks with its bytes, as before",
+    );
+}
+
+/// A restore that dead-letters leaves the queue, and the refusal goes with it.
+#[test]
+fn a_save_passes_once_a_queued_restore_dead_letters() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 21);
+    queue_restore(&mut engine, file, &history[1].content_cid);
+    let head = WriteTarget::Version {
+        node: file,
+        expected_version: Some(history[0].content_cid.clone()),
+    };
+    assert_eq!(
+        block_on(engine.begin_write(head.clone(), 8)),
+        Err(RESTORE_QUEUED),
+    );
+
+    // A co-writer drops the version the restore names.
+    plant_versions(&world, &blocks, file, vec![history[0].clone()]);
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::BaseSuperseded],
+    );
+
+    write_file(&mut engine, head, b"a save after the restore failed")
+        .expect("the save commits once the restore left the queue");
 }
 
 /// A delete drops the entry and retires what it owes. The version is then

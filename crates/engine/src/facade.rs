@@ -5649,14 +5649,6 @@ enum QueuedHead {
     Restore,
 }
 
-/// An edit of a file while a restore of it is queued: the restore replaces the
-/// head the edit read, so the drain can only dead-letter the edit.
-fn restore_queued() -> EngineError {
-    EngineError::UnsupportedTarget {
-        check: "a-restore-of-the-file-is-queued",
-    }
-}
-
 /// One of the [`MAX_OPEN_STREAMS`] slots, reserved before
 /// [`open_content_stream`](Engine::open_content_stream) spends any network and
 /// released when the [`LiveStream`] it lives in drops.
@@ -11616,7 +11608,7 @@ where {
                             });
                         }
                         Some(expected) => {
-                            self.refuse_superseded_anchor(*node, Some(expected)).await?;
+                            self.refuse_superseded_anchor(*node, expected).await?;
                             Some(expected.clone())
                         }
                         None => self.write_anchor(*node).await?,
@@ -11896,11 +11888,11 @@ where {
         // Re-checked here too: another handle can stage a version, or a restore
         // can queue, between this handle's open and its commit.
         if let WriteTarget::Version {
-            expected_version, ..
+            expected_version: Some(anchor),
+            ..
         } = &target
         {
-            self.refuse_superseded_anchor(node, expected_version.as_deref())
-                .await?;
+            self.refuse_superseded_anchor(node, anchor).await?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -13437,19 +13429,16 @@ where {
 
     /// The version a new write of `node` follows — the conditional-edit anchor
     /// ([`OpKind::UpdateContent`](crate::sync::op::OpKind::UpdateContent)): the
-    /// last queued op that authors one, else the published head. A queued
-    /// restore refuses: the overlay cannot render the version it restores, so
-    /// no read serves the bytes an edit would follow.
+    /// last queued op that authors one, else the published head.
     ///
     /// A head this device has never projected is resolved here, before anything
     /// is spent, rather than left unanchored — an unanchored write is one the
     /// drain can only refuse, after a whole upload. Fails closed: a head that
     /// will not resolve is a write that cannot prove what it replaces.
     async fn write_anchor(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
-        match self.queued_head(node).await? {
-            Some(QueuedHead::Staged(cid)) => return Ok(Some(cid)),
-            Some(QueuedHead::Restore) => return Err(restore_queued()),
-            None => {}
+        let authored = self.staged_version_cid(node).await?;
+        if authored.is_some() {
+            return Ok(authored);
         }
         let projected = {
             let base = self.state.snapshot.borrow();
@@ -13474,23 +13463,29 @@ where {
 
     /// Refuse an anchor that is not the newest version this device knows of for
     /// `node`, staged or projected: the drain can only dead-letter that write as
-    /// `BaseSuperseded`. A queued restore supersedes every anchor, `None` too.
+    /// `BaseSuperseded`.
+    ///
+    /// A queued restore supersedes every anchor: the overlay cannot render the
+    /// version it restores, so no read serves the bytes an edit would follow.
     async fn refuse_superseded_anchor(
         &self,
         node: NodeId,
-        anchor: Option<&[u8]>,
+        anchor: &[u8],
     ) -> Result<(), EngineError> {
         let superseded = match self.queued_head(node).await? {
-            Some(QueuedHead::Restore) => return Err(restore_queued()),
-            Some(QueuedHead::Staged(staged)) => anchor.is_some_and(|anchor| staged != anchor),
-            None => anchor.is_some_and(|anchor| {
-                self.state
-                    .snapshot
-                    .borrow()
-                    .node(node)
-                    .and_then(|meta| meta.content_version.and(meta.head_content_cid.as_deref()))
-                    .is_some_and(|head| head != anchor)
-            }),
+            Some(QueuedHead::Restore) => {
+                return Err(EngineError::UnsupportedTarget {
+                    check: "a-restore-of-the-file-is-queued",
+                });
+            }
+            Some(QueuedHead::Staged(staged)) => staged != anchor,
+            None => self
+                .state
+                .snapshot
+                .borrow()
+                .node(node)
+                .and_then(|meta| meta.content_version.and(meta.head_content_cid.as_deref()))
+                .is_some_and(|head| head != anchor),
         };
         if superseded {
             return Err(EngineError::UnsupportedTarget {
