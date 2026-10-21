@@ -20014,6 +20014,34 @@ fn a_save_against_a_staged_edit_a_later_restore_replaces_is_refused() {
     );
 }
 
+/// An op staged after a queued restore anchors on the head the restore
+/// replaces, so a save against its version can only dead-letter too.
+#[test]
+fn a_save_against_an_edit_staged_after_a_queued_restore_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) = file_of_two_versions(&world, &blocks, &mut engine, &mut tasks, 25);
+    queue_restore(&mut engine, file, &history[1].content_cid);
+    write_file(&mut engine, version(file), b"a mount close").expect("the write stages");
+    let staged = block_on(engine.read_served_content(file))
+        .expect("the staged write reads")
+        .version;
+
+    assert_eq!(
+        block_on(engine.begin_write(
+            WriteTarget::Version {
+                node: file,
+                expected_version: Some(staged),
+            },
+            8,
+        )),
+        Err(RESTORE_QUEUED),
+    );
+}
+
 /// A write that names no version (a mount close, a parked-write recover) has
 /// no editor to refuse to, so it queues as before and keeps its bytes.
 #[test]
@@ -20043,7 +20071,14 @@ fn a_write_with_no_version_queues_while_a_restore_is_queued() {
             op_id,
             reason: DeadLetterReason::BaseSuperseded
         }],
-        "the write parks with its bytes, as before",
+        "the write parks, as before",
+    );
+    block_on(engine.command(Command::RecoverDeadLetter { op_id })).expect("the recover queues");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the recovered head reads"),
+        b"a mount close",
+        "the parked write kept its bytes",
     );
 }
 

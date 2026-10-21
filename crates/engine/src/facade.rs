@@ -5641,14 +5641,6 @@ struct PinnedVersion {
     version_count: Option<u64>,
 }
 
-/// The newest queued op that sets a file's head.
-enum QueuedHead {
-    /// Staged content, with its `contentCid`.
-    Staged(Vec<u8>),
-    /// A [`OpKind::RestoreVersion`].
-    Restore,
-}
-
 /// One of the [`MAX_OPEN_STREAMS`] slots, reserved before
 /// [`open_content_stream`](Engine::open_content_stream) spends any network and
 /// released when the [`LiveStream`] it lives in drops.
@@ -13466,19 +13458,20 @@ where {
     /// `BaseSuperseded`.
     ///
     /// A queued restore supersedes every anchor: the overlay cannot render the
-    /// version it restores, so no read serves the bytes an edit would follow.
+    /// version it restores, and an op staged after it anchors on the head it
+    /// replaces, so no read serves a version an edit could publish over.
     async fn refuse_superseded_anchor(
         &self,
         node: NodeId,
         anchor: &[u8],
     ) -> Result<(), EngineError> {
-        let superseded = match self.queued_head(node).await? {
-            Some(QueuedHead::Restore) => {
-                return Err(EngineError::UnsupportedTarget {
-                    check: "a-restore-of-the-file-is-queued",
-                });
-            }
-            Some(QueuedHead::Staged(staged)) => staged != anchor,
+        if self.restore_queued(node).await? {
+            return Err(EngineError::UnsupportedTarget {
+                check: "a-restore-of-the-file-is-queued",
+            });
+        }
+        let superseded = match self.staged_version_cid(node).await? {
+            Some(staged) => staged != anchor,
             None => self
                 .state
                 .snapshot
@@ -13548,22 +13541,14 @@ where {
             }))
     }
 
-    /// The newest queued op that sets `node`'s head, `None` when the queue sets
-    /// none.
-    async fn queued_head(&self, node: NodeId) -> Result<Option<QueuedHead>, EngineError> {
+    /// Whether a restore of `node` is queued.
+    async fn restore_queued(&self, node: NodeId) -> Result<bool, EngineError> {
         Ok(self
             .scan_queue()
             .await?
             .mine
-            .into_iter()
-            .rev()
-            .filter(|(_, op)| op.target == node)
-            .find_map(|(_, op)| match &op.kind {
-                OpKind::RestoreVersion { .. } => Some(QueuedHead::Restore),
-                _ => op
-                    .staged_content()
-                    .map(|staged| QueuedHead::Staged(staged.root_cid.clone())),
-            }))
+            .iter()
+            .any(|(_, op)| op.target == node && matches!(op.kind, OpKind::RestoreVersion { .. })))
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
