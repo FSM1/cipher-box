@@ -34122,41 +34122,38 @@ fn parent_moved_events(events: &[Event]) -> usize {
         .count()
 }
 
-/// The proof walks only the bound write scope. Another device links the
-/// source root in a folder of that scope before the relink lands, then moves
-/// the relink parent with the copy into a scope with a write seed of its own.
-/// A walk from the moved parent would find the copy alone. The entry parks
-/// with one event in each session, the index keeps the source root, and no
-/// name of it retires.
-#[test]
-fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
-    let mut fx = GrantScenario::new();
+/// Another device links the source root `S` in a folder of the bound write
+/// scope before the relink lands, then moves the relink parent with the copy
+/// into a scope with a write seed of its own. Answers `S` and its names.
+fn relink_parent_moved_out_of_the_bound_write_scope(
+    fx: &mut GrantScenario,
+) -> (NodeId, Vec<String>) {
     let folder = fx.folder;
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     assert_eq!(
-        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        command_across_retries(fx, Command::RotateWriteNow { node: folder }),
         Ok(CommandOutcome::Done)
     );
     let parent = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "parent");
     let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
     let shared = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, "s");
     grant_to_recipient(&mut fx.engine, shared);
-    ticks(&mut fx, 2);
+    ticks(fx, 2);
     assert_eq!(
         fx.dissolve_into(shared, parent, dissolve_binding()),
         Ok(Some(DissolveStep::Map))
     );
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(header_at(&fx, shared).step, DissolveStep::Seal);
+    assert_eq!(header_at(fx, shared).step, DissolveStep::Seal);
     drop(moved_in_the_relink_gap_at(
-        &mut fx,
+        fx,
         shared,
         parent,
         other,
         &[parent],
     ));
-    let copy = header_at(&fx, shared).new_root;
-    let names = source_names_of(&fx, shared);
+    let copy = header_at(fx, shared).new_root;
+    let names = source_names_of(fx, shared);
     // A device that boots after the relink seals P from the relinked body.
     let device = fx.world.device(b"the owner's third device");
     let (mut laptop, _laptop_events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &device);
@@ -34165,12 +34162,12 @@ fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
         .expect("the laptop opens the parent");
     tick(&fx.world, &laptop, &mut tasks);
     assert_eq!(
-        folder_children(&fx, parent),
+        folder_children(fx, parent),
         vec![copy],
         "the parent names the copy"
     );
     assert!(
-        folder_children(&fx, other).contains(&shared),
+        folder_children(fx, other).contains(&shared),
         "the other folder names S"
     );
     block_on(laptop.command(Command::Move {
@@ -34183,8 +34180,8 @@ fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
     for _ in 0..4 {
         tick(&fx.world, &laptop, &mut tasks);
     }
-    assert!(!folder_children(&fx, ROOT).contains(&parent), "P left ROOT");
-    let seed = granted_override_seed(&fx, 1);
+    assert!(!folder_children(fx, ROOT).contains(&parent), "P left ROOT");
+    let seed = granted_override_seed(fx, 1);
     let moved_name = published_child_name(
         &fx.world,
         &fx.blocks,
@@ -34204,6 +34201,16 @@ fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
     // put fails here: the proof reads the P that names the copy alone.
     fx.world.record_store.fail_put_for(moved_name.as_str());
     events_so_far(&mut fx._events);
+    (shared, names)
+}
+
+/// The proof walks only the bound write scope. A walk from a relink parent
+/// that left it would find the copy alone. The entry parks with one event in
+/// each session, the index keeps the source root, and no name of it retires.
+#[test]
+fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
+    let mut fx = GrantScenario::new();
+    let (shared, names) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx);
 
     ticks(&mut fx, 6);
 
@@ -34230,6 +34237,34 @@ fn a_relink_parent_moved_out_of_the_bound_write_scope_parks_with_one_event() {
     );
     let retired = retired(&fx.owner_device);
     assert!(names.iter().all(|name| !retired.contains(name)));
+}
+
+/// A park whose commit fails sends the moved-parent event once in the
+/// session, and a later commit parks the entry.
+#[test]
+fn a_moved_parent_park_whose_commit_fails_sends_one_event() {
+    let mut fx = GrantScenario::new();
+    let (shared, _) = relink_parent_moved_out_of_the_bound_write_scope(&mut fx);
+    let header_key = [prefix_of(shared).as_slice(), b"h"].concat();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_writes_at(&header_key);
+
+    ticks(&mut fx, 6);
+
+    let header = header_at(&fx, shared);
+    assert!(
+        header.step == DissolveStep::Relink && !header.parked,
+        "the park does not commit"
+    );
+    assert_eq!(parent_moved_events(&events_so_far(&mut fx._events)), 1);
+
+    fx.owner_device.staging_store.inner().heal_staged_writes();
+    ticks(&mut fx, 2);
+
+    assert!(header_at(&fx, shared).parked, "the entry parks");
+    assert_eq!(parent_moved_events(&events_so_far(&mut fx._events)), 0);
 }
 
 /// A child's kind comes from its own gated body, not from the ref that names
