@@ -354,14 +354,16 @@ where
                         return Err(NotDriven);
                     }
                     self.cells.dissolve_proofs.borrow_mut().remove(&source);
-                    // A park holds the entry for the session, so this event
-                    // goes once in each session.
-                    let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
-                        scope_root: source,
-                        detail: DISSOLVE_RELINK_PARENT_MOVED.to_owned(),
-                        retryable: false,
-                        class: OwedWorkClass::Capability,
-                    });
+                    // The park commit can fail, so the event keeps its own
+                    // session mark.
+                    if self.cells.dissolve.note_parent_moved(source) {
+                        let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                            scope_root: source,
+                            detail: DISSOLVE_RELINK_PARENT_MOVED.to_owned(),
+                            retryable: false,
+                            class: OwedWorkClass::Capability,
+                        });
+                    }
                     return self.park(journal, hold, &header).await;
                 }
                 Box::pin(self.prove(owner, ends, journal, hold, &header, &target, named, left))
