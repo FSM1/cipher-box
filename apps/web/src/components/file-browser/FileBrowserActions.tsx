@@ -81,6 +81,10 @@ export function FileBrowserActions({
   // reach one the user opened while the scope was still writable. The state goes
   // with it, so a scope that turns writable again raises nothing of its own.
   if (dialog !== null && !writable && MUTATIONS.has(dialog.kind)) setDialog(null);
+  // Preview and edit follow the live row, so a later size or write reaches them.
+  const opened = dialog?.kind === 'preview' || dialog?.kind === 'edit' ? dialog.row : null;
+  const liveRow = opened === null ? undefined : rows.find((row) => row.key === opened.key);
+  if (dialog?.kind === 'preview' && liveRow === undefined) setDialog(null);
 
   const close = () => setDialog(null);
   /**
@@ -274,12 +278,18 @@ export function FileBrowserActions({
           onClose={close}
         />
       )}
-      {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
-      {dialog?.kind === 'preview' && (
-        <FilePreviewDialog
-          row={dialog.row}
+      {dialog?.kind === 'edit' && (
+        <TextEditorDialog
+          row={liveRow ?? dialog.row}
+          present={liveRow !== undefined}
           onClose={close}
-          onDownload={() => void downloads.save(saveRequest(dialog.row))}
+        />
+      )}
+      {dialog?.kind === 'preview' && liveRow !== undefined && (
+        <FilePreviewDialog
+          row={liveRow}
+          onClose={close}
+          onDownload={() => void downloads.save(saveRequest(liveRow))}
         />
       )}
     </>

@@ -3,8 +3,8 @@ import { expect, type Download, type Locator, type Page } from '@playwright/test
 /** The accessible name a row's selection checkbox carries. */
 const SELECT_PREFIX = 'select ';
 
-/** A size cell with a value, not the `...` of an unresolved row. */
-const RESOLVED = /^(?!\.\.\.$).+/;
+/** The refusal a read dialog shows until the engine projects the file size. */
+const SIZE_PENDING = /^size not known yet/;
 
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
@@ -249,21 +249,18 @@ export class FilesPage {
     return shown;
   }
 
-  /**
-   * Raises the text editor on a row and waits for the file text to load into
-   * it. The dialog keeps the row of the click, and a row with no size yet opens
-   * on a refusal that never clears, so the click waits for the size.
-   */
+  /** Raises the text editor on a row and waits for the file text to load into it. */
   async openEditor(name: string): Promise<Locator> {
-    await expect(
-      this.row(name).locator('.file-list-item-size'),
-      `the size of ${name} did not resolve`
-    ).toHaveText(RESOLVED, { timeout: 60_000 });
     await this.act(name, 'edit');
     const dialog = this.page.getByRole('dialog', { name: `edit ${name}`, exact: true });
     const field = dialog.getByTestId('text-editor-field');
-    const refusal = dialog.getByTestId('dialog-error');
-    await expect(field.or(refusal).first()).toBeVisible({ timeout: 60_000 });
+    // The size refusal clears by itself when the size lands; any other is final.
+    const refusal = dialog.getByTestId('dialog-error').filter({ hasNotText: SIZE_PENDING });
+    // One budget covers the size projection and the read after it.
+    await expect(
+      field.or(refusal).first(),
+      `the editor did not load ${name} or refuse it`
+    ).toBeVisible({ timeout: 120_000 });
     if (await refusal.isVisible()) {
       throw new Error(`the editor refused ${name}: ${await refusal.innerText()}`);
     }

@@ -29,6 +29,8 @@ const RELEASE_PORT = 4174;
 
 const isCi = Boolean(process.env.CI);
 const reporter: ReporterDescription[] = isCi ? [['list'], ['html', { open: 'never' }]] : [['list']];
+// A staging page holds real links, so its matcher snapshot stays off the report.
+const stagingReporter: ReporterDescription[] = [...reporter, ['./staging/errorContextReporter.ts']];
 
 const url = (port: number) => `http://localhost:${port}`;
 
@@ -69,7 +71,7 @@ const stagingUse = {
  * behind a rate limit keyed on the caller address, so the run is serial.
  */
 const staging = {
-  reporter: [...reporter, ['./staging/signInReporter.ts']] satisfies ReporterDescription[],
+  reporter: [...stagingReporter, ['./staging/signInReporter.ts']] satisfies ReporterDescription[],
   workers: 1,
   fullyParallel: false,
   timeout: 300_000,
@@ -101,6 +103,7 @@ const staging = {
 
 /** The staging soak, as the two durable soak accounts (staging/README). */
 const soak = {
+  reporter: stagingReporter,
   workers: 1,
   fullyParallel: false,
   timeout: 600_000,

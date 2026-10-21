@@ -42,7 +42,7 @@ jobs:
       contents: read
     # The uploaded report and `test-results/` are public, and an ARIA snapshot
     # lists each link and field value on the page. This drops the page snapshot;
-    # the strip step drops the snapshot a failed matcher writes.
+    # `staging/errorContextReporter.ts` drops the one a failed matcher writes.
     env:
       PLAYWRIGHT_NO_COPY_PROMPT: '1'
 
@@ -75,8 +75,8 @@ jobs:
         env:
           E2E_BASE_URL: ${{ inputs.base-url }}
 
-      - name: Strip the ARIA snapshots from the Markdown error context
-        id: strip
+      - name: Check that no ARIA snapshot is left in the report
+        id: snapshot-check
         if: always()
         working-directory: tests/web-e2e
         run: |
@@ -86,17 +86,24 @@ jobs:
             if [ -d "${dir}" ]; then dirs+=("${dir}"); fi
           done
           if [ "${#dirs[@]}" -eq 0 ]; then exit 0; fi
-          find "${dirs[@]}" -type f -name '*.md' -exec perl -0pi -e 's/^```yaml\n.*?^```[ \t]*(?:\n|\z)//msg' {} +
+          left=$(find "${dirs[@]}" -name 'error-context*')
+          if [ -n "${left}" ]; then
+            printf '%s\n' "${left}" >&2
+            echo 'An error-context file is still in the report.' >&2
+            exit 1
+          fi
+          # The HTML reporter renames its copies, so the copy in `data/` is
+          # found by the error-context layout, not by name.
           # Only status 1 is clean: 0 is a match, and 2 is a read error.
           found=0
-          grep -rl --include='*.md' '^```yaml' "${dirs[@]}" || found=$?
+          grep -rlE --include='*.md' '^(```yaml|# Test info)' "${dirs[@]}" || found=$?
           if [ "${found}" -ne 1 ]; then
-            echo 'A fenced yaml block is still in the files above, or grep could not read a file.' >&2
+            echo 'An error context or a fenced yaml block is still in the files above, or grep could not read a file.' >&2
             exit 1
           fi
 
       - name: Upload the Playwright report and the measured timings
-        if: always() && steps.strip.outcome == 'success'
+        if: always() && steps.snapshot-check.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: staging-e2e-report-${{ matrix.project }}

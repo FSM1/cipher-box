@@ -14,14 +14,24 @@ const wasmArtifact = resolve(repoRoot, 'target/wasm32-unknown-unknown/debug/ciph
 
 const run = (command, args) => execFileSync(command, args, { cwd: repoRoot, stdio: 'inherit' });
 
+// A debug engine overflows the 1 MiB default wasm stack on its deeper sync
+// paths. 8 MiB is the stack the desktop engine thread gets for the same debug
+// paths. The flag goes after `--`, because `RUSTFLAGS` would replace the
+// getrandom backend that `.cargo/config.toml` sets for this target.
+const STACK_BYTES = 8 * 1024 * 1024;
+
 run('cargo', [
-  'build',
+  'rustc',
   '-p',
   'cipherbox-wasm',
+  '--lib',
   '--features',
   'conformance,observer',
   '--target',
   'wasm32-unknown-unknown',
+  '--',
+  '-C',
+  `link-arg=-zstack-size=${STACK_BYTES}`,
 ]);
 
 run('wasm-bindgen', [

@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { fromHex } from '@cipherbox/client';
+import { fromHex, toHex } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
@@ -24,7 +24,7 @@ export type FilePreview =
   | { status: 'error'; message: string }
   | { status: 'image'; url: string }
   | { status: 'pdf'; url: string }
-  | { status: 'text'; text: string }
+  | { status: 'text'; text: string; version: string | null }
   | { status: 'audio'; url: string }
   | { status: 'video'; url: string };
 
@@ -32,8 +32,16 @@ export type FilePreview =
  * @param key the file's node id as lowercase hex, so the read keys on a value
  * @param size the engine's byte count, which caps the buffered read before it
  * decrypts a file too large to show; `null` while the projection is resolving
+ * @param contentCid the row's content CID: a new one restarts the read, and a
+ * text result carries, as lowercase hex, the one the row showed when its read started
  */
-export function useFilePreview(key: string, name: string, size: bigint | null): FilePreview {
+export function useFilePreview(
+  key: string,
+  name: string,
+  size: bigint | null,
+  contentCid: Uint8Array | null
+): FilePreview {
+  const version = contentCid === null ? null : toHex(contentCid);
   const client = useEngine();
   const media = useMediaService();
   const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });
@@ -51,7 +59,10 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     // Reading first and measuring after would decrypt the whole file into the
     // tab before the budget could refuse it, so an unprojected size refuses now.
     if (size === null) {
-      setPreview({ status: 'error', message: 'size not known yet - preview it again in a moment' });
+      setPreview({
+        status: 'error',
+        message: 'size not known yet - the preview loads when it arrives',
+      });
       return;
     }
 
@@ -91,7 +102,7 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
           setPreview({ status: 'error', message: TOO_LARGE });
           return;
         }
-        const rendered = render(kind, bytes, name);
+        const rendered = render(kind, bytes, name, version);
         if (rendered.status === 'image' || rendered.status === 'pdf') url = rendered.url;
         setPreview(rendered);
       },
@@ -104,15 +115,21 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
       live = false;
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, [key, name, size, client, media]);
+  }, [key, name, size, version, client, media]);
 
   return preview;
 }
 
-function render(kind: 'image' | 'pdf' | 'text', bytes: ArrayBuffer, name: string): FilePreview {
+function render(
+  kind: 'image' | 'pdf' | 'text',
+  bytes: ArrayBuffer,
+  name: string,
+  version: string | null
+): FilePreview {
   if (kind === 'text') {
     try {
-      return { status: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return { status: 'text', text, version };
     } catch {
       return { status: 'error', message: 'not valid UTF-8 text' };
     }
