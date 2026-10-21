@@ -49,6 +49,10 @@ const RELINK_MARK_PREFIX: &[u8] = b"dissolve-relink/";
 /// The detail of the owed work that a lost scope pointer holds.
 const DISSOLVE_POINTER_LOST: &str = "dissolve-scope-pointer-lost";
 
+/// The `RotationWorkOwed` detail of an entry parked because its relink parent
+/// left the bound write scope.
+const DISSOLVE_RELINK_PARENT_MOVED: &str = "dissolve-relink-parent-moved";
+
 /// The floor-store keys of the relink marks of the dissolve of `source_root`
 /// at the parent name `name`: the mark of the entry, then the mark of the
 /// name. Each holds the highest sequence that a relink publish signed there.
@@ -350,6 +354,14 @@ where
                         return Err(NotDriven);
                     }
                     self.cells.dissolve_proofs.borrow_mut().remove(&source);
+                    // A park holds the entry for the session, so this event
+                    // goes once in each session.
+                    let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                        scope_root: source,
+                        detail: DISSOLVE_RELINK_PARENT_MOVED.to_owned(),
+                        retryable: false,
+                        class: OwedWorkClass::Capability,
+                    });
                     return self.park(journal, hold, &header).await;
                 }
                 Box::pin(self.prove(owner, ends, journal, hold, &header, &target, named, left))

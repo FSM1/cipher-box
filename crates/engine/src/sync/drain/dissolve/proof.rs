@@ -13,7 +13,7 @@
 use core::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::seal::{NodeKind, ReadBody};
+use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::secret::ct_eq;
 
 use super::super::walker::{Overflow, ReadFault, SweepPolicy, Swept, TwoSweep};
@@ -61,10 +61,11 @@ pub(super) enum LinkKey {
 /// What one read gives the proof.
 pub(super) struct LinkRead {
     mark: RecordMark,
-    /// The children of a folder, with their kinds.
-    children: Vec<(NodeId, NodeKind)>,
-    /// Each bin entry: its node, its scope, its deletion time and its kind.
-    entries: Vec<(NodeId, NodeId, u64, NodeKind)>,
+    /// The children of a folder. A child's kind comes from its own gated
+    /// body, never from the ref that names it.
+    children: Vec<NodeId>,
+    /// Each bin entry: its node, its scope and its deletion time.
+    entries: Vec<(NodeId, NodeId, u64)>,
     /// Set when the node is a scope root.
     anchor: Option<WalkAnchor>,
 }
@@ -147,8 +148,8 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
     }
 
     /// Note each child and bin entry that is the copy or the source root, and
-    /// queue each folder that a walked scope holds. A node named again in
-    /// another plane stops the walk; a file names no root.
+    /// queue each one a walked scope holds. A node named again in another
+    /// plane stops the walk.
     fn visit(
         &mut self,
         sweep: &mut TwoSweep<LinkKey>,
@@ -158,11 +159,8 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
         let mut next = Vec::new();
         match key {
             LinkKey::Bin => {
-                for (node, scope, deleted_at, kind) in read.entries {
+                for (node, scope, deleted_at) in read.entries {
                     self.note(node);
-                    if kind == NodeKind::File {
-                        continue;
-                    }
                     if self.walked.contains(&scope) {
                         next.push(LinkKey::Node {
                             node,
@@ -183,11 +181,8 @@ impl SweepPolicy<LinkKey> for LinkPolicy<'_> {
                 if let Some(anchor) = read.anchor {
                     self.anchors.insert(*node, anchor);
                 }
-                for (child, kind) in read.children {
+                for child in read.children {
                     self.note(child);
-                    if kind == NodeKind::File {
-                        continue;
-                    }
                     if !self.roots.contains(&child) {
                         next.push(LinkKey::Node {
                             node: child,
@@ -429,7 +424,6 @@ where
                         NodeId(entry.node_id),
                         NodeId(entry.scope_id),
                         entry.deleted_at,
-                        entry.kind,
                     ));
                 }
                 return Ok(LinkRead {
@@ -459,12 +453,7 @@ where
                     sequence: root.state.observed.sequence(),
                     digest: hash(&root.state.record),
                 },
-                children: root
-                    .state
-                    .children
-                    .iter()
-                    .map(|child| (NodeId(child.id), child.kind))
-                    .collect(),
+                children: root.state.children.iter().map(|c| NodeId(c.id)).collect(),
                 entries: Vec::new(),
                 anchor: Some(WalkAnchor {
                     epoch: root.epoch,
@@ -508,10 +497,9 @@ where
                 digest: hash(&loaded.record),
             },
             children: match loaded.body {
-                ReadBody::Folder { children, .. } => children
-                    .iter()
-                    .map(|child| (NodeId(child.id), child.kind))
-                    .collect(),
+                ReadBody::Folder { children, .. } => {
+                    children.iter().map(|child| NodeId(child.id)).collect()
+                }
                 ReadBody::File { .. } => Vec::new(),
             },
             entries: Vec::new(),
