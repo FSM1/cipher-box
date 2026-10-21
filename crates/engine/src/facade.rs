@@ -5405,11 +5405,23 @@ fn reseal_with_moved_child(
     node: NodeId,
     moved: &IpnsName,
 ) -> Result<ResealedScopeRoot, EngineError> {
-    let scope = &parent.scope;
     let index = insert_child(
         &current.direct_child_scope_index,
         ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
     );
+    reseal_with_index(entropy, owner_enc_secret, parent, current, &index)
+}
+
+/// `parent`'s root, `current`, sealed again with `index` as its
+/// direct-child-scope index.
+fn reseal_with_index(
+    entropy: &RefCell<Box<dyn Entropy>>,
+    owner_enc_secret: &X25519Secret,
+    parent: &OwnerScope,
+    current: &CascadeTarget,
+    index: &[ChildScopeRef],
+) -> Result<ResealedScopeRoot, EngineError> {
+    let scope = &parent.scope;
     let section = reseal_scope_root(
         &mut SharedEntropy(entropy),
         &ScopeRootIdentity {
@@ -5438,7 +5450,7 @@ fn reseal_with_moved_child(
             commitment: &current.commitment,
             commitment_sig: &current.commitment_sig,
             grant_ledger: &current.grant_ledger,
-            direct_child_scope_index: &index,
+            direct_child_scope_index: index,
             revoked_recipients: &[],
         },
         &current.carried_history_links,

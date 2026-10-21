@@ -40,6 +40,7 @@ const LOG_PART: u8 = b'n';
 const FLAG_COPY_STARTED: u8 = 1;
 const FLAG_RELINK_SENT: u8 = 1 << 1;
 const FLAG_PARKED: u8 = 1 << 2;
+const FLAG_KEEP_NAMES: u8 = 1 << 3;
 const MANIFEST_SET: u8 = 1;
 const MANIFEST_RETIRED: u8 = 1 << 1;
 const SCOPE_FINAL_LANDED: u8 = 1 << 2;
@@ -171,6 +172,8 @@ pub struct DissolveHeader {
     pub relink_sent: bool,
     /// The relink result is not proved.
     pub parked: bool,
+    /// The link proof found neither root linked, so no copy name retires.
+    pub keep_names: bool,
     /// The id of the copy's root.
     pub new_root: NodeId,
     /// The folder that names the source root.
@@ -207,6 +210,7 @@ impl DissolveHeader {
             copy_started: false,
             relink_sent: false,
             parked: false,
+            keep_names: false,
             new_root,
             relink_parent,
             binding,
@@ -293,6 +297,9 @@ pub enum DissolveCodecError {
     ManifestMissing,
     /// `parked` outside the relink step.
     ParkedOutsideRelink,
+    /// `keep_names` outside the index removal and the retire step, or with
+    /// no relink sent.
+    KeptNamesOutsideCleanup,
     /// A retired manifest outside the hold step.
     RetiredOutsideHold,
     /// A retire cursor past the map, or outside the retire step.
@@ -324,6 +331,7 @@ impl DissolveCodecError {
             Self::MapShape => "dissolve-journal-map-shape",
             Self::ManifestMissing => "dissolve-journal-manifest-missing",
             Self::ParkedOutsideRelink => "dissolve-journal-parked-outside-relink",
+            Self::KeptNamesOutsideCleanup => "dissolve-journal-kept-names-outside-cleanup",
             Self::RetiredOutsideHold => "dissolve-journal-retired-outside-hold",
             Self::RetireCursor => "dissolve-journal-retire-cursor",
             Self::MapAtHold => "dissolve-journal-map-at-hold",
@@ -399,6 +407,9 @@ fn check_header(header: &DissolveHeader, source_root: NodeId) -> Result<(), Diss
     }
     if header.parked && header.step != S::Relink {
         return Err(E::ParkedOutsideRelink);
+    }
+    if header.keep_names && !(header.relink_sent && matches!(header.step, S::Unindex | S::Retire)) {
+        return Err(E::KeptNamesOutsideCleanup);
     }
     if header.retire_cursor > header.map_pages
         || (header.retire_cursor != 0 && header.step != S::Retire)
@@ -498,7 +509,8 @@ pub fn encode_dissolve_header(
     out.push(
         bit(header.copy_started, FLAG_COPY_STARTED)
             | bit(header.relink_sent, FLAG_RELINK_SENT)
-            | bit(header.parked, FLAG_PARKED),
+            | bit(header.parked, FLAG_PARKED)
+            | bit(header.keep_names, FLAG_KEEP_NAMES),
     );
     out.extend_from_slice(&header.new_root.0);
     out.extend_from_slice(&header.relink_parent.0);
@@ -605,7 +617,7 @@ pub fn decode_dissolve_header(
     let mut r = Reader(payload);
     let step = DissolveStep::of(r.u8()?).ok_or(DissolveCodecError::UnknownStep)?;
     let flags = r.u8()?;
-    if flags & !(FLAG_COPY_STARTED | FLAG_RELINK_SENT | FLAG_PARKED) != 0 {
+    if flags & !(FLAG_COPY_STARTED | FLAG_RELINK_SENT | FLAG_PARKED | FLAG_KEEP_NAMES) != 0 {
         return Err(DissolveCodecError::UnknownFlag);
     }
     let new_root = r.id()?;
@@ -672,6 +684,7 @@ pub fn decode_dissolve_header(
         copy_started: flags & FLAG_COPY_STARTED != 0,
         relink_sent: flags & FLAG_RELINK_SENT != 0,
         parked: flags & FLAG_PARKED != 0,
+        keep_names: flags & FLAG_KEEP_NAMES != 0,
         new_root,
         relink_parent,
         binding,
@@ -821,6 +834,30 @@ fn check_successor(held: &DissolveHeader, new: &DissolveHeader) -> Result<(), &'
     if held.step >= DissolveStep::Relink && new.step < held.step && !reseal {
         return Err("dissolve-journal-step-back-after-relink");
     }
+    // The final records that the hold step retires are fixed once the copy
+    // is named, and a retired record stays retired.
+    if held.step >= DissolveStep::Unindex
+        && held.scopes.iter().zip(&new.scopes).any(|(was, now)| {
+            match (&was.manifest, &now.manifest) {
+                (Some(was), Some(now)) => {
+                    (was.retired && !now.retired)
+                        || Manifest {
+                            retired: was.retired,
+                            ..now.clone()
+                        } != *was
+                }
+                _ => true,
+            }
+        })
+    {
+        return Err("dissolve-journal-manifest-changed-after-relink");
+    }
+    if held.step >= DissolveStep::Unindex
+        && new.step <= DissolveStep::Retire
+        && held.keep_names != new.keep_names
+    {
+        return Err("dissolve-journal-kept-names-changed");
+    }
     // A re-cut returns to the cut step, and only before the copy is named.
     if new.step != DissolveStep::Cut
         && held
@@ -944,6 +981,15 @@ pub struct DissolveCell {
     /// The destination, read scope and write scope, that a relink tick
     /// computed off the binding, and the number of that tick, by source root.
     relink_rebinds: RefCell<BTreeMap<NodeId, RelinkRebind>>,
+    /// The source roots whose entry parked in this session. A parked entry
+    /// runs its link proof again only in a later session.
+    parked: RefCell<BTreeSet<NodeId>>,
+    /// The cut scopes of each entry past its index removal, which the
+    /// session's root sets and held records drop.
+    unindexed: RefCell<BTreeSet<NodeId>>,
+    /// The source roots whose retire step stopped in this session, each
+    /// reported once.
+    retire_stopped: RefCell<BTreeSet<NodeId>>,
 }
 
 /// A destination that a relink tick computed, and the number of that tick.
@@ -960,6 +1006,12 @@ impl DissolveCell {
     /// device signed. `true` the first time.
     pub fn note_lost_pointer(&self, scope: NodeId) -> bool {
         self.lost_pointers.borrow_mut().insert(scope)
+    }
+
+    /// Note that the retire step of the entry at `root` stopped. Answers
+    /// whether this is the first note in the session.
+    pub fn note_retire_stopped(&self, root: NodeId) -> bool {
+        self.retire_stopped.borrow_mut().insert(root)
     }
 
     /// Note that an endpoint serves the pointer of `scope` again, so a later
@@ -980,6 +1032,26 @@ impl DissolveCell {
         self.relink_rebinds
             .borrow_mut()
             .insert(root, (candidate, tick))
+    }
+
+    /// Note that the entry at `root` parked in this session.
+    pub fn note_parked(&self, root: NodeId) {
+        self.parked.borrow_mut().insert(root);
+    }
+
+    /// Whether the entry at `root` parked in this session.
+    pub fn parked_now(&self, root: NodeId) -> bool {
+        self.parked.borrow().contains(&root)
+    }
+
+    /// Note `scopes`, the cut scopes of an entry past its index removal.
+    pub fn note_unindexed(&self, scopes: impl IntoIterator<Item = NodeId>) {
+        self.unindexed.borrow_mut().extend(scopes);
+    }
+
+    /// Take the scopes that [`Self::note_unindexed`] noted.
+    pub fn take_unindexed(&self) -> BTreeSet<NodeId> {
+        core::mem::take(&mut self.unindexed.borrow_mut())
     }
 
     /// Take the scopes that [`Self::note_short_terms`] noted for `root`.
@@ -1296,6 +1368,24 @@ impl<'a, S: StagingStore> DissolveJournal<'a, S> {
         Ok(pages)
     }
 
+    /// Remove the name log page at `index` of the entry at the root of
+    /// `hold` whose header is `held`.
+    pub async fn drop_log_page(
+        &self,
+        hold: &DissolveHold<'_>,
+        held: &DissolveHeader,
+        index: u32,
+    ) -> Result<(), DissolveWriteError> {
+        let _writer = self.cell.writer.lock().await;
+        if self.standing(hold.root).await?.as_ref() != Some(held) {
+            return Err(DissolveWriteError::Stale);
+        }
+        Ok(self
+            .journal
+            .remove(hold.root, &Self::log_part(index), DISSOLVE_CALLER)
+            .await?)
+    }
+
     /// Drop the entry at the root of `hold` whose header is `held`: each
     /// page and log page, then the header.
     pub async fn drop_entry(
@@ -1468,7 +1558,7 @@ mod tests {
         let mut zero_step = valid.clone();
         zero_step[0] = 0;
         let mut unknown_flag = valid.clone();
-        unknown_flag[1] = 1 << 3;
+        unknown_flag[1] = 1 << 4;
         let mut trailing = valid.clone();
         trailing.push(0);
         let mut unknown_manifest = valid.clone();

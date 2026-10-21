@@ -25,7 +25,7 @@ use cipherbox_core::seal::{ChildRef, PreservedFields};
 
 use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_read};
 use super::seal::{Destination, SealFault, restarted};
-use super::{NotDriven, cut_epoch_of, cut_overtaken};
+use super::{CLOSE_READS_PER_SCOPE, NotDriven, ReadShare, cut_epoch_of, cut_overtaken};
 use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
@@ -49,10 +49,14 @@ const RELINK_MARK_PREFIX: &[u8] = b"dissolve-relink/";
 /// The detail of the owed work that a lost scope pointer holds.
 const DISSOLVE_POINTER_LOST: &str = "dissolve-scope-pointer-lost";
 
+/// The `RotationWorkOwed` detail of an entry parked because its relink parent
+/// left the bound write scope.
+const DISSOLVE_RELINK_PARENT_MOVED: &str = "dissolve-relink-parent-moved";
+
 /// The floor-store keys of the relink marks of the dissolve of `source_root`
 /// at the parent name `name`: the mark of the entry, then the mark of the
 /// name. Each holds the highest sequence that a relink publish signed there.
-fn relink_mark_keys(source_root: NodeId, name: &[u8]) -> [Vec<u8>; 2] {
+pub(super) fn relink_mark_keys(source_root: NodeId, name: &[u8]) -> [Vec<u8>; 2] {
     [
         [RELINK_MARK_PREFIX, &source_root.0, name].concat(),
         floor::relink_parent_mark_key(name),
@@ -78,8 +82,10 @@ fn signed_eol(name: &IpnsName, bytes: &[u8]) -> Option<(VerifiedRecord, u64)> {
     Some((record, eol))
 }
 
-/// What the gated relink parent names.
-enum ParentNames {
+/// Which of the copy's root and the source root the gated relink parent, or
+/// the folders of a link proof, name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ParentNames {
     /// The copy's root, and not the source root.
     Copy,
     /// The source root, and not the copy's root.
@@ -131,7 +137,11 @@ where
                 .iter()
                 .find(|end| end.root == scope.scope_id)
                 .ok_or(SealFault::Unanswered)?;
-            let manifest = self.final_records(owner, end, header, scope, left).await?;
+            let share =
+                ReadShare::take(left, CLOSE_READS_PER_SCOPE).ok_or(SealFault::Unanswered)?;
+            let manifest = self
+                .final_records(owner, end, header, scope, &share.left)
+                .await?;
             if manifest.hold_until < term_end(scope.cut_time) {
                 short.insert(scope.scope_id);
             }
@@ -240,7 +250,8 @@ where
     }
 
     /// Drive the relink step of the entry at `root` within the reads of
-    /// `left`. A parked entry waits.
+    /// `left`. An entry that parked reads its parent again in the next
+    /// session.
     pub(super) async fn drive_relink(
         &self,
         owner: &DrainScope<'_>,
@@ -251,11 +262,15 @@ where
     ) {
         let header = match journal.header(root).await {
             Ok(HeaderSlot::Own(header))
-                if header.step == DissolveStep::Relink && !header.parked =>
+                if header.step == DissolveStep::Relink
+                    && !(header.parked && self.cells.dissolve.parked_now(root)) =>
             {
                 header
             }
-            _ => return,
+            _ => {
+                self.cells.dissolve_proofs.borrow_mut().remove(&root);
+                return;
+            }
         };
         let Some(hold) = self.cells.dissolve.hold(root) else {
             return;
@@ -297,12 +312,8 @@ where
             (true, true) => ParentNames::Both,
         };
         match named {
-            ParentNames::Copy => {
-                let mut next = header.clone();
-                next.step = DissolveStep::Unindex;
-                Ok(journal.commit(hold, Some(&header), &next).await?)
-            }
             ParentNames::Source => {
+                self.cells.dissolve_proofs.borrow_mut().remove(&source);
                 let floors = self.guards_hold(&target).await.ok_or(NotDriven)?;
                 match self
                     .destination_moved(owner, &header, &target, &floors, &pass, left)
@@ -325,7 +336,37 @@ where
             ParentNames::Neither if !header.relink_sent => {
                 self.forsake(journal, hold, &header).await
             }
-            ParentNames::Neither | ParentNames::Both => self.park(journal, hold, &header).await,
+            // A parent that names the copy proves no unlink of the source
+            // root: another device can link it elsewhere before the relink
+            // lands.
+            ParentNames::Copy | ParentNames::Neither | ParentNames::Both => {
+                // The proof must walk the write scope that the index removal
+                // and the retire read, so a parent that left it parks the
+                // entry once two ticks agree.
+                let bound = header.binding;
+                if target.write.root != bound.write_scope {
+                    let candidate = (bound.read_scope, target.write.root);
+                    let seen =
+                        self.cells
+                            .dissolve
+                            .see_relink_rebind(source, candidate, self.inputs.tick);
+                    if !self.rebind_confirmed(bound.read_scope, candidate, seen) {
+                        return Err(NotDriven);
+                    }
+                    self.cells.dissolve_proofs.borrow_mut().remove(&source);
+                    // A park holds the entry for the session, so this event
+                    // goes once in each session.
+                    let _ = self.seams.events.unbounded_send(Event::RotationWorkOwed {
+                        scope_root: source,
+                        detail: DISSOLVE_RELINK_PARENT_MOVED.to_owned(),
+                        retryable: false,
+                        class: OwedWorkClass::Capability,
+                    });
+                    return self.park(journal, hold, &header).await;
+                }
+                Box::pin(self.prove(owner, ends, journal, hold, &header, &target, named, left))
+                    .await
+            }
         }
     }
 
@@ -428,7 +469,8 @@ where
 
     /// Publish the relink parent with the copy's root in place of the source
     /// root, under the write leases of `target`'s chain at `floors`. The
-    /// header holds `relink_sent` and the parent name first.
+    /// header holds `relink_sent` and the parent name first. A later tick
+    /// proves the link.
     #[expect(clippy::too_many_arguments, reason = "one relink publish")]
     async fn relink(
         &self,
@@ -453,15 +495,17 @@ where
             .lease_the_chain(target, floors)
             .await
             .map_err(|_| NotDriven)?;
-        let header = if header.relink_sent && header.relink_names.contains(&name) {
+        let listed = header.relink_names.contains(&name);
+        let header = if header.relink_sent && listed && !header.parked {
             header
         } else {
-            if header.relink_names.len() >= MAX_RELINK_NAMES {
+            if !listed && header.relink_names.len() >= MAX_RELINK_NAMES {
                 return self.park(journal, hold, &header).await;
             }
             let mut sent = header.clone();
             sent.relink_sent = true;
-            if !sent.relink_names.contains(&name) {
+            sent.parked = false;
+            if !listed {
                 sent.relink_names.push(name.clone());
             }
             journal.commit(hold, Some(&header), &sent).await?;
@@ -485,15 +529,13 @@ where
         let keys = relink_mark_keys(source, &name);
         self.publish_folder_marked(scope, &mut pass, parent, modified_at, None, Some(&keys))
             .await
-            .map_err(|_| NotDriven)?;
-        let mut next = header.clone();
-        next.step = DissolveStep::Unindex;
-        Ok(journal.commit(hold, Some(&header), &next).await?)
+            .map(|_| ())
+            .map_err(|_| NotDriven)
     }
 
     /// No relink left this device, and the parent names neither root: retire
     /// each name the copy published at, then drop the entry.
-    async fn forsake(
+    pub(super) async fn forsake(
         &self,
         journal: &DissolveJournal<'_, St>,
         hold: &DissolveHold<'_>,
@@ -525,6 +567,7 @@ where
     ) -> Result<(), NotDriven> {
         let mut next = header.clone();
         next.step = DissolveStep::Seal;
+        next.parked = false;
         for scope in &mut next.scopes {
             scope.manifest = None;
         }
@@ -532,12 +575,16 @@ where
     }
 
     /// Mark the entry parked: its copy stays, and nothing retires.
-    async fn park(
+    pub(super) async fn park(
         &self,
         journal: &DissolveJournal<'_, St>,
         hold: &DissolveHold<'_>,
         header: &DissolveHeader,
     ) -> Result<(), NotDriven> {
+        self.cells.dissolve.note_parked(header.scopes[0].scope_id);
+        if header.parked {
+            return Ok(());
+        }
         let mut parked = header.clone();
         parked.parked = true;
         Ok(journal.commit(hold, Some(header), &parked).await?)

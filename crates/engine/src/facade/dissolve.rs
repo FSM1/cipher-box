@@ -11,7 +11,7 @@
 use super::claim_conversion::{ConversionSites, HeldRecord, OnRunning};
 use super::owed_rotation::{OwedCut, OwedScope, OwedStop, owed_write_cut};
 use super::*;
-use crate::grants::{OwnerAuthority, committed_links};
+use crate::grants::{OwnerAuthority, committed_links, remove_child};
 use crate::net::cut::{republish_scope_pointer, reseal_root_in_place};
 use crate::rotation::{
     CascadeError, CommittedSet, NoBound, WriteRotationOutcome, recut_from_last_copy,
@@ -84,6 +84,9 @@ where
         };
         for root in roots {
             let driven = match self.drive_dissolve_cut(sites, pointers, root).await {
+                Ok(Some(step)) if step >= DissolveStep::Unindex => {
+                    Box::pin(self.drive_dissolve_unindex(sites, root)).await
+                }
                 Ok(_) => self.republish_short_terms(sites, root).await,
                 Err(error) => Err(error),
             };
@@ -204,6 +207,75 @@ where
             )
             .await
             .map_err(|error| EngineError::from_rotate(RotateError::Publish(error)))?;
+        }
+        Ok(())
+    }
+
+    /// Remove the source root of the entry at `root` from the index of its
+    /// destination read scope, then commit the retire step. From the retire
+    /// step on, the session forgets each cut scope, so no walk enrols or
+    /// renews its final records again (ADR 0077 D1).
+    async fn drive_dissolve_unindex(
+        &self,
+        sites: &impl ConversionSites,
+        root: NodeId,
+    ) -> Result<(), EngineError> {
+        let journal = self.dissolve_journal();
+        let HeaderSlot::Own(mut header) =
+            journal.header(root).await.map_err(EngineError::from_seam)?
+        else {
+            return Ok(());
+        };
+        if header.step == DissolveStep::Unindex {
+            let Some(hold) = self.owed.dissolve().hold(root) else {
+                return Ok(());
+            };
+            let parent = header.binding.read_scope;
+            let (target, current) = if parent == self.cut.vault_root {
+                let target = sites.enclosing(parent).await?;
+                let current = self
+                    .net(&target, PointerConsultArm::Refused)
+                    .resolve_anchored(&target.scope)
+                    .await
+                    .map_err(|e| EngineError::from_resolve_failure(e, "dissolve-unindex"))?;
+                (target, current)
+            } else {
+                let OwedScope {
+                    target, current, ..
+                } = self
+                    .owed_scope(sites, parent, "dissolve-unindex", false)
+                    .await
+                    .map_err(EngineError::from_owed_stop)?;
+                (target, current)
+            };
+            let index = &current.direct_child_scope_index;
+            if index.iter().any(|child| child.scope_id == root.0) {
+                let resealed = reseal_with_index(
+                    self.entropy,
+                    self.enc_secret,
+                    &target,
+                    &current,
+                    &remove_child(index, &root.0),
+                )?;
+                self.net(&target, PointerConsultArm::Permitted)
+                    .publish_scope_root(&resealed)
+                    .await
+                    .map_err(|error| EngineError::from_rotate(RotateError::Publish(error)))?;
+            }
+            self.commit_dissolve(&journal, &hold, &mut header, |header| {
+                header.step = DissolveStep::Retire;
+            })
+            .await?;
+        }
+        if header.step >= DissolveStep::Retire {
+            let mut held = self.cut.held.borrow_mut();
+            for scope in &header.scopes {
+                held.remove(&HeldKey::Node(scope.scope_id.0));
+                held.remove(&HeldKey::ScopePointer(scope.scope_id.0));
+            }
+            self.owed
+                .dissolve()
+                .note_unindexed(header.scopes.iter().map(|scope| scope.scope_id));
         }
         Ok(())
     }

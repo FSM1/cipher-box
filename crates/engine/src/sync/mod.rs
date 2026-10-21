@@ -54,6 +54,13 @@ pub use drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, QueueHold, QueueHoldReason,
     UNATTRIBUTED_BUDGET, owner_scoped_key, owner_tag,
 };
+/// The read costs of a dissolve tick, for the tests that fill its share.
+#[cfg(any(test, feature = "test-kit"))]
+pub mod dissolve_reads {
+    pub use super::drain::{
+        CLOSE_READS_PER_SCOPE, MAX_DISSOLVE_WALK_READS, SEAL_HEADER_READS, SEAL_ROW_READS,
+    };
+}
 pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
