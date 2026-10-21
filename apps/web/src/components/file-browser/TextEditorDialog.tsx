@@ -4,8 +4,8 @@
  * are framed and sealed by the engine and never by this layer.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { fromHex, toHex } from '@cipherbox/client';
+import { useEffect, useState } from 'react';
+import { fromHex } from '@cipherbox/client';
 import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import { errorMessage } from '../../lib/errorMessage';
 import { useEngine } from '../../providers/EngineProvider';
@@ -36,31 +36,18 @@ export function TextEditorDialog({ row, present, onClose }: TextEditorDialogProp
   // The live row reaches the editor only until its text loads: a later rename
   // or write must not change what the draft is compared and saved against.
   const source = basis?.row ?? row;
-  const loaded = useFilePreview(
-    source.key,
-    source.storedName,
-    source.bytes,
-    source.contentCid === null ? null : toHex(source.contentCid)
-  );
+  const loaded = useFilePreview(source.key, source.storedName, source.bytes, source.contentCid);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  // The row of the last committed render, which the read in flight started
-  // from: a read result and a new row can land in one render.
-  const readRow = useRef(source);
 
   useEffect(() => {
     if (basis !== null || loaded.status !== 'text') return;
-    setBasis({ row: readRow.current, text: loaded.text, version: loaded.version });
+    setBasis({ row, text: loaded.text, version: loaded.version });
     setDraft(loaded.text);
-  }, [basis, loaded]);
+  }, [basis, loaded, row]);
 
-  // Declared after the adoption, so the adoption reads the previous row.
-  useEffect(() => {
-    readRow.current = source;
-  });
-
-  const dirty = basis !== null && draft !== null && draft !== basis.text;
+  const dirty = basis !== null && draft !== basis.text;
 
   // A dirty draft outlives its row: the engine writes a moved file by its id
   // and refuses a deleted one.

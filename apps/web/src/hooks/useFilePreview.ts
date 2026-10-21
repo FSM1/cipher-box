@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { fromHex } from '@cipherbox/client';
+import { fromHex, toHex } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
@@ -32,15 +32,16 @@ export type FilePreview =
  * @param key the file's node id as lowercase hex, so the read keys on a value
  * @param size the engine's byte count, which caps the buffered read before it
  * decrypts a file too large to show; `null` while the projection is resolving
- * @param version the row's content CID as lowercase hex: a new one restarts the
- * read, and a text result carries the one the row showed when its read started
+ * @param contentCid the row's content CID: a new one restarts the read, and a
+ * text result carries, as lowercase hex, the one the row showed when its read started
  */
 export function useFilePreview(
   key: string,
   name: string,
   size: bigint | null,
-  version: string | null
+  contentCid: Uint8Array | null
 ): FilePreview {
+  const version = contentCid === null ? null : toHex(contentCid);
   const client = useEngine();
   const media = useMediaService();
   const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });

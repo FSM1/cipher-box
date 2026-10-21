@@ -167,6 +167,9 @@ function chooseMenuItem(label: string): void {
 
 const listing = () =>
   folderView({ children: [folder(DOCS, 'documents'), file(NOTE, 'notes.txt')] });
+/** The note alone, at one content CID. */
+const noteAt = (contentCid: Uint8Array, name = 'notes.txt') =>
+  folderView({ children: [file(NOTE, name, { contentCid })] });
 
 describe('the vault browser write path', () => {
   it('dispatches create for a new folder under the folder on screen', async () => {
@@ -744,18 +747,12 @@ describe('the vault browser read path over the facade', () => {
     const reads = [bytes('first text'), bytes('later text')];
     const engine = fakeEngine(() => Promise.resolve(reads.shift() ?? bytes('unexpected')));
     renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([1]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([1])));
 
     openRowMenu('notes.txt');
     chooseMenuItem('preview');
     expect((await screen.findByTestId('preview-text')).textContent).toBe('first text');
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([2]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([2])));
 
     await waitFor(() => expect(screen.getByTestId('preview-text').textContent).toBe('later text'));
     expect(engine.reads.download).toHaveBeenCalledTimes(2);
@@ -770,17 +767,11 @@ describe('the vault browser read path over the facade', () => {
         })
     );
     renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([1]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([1])));
 
     openRowMenu('notes.txt');
     chooseMenuItem('preview');
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([2]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([2])));
     await waitFor(() => expect(releases).toHaveLength(2));
 
     await act(async () => {
@@ -1231,18 +1222,12 @@ describe('the text editor', () => {
     const READ = new Uint8Array([1]);
     const engine = fakeEngine(text('to do: nothing'));
     renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: READ })] })
-    );
+    await landSnapshot(engine, noteAt(READ));
 
     openRowMenu('notes.txt');
     chooseMenuItem('edit');
     const field = await screen.findByTestId('text-editor-field');
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: new Uint8Array([2]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([2])));
     fireEvent.change(field, { target: { value: 'to do: everything' } });
     fireEvent.click(screen.getByTestId('text-editor-save'));
 
@@ -1265,17 +1250,11 @@ describe('the text editor', () => {
     const reads = [() => held, text('to do: remote!')];
     const engine = fakeEngine(() => (reads.shift() ?? text('unexpected'))());
     renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: READ })] })
-    );
+    await landSnapshot(engine, noteAt(READ));
 
     openRowMenu('notes.txt');
     chooseMenuItem('edit');
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: REMOTE })] })
-    );
+    await landSnapshot(engine, noteAt(REMOTE));
     await act(async () => {
       release();
       await Promise.resolve();
@@ -1298,20 +1277,14 @@ describe('the text editor', () => {
     const READ = new Uint8Array([1]);
     const engine = fakeEngine(text('to do: nothing'));
     renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.txt', { contentCid: READ })] })
-    );
+    await landSnapshot(engine, noteAt(READ));
 
     openRowMenu('notes.txt');
     chooseMenuItem('edit');
     fireEvent.change(await screen.findByTestId('text-editor-field'), {
       target: { value: 'changed' },
     });
-    await landSnapshot(
-      engine,
-      folderView({ children: [file(NOTE, 'notes.bin', { contentCid: new Uint8Array([2]) })] })
-    );
+    await landSnapshot(engine, noteAt(new Uint8Array([2]), 'notes.bin'));
 
     expect(screen.queryByTestId('dialog-error')).toBeNull();
     expect(screen.getByRole('dialog', { name: 'edit notes.txt' })).toBeDefined();

@@ -86,14 +86,14 @@ jobs:
             if [ -d "${dir}" ]; then dirs+=("${dir}"); fi
           done
           if [ "${#dirs[@]}" -eq 0 ]; then exit 0; fi
-          # The HTML reporter renames its copies, so the copy in `data/` is
-          # found by the error-context layout, not by name.
           left=$(find "${dirs[@]}" -name 'error-context*')
           if [ -n "${left}" ]; then
             printf '%s\n' "${left}" >&2
             echo 'An error-context file is still in the report.' >&2
             exit 1
           fi
+          # The HTML reporter renames its copies, so the copy in `data/` is
+          # found by the error-context layout, not by name.
           # Only status 1 is clean: 0 is a match, and 2 is a read error.
           found=0
           grep -rlE --include='*.md' '^(```yaml|# Test info)' "${dirs[@]}" || found=$?
