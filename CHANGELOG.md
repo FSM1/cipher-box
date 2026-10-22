@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.15.0](https://github.com/FSM1/cipher-box/compare/v2.14.0...v2.15.0) (2026-10-22)
+
+
+### Features
+
+* **engine:** a received share keeps its ended mark after the final records retire ([#2500](https://github.com/FSM1/cipher-box/issues/2500)) ([1d36ff6](https://github.com/FSM1/cipher-box/commit/1d36ff65f6a823ff863d349b5348187d57e99fc1))
+* **engine:** the caller-1 grammar and store of the subtree re-seal journal ([#2483](https://github.com/FSM1/cipher-box/issues/2483)) ([d8f3634](https://github.com/FSM1/cipher-box/commit/d8f363421f3f755d8ef79b305ce1c86ada35ae47))
+* **engine:** the dissolve confirms the copy and relinks it in place of the source root ([#2501](https://github.com/FSM1/cipher-box/issues/2501)) ([dd87b74](https://github.com/FSM1/cipher-box/commit/dd87b74a28b36db83665df9ccb1045d9b317b6fd))
+* **engine:** the dissolve cuts every grant and keeps the final records for one term ([#2484](https://github.com/FSM1/cipher-box/issues/2484)) ([9cf2fd0](https://github.com/FSM1/cipher-box/commit/9cf2fd0c2feb03d7fa4a0109f18d8bbcdf7bcb8e))
+* **engine:** the dissolve proves the relink, removes the index entry, and retires the old names ([#2508](https://github.com/FSM1/cipher-box/issues/2508)) ([ef9b3ab](https://github.com/FSM1/cipher-box/commit/ef9b3ab2e834468a515f6b97804a8a0d4614f5dd))
+* **engine:** the dissolve seal reads the scope pointer, rebinds, and remaps with the live ids ([#2497](https://github.com/FSM1/cipher-box/issues/2497)) ([55b91b5](https://github.com/FSM1/cipher-box/commit/55b91b50263a044ebee1950a64f5e56140fafeae))
+* **engine:** the dissolve seals each mapped node again under the destination ([#2491](https://github.com/FSM1/cipher-box/issues/2491)) ([966e8ff](https://github.com/FSM1/cipher-box/commit/966e8ff7918f8c7f71de66cae2ee1bd73fb9c30e))
+* **engine:** the dissolve walks the cut subtree and maps it into new node ids ([#2490](https://github.com/FSM1/cipher-box/issues/2490)) ([660c5a1](https://github.com/FSM1/cipher-box/commit/660c5a1db9613f298c2dfff6cb2b4db77e856d0f))
+
+
+### Bug Fixes
+
+* **engine:** a read returns the version it served so an edit saves against it ([#2518](https://github.com/FSM1/cipher-box/issues/2518)) ([e00c5f4](https://github.com/FSM1/cipher-box/commit/e00c5f43362928b5891fb59cb8c57cf419045988))
+* **engine:** bound the dissolve walk restarts and stop a fifth rebind ([#2506](https://github.com/FSM1/cipher-box/issues/2506)) ([744e111](https://github.com/FSM1/cipher-box/commit/744e111bdb38c12706743446eaa18b77cf3c62be))
+* **engine:** bound the reads of the doomed walk of a hard delete ([#2482](https://github.com/FSM1/cipher-box/issues/2482)) ([bdc2e8a](https://github.com/FSM1/cipher-box/commit/bdc2e8a5c5c30a3aeaaa7b1dd70b670fef295773))
+* **engine:** box the tick legs and give the desktop engine thread an 8 MiB stack ([#2507](https://github.com/FSM1/cipher-box/issues/2507)) ([f2d1b25](https://github.com/FSM1/cipher-box/commit/f2d1b25fb73ada9332ecdd458d9ea34d9f9d9d25))
+* **engine:** re-seal the ascent links of nested scope roots after a flat cut ([#2493](https://github.com/FSM1/cipher-box/issues/2493)) ([ec625c6](https://github.com/FSM1/cipher-box/commit/ec625c60da446916e06c01b9c80557f460fa978e))
+* **engine:** refuse an editor save of a file while a restore of it is queued ([#2520](https://github.com/FSM1/cipher-box/issues/2520)) ([ef9eb11](https://github.com/FSM1/cipher-box/commit/ef9eb11ef840d5892b678db20954a443758287fa))
+* **engine:** send one abuse event for a root replayed below the floor ([#2479](https://github.com/FSM1/cipher-box/issues/2479)) ([f4f5a5b](https://github.com/FSM1/cipher-box/commit/f4f5a5b43fcdfc243a14eef7afa3748d2a3e889d))
+* **engine:** send the dissolve moved-parent event once when the park commit fails ([#2516](https://github.com/FSM1/cipher-box/issues/2516)) ([7bdd4ef](https://github.com/FSM1/cipher-box/commit/7bdd4ef97b14b2821a026d7c6c0f30dc97f3b5ae))
+* **web-e2e:** drop the terminal color codes from the soak failure text ([#2521](https://github.com/FSM1/cipher-box/issues/2521)) ([633a6ca](https://github.com/FSM1/cipher-box/commit/633a6ca6f5f573b550cefc3d63f9f22ad6edb720))
+* **web:** read dialogs follow the live row, and staging drops the error context ([#2515](https://github.com/FSM1/cipher-box/issues/2515)) ([cc6208b](https://github.com/FSM1/cipher-box/commit/cc6208b8aa197375693e69e5e6339e2098d1970b))
+
 ## [2.14.0](https://github.com/FSM1/cipher-box/compare/v2.13.2...v2.14.0) (2026-10-18)
 
 
