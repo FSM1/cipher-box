@@ -8,6 +8,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import type { TestInfo } from '@playwright/test';
 import {
   isSoakReason,
@@ -63,8 +64,17 @@ export function parseRecords(text: string): SoakRecord[] {
       }
       const problem = invalid(value);
       if (problem !== null) throw new Error(`results line ${index + 1}: ${problem}`);
-      return value as SoakRecord;
+      return plain(value as SoakRecord);
     });
+}
+
+/** The report can read the lines of an older suite, which recorded the color codes. */
+function plain(entry: SoakRecord): SoakRecord {
+  if (entry.kind === 'fact') return { ...entry, value: stripVTControlCharacters(entry.value) };
+  if (entry.kind === 'check' && entry.outcome !== 'passed') {
+    return { ...entry, detail: stripVTControlCharacters(entry.detail) };
+  }
+  return entry;
 }
 
 export async function record(entry: SoakRecord, file = RESULTS_FILE): Promise<void> {
@@ -112,9 +122,9 @@ export function unfinishedTests(records: readonly SoakRecord[]): SoakRecord[] {
   );
 }
 
-/** The first line of `text`, cut to the summary's budget. */
+/** The first line of `text` with no terminal color codes, cut to the summary's budget. */
 export function shortDetail(text: string): string {
-  const first = text.split('\n', 1)[0]!.trim();
+  const first = stripVTControlCharacters(text).split('\n', 1)[0]!.trim();
   return first.length > DETAIL_CHARS ? `${first.slice(0, DETAIL_CHARS - 3)}...` : first;
 }
 
