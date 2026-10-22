@@ -11877,8 +11877,8 @@ where {
         if let WriteTarget::NewFile { parent, .. } = &target {
             refuse_full_parent(&rendered, *parent, None, None, &scope_roots)?;
         }
-        // Re-checked here too: another handle can stage a version between this
-        // handle's open and its commit.
+        // Re-checked here too: another handle can stage a version, or a restore
+        // can queue, between this handle's open and its commit.
         if let WriteTarget::Version {
             expected_version: Some(anchor),
             ..
@@ -13456,11 +13456,20 @@ where {
     /// Refuse an anchor that is not the newest version this device knows of for
     /// `node`, staged or projected: the drain can only dead-letter that write as
     /// `BaseSuperseded`.
+    ///
+    /// A queued restore supersedes every anchor: the overlay cannot render the
+    /// version it restores, and an op staged after it anchors on the head it
+    /// replaces, so no read serves a version an edit could publish over.
     async fn refuse_superseded_anchor(
         &self,
         node: NodeId,
         anchor: &[u8],
     ) -> Result<(), EngineError> {
+        if self.restore_queued(node).await? {
+            return Err(EngineError::UnsupportedTarget {
+                check: "a-restore-of-the-file-is-queued",
+            });
+        }
         let superseded = match self.staged_version_cid(node).await? {
             Some(staged) => staged != anchor,
             None => self
@@ -13530,6 +13539,16 @@ where {
                     .flatten()
                     .map(|staged| (op_id, staged, op.authored_at))
             }))
+    }
+
+    /// Whether a restore of `node` is queued.
+    async fn restore_queued(&self, node: NodeId) -> Result<bool, EngineError> {
+        Ok(self
+            .scan_queue()
+            .await?
+            .mine
+            .iter()
+            .any(|(_, op)| op.target == node && matches!(op.kind, OpKind::RestoreVersion { .. })))
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
