@@ -176,6 +176,13 @@ describe('the job summary', () => {
     expect(long).toHaveLength(300);
     expect(long.endsWith('...')).toBe(true);
   });
+
+  it('drops the terminal color codes of a Playwright assertion', () => {
+    const colored =
+      '\u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible' +
+      "\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('ledger')";
+    expect(shortDetail(colored)).toBe('expect(locator).toBeVisible() failed');
+  });
 });
 
 describe('an unrecorded failure', () => {

@@ -8,6 +8,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import type { TestInfo } from '@playwright/test';
 import {
   isSoakReason,
@@ -112,9 +113,9 @@ export function unfinishedTests(records: readonly SoakRecord[]): SoakRecord[] {
   );
 }
 
-/** The first line of `text`, cut to the summary's budget. */
+/** The first line of `text` with no terminal color codes, cut to the summary's budget. */
 export function shortDetail(text: string): string {
-  const first = text.split('\n', 1)[0]!.trim();
+  const first = stripVTControlCharacters(text).split('\n', 1)[0]!.trim();
   return first.length > DETAIL_CHARS ? `${first.slice(0, DETAIL_CHARS - 3)}...` : first;
 }
 
