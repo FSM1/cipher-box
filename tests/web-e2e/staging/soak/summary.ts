@@ -64,8 +64,17 @@ export function parseRecords(text: string): SoakRecord[] {
       }
       const problem = invalid(value);
       if (problem !== null) throw new Error(`results line ${index + 1}: ${problem}`);
-      return value as SoakRecord;
+      return plain(value as SoakRecord);
     });
+}
+
+/** The report can read the lines of an older suite, which recorded the color codes. */
+function plain(entry: SoakRecord): SoakRecord {
+  if (entry.kind === 'fact') return { ...entry, value: stripVTControlCharacters(entry.value) };
+  if (entry.kind === 'check' && entry.outcome !== 'passed') {
+    return { ...entry, detail: stripVTControlCharacters(entry.detail) };
+  }
+  return entry;
 }
 
 export async function record(entry: SoakRecord, file = RESULTS_FILE): Promise<void> {

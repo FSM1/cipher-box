@@ -239,4 +239,33 @@ describe('the result files', () => {
     expect(found['desktop-linux'].kind).toBe('unparsable');
     expect(found['desktop-macos']).toEqual({ kind: 'missing' });
   });
+
+  it('drop the color codes that an older suite recorded, in the issue and the summary', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'soak-night-'));
+    const colored: SoakRecord = {
+      ...failed,
+      detail:
+        '\u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible() failed',
+    };
+    const fact: SoakRecord = { kind: 'fact', label: 'ledger', value: '\u001b[31mday 3\u001b[39m' };
+    await mkdir(join(dir, resultsArtifact('web-vault')), { recursive: true });
+    await writeFile(
+      join(dir, resultsArtifact('web-vault'), 'soak-results.jsonl'),
+      `${encodeRecord(colored)}\n${encodeRecord(fact)}\n`
+    );
+
+    const night = classifyNight(
+      results({ ...everyLeg('success'), 'web-vault': 'failure' }),
+      await readLegResults(dir)
+    );
+    const body = issueBody(night, RUN)!;
+    const summary = renderNight(night, RUN);
+    expect(body).toContain(
+      '- web-vault: owner markers: `marker-unreadable`: expect(locator).toBeVisible() failed'
+    );
+    expect(summary).toContain('| expect(locator).toBeVisible() failed |');
+    expect(summary).toContain('| ledger | day 3 |');
+    expect(body).not.toContain('\u001b');
+    expect(summary).not.toContain('\u001b');
+  });
 });
