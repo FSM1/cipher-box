@@ -10,6 +10,7 @@ import {
   type Browser,
   type Locator,
   type Page,
+  type Request,
   type Response,
   type TestInfo,
 } from '@playwright/test';
@@ -217,7 +218,14 @@ export async function signInWithWallet(
       if (response.status() < 400) return;
       failed.push(`${requestTarget(response.url())} ${response.status()}`);
     };
+    // A network error has no status; the Cloudflare beacon that the CSP blocks is noise.
+    const noteFailed = (request: Request): void => {
+      const errorText = request.failure()?.errorText ?? 'unknown';
+      if (errorText === 'csp') return;
+      failed.push(`${requestTarget(request.url())} ${errorText}`);
+    };
     page.on('response', noteRefused);
+    page.on('requestfailed', noteFailed);
     let started = attemptStarted;
     let outcome: SignInOutcome = { kind: 'signed-out' };
     try {
@@ -256,6 +264,7 @@ export async function signInWithWallet(
       throw error;
     } finally {
       page.off('response', noteRefused);
+      page.off('requestfailed', noteFailed);
     }
     if (outcome.kind === 'signed-in') {
       annotate(faults.length === 0 ? 'signed-in' : 'recovered');
@@ -264,7 +273,14 @@ export async function signInWithWallet(
     const refusal = refusalText(outcome);
 
     const now = Date.now();
-    const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted, Math.random());
+    const step = nextStep(
+      attempt,
+      refusal,
+      runDeadline - now,
+      now - signInStarted,
+      Math.random(),
+      failed
+    );
     if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
     if (step.action === 'fail') {
       annotate(step.result);

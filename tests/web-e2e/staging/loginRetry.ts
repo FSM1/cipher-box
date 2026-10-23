@@ -16,7 +16,8 @@ export type DevnetFault =
   | 'key-assign'
   | 'key-broadcast'
   | 'rss-envelope'
-  | 'key-timeout';
+  | 'key-timeout'
+  | 'node-fetch';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -34,8 +35,21 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['key-timeout', /did not assign your key in time/i],
 ];
 
-export function devnetFault(refusal: string): DevnetFault | null {
-  return DEVNET_FAULTS.find(([, pattern]) => pattern.test(refusal))?.[0] ?? null;
+// A refused request reads `<host>/<path> <status or network error>`.
+const DEVNET_REQUEST = /^[^/\s]+\.dev-node\.web3auth\.io\//i;
+
+/**
+ * The fault class of `refusal`. A browser network error names no host, so
+ * `Failed to fetch` is a devnet fault only when a refused request of the same
+ * attempt went to a devnet node.
+ */
+export function devnetFault(refusal: string, refused: readonly string[] = []): DevnetFault | null {
+  const fault = DEVNET_FAULTS.find(([, pattern]) => pattern.test(refusal))?.[0];
+  if (fault !== undefined) return fault;
+  if (/failed to fetch/i.test(refusal) && refused.some((request) => DEVNET_REQUEST.test(request))) {
+    return 'node-fetch';
+  }
+  return null;
 }
 
 /**
@@ -73,17 +87,19 @@ export type NextStep =
 
 /**
  * Decides the step after refused `attempt` (0-based), `elapsedMs` into the
- * sign-in, with a jitter sample in [0, 1]. A wait must leave time for another
- * attempt inside both deadlines.
+ * sign-in, with a jitter sample in [0, 1]. `refused` holds the refused requests
+ * of that attempt. A wait must leave time for another attempt inside both
+ * deadlines.
  */
 export function nextStep(
   attempt: number,
   refusal: string,
   runRemainingMs: number,
   elapsedMs: number,
-  jitter: number
+  jitter: number,
+  refused: readonly string[] = []
 ): NextStep {
-  const fault = devnetFault(refusal);
+  const fault = devnetFault(refusal, refused);
   if (fault === null) return { action: 'fail', fault, result: 'refused' };
   // Keep trying throughout the fault window without synchronizing callers.
   const waitMs = (attempt === 0 ? 15_000 : 25_000) + Math.floor(jitter * 5_000);
