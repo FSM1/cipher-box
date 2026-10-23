@@ -10,12 +10,21 @@ vi.mock('./fixtures', () => ({ signInWithWallet: vi.fn() }));
 
 const POLY_FAILURE = 'master poly commits inconsistent with tssPubKey';
 
+type Listener = (event: unknown) => void;
+
 function browser() {
   const visible = new Map<string, string>();
   const disabled = new Set<string>();
+  const listeners = new Map<string, Set<Listener>>();
   const calls = {
     goto: vi.fn(),
     reload: vi.fn(),
+    on(name: string, listener: Listener) {
+      listeners.set(name, (listeners.get(name) ?? new Set()).add(listener));
+    },
+    off(name: string, listener: Listener) {
+      listeners.get(name)?.delete(listener);
+    },
     getByTestId(id: string) {
       return {
         id,
@@ -25,7 +34,11 @@ function browser() {
       };
     },
   };
-  return { visible, disabled, calls, page: calls as unknown as Page };
+  const failRequest = (url: string, errorText: string): void => {
+    const request = { url: () => url, failure: () => ({ errorText }) };
+    for (const listener of listeners.get('requestfailed') ?? []) listener(request);
+  };
+  return { visible, disabled, calls, listeners, failRequest, page: calls as unknown as Page };
 }
 
 beforeEach(() => {
@@ -68,7 +81,8 @@ describe('returning to the vault with a saved session', () => {
     expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(
       b.page,
       expect.objectContaining({ id: 'file-browser' }),
-      POLY_FAILURE
+      POLY_FAILURE,
+      []
     );
   });
 
@@ -117,8 +131,37 @@ describe('resuming a session on a page that is already open', () => {
 
     await resumeSession(b.page, joinable);
 
-    expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(b.page, joinable, POLY_FAILURE);
+    expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(b.page, joinable, POLY_FAILURE, []);
     expect(b.calls.goto).not.toHaveBeenCalled();
+  });
+
+  it('signs in again on Failed to fetch when a request to a devnet node failed', async () => {
+    const b = browser();
+    const joinable = b.page.getByTestId('invite-join');
+    const resume = resumeSession(b.page, joinable);
+    b.failRequest('https://node-3.dev-node.web3auth.io/rss/rss_round_1', 'net::ERR_FAILED');
+    b.visible.set('login-error', 'Failed to fetch');
+    b.visible.set('wallet-login-button', '');
+
+    await resume;
+
+    expect(signInWithWallet).toHaveBeenCalledExactlyOnceWith(b.page, joinable, 'Failed to fetch', [
+      'node-3.dev-node.web3auth.io/rss/rss_round_1 net::ERR_FAILED',
+    ]);
+    expect(b.listeners.get('requestfailed')?.size).toBe(0);
+  });
+
+  it('names the failed host of Failed to fetch elsewhere, and does not sign in', async () => {
+    const b = browser();
+    const resume = resumeSession(b.page, b.page.getByTestId('invite-join'));
+    b.failRequest('https://api.example.com/auth/refresh', 'net::ERR_FAILED');
+    b.visible.set('login-error', 'Failed to fetch');
+    b.visible.set('wallet-login-button', '');
+
+    await expect(resume).rejects.toThrow(
+      'devnet fault: none; the refused requests: api.example.com/auth/refresh net::ERR_FAILED'
+    );
+    expect(signInWithWallet).not.toHaveBeenCalled();
   });
 
   it('does not sign in when the resume reaches the locator', async () => {

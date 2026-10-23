@@ -223,6 +223,7 @@ describe('the wallet login retry flow', () => {
       await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow(`attempt 2: ${limit}`);
       expect(records().map(({ result }) => result)).toEqual([limit]);
       expect(opened.calls.waitForTimeout).toHaveBeenCalledExactlyOnceWith(15_000);
+      expect([...opened.listeners.keys()].sort()).toEqual(['requestfailed', 'response']);
       expect([...opened.listeners.values()].every((set) => set.size === 0)).toBe(true);
     }
   );
@@ -286,6 +287,33 @@ describe('the wallet login retry flow', () => {
     expect(opened.calls.waitForTimeout).not.toHaveBeenCalled();
     expect(records()).toEqual([{ faults: [], result: 'refused' }]);
     expect(opened.listeners.get('requestfailed')?.size).toBe(0);
+  });
+
+  it('does not retry Failed to fetch when the only devnet request was aborted', async () => {
+    const opened = page();
+    harness.refusal.mockImplementationOnce(async () => {
+      opened.failRequest('https://node-3.dev-node.web3auth.io/rss/rss_round_1', 'net::ERR_ABORTED');
+      return 'Failed to fetch';
+    });
+    await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow(
+      /attempt 1 \(refused\); the refusal read: Failed to fetch; the refused requests: none$/
+    );
+    expect(opened.calls.waitForTimeout).not.toHaveBeenCalled();
+  });
+
+  it('names each refused request once, without a key in its path', async () => {
+    const opened = page();
+    const key = 'c0ffee'.repeat(8);
+    harness.refusal.mockImplementationOnce(async () => {
+      opened.failRequest(`https://gw.example.com/ipfs/${key}/blob`, 'net::ERR_FAILED');
+      opened.failRequest(`https://gw.example.com/ipfs/${key}/blob`, 'net::ERR_FAILED');
+      return 'Failed to fetch';
+    });
+    const thrown = await signInWithWallet(opened.page, signedIn).catch((error: Error) => error);
+    expect(String(thrown)).toMatch(
+      /the refused requests: gw\.example\.com\/ipfs\/\[redacted\]\/blob net::ERR_FAILED$/
+    );
+    expect(String(thrown)).not.toContain(key);
   });
 
   it('waits for the banner of an earlier refusal to clear before it reads the login', async () => {

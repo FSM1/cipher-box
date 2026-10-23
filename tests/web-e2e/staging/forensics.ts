@@ -4,7 +4,7 @@
  * header and no body, and it redacts each line.
  */
 
-import type { Page } from '@playwright/test';
+import type { Page, Request, Response } from '@playwright/test';
 
 // The shapes of a token, a key, a share or a person: a JWT, the query or
 // fragment of a URL, an email, padded base64, a whole standalone base64 word
@@ -31,6 +31,32 @@ export function requestTarget(url: string): string {
   } catch {
     return 'an unparsable url';
   }
+}
+
+/** The refused requests of `page` until `stop`, each once, as `<host>/<path> <status or error>`. */
+export function watchRefusedRequests(page: Page): { requests: string[]; stop(): void } {
+  const requests: string[] = [];
+  const note = (entry: string): void => {
+    if (!requests.includes(entry)) requests.push(entry);
+  };
+  const onResponse = (response: Response): void => {
+    if (response.status() >= 400) note(`${requestTarget(response.url())} ${response.status()}`);
+  };
+  // The CSP blocks the Cloudflare beacon, and a reload aborts the requests of the page before it.
+  const onFailed = (request: Request): void => {
+    const errorText = request.failure()?.errorText ?? 'unknown';
+    if (errorText === 'csp' || errorText === 'net::ERR_ABORTED') return;
+    note(`${requestTarget(request.url())} ${errorText}`);
+  };
+  page.on('response', onResponse);
+  page.on('requestfailed', onFailed);
+  return {
+    requests,
+    stop() {
+      page.off('response', onResponse);
+      page.off('requestfailed', onFailed);
+    },
+  };
 }
 
 export interface Forensics {

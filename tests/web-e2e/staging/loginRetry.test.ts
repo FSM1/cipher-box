@@ -85,8 +85,15 @@ describe('devnetFault for a network error', () => {
     expect(devnetFault('Failed to fetch', refused)).toBeNull();
   });
 
-  it('does not class another refusal by its refused requests', () => {
-    expect(devnetFault('the wallet signature was rejected', [RSS_ROUND])).toBeNull();
+  it.each([
+    'the wallet signature was rejected',
+    'Failed to fetch dynamically imported module: x.js',
+  ])('does not class %s by its refused requests', (refusal) => {
+    expect(devnetFault(refusal, [RSS_ROUND])).toBeNull();
+  });
+
+  it('reads a refusal with spaces around Failed to fetch', () => {
+    expect(devnetFault(' Failed to fetch\n', [RSS_ROUND])).toBe('node-fetch');
   });
 
   it('retries a devnet fetch failure and ends a fetch failure elsewhere', () => {

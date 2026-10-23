@@ -46,7 +46,10 @@ const DEVNET_REQUEST = /^[^/\s]+\.dev-node\.web3auth\.io\//i;
 export function devnetFault(refusal: string, refused: readonly string[] = []): DevnetFault | null {
   const fault = DEVNET_FAULTS.find(([, pattern]) => pattern.test(refusal))?.[0];
   if (fault !== undefined) return fault;
-  if (/failed to fetch/i.test(refusal) && refused.some((request) => DEVNET_REQUEST.test(request))) {
+  if (
+    /^failed to fetch$/i.test(refusal.trim()) &&
+    refused.some((request) => DEVNET_REQUEST.test(request))
+  ) {
     return 'node-fetch';
   }
   return null;
