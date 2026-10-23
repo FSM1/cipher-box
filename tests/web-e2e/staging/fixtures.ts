@@ -10,7 +10,6 @@ import {
   type Browser,
   type Locator,
   type Page,
-  type Response,
   type TestInfo,
 } from '@playwright/test';
 import type { Hex } from 'viem';
@@ -18,7 +17,7 @@ import { loadInPage } from '../inPageLoad';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage, refusalText, type SignInOutcome } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
-import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
+import { recordForensics, redact, watchRefusedRequests, type Forensics } from './forensics';
 import {
   nextStep,
   runRetryBudget,
@@ -175,12 +174,14 @@ export async function signIn(page: Page): Promise<number> {
  * a banner and not as a navigation. {@link nextStep} decides whether a refusal
  * reloads the same address, fragment included, and tries again. The thrown
  * error is redacted, since it lands in a public log. `firstRefusal` is the
- * refusal of a session resume, which counts as the first refused attempt.
+ * refusal of a session resume, which counts as the first refused attempt, and
+ * `firstRequests` are the refused requests of that resume.
  */
 export async function signInWithWallet(
   page: Page,
   signedIn: Locator,
-  firstRefusal?: string
+  firstRefusal?: string,
+  firstRequests: readonly string[] = []
 ): Promise<number> {
   const login = new LoginPage(page);
   const info = test.info();
@@ -212,12 +213,7 @@ export async function signInWithWallet(
       throw new Error(stopped);
     };
 
-    const failed: string[] = [];
-    const noteRefused = (response: Response): void => {
-      if (response.status() < 400) return;
-      failed.push(`${requestTarget(response.url())} ${response.status()}`);
-    };
-    page.on('response', noteRefused);
+    const watch = watchRefusedRequests(page);
     let started = attemptStarted;
     let outcome: SignInOutcome = { kind: 'signed-out' };
     try {
@@ -255,16 +251,24 @@ export async function signInWithWallet(
       }
       throw error;
     } finally {
-      page.off('response', noteRefused);
+      watch.stop();
     }
     if (outcome.kind === 'signed-in') {
       annotate(faults.length === 0 ? 'signed-in' : 'recovered');
       return Date.now() - started;
     }
     const refusal = refusalText(outcome);
+    const failed = attempt === 0 && firstRefusal !== undefined ? firstRequests : watch.requests;
 
     const now = Date.now();
-    const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted, Math.random());
+    const step = nextStep(
+      attempt,
+      refusal,
+      runDeadline - now,
+      now - signInStarted,
+      Math.random(),
+      failed
+    );
     if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
     if (step.action === 'fail') {
       annotate(step.result);

@@ -37,6 +37,7 @@ Read the log line and the `error-context.md` of each failed spec. A locator time
   - `could not retrieve nonce: Internal error, failed to get nonce with status code: 503`
   - `master poly commits inconsistent with tssPubKey`
   - `Cannot read properties of undefined (reading 'ciphertext')`
+  - `Failed to fetch`, with a refused request `node-N.dev-node.web3auth.io/... net::ERR_FAILED` (the RSS share refresh during the TSS key export)
 
   The snapshot stops at the `Available wallets` group. The account-removal attachment reads `kept: refresh answered 401`.
 

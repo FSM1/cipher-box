@@ -59,6 +59,57 @@ describe('devnetFault', () => {
   });
 });
 
+describe('devnetFault for a network error', () => {
+  const RSS_ROUND = 'node-3.dev-node.web3auth.io/rss/rss_round_1 net::ERR_FAILED';
+
+  it('classes Failed to fetch with a failed request to a devnet node', () => {
+    expect(devnetFault('Failed to fetch', ['api.example.com/auth/login 401', RSS_ROUND])).toBe(
+      'node-fetch'
+    );
+  });
+
+  it('keeps the class of a devnet refusal that also reads failed to fetch', () => {
+    expect(
+      devnetFault('Unable to assign key, failed to fetch key assign result', [RSS_ROUND])
+    ).toBe('key-assign');
+  });
+
+  it.each([
+    ['no refused request', []],
+    ['a failed request to another host', ['api.example.com/auth/login net::ERR_FAILED']],
+    [
+      'a host that only contains the devnet name',
+      ['node-3.dev-node.web3auth.io.example.com/rss net::ERR_FAILED'],
+    ],
+  ])('fails at once on Failed to fetch with %s', (_, refused) => {
+    expect(devnetFault('Failed to fetch', refused)).toBeNull();
+  });
+
+  it.each([
+    'the wallet signature was rejected',
+    'Failed to fetch dynamically imported module: x.js',
+  ])('does not class %s by its refused requests', (refusal) => {
+    expect(devnetFault(refusal, [RSS_ROUND])).toBeNull();
+  });
+
+  it('reads a refusal with spaces around Failed to fetch', () => {
+    expect(devnetFault(' Failed to fetch\n', [RSS_ROUND])).toBe('node-fetch');
+  });
+
+  it('retries a devnet fetch failure and ends a fetch failure elsewhere', () => {
+    expect(nextStep(0, 'Failed to fetch', FULL_RUN_WINDOW, 0, 0, [RSS_ROUND])).toEqual({
+      action: 'retry',
+      fault: 'node-fetch',
+      waitMs: 15_000,
+    });
+    expect(nextStep(0, 'Failed to fetch', FULL_RUN_WINDOW, 0, 0, [])).toEqual({
+      action: 'fail',
+      fault: null,
+      result: 'refused',
+    });
+  });
+});
+
 describe('summarize', () => {
   it('distinguishes terminal faults and the two time limits', () => {
     expect(
