@@ -84,7 +84,7 @@ jobs:
           API_VERSION=$(node -e "console.log(require('./apps/api/package.json').version)")
           echo "api=${API_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -115,7 +115,7 @@ jobs:
       - name: Set lowercase image name
         run: echo "CADDY_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-caddy" >> "$GITHUB_ENV"
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
