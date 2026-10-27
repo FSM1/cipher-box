@@ -12461,7 +12461,14 @@ fn an_unindexed_scope_probe_does_not_read_an_absent_head_block_as_no_scope() {
         .record_store
         .heal_put_for(write_name(ROOT).as_str());
     let folder = fx.folder;
-    fx.owner_device.floor_store.forget_epoch_floor(&folder.0);
+    assert_eq!(
+        block_on(floor::read_epoch_floor(
+            &fx.owner_device.floors(&SECRET),
+            &folder.0
+        )),
+        Ok(None),
+        "the device holds no read-epoch floor for the scope"
+    );
     let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
     publish_value_at(&fx.world, folder, format!("/ipfs/{absent}").as_bytes());
     let _ = events_so_far(&mut fx._events);
