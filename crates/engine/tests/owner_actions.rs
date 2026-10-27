@@ -32131,35 +32131,74 @@ fn a_cut_with_no_row_after_the_copy_started_raises_the_held_cut_epoch() {
     assert_one_recut(&fx, &events);
 }
 
-/// A restart after the raise of the held cut epoch, and before the final
-/// records publish again, publishes them in the next session with no second
-/// raise and no second event.
-#[test]
-fn a_restart_after_the_recut_raise_publishes_the_final_records_once_more() {
+/// The no-row re-cut with each PUT at the name `failed` picks refused. The
+/// raise of the held cut epoch is durable, and `final_landed` is clear, before
+/// the restart. The next session publishes the final records with no second
+/// raise, and the host gets one event in total.
+fn restart_after_the_recut_raise(failed: impl Fn(&GrantScenario) -> IpnsName) {
     let mut fx = GrantScenario::new();
     log_the_cut_subtree(&mut fx);
     let cut_epoch = fx.standing_dissolve().scopes[0].cut_epoch;
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
     let revoked = fx.folder_section().commitment.cut_epoch;
-    let pointer = folder_pointer(&fx);
-    fx.world.record_store.fail_put_for(pointer.as_str());
+    let name = failed(&fx);
+    fx.world.record_store.fail_put_for(name.as_str());
     ticks(&mut fx, 3);
     let header = fx.standing_dissolve();
     assert_eq!(header.step, DissolveStep::Cut);
     assert_eq!(header.scopes[0].cut_epoch, revoked, "the raise landed");
-    assert!(!header.scopes[0].final_landed, "and the pointer did not");
+    assert!(
+        !header.scopes[0].final_landed,
+        "and the final records did not"
+    );
     let mut events = recut_events(&mut fx._events);
 
     settle_filed_sweeps(&fx);
     restart_owner(&mut fx);
-    fx.world.record_store.heal_put_for(pointer.as_str());
+    fx.world.record_store.heal_put_for(name.as_str());
     let folder = fx.folder;
     let (raised, after) = recut_to_the_relink(&mut fx, folder, cut_epoch);
 
     assert_eq!(raised, revoked, "no second raise");
     events.extend(after);
     assert_one_recut(&fx, &events);
+}
+
+/// A restart after the raise of the held cut epoch, and before the scope
+/// pointer publishes again, publishes it in the next session with no second
+/// raise and no second event.
+#[test]
+fn a_restart_after_the_recut_raise_publishes_the_final_records_once_more() {
+    restart_after_the_recut_raise(folder_pointer);
+}
+
+/// The raise of the held cut epoch is durable before the final root publishes
+/// again: a root PUT that fails leaves the raise, and the next session
+/// publishes the root with no second raise.
+#[test]
+fn a_recut_raise_is_durable_before_the_final_root_publishes() {
+    restart_after_the_recut_raise(|fx| fx.granted_scope_repoint().current_root);
+}
+
+/// At the seal step after the copy started, a cut scope read below the held
+/// cut epoch waits: the journal stays as it is, and no re-cut runs.
+#[test]
+fn a_seal_read_below_the_held_cut_epoch_waits() {
+    let mut fx = GrantScenario::new();
+    log_the_cut_subtree(&mut fx);
+    let folder = fx.folder;
+    edit_dissolve(&fx, folder, |header| {
+        header.step = DissolveStep::Cut;
+        header.scopes[0].cut_epoch += 1;
+    });
+    edit_dissolve(&fx, folder, |header| header.step = DissolveStep::Seal);
+    let held = fx.standing_dissolve();
+
+    ticks(&mut fx, 3);
+
+    assert_eq!(fx.standing_dissolve(), held, "the journal stays");
+    assert!(recut_events(&mut fx._events).is_empty(), "no re-cut");
 }
 
 /// After the copy started, a cut step that finds a listed scope outside the

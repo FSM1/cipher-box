@@ -313,7 +313,8 @@ enum CutRead {
     Held,
     /// A row or a cut that the dissolve did not make overtook it.
     Overtaken,
-    /// The read lags the cut epoch of the entry, so a later tick reads again.
+    /// The read lags the cut epoch of the entry, or the entry does not cut
+    /// the scope, so a later tick reads again.
     Lags,
 }
 

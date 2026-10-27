@@ -482,7 +482,7 @@ where
             None => {
                 // A cut that left no row moves the baseline up to it.
                 if recut {
-                    Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, true)).await?;
+                    Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, recut)).await?;
                 }
                 self.republish_root(sites, &target, &name).await?;
                 self.forget_link_grants(scope).await?;
