@@ -92,6 +92,6 @@ signature does not go above a bound as in ADR 0076 D2.
 
 ## Residuals
 
-- The name wave (`publish_moved`, over `Observed::unread` at a new name) and the pointer plane do
-  not raise the mark. A wave PUT that does not confirm has the same window at its new name. Does
+- The name wave (`publish_moved`, over `Observed::unread` at a new name), which also moves the
+  root of a write cut, and the pointer plane do not raise the mark. A wave PUT that does not confirm has the same window at its new name. Does
   the wave need the mark too?
