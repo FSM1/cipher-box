@@ -1342,7 +1342,7 @@ by FSM1/cipher-box-next#38 D5):
   cheap for grant-less scopes), owner blob, history link, ascent link under
   the parent's new derivation. Cached descendant seeds are why ascent-re-seal
   alone is insufficient. Cost: O(descendant scope count), never tree size.
-- **Flat cuts** (`RotateNow`, an owned scope exit; the engine starts no grantee cut,
+- **Flat cuts** (`RotateNow`, an owned scope exit; the engine starts no cut of a received scope on the grantee device,
   [ADR 0082](../decisions/0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md)):
   The cut preserves the grant set and does not run a revoke cascade. Every
   old-seed holder is a live grantee who receives the new seed. The single root still republishes the full per-scope-root list — blobs

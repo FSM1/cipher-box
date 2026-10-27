@@ -162,7 +162,7 @@ commitment below the newest cut epoch that this scope already adopted, as a whol
 violation (`commitment-invalid`, `core::seal::refuse_stale_cut_epoch`). The commitment still
 carries no read epoch, so a grantee-triggered rotation still needs no owner signature. The raise
 of the cut-epoch floor is ADR 0014. The rule landed with FSM1/cipher-box#1604; this ADR records it.
-Amended by ADR 0082 D1 on 2026-10-28: the engine runs no grantee scope-exit rotation, and the
+Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, and the
 commitment format does not change.
 
 **D7 — The engine keeps a device-local revocation floor per scope and recipient.** When the
@@ -288,7 +288,7 @@ recipients, but it needs a new commitment format. The owner accepted the leak on
 
 **(k) An owner signature at each read rotation, so a revoked grantee loses the unmask key.** The
 commitment carries no read epoch so that a grantee-triggered rotation needs no owner signature.
-This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine runs no grantee rotation, so
+This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, so
 this reason no longer applies.
 
 ## Consequences
