@@ -12,7 +12,7 @@
   D1, [ADR 0080](./0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md) (the child
   ascent re-seal), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) (a durable
   record reads the previous release)
-- **Implemented by:** not landed
+- **Implemented by:** [FSM1/cipher-box#2530](https://github.com/FSM1/cipher-box/pull/2530)
 - **Amends:** ADR 0080 Consequences ("the re-seal keeps no durable state"), ADR 0076 D3, ADR 0061
   D3 step 6
 
