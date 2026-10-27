@@ -1079,6 +1079,9 @@ fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
 
 /// [`record_publish_verdict`] for a failure of the publish pipeline itself.
 fn rotation_publish_verdict(error: PublishError) -> RotationPublishError {
+    if let PublishError::Overtaken { .. } = error {
+        return RotationPublishError::LostRace;
+    }
     match error.verdict() {
         PublishVerdict::Refused | PublishVerdict::RefusedUnaddressed => {
             RotationPublishError::Rejected
@@ -2867,6 +2870,10 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     put_sent: Option<([u8; 16], &'a Cell<bool>)>,
     /// Takes the sequence of each signed record, landed or not.
     signed: Option<&'a Cell<Option<u64>>>,
+    /// Whether the signature refuses a floor above the read the publish
+    /// builds on ([`Observed::bounded`]). A last copy keeps the bound of its
+    /// own read (ADR 0068 D1).
+    bounded: bool,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
@@ -2947,6 +2954,11 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
 
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
+        let observed = if self.bounded {
+            current.observed.clone().bounded()
+        } else {
+            current.observed.clone()
+        };
         let mark = self
             .put_sent
             .filter(|(scope_id, _)| *scope_id == record.scope_id)
@@ -2962,7 +2974,7 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                observed: &current.observed,
+                observed: &observed,
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
@@ -3022,6 +3034,10 @@ where
                 .as_ref()
                 .and_then(|fallback| fallback.put_sent.map(|sent| (fallback.scope_id, sent))),
             signed: None,
+            bounded: !self
+                .root_fallback
+                .as_ref()
+                .is_some_and(RootFallback::fell_back),
         }
     }
 }
@@ -3505,6 +3521,7 @@ where
             owner_identity: self.keys.owner_identity,
             put_sent: None,
             signed: None,
+            bounded: true,
         }
     }
 }
@@ -11346,6 +11363,50 @@ mod tests {
         assert_eq!(
             block_on(net.put_back_unmoved(own_read)),
             Err(RotationPublishError::LostRace),
+        );
+    }
+
+    /// The cut reads P at sequence 1, another device cuts P at sequence 2,
+    /// and a background read of this device adopts that cut before the
+    /// signature. The cut loses the race and signs nothing.
+    #[test]
+    fn a_background_adoption_before_the_signature_makes_the_cut_lose_the_race() {
+        let root = vault_root(SCOPE, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let scope = ChildScopeRef::new(SCOPE, root.name.as_str().as_bytes().to_vec());
+        let net = harness.net(&[]);
+        block_on(net.resolve_anchored(&scope)).expect("the cut reads the root");
+
+        let other_floors = InMemoryFloorStore::default();
+        block_on(floor::advance_write_epoch_on_sight(
+            &other_floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH,
+        ))
+        .expect("write floor");
+        let other_device = harness.net_rooted_with_floors(
+            RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, &[]),
+            &other_floors,
+        );
+        block_on(other_device.publish_scope_root(&cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1)))
+            .expect("another device cuts the root");
+        let (theirs, _) = published_head(&harness, &root.name);
+        block_on(harness.net(&[]).resolve_anchored(&scope)).expect("a background read adopts it");
+
+        assert_eq!(
+            block_on(net.publish_scope_root(&cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1))),
+            Err(RotationPublishError::LostRace),
+        );
+        let (standing, _) = published_head(&harness, &root.name);
+        assert_eq!(
+            (standing.sequence, standing.value),
+            (theirs.sequence, theirs.value),
+            "the cut of the other device stands",
+        );
+        assert!(
+            net.gated.take(&root.name).is_none(),
+            "the next try reads again"
         );
     }
 
