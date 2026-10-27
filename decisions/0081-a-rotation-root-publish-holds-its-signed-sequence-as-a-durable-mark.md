@@ -98,7 +98,8 @@ signature does not go above a bound as in ADR 0076 D2.
   refuses; a raise that the store does not take sends no PUT.
 - `CONTEXT.md` defines "rotation mark", in this PR or the next one.
 - ADR 0080 Consequences carries an "Amended by" sentence for D1.
-- ADR 0076 D3 and ADR 0061 D3 step 6 carry an "Amended by" sentence for D2.
+- ADR 0076 D3 carries an "Amended by" sentence for D2.
+- ADR 0061 D3 step 6 carries an "Amended by" sentence for D2.
 
 ## Residuals
 
