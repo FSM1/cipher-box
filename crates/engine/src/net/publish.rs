@@ -137,6 +137,8 @@ pub struct Observed {
     name: IpnsName,
     sequence: u64,
     bytes: Vec<u8>,
+    /// Set by [`Self::bounded`].
+    bounded: bool,
 }
 
 impl Observed {
@@ -147,6 +149,7 @@ impl Observed {
             name: name.clone(),
             sequence: 0,
             bytes: Vec::new(),
+            bounded: false,
         }
     }
 
@@ -157,6 +160,7 @@ impl Observed {
             name: name.clone(),
             sequence,
             bytes: Vec::new(),
+            bounded: false,
         }
     }
 
@@ -167,6 +171,7 @@ impl Observed {
             name: name.clone(),
             sequence,
             bytes: bytes.to_vec(),
+            bounded: false,
         }
     }
 
@@ -195,6 +200,7 @@ impl Observed {
             name: name.clone(),
             sequence,
             bytes: bytes.to_vec(),
+            bounded: false,
         })
     }
 
@@ -214,6 +220,17 @@ impl Observed {
     pub(crate) fn clearing(self, sequence: u64) -> Self {
         Self {
             sequence: self.sequence.max(sequence),
+            ..self
+        }
+    }
+
+    /// This observation, with a signature that refuses once the durable
+    /// sequence floor of the name rises above it: a publish over it would
+    /// replace a record that its author did not see.
+    #[must_use]
+    pub(crate) fn bounded(self) -> Self {
+        Self {
+            bounded: true,
             ..self
         }
     }
@@ -411,6 +428,14 @@ pub enum PublishError {
     /// The durable mark the caller asked to raise ahead of the PUT could not
     /// be written, so nothing was PUT.
     MarkUnrecorded(SeamError),
+    /// The durable sequence floor rose above the [`Observed::bounded`] read
+    /// the publish built on, so nothing was signed.
+    Overtaken {
+        /// The durable sequence floor at the signature.
+        floor: u64,
+        /// The sequence the publish built on.
+        bound: u64,
+    },
 }
 
 /// A publish failure on rule 6's retryable-versus-trust axis, split as finely
@@ -444,7 +469,9 @@ impl PublishError {
             Self::BelowBar { .. } | Self::ForeignVersion { .. } | Self::SequenceExhausted => {
                 PublishVerdict::Refused
             }
-            Self::FloorRead(_) | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
+            Self::FloorRead(_) | Self::MarkUnrecorded(_) | Self::Overtaken { .. } => {
+                PublishVerdict::NotLanded
+            }
             Self::AllEndpointsFailed => PublishVerdict::PutUnacknowledged,
             Self::AllEndpointsRefused => PublishVerdict::PutRefused,
         }
@@ -453,6 +480,9 @@ impl PublishError {
 
 impl core::fmt::Display for PublishError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Self::Overtaken { .. } = self {
+            return f.write_str("the sequence floor rose above the read (never published)");
+        }
         f.write_str(match self.verdict() {
             PublishVerdict::RegistryRefused => "register-first publish failed",
             PublishVerdict::Refused => "record refused by the produce-side gate (never published)",
@@ -520,13 +550,22 @@ impl<'a> SignatureGate<'a> {
         observed: &'a Observed,
         bar: Option<PublishBar>,
     ) -> Result<Self, PublishError> {
-        let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
-            .await
-            .map_err(PublishError::FloorRead)?;
+        // A bounded read takes the sequence floor last, so it sees an
+        // adoption during the reads above. Every other read keeps the bar
+        // last, so the bar holds to the signature.
+        let floor_before_bar = if observed.bounded {
+            None
+        } else {
+            Some(read_sequence_floor(floors, observed).await?)
+        };
         let relink_mark = read_relink_mark(floors, observed).await?;
         let bar = match bar {
             Some(bar) => Some((bar, bar.read_floors(floors).await?)),
             None => None,
+        };
+        let sequence_floor = match floor_before_bar {
+            Some(sequence_floor) => sequence_floor,
+            None => read_sequence_floor(floors, observed).await?,
         };
         Ok(Self {
             observed,
@@ -550,9 +589,7 @@ impl<'a> SignatureGate<'a> {
             None => None,
         };
         let relink_mark = read_relink_mark(floors, observed).await?;
-        let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
-            .await
-            .map_err(PublishError::FloorRead)?;
+        let sequence_floor = read_sequence_floor(floors, observed).await?;
         Ok(Self {
             observed,
             bar,
@@ -580,6 +617,19 @@ impl<'a> SignatureGate<'a> {
         self.sign_above(0, signer, value, ttl_nanos, eol)
     }
 
+    /// Refuse a sequence floor above an [`Observed::bounded`] read.
+    fn refuse_overtaken(&self) -> Result<(), PublishError> {
+        match self.sequence_floor {
+            Some(floor) if self.observed.bounded && floor > self.observed.sequence => {
+                Err(PublishError::Overtaken {
+                    floor,
+                    bound: self.observed.sequence,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// [`Self::sign`], also strictly above `held`: a mark of this device's own
     /// PUT that may still surface at the name.
     pub(crate) fn sign_above(
@@ -593,6 +643,7 @@ impl<'a> SignatureGate<'a> {
         if let Some((bar, at)) = &self.bar {
             bar.refuse(*at)?;
         }
+        self.refuse_overtaken()?;
         let sequence = self
             .sequence_floor
             .unwrap_or(0)
@@ -610,6 +661,16 @@ impl<'a> SignatureGate<'a> {
         }
         Ok((record_bytes, sequence))
     }
+}
+
+/// The durable sequence floor of `observed`'s name.
+async fn read_sequence_floor<F: FloorStore>(
+    floors: &F,
+    observed: &Observed,
+) -> Result<Option<u64>, PublishError> {
+    floor::sequence_floor(floors, observed.name.as_str().as_bytes())
+        .await
+        .map_err(PublishError::FloorRead)
 }
 
 /// The relink mark of `observed`'s name ([`floor::relink_parent_mark_key`]).
@@ -1119,6 +1180,73 @@ mod tests {
         );
     }
 
+    /// A bounded read refuses a floor above it, and signs at a floor equal to
+    /// it. An unbounded read signs above the floor.
+    #[test]
+    fn a_bounded_read_refuses_a_floor_a_read_raised_above_it() {
+        let signer = Ed25519Signer::from_seed([0x55; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 2)).unwrap();
+        let sign = |observed: &Observed| {
+            block_on(SignatureGate::read(&floors, observed, None))
+                .unwrap()
+                .sign(&signer, b"/ipfs/x", 1, "2099-01-01T00:00:00Z")
+                .map(|(_, sequence)| sequence)
+        };
+
+        let read = Observed::gated(&name, 1, ENVELOPE_V, &[]).unwrap();
+        let bounded = read.clone().bounded();
+        assert_eq!(
+            sign(&bounded),
+            Err(PublishError::Overtaken { floor: 2, bound: 1 }),
+        );
+        assert_eq!(sign(&read.clone().clearing(2).bounded()), Ok(3));
+        assert_eq!(sign(&read), Ok(3));
+        assert_eq!(
+            block_on(SignatureGate::read(&floors, &bounded, None))
+                .unwrap()
+                .sign_above(0, &signer, b"/ipfs/x", 1, "2099-01-01T00:00:00Z")
+                .map(|(_, sequence)| sequence),
+            Err(PublishError::Overtaken { floor: 2, bound: 1 }),
+            "sign_above refuses too",
+        );
+    }
+
+    /// An adoption during an epoch-floor read or the relink-mark read of the
+    /// gate raises the floor above a bounded read, and the signature refuses.
+    #[test]
+    fn a_bounded_read_refuses_a_floor_raised_during_its_gate_reads() {
+        let signer = Ed25519Signer::from_seed([0x56; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let observed = Observed::gated(&name, 7, ENVELOPE_V, &[])
+            .unwrap()
+            .bounded();
+        let bar = PublishBar {
+            scope_id: [0; 16],
+            read_epoch: 1,
+            write_epoch: Some(1),
+            cut_epoch: Some(0),
+        };
+
+        for on in [AdoptOn::EpochRead, AdoptOn::RelinkMarkRead] {
+            let floors = ConcurrentAdopt {
+                inner: InMemoryFloorStore::default(),
+                name: name.clone(),
+                on,
+            };
+            block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
+
+            let gate = block_on(SignatureGate::read(&floors, &observed, Some(bar))).unwrap();
+
+            assert_eq!(
+                gate.sign(&signer, b"/ipfs/x", 1, "2099-01-01T00:00:00Z")
+                    .map(|(_, sequence)| sequence),
+                Err(PublishError::Overtaken { floor: 8, bound: 7 }),
+            );
+        }
+    }
+
     #[test]
     fn a_publish_error_displays_its_verdict_and_no_finer_detail() {
         let refused = [
@@ -1141,6 +1269,16 @@ mod tests {
             refused[0],
             PublishError::RecordTooLarge { size: 2, limit: 1 }.to_string(),
             "another verdict shows another string"
+        );
+        let overtaken = PublishError::Overtaken { floor: 8, bound: 7 }.to_string();
+        assert!(
+            !overtaken.contains('8') && !overtaken.contains('7'),
+            "no floor or bound number: {overtaken}"
+        );
+        assert_ne!(
+            overtaken,
+            PublishError::FloorRead(SeamError::new("x")).to_string(),
+            "not the text of a floor-store fault"
         );
     }
 }
