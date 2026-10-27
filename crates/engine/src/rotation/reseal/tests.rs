@@ -316,85 +316,6 @@ fn blob_sig(sig: &[u8; 64]) -> Ed25519Signature {
 }
 
 #[test]
-fn a_re_seal_to_a_carried_public_half_still_opens_by_the_ancestors_descent() {
-    // A grantee holds no ancestor seed, so it seals to the public half the
-    // record it is replacing publishes; the ancestor must still descend.
-    let fx = Fixture::new();
-    let owner_pub = fx.owner_enc.public();
-    let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
-    let carried = kdf::ascent_keypair(&fx.parent_node_seed)
-        .public()
-        .to_bytes();
-    let mut id = identity(&fx, &owner_pub, b"scope-root-name", None);
-    id.ascent = Some(AscentAuthority::CarriedPublic(&carried));
-    id.owes_ascent_link = true;
-    let override_seed = [0x9d; 32];
-
-    let section = reseal_scope_root(
-        &mut SeededEntropy::new(5),
-        &id,
-        &seeds(
-            &override_seed,
-            4,
-            None,
-            &fx.write_scope_seed,
-            &fx.pointer_read_key,
-        ),
-        &committed_set(&commitment, &sig, &ledger),
-        &[],
-    )
-    .expect("the re-seal completes without an ancestor seed");
-
-    let link = section.ascent_link.expect("a link is owed and minted");
-    let ctx = ctx_for(V, SCOPE, 4, STRUCT_TAG_ASCENT_LINK);
-    let opened = open_ascent_link(
-        &fx.parent_node_seed,
-        &ctx,
-        &cipherbox_core::seal::AscentLink {
-            ascent_public: link.ascent_public,
-            enc: link.enc,
-            ciphertext: link.ciphertext,
-            unknown: PreservedFields::new(),
-        },
-    )
-    .expect("the ancestor's own descent opens it");
-    assert!(ct_eq(opened.override_seed(), &override_seed));
-}
-
-#[test]
-fn an_ascent_public_half_no_key_can_open_is_refused_before_any_seal() {
-    // Release-active: a link sealed to bytes that are not an X25519 point
-    // could never serve the descent it exists for.
-    let fx = Fixture::new();
-    let owner_pub = fx.owner_enc.public();
-    let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
-    // Not the canonical encoding of a prime-order point, so
-    // `X25519Public::from_bytes` refuses to address it.
-    let unusable = [0xff; 32];
-    let mut id = identity(&fx, &owner_pub, b"scope-root-name", None);
-    id.ascent = Some(AscentAuthority::CarriedPublic(&unusable));
-    id.owes_ascent_link = true;
-
-    assert_eq!(
-        reseal_scope_root(
-            &mut UndrawnEntropy,
-            &id,
-            &seeds(
-                &[0x9d; 32],
-                4,
-                None,
-                &fx.write_scope_seed,
-                &fx.pointer_read_key
-            ),
-            &committed_set(&commitment, &sig, &ledger),
-            &[],
-        )
-        .unwrap_err(),
-        ResealError::UnusableAscentPublic,
-    );
-}
-
-#[test]
 fn reseal_round_trips_and_every_structure_is_pseudonym_signed() {
     let fx = Fixture::new();
     let owner_pub = fx.owner_enc.public();
@@ -2389,7 +2310,6 @@ fn the_check_surface_matches_the_variants_in_order() {
         ResealError::AscentLinkMismatch,
         ResealError::AscentLinkDropped,
         ResealError::AscentLinkNotOwed,
-        ResealError::UnusableAscentPublic,
         ResealError::Entropy(EntropyError::new("no entropy")),
         ResealError::TooManyHistoryLinks,
         ResealError::TooManyCommittedGrants,

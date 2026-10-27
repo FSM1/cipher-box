@@ -4781,7 +4781,6 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::AscentLinkMismatch
         | ResealError::AscentLinkDropped
         | ResealError::AscentLinkNotOwed
-        | ResealError::UnusableAscentPublic
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
@@ -8813,8 +8812,7 @@ mod tests {
                 rogue.name.as_str().as_bytes(),
             )
             .unwrap();
-            let signer =
-                SessionIdentity::grantee_writer_pseudonym_signer(shared.as_bytes(), &SCOPE);
+            let signer = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE);
             let sealed = cipherbox_core::seal::seal_owner_blob(
                 &owner_enc().public(),
                 &[0x99; 32],
@@ -14450,7 +14448,6 @@ mod tests {
             ResealError::AscentLinkMismatch,
             ResealError::AscentLinkDropped,
             ResealError::AscentLinkNotOwed,
-            ResealError::UnusableAscentPublic,
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
@@ -14484,7 +14481,6 @@ mod tests {
                 | ResealError::AscentLinkMismatch
                 | ResealError::AscentLinkDropped
                 | ResealError::AscentLinkNotOwed
-                | ResealError::UnusableAscentPublic
                 | ResealError::TooManyHistoryLinks
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending

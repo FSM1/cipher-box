@@ -1082,7 +1082,9 @@ pub(crate) fn owner_seed_refused(rejection: &GateRejection) -> bool {
 mod tests {
     use super::*;
 
-    use cipherbox_core::seal::{Envelope, GrantSection, MAX_GRANT_BLOBS, encode_envelope};
+    use cipherbox_core::seal::{
+        Envelope, GrantSection, GrantSetEntry, MAX_GRANT_BLOBS, encode_envelope,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use crate::content::root_block_cid;
@@ -1961,10 +1963,7 @@ mod tests {
             fx.name.as_str().as_bytes(),
         )
         .unwrap();
-        let signer = crate::session::SessionIdentity::grantee_writer_pseudonym_signer(
-            shared.as_bytes(),
-            &fx.scope_id,
-        );
+        let signer = kdf::pseudonym_sign(shared.as_bytes(), &fx.scope_id);
         let granted = owner_root_fixture(OwnerRootSpec {
             writer_pseudonym: &owner_root_pseudonym(),
             pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
@@ -2014,6 +2013,122 @@ mod tests {
         };
         assert_eq!(rejection.stage, GateStage::Unseal, "{}", rejection.check());
         assert_eq!(rejection.check(), "seal-open-failed");
+    }
+
+    /// The device a [`granted`] root commits a write grant to.
+    fn grantee_enc() -> X25519Secret {
+        X25519Secret::from_scalar([0xa1; 32])
+    }
+
+    /// The fixture root republished with one write grant row for
+    /// [`grantee_enc`], after `edit` changes the row and before the owner signs
+    /// the commitment.
+    fn granted(edit: impl FnOnce(&mut crate::grants::GrantRow)) -> Fixture {
+        let mut fx = Fixture::new();
+        let mut row = crate::grants::mint_grant_row(
+            &owner_identity(),
+            &fx.owner_enc,
+            &OWNER_ROOT_POINTER_READ_KEY,
+            EcdsaSigner::from_scalar(&[0xa2; 32])
+                .unwrap()
+                .verifying_key()
+                .to_sec1(),
+            &grantee_enc().public(),
+            &fx.scope_id,
+            fx.name.as_str().as_bytes(),
+            Permission::Write,
+        )
+        .unwrap();
+        edit(&mut row);
+        let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+            owner_identity: &owner_identity(),
+            owner_enc: &fx.owner_enc.public(),
+            scope_id: fx.scope_id,
+            root_id: fx.root_id,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: None,
+            write_history_link: Vec::new(),
+            grants: vec![row],
+        });
+        fx.grant_section = root.grant_section;
+        fx.envelope = root.envelope;
+        fx.head_block = root.head_block;
+        fx.head_cid_str = root.head_cid_str;
+        fx
+    }
+
+    /// Adopt `fx`'s record as the grantee `enc_secret`, as a grafted pass does
+    /// ([`RootAdopter::for_grantee`]).
+    fn grantee_adopt(fx: &Fixture, enc_secret: &X25519Secret) -> Result<AdoptOutcome, GateError> {
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let owner_enc_pub = fx.owner_enc.public();
+        let adopter = RootAdopter::for_grantee(
+            &gw,
+            &http,
+            &floors,
+            enc_secret,
+            &owner_enc_pub,
+            &fx.owner_identity_verifier,
+            fx.scope_id,
+        );
+        block_on(adopter.adopt(&fx.name, &fx.record(1)))
+    }
+
+    fn refused_check(adopted: Result<AdoptOutcome, GateError>) -> &'static str {
+        match adopted {
+            Err(GateError::Rejected(rejection)) => rejection.check(),
+            Err(GateError::Seam(e)) => panic!("expected a gate rejection, got seam {e}"),
+            Ok(_) => panic!("expected a gate rejection, got an adoption"),
+        }
+    }
+
+    #[test]
+    fn a_committed_write_grantee_adopts_and_recovers_both_seeds() {
+        let outcome = grantee_adopt(&granted(|_| {}), &grantee_enc()).expect("the grantee adopts");
+
+        assert!(outcome.read_scope_seed.is_some());
+        assert!(
+            outcome.write_scope_seed.is_some(),
+            "the commitment grants write, so the blob's write seed is surfaced",
+        );
+    }
+
+    /// Any committed writer can plant a blob at a revoked grantee's tag; only
+    /// the owner-signed commitment says who holds a grant (CONTEXT.md "Grant
+    /// blob").
+    #[test]
+    fn a_blob_at_a_tag_the_commitment_does_not_name_is_rejected() {
+        let fx = granted(|row| {
+            row.commitment_entry = GrantSetEntry::new(
+                &OWNER_ROOT_POINTER_READ_KEY,
+                [0xee; 32],
+                [0x2e; 32],
+                Permission::Write,
+                [0u8; 32],
+            );
+        });
+
+        assert_eq!(
+            refused_check(grantee_adopt(&fx, &grantee_enc())),
+            "commitment-invalid"
+        );
+    }
+
+    #[test]
+    fn a_key_whose_tag_the_commitment_does_not_name_is_rejected() {
+        let outsider = X25519Secret::from_scalar([0xa3; 32]);
+
+        assert_eq!(
+            refused_check(grantee_adopt(&granted(|_| {}), &outsider)),
+            "commitment-invalid"
+        );
     }
 
     #[test]
