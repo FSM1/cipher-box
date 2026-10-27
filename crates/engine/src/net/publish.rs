@@ -1138,17 +1138,21 @@ mod tests {
     fn a_signature_sees_a_sequence_advanced_during_its_rotation_mark_read() {
         let signer = Ed25519Signer::from_seed([0x58; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        let floors = ConcurrentAdopt {
-            inner: InMemoryFloorStore::default(),
-            name: name.clone(),
-            on: AdoptOn::RotationMark,
-        };
-        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
+        // A store at 7 that a concurrent adopt raises to 8 during the mark read.
+        let floors = || {
+            let floors = ConcurrentAdopt {
+                inner: InMemoryFloorStore::default(),
+                name: name.clone(),
+                on: AdoptOn::RotationMark,
+            };
+            block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
+            floors
+        };
 
-        let gate = block_on(SignatureGate::read(&floors, &observed, None)).unwrap();
+        let gate = block_on(SignatureGate::read(&floors(), &observed, None)).unwrap();
         assert_eq!(gate.sequence_floor(), Some(8));
-        let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, None)).unwrap();
+        let gate = block_on(SignatureGate::read_for_renewal(&floors(), &observed, None)).unwrap();
         assert_eq!(gate.sequence_floor(), Some(8));
     }
 

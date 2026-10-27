@@ -18477,19 +18477,31 @@ mod tests {
         });
     }
 
-    /// A rotation publish whose mark the floor store does not take, by a
-    /// lower value or by an error, sends no PUT, at a scope root and at an
-    /// interior node.
-    #[test]
-    fn a_rotation_mark_the_store_does_not_take_sends_no_put() {
-        for fails in [false, true] {
+    /// How a case of [`a_rotation_mark_the_store_does_not_take_sends_no_put`]
+    /// treats the raise of the rotation mark.
+    #[derive(Clone, Copy, PartialEq)]
+    enum MarkRaise {
+        Taken,
+        UnderReported,
+        Failed,
+    }
+
+    /// A rotation publish at a scope root and at an interior node, each in its
+    /// own world, under `raise`. Answers each result, with the PUTs and the
+    /// rotation mark at the node name after it.
+    fn publish_under(
+        raise: MarkRaise,
+    ) -> [(Result<(), RotationPublishError>, usize, Option<u64>); 2] {
+        [true, false].map(|promote| {
             let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
             let name = interior_name(node_id);
             let mark_key = floor::rotation_mark_key(name.as_str().as_bytes());
-            if fails {
-                harness.floors.fail_floor_raises_for(&mark_key);
-            } else {
-                harness.floors.under_report_sequence_raises_for(&mark_key);
+            match raise {
+                MarkRaise::Taken => {}
+                MarkRaise::UnderReported => {
+                    harness.floors.under_report_sequence_raises_for(&mark_key);
+                }
+                MarkRaise::Failed => harness.floors.fail_floor_raises_for(&mark_key),
             }
             let net = harness.net(&[]);
             let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");
@@ -18497,12 +18509,9 @@ mod tests {
             let body = interior_body();
             let empty = PreservedFields::new();
             let observed = gated_at(&name);
-
-            assert_eq!(
-                block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[])).err(),
-                Some(RotationPublishError::NotPublished),
-            );
-            assert_eq!(
+            let published = if promote {
+                block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[])).map(drop)
+            } else {
                 block_on(net.publish_node(
                     &scope,
                     &LaggingNode {
@@ -18514,10 +18523,29 @@ mod tests {
                         carried_unknown: &empty,
                         carried_epoch_tag_unknown: &empty,
                     },
-                )),
-                Err(RotationPublishError::NotPublished),
-            );
-            assert_eq!(harness.store.put_count(name.as_str()), 0);
+                ))
+            };
+            let mark = block_on(harness.floors.sequence_floor(&mark_key)).expect("reads");
+            (published, harness.store.put_count(name.as_str()), mark)
+        })
+    }
+
+    /// A rotation publish whose mark the floor store does not take, by a
+    /// lower value or by an error, sends no PUT, at a scope root and at an
+    /// interior node. With the raise taken, the same publishes raise the
+    /// mark and PUT.
+    #[test]
+    fn a_rotation_mark_the_store_does_not_take_sends_no_put() {
+        for (published, puts, mark) in publish_under(MarkRaise::Taken) {
+            assert_eq!(published, Ok(()));
+            assert!(puts > 0);
+            assert_eq!(mark, Some(2));
+        }
+        for raise in [MarkRaise::UnderReported, MarkRaise::Failed] {
+            for (published, puts, _) in publish_under(raise) {
+                assert_eq!(published, Err(RotationPublishError::NotPublished));
+                assert_eq!(puts, 0);
+            }
         }
     }
 
