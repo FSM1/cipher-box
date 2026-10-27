@@ -31974,30 +31974,117 @@ fn the_scope_pointer_moves_the_restart_floor_up_and_never_down() {
     assert_eq!(abuse_events(&mut fx._events), 0);
 }
 
-/// After the copy started, a concurrent stop keeps the entry at its cut step
-/// and runs no forget, so no read of a cut scope there can drop the fault of
-/// its gate. The link grant of the folder stays.
+/// The detail of the one host event for each re-cut of a dissolve.
+const RECUT: &str = "dissolve-recut";
+
+/// The section of the scope root `scope` at the root its pointer vouches.
+fn section_of(fx: &GrantScenario, scope: NodeId) -> GrantSection {
+    published_grant_section_at(
+        &fx.world,
+        &fx.blocks,
+        &scope_repoint(&fx.world, &scope.0).current_root,
+    )
+    .expect("the scope root answers")
+}
+
+/// Tick the entry at the folder past its relink. Then `scope`, cut at
+/// `cut_epoch` by the dissolve, holds no row at a higher cut epoch, the entry
+/// holds that epoch, and the host got one re-cut event and no abuse event.
+fn assert_recut_to_the_relink(fx: &mut GrantScenario, scope: NodeId, cut_epoch: u64) {
+    let header = tick_until_step(fx, DissolveStep::Unindex, 16).expect("the entry stands");
+    assert!(
+        header.step >= DissolveStep::Unindex,
+        "the dissolve passes its relink, not {:?}",
+        header.step
+    );
+    let events = events_so_far(&mut fx._events);
+    let recuts = events
+        .iter()
+        .filter(|event| matches!(event, Event::RotationWorkOwed { detail, .. } if detail == RECUT))
+        .count();
+    assert_eq!(recuts, 1, "one event for the re-cut");
+    assert_eq!(abuse_events_in(&events), 0);
+    let section = section_of(fx, scope);
+    assert!(section.commitment.entries.is_empty(), "the new row is cut");
+    assert!(section.commitment.cut_epoch > cut_epoch, "by a second cut");
+    let held = header
+        .scopes
+        .iter()
+        .find(|cut| cut.scope_id == scope)
+        .expect("the scope stays listed");
+    assert_eq!(held.cut_epoch, section.commitment.cut_epoch);
+    assert!(held.final_landed);
+}
+
+/// ADR 0077 Consequences, the dissolve wins after the copy: a grant on a cut
+/// scope that the map step finds sends the entry back to its cut step, which
+/// cuts the scope again, and the dissolve goes on to its relink.
 #[test]
-fn a_concurrent_stop_after_the_copy_started_runs_no_forget() {
+fn a_grant_on_a_cut_scope_at_the_map_after_the_copy_started_is_cut_again() {
+    let mut fx = GrantScenario::new();
+    let (plain, _) = log_a_flat_subtree(&mut fx);
+    move_plain_out(&mut fx, plain);
+    let cut_epoch = fx.standing_dissolve().scopes[0].cut_epoch;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let folder = fx.folder;
+    assert_recut_to_the_relink(&mut fx, folder, cut_epoch);
+}
+
+/// ADR 0077 Consequences, the dissolve wins after the copy: a grant on a cut
+/// scope that the seal step finds sends the entry back to its cut step.
+#[test]
+fn a_grant_on_a_cut_scope_at_the_seal_after_the_copy_started_is_cut_again() {
+    let mut fx = GrantScenario::new();
+    log_the_cut_subtree(&mut fx);
+    let cut_epoch = fx.standing_dissolve().scopes[0].cut_epoch;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let folder = fx.folder;
+    assert_recut_to_the_relink(&mut fx, folder, cut_epoch);
+}
+
+/// ADR 0077 Consequences, the dissolve wins after the copy: at the cut step
+/// of a join, a grant on a scope that the dissolve cut already is cut again,
+/// and the dissolve goes on to its relink.
+#[test]
+fn a_grant_on_a_cut_scope_at_the_cut_step_after_the_copy_started_is_cut_again() {
     let mut fx = GrantScenario::new();
     let (plain, _) = log_the_cut_subtree(&mut fx);
-    let identity = plant_link_contact(&fx);
     let inner = fx.standing_dissolve().scopes[1].scope_id;
+    let cut_epoch = fx.standing_dissolve().scopes[1].cut_epoch;
     grant_to_recipient(&mut fx.engine, plain);
     let plain_pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &plain.0);
     fx.world.record_store.fail_put_for(plain_pointer.as_str());
     ticks(&mut fx, 6);
     let header = fx.standing_dissolve();
     assert_eq!(header.step, DissolveStep::Cut, "the shared folder joins");
-    assert!(header.scopes.iter().any(|scope| scope.scope_id == plain));
+    assert!(header.copy_started);
     grant_to_recipient(&mut fx.engine, inner);
     fx.world.record_store.heal_put_for(plain_pointer.as_str());
-    assert!(book_holds(&fx, &identity));
 
-    assert_eq!(fx.dissolve(), Ok(Some(DissolveStep::Cut)));
+    assert_eq!(
+        fx.dissolve(),
+        Ok(Some(DissolveStep::Map)),
+        "the cut step ends"
+    );
 
-    assert!(book_holds(&fx, &identity), "no forget runs");
-    assert!(fx.standing_dissolve().copy_started);
+    assert_recut_to_the_relink(&mut fx, inner, cut_epoch);
+}
+
+/// A cut that leaves no row on a cut scope after the copy started, here a
+/// grant and its revoke, raises the held cut epoch to it with no stop.
+#[test]
+fn a_cut_with_no_row_after_the_copy_started_raises_the_held_cut_epoch() {
+    let mut fx = GrantScenario::new();
+    log_the_cut_subtree(&mut fx);
+    let cut_epoch = fx.standing_dissolve().scopes[0].cut_epoch;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert!(fx.folder_section().commitment.entries.is_empty());
+
+    let folder = fx.folder;
+    assert_recut_to_the_relink(&mut fx, folder, cut_epoch);
 }
 
 /// A joined scope cannot leave the subtree: a move of a scope root into
