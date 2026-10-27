@@ -87,8 +87,7 @@ pub(crate) use rotation::{
     WritePlaneDark, enrol_owned_scope_pointers,
 };
 pub use rotation::{
-    GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
-    PointerConsultArm, WriteWaveNet,
+    GrantedScopeRoot, OwnerRotationKeys, OwnerRotationNet, PointerConsultArm, WriteWaveNet,
 };
 pub(crate) use vault_pointer::{
     ChainRevival, ChainStall, VaultPointerRead, VaultPointerVoucher, VouchedRoot,

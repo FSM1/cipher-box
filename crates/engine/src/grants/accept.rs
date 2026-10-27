@@ -164,8 +164,8 @@ pub struct ReceivedShare {
     pub scope_root_name: Vec<u8>,
     /// The accepted scope's id, as the gate-adopted record's envelope bound it
     /// ([`AcceptOutcome::scope_id`]). Persisted because a grantee cannot derive
-    /// it from the name, and the grantee rotation arm addresses a scope by id
-    /// ([`GrantedScopeRoots`](crate::rotation::GrantedScopeRoots)).
+    /// it from the name, and a browse addresses a scope by id
+    /// ([`ReceivedSharesList::granted_scope_roots`]).
     pub scope_id: [u8; 16],
     /// The sharer's identity key.
     pub sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
@@ -571,18 +571,15 @@ impl ReceivedSharesList {
         }
     }
 
-    /// The scope roots this device can address by scope id — the caller-held
-    /// pairing the grantee rotation arm borrows
-    /// ([`GranteeRotationNet`](crate::net::GranteeRotationNet)), derived from the
+    /// The scope roots this device can address by scope id, derived from the
     /// bookmark rather than cached beside it.
     ///
     /// Two exclusions, both fail-closed. A stored name that is not a well-formed
-    /// IPNS name resolves nothing, so it names no rotation destination. And a
-    /// scope id carried by more than one bookmark is **ambiguous**: the list is
-    /// keyed by [`ReceivedShare::key`], so two sharers may each hold a bookmark
-    /// for one id legitimately — but the rotation arm addresses a scope by id
-    /// alone, so neither may answer, or a rotation would be aimed at whichever
-    /// sorted first while the revokee on the other scope keeps a live seed.
+    /// IPNS name resolves nothing, so it names no destination. And a scope id
+    /// carried by more than one bookmark is **ambiguous**: the list is keyed by
+    /// [`ReceivedShare::key`], so two sharers may each hold a bookmark for one
+    /// id legitimately — but a browse addresses a scope by id alone, so neither
+    /// may answer, or it would reach whichever sorted first.
     pub fn granted_scope_roots(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|_| true)
     }

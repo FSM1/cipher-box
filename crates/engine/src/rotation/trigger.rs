@@ -67,8 +67,7 @@ impl RotationTrigger {
 /// retention law; this seam owns assembling the root's
 /// [`RotateScopePlan`](super::rotate::RotateScopePlan) from its resolved record
 /// and running [`rotate_scope`](super::rotate::rotate_scope) over the live
-/// plane — [`GranteeRotationNet`](crate::net::GranteeRotationNet) over the real
-/// transport.
+/// plane — the owner's `cut_exited_scope` over the real transport (ADR 0082).
 pub trait ScopeExitRotator {
     /// Run the flat, grantee-triggered [`RotationTrigger::ScopeExit`] cut at
     /// `scope_root`. `Err` means nothing was cut, with the single documented

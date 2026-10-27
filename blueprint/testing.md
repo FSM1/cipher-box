@@ -383,7 +383,7 @@ scenario fails the meta-test):
 - the rotation mark (ADR 0081) — a rotation PUT that lands and does not
   confirm, then a publish in a new net over the same floor store, signs above
   the mark: a flat cut root, a child ascent re-seal, a promotion, a sweep
-  re-seal, a grant move re-seal and a grantee cut; a retry after a cut PUT
+  re-seal and a grant move re-seal; a retry after a cut PUT
   that no endpoint acknowledged signs above it; a raise that the floor store
   does not take, or refuses with an error, sends no PUT, and a raise that it
   takes is followed by the PUT (`net::rotation`); each attempt of the cut of a
@@ -449,8 +449,8 @@ scenario fails the meta-test):
   queued and lands after the failed endpoint recovers; when the other
   endpoint serves the old record or answers 403, each stays a trust violation;
   the revoke finishes after the failed endpoint recovers
-  (`tests/owner_actions.rs`); the root admit, the sweep read, the grantee root
-  read, the write cut's root, boundary, interior and `gated_root_at` reads, and
+  (`tests/owner_actions.rs`); the root admit, the sweep read, the write cut's
+  root, boundary, interior and `gated_root_at` reads, and
   the served-root gate of `FallbackRead` give the same split, and a forged
   record stays a rejection
   (`net::rotation`); the vault pointer's standing read does too
@@ -476,8 +476,8 @@ scenario fails the meta-test):
   An absent head block (ADR 0078 D1): every block source answers 404 while
   every record endpoint answers. The boundary walk is unavailable, sends no
   trust event and refuses no move, and a forged second scope root of the same
-  walk stays a rejection; the grantee root read and the write cut boundary
-  read are unavailable (`net::rotation`
+  walk stays a rejection; the write cut boundary read is unavailable
+  (`net::rotation`
   `head_block_absent_off_the_owner_rotation`, `tests/owner_actions.rs`
   `a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk`);
   the renewal walk reports the scope root as a failed renewal, sends no
