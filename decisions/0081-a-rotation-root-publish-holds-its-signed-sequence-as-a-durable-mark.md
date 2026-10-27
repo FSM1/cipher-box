@@ -32,16 +32,17 @@ nothing. The second mark of ADR 0076 covers drain nodes only.
 **D1 — Each rotation publish raises a durable mark at its name to its signed sequence, before the
 PUT.** This is the rotation mark of the name. The key is `rotation-signed/ | name`, in the sequence namespace of the floor store, in the
 style of the relink mark key `dissolve-relink-parent/ | name` (`floor::relink_parent_mark_key`).
-The raise is `PutMark::SignedDurable`. When the floor store does not take the raise, the publish
+The raise is `PutMark::Rotation`. When the floor store does not take the raise, the publish
 refuses before the PUT (`PublishError::MarkUnrecorded`). Two arms raise the mark: the scope-root
 publish arm `RootPublish::run` and `publish_interior_head`. Thus each of these publishes raises it:
 the cut root and each descendant root of an owner cut, in each attempt of the bounded loops of
 `OwnerCutNet`; the root of a flat cut (`flat_root_cut`); the child ascent re-seal
 (`reseal_root_in_place`) and the index repair of the sweep; `promote_scope_root`; the grantee
-scope-root publish, under the floors of its granting identity; and the interior re-seals of the
+scope-root publish, at the same key as an owner publish, because the view of its granting
+identity scopes only the epoch keys; and the interior re-seals of the
 sweep (`publish_node`) and of a grant move (`reseal_interior_node`). The mark only rises, and
 nothing clears it. A PUT that fails leaves a gap in the sequences of the name, and a gap is
-harmless. The mark is not a floor: no gate, no resolve and no settle reads it.
+harmless. The mark is not a floor: no adoption gate, no resolve and no settle reads it.
 
 **D2 — Every signature at the name reads the mark and signs strictly above it.**
 `SignatureGate::read` and `SignatureGate::read_for_renewal` read the mark as they read the relink
