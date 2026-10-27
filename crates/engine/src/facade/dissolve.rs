@@ -426,8 +426,7 @@ where
         }
         // A cut that left no row moves the baseline up to it.
         if recut && cut.is_none() {
-            self.raise_cut(journal, hold, header, at, cut_epoch, true)
-                .await?;
+            Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, recut)).await?;
         }
         let target = match cut {
             Some(cut) => {
@@ -449,7 +448,7 @@ where
                 if owed != OwedCut::Unproved {
                     let forgot = self.forget_link_grants(scope).await;
                     if cut_epoch > header.scopes[at].cut_epoch {
-                        self.raise_cut(journal, hold, header, at, cut_epoch, recut)
+                        Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, recut))
                             .await?;
                     }
                     forgot?;

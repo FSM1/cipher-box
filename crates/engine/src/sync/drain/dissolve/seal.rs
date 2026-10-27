@@ -28,8 +28,8 @@ use super::super::{
     encode_content_cid_str, refuse_record, seal_open_failed, take_tick_read,
 };
 use super::{
-    CLOSE_READS_PER_SCOPE, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS, cut_epoch_of,
-    cut_overtaken,
+    CLOSE_READS_PER_SCOPE, CutRead, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS,
+    cut_epoch_of, cut_read, step_back,
 };
 use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
@@ -42,7 +42,7 @@ use crate::seams::{
 use crate::sync::dissolve_journal::{
     DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep,
     DissolveWriteError, HeaderSlot, LoggedName, MAX_PRIOR_BINDINGS, MapRow, NameLogPage,
-    PriorBinding, RelinkRebind, overtakes,
+    PriorBinding, RelinkRebind,
 };
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
@@ -120,11 +120,11 @@ impl SealFault {
         rows: bool,
         cut_epoch: u64,
     ) -> Option<Self> {
-        let held = cut_epoch_of(header, scope);
-        if held.is_some_and(|held| overtakes(rows, cut_epoch, held)) {
-            return Some(Self::Recut);
+        match cut_read(rows, cut_epoch, cut_epoch_of(header, scope)) {
+            CutRead::Held => None,
+            CutRead::Overtaken => Some(Self::Recut),
+            CutRead::Lags => Some(Self::Unanswered),
         }
-        cut_overtaken(rows, cut_epoch, held).then_some(Self::Unanswered)
     }
 }
 
@@ -151,18 +151,6 @@ pub(super) struct Destination<'t, 'e> {
     /// each scope up to `write`.
     pub(super) chain: Vec<&'t ScopeEnd<'e>>,
     pub(super) write: &'t ScopeEnd<'e>,
-}
-
-/// Commit `header` back at `step`, a step before the seal.
-async fn step_back<St: StagingStore>(
-    journal: &DissolveJournal<'_, St>,
-    hold: &DissolveHold<'_>,
-    header: &DissolveHeader,
-    step: DissolveStep,
-) -> Result<(), SealFault> {
-    let mut back = header.clone();
-    back.step = step;
-    Ok(journal.commit(hold, Some(header), &back).await?)
 }
 
 /// The header that the gated destination root at `epoch` and `cut_epoch`,
@@ -682,10 +670,10 @@ where
         match fault {
             Some(SealFault::Refused) => return Err(SealFault::Refused),
             Some(SealFault::Remap) => {
-                return step_back(journal, hold, &header, DissolveStep::Map).await;
+                return Ok(Box::pin(step_back(journal, hold, &header, DissolveStep::Map)).await?);
             }
             Some(SealFault::Recut) => {
-                return step_back(journal, hold, &header, DissolveStep::Cut).await;
+                return Ok(Box::pin(step_back(journal, hold, &header, DissolveStep::Cut)).await?);
             }
             _ => {}
         }
@@ -729,7 +717,9 @@ where
                 .await
             {
                 Err(SealFault::Recut) => {
-                    return step_back(journal, hold, &header, DissolveStep::Cut).await;
+                    return Ok(
+                        Box::pin(step_back(journal, hold, &header, DissolveStep::Cut)).await?,
+                    );
                 }
                 closed => closed?,
             }

@@ -214,7 +214,9 @@ enum MapHalt {
     /// A diamond, or a scope root that the gated index does not name yet:
     /// the next tick walks again.
     Restart,
-    /// A row, a cut, or a scope root that the dissolve did not make.
+    /// A row or another cut on a cut scope before the copy started, a cut
+    /// scope read below its held cut epoch, or a scope root that the
+    /// dissolve did not make.
     Concurrent,
     /// The walk passed its node bound.
     TooLarge,
@@ -304,10 +306,37 @@ fn ascends_from(parent: &ScopeEnd<'_>, child: &ScopeEnd<'_>) -> bool {
     })
 }
 
-/// Whether a cut scope root that holds `rows` at `cut_epoch` shows work that
-/// the dissolve did not do, against `cut`, the cut epoch of the entry.
-fn cut_overtaken(rows: bool, cut_epoch: u64, cut: Option<u64>) -> bool {
-    rows || Some(cut_epoch) != cut
+/// How a cut scope root stands against the cut epoch of the entry.
+#[derive(Debug, PartialEq, Eq)]
+enum CutRead {
+    /// It holds no row at the cut epoch of the entry.
+    Held,
+    /// A row or a cut that the dissolve did not make overtook it.
+    Overtaken,
+    /// The read lags the cut epoch of the entry, so a later tick reads again.
+    Lags,
+}
+
+/// How a cut scope root that holds `rows` at `cut_epoch` stands against
+/// `held`, the cut epoch at which the entry cuts it.
+fn cut_read(rows: bool, cut_epoch: u64, held: Option<u64>) -> CutRead {
+    match held {
+        Some(held) if overtakes(rows, cut_epoch, held) => CutRead::Overtaken,
+        Some(held) if !rows && cut_epoch == held => CutRead::Held,
+        _ => CutRead::Lags,
+    }
+}
+
+/// Commit `header` back at `step`, a step before the one it holds.
+async fn step_back<St: StagingStore>(
+    journal: &DissolveJournal<'_, St>,
+    hold: &DissolveHold<'_>,
+    header: &DissolveHeader,
+    step: DissolveStep,
+) -> Result<(), DissolveWriteError> {
+    let mut back = header.clone();
+    back.step = step;
+    journal.commit(hold, Some(header), &back).await
 }
 
 /// The cut epoch at which `header` cuts `scope`, `None` when it does not cut
@@ -528,12 +557,10 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
     ) -> Result<(), Overflow> {
         let at = u32::try_from(sweep.read.len() - 1).map_err(|_| Overflow)?;
         if let Some(root) = read.root {
-            let held = self.cuts(key.node);
-            if self.joining && held.is_some_and(|held| overtakes(root.rows, root.cut_epoch, held)) {
-                return self.stop(MapHalt::Recut);
-            }
-            if cut_overtaken(root.rows, root.cut_epoch, held) {
-                return self.stop(MapHalt::Concurrent);
+            match cut_read(root.rows, root.cut_epoch, self.cuts(key.node)) {
+                CutRead::Held => {}
+                CutRead::Overtaken if self.joining => return self.stop(MapHalt::Recut),
+                CutRead::Overtaken | CutRead::Lags => return self.stop(MapHalt::Concurrent),
             }
             let uncut: BTreeSet<NodeId> = root
                 .index
@@ -723,9 +750,7 @@ where
                 }
             }
             MapStep::Recut => {
-                let mut recut = header.clone();
-                recut.step = DissolveStep::Cut;
-                Ok(journal.commit(&hold, Some(&header), &recut).await?)
+                Ok(Box::pin(step_back(journal, &hold, &header, DissolveStep::Cut)).await?)
             }
             MapStep::Join(scopes) => {
                 let mut joined = header.clone();
@@ -1509,6 +1534,43 @@ mod tests {
 
             assert_eq!(Fake::new(tree).run(&mut walk(&[S, N])), MapStep::Stop);
         }
+    }
+
+    /// After the copy started, a row or a higher cut at a cut scope root
+    /// sends the entry back to its cut step, and a read below the held cut
+    /// epoch keeps the entry for a later tick.
+    #[test]
+    fn after_the_copy_an_overtaken_cut_scope_recuts_and_a_lagging_read_waits() {
+        let mut header = header(&[S, N]);
+        header.copy_started = true;
+        for (root, step) in [
+            ((Vec::new(), true, 2), MapStep::Recut),
+            ((Vec::new(), false, 3), MapStep::Recut),
+            ((Vec::new(), true, 1), MapStep::Stop),
+            ((Vec::new(), false, 1), MapStep::Stop),
+        ] {
+            let mut tree = tree();
+            tree.get_mut(&N).unwrap().root = Some(root);
+
+            assert_eq!(
+                Fake::new(tree).run(&mut DissolveWalk::new(&header, S)),
+                step
+            );
+        }
+        assert_eq!(map_stop_action(&MapStep::Stop, true), MapStopAction::Keep);
+    }
+
+    /// The seal and the close read a cut scope root by the same rule as the
+    /// walk: a row or a higher cut overtakes it, and a read below the held cut
+    /// epoch, or of a scope the entry does not cut, lags.
+    #[test]
+    fn a_cut_scope_read_is_held_overtaken_or_lagging() {
+        assert_eq!(cut_read(false, 2, Some(2)), CutRead::Held);
+        assert_eq!(cut_read(true, 2, Some(2)), CutRead::Overtaken);
+        assert_eq!(cut_read(false, 3, Some(2)), CutRead::Overtaken);
+        assert_eq!(cut_read(true, 1, Some(2)), CutRead::Lags);
+        assert_eq!(cut_read(false, 1, Some(2)), CutRead::Lags);
+        assert_eq!(cut_read(false, 2, None), CutRead::Lags);
     }
 
     /// A diamond and a cycle are both a second ref to a node the walk holds:
