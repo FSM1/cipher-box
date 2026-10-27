@@ -554,7 +554,7 @@ impl<'a> SignatureGate<'a> {
         // A bounded read takes the sequence floor last, so it sees an
         // adoption during the reads above. Every other read keeps the bar
         // last, so the bar holds to the signature.
-        let early = if observed.bounded {
+        let floor_before_bar = if observed.bounded {
             None
         } else {
             Some(read_sequence_floor(floors, observed).await?)
@@ -564,7 +564,7 @@ impl<'a> SignatureGate<'a> {
             Some(bar) => Some((bar, bar.read_floors(floors).await?)),
             None => None,
         };
-        let sequence_floor = match early {
+        let sequence_floor = match floor_before_bar {
             Some(sequence_floor) => sequence_floor,
             None => read_sequence_floor(floors, observed).await?,
         };
@@ -590,9 +590,7 @@ impl<'a> SignatureGate<'a> {
             None => None,
         };
         let relink_mark = read_relink_mark(floors, observed).await?;
-        let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
-            .await
-            .map_err(PublishError::FloorRead)?;
+        let sequence_floor = read_sequence_floor(floors, observed).await?;
         Ok(Self {
             observed,
             bar,
@@ -1205,12 +1203,21 @@ mod tests {
         );
         assert_eq!(sign(&read.clone().clearing(2).bounded()), Ok(3));
         assert_eq!(sign(&read), Ok(3));
+        let bounded = read.clone().bounded();
+        assert_eq!(
+            block_on(SignatureGate::read(&floors, &bounded, None))
+                .unwrap()
+                .sign_above(0, &signer, b"/ipfs/x", 1, "2099-01-01T00:00:00Z")
+                .map(|(_, sequence)| sequence),
+            Err(PublishError::Overtaken { floor: 2, bound: 1 }),
+            "sign_above refuses too",
+        );
     }
 
     /// An adoption during an epoch-floor read or the relink-mark read of the
     /// gate raises the floor above a bounded read, and the signature refuses.
     #[test]
-    fn a_bounded_read_refuses_a_floor_raised_during_its_epoch_reads() {
+    fn a_bounded_read_refuses_a_floor_raised_during_its_gate_reads() {
         let signer = Ed25519Signer::from_seed([0x56; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[])
@@ -1263,6 +1270,16 @@ mod tests {
             refused[0],
             PublishError::RecordTooLarge { size: 2, limit: 1 }.to_string(),
             "another verdict shows another string"
+        );
+        let overtaken = PublishError::Overtaken { floor: 8, bound: 7 }.to_string();
+        assert!(
+            !overtaken.contains('8') && !overtaken.contains('7'),
+            "no floor or bound number: {overtaken}"
+        );
+        assert_ne!(
+            overtaken,
+            PublishError::FloorRead(SeamError::new("x")).to_string(),
+            "not the text of a floor-store fault"
         );
     }
 }

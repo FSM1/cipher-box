@@ -2874,7 +2874,7 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// copy has no bound, because its read can sit below the floor (ADR 0068
     /// D1). Every other publish refuses a floor above its read
     /// ([`Observed::bounded`]).
-    unbounded: Option<[u8; 16]>,
+    last_copy_root: Option<[u8; 16]>,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
@@ -2955,7 +2955,7 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
 
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
-        let observed = if self.unbounded == Some(record.scope_id) {
+        let observed = if self.last_copy_root == Some(record.scope_id) {
             current.observed.clone()
         } else {
             current.observed.clone().bounded()
@@ -2986,7 +2986,7 @@ where
         .map_err(record_publish_verdict)?;
 
         match receipt.outcome {
-            // The floor only moves when a **read** adopts, so a second publish at
+            // Only a read or a landed renewal moves the floor, so a second publish at
             // this name in the same pass clears the sequence this one spent
             // through the base — pass-local, because raising the floor here would
             // make this device's own next resolve read its record as current
@@ -3035,7 +3035,7 @@ where
                 .as_ref()
                 .and_then(|fallback| fallback.put_sent.map(|sent| (fallback.scope_id, sent))),
             signed: None,
-            unbounded: self
+            last_copy_root: self
                 .root_fallback
                 .as_ref()
                 .filter(|fallback| fallback.fell_back())
@@ -3523,7 +3523,7 @@ where
             owner_identity: self.keys.owner_identity,
             put_sent: None,
             signed: None,
-            unbounded: None,
+            last_copy_root: None,
         }
     }
 }
@@ -11409,6 +11409,49 @@ mod tests {
         assert!(
             net.gated.take(&root.name).is_none(),
             "the next try reads again"
+        );
+    }
+
+    /// A read of one scope root that fell back to the last copy exempts that
+    /// scope only. Another scope root of the same net keeps its bound.
+    #[test]
+    fn a_last_copy_of_one_scope_leaves_the_bound_on_another_scope() {
+        let harness = Harness::plain();
+        let roots = [SCOPE, CHILD_SCOPE].map(|scope_id| {
+            let root = vault_root(scope_id, Vec::new());
+            harness.stage(scope_id, &root, Some(OWNER_ROOT_EPOCH));
+            root
+        });
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+        net.root_fallback
+            .as_ref()
+            .expect("the fallback")
+            .fell_back
+            .set(true);
+        let publish = |root: &OwnerRootFixture, scope_id: [u8; 16]| {
+            let scope = ChildScopeRef::new(scope_id, root.name.as_str().as_bytes().to_vec());
+            block_on(net.resolve_anchored(&scope)).expect("the cut reads the root");
+            block_on(
+                harness
+                    .floors
+                    .raise_sequence_floor(root.name.as_str().as_bytes(), 2),
+            )
+            .expect("an adoption raises the floor");
+            block_on(net.publish_scope_root(&cut(root, scope_id, OWNER_ROOT_EPOCH + 1)))
+                .map(|published| published.sequence)
+        };
+
+        assert_eq!(
+            publish(&roots[0], SCOPE),
+            Ok(3),
+            "the last copy has no bound"
+        );
+        assert_eq!(
+            publish(&roots[1], CHILD_SCOPE),
+            Err(RotationPublishError::LostRace),
+            "another scope keeps its bound",
         );
     }
 
