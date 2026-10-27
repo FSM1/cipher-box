@@ -1235,6 +1235,28 @@ fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
     assert!(landed[1] > landed[0], "{landed:?}");
 }
 
+/// Each attempt of the cut of a revoke runs in a new net. An attempt signs
+/// above the rotation mark of an attempt before it whose root PUT landed but
+/// did not confirm.
+#[test]
+fn a_cut_retry_signs_above_an_unconfirmed_root_put_of_the_attempt_before() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder_name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &folder_name);
+    serve_the_current_record_after_each_put(&fx.world, &folder_name);
+    let _clock = fx.world.scheduler.clone().with_auto_advance();
+
+    let revoked = block_on(fx.engine.command(Command::Revoke {
+        node: fx.folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+    }));
+    assert!(revoked.is_err(), "{revoked:?}");
+    let after = sequence_at(&fx.world, &folder_name);
+    assert!(after > before + 1, "{before} then {after}");
+}
+
 /// The sweep a cut enqueues signs above a re-seal of that cut that landed
 /// but did not confirm.
 #[test]
