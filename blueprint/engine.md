@@ -1342,11 +1342,10 @@ by FSM1/cipher-box-next#38 D5):
   cheap for grant-less scopes), owner blob, history link, ascent link under
   the parent's new derivation. Cached descendant seeds are why ascent-re-seal
   alone is insufficient. Cost: O(descendant scope count), never tree size.
-- **Flat cuts** (`RotateNow`, an owned scope exit; a grantee cuts no scope,
+- **Flat cuts** (`RotateNow`, an owned scope exit; the engine starts no grantee cut,
   [ADR 0082](../decisions/0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md)):
-  flat, self-contained, offline — every
-  old-seed holder is a live grantee who receives the new seed, so no cascade;
-  the single root still republishes the full per-scope-root list — blobs
+  The cut preserves the grant set and does not run a revoke cascade. Every
+  old-seed holder is a live grantee who receives the new seed. The single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
   FSM1/cipher-box-next#38 D5). A flat cut also
@@ -1364,8 +1363,8 @@ Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box
 maintained by the ops that change scope parentage (grant, scope dissolution,
 cross-scope moves of a scope root) under the same dest-first + observed-repair
 semantics as any move. The rotator detached-signs every seed-bearing structure
-it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a grantee re-wraps blobs for
-the committed tag set verbatim and can neither extend nor shrink it (FSM1/cipher-box-next#26 D5).
+it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a flat cut preserves the
+committed tag set (FSM1/cipher-box-next#26 D5).
 
 A dissolve removes the source root from the index only after a gated link proof
 finds it unlinked (ADR 0077 D1). When the relink parent names neither root or
@@ -1751,8 +1750,7 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   is non-circular and public observers cannot link old↔new roots; revokee
   readability is accepted (FSM1/cipher-box-next#38 D3, FSM1/cipher-box-next#39 D4). `writeEpoch` moves on owner-only
   write rotation; `minReadEpoch` bumps only on owner-triggered read rotations,
-  so grantee rotations need no owner signature and each plane's clock is
-  authored by the authority that owns it.
+  so each plane's clock follows the authority that owns it (ADR 0082).
 - **Consult discipline: polled, not fallback** (FSM1/cipher-box-next#38 D4). A revokee's forged
   old-epoch records pass every other gate stage — valid old-key signature,
   fresh sequence, floor-level epoch, old-seed unseal — so staleness never

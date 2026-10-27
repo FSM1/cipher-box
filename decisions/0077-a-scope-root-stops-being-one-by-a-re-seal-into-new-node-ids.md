@@ -54,7 +54,9 @@ destination write scope for a name. The pass writes a new epoch to the entry bef
 that epoch. A rise that an owner cut of the read scope causes (`minReadEpoch` or the cut epoch
 rises) re-seals each published node again, because key regression gives a cut grantee every epoch
 below the cut, and the lazy wave reaches no node that the destination does not link. Another rise
-seals only the remaining nodes at the new epoch, so a grantee rotation cannot restart the pass. A
+seals only the remaining nodes at the new epoch, so a grantee rotation cannot restart the pass
+(Amended by ADR 0082 D1 on 2026-10-28: no grantee rotation exists; a read-epoch rise without a
+`minReadEpoch` or cut-epoch rise, as in an owner flat cut, still does not restart the pass). A
 write cut of the destination write scope derives each name again under the new write scope seed,
 publishes each node again and retires the vacated names; as ADR 0063 D1 refuses a resume at another
 write epoch, no publish lands at a name of an old write scope seed. A grant on an ancestor of the

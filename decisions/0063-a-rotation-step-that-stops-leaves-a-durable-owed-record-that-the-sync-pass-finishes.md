@@ -24,7 +24,8 @@ leaves the revoked writer with a live write seed (FSM1/cipher-box#1923, FSM1/cip
 promoted scope whose write-scope cut did not run lapses, because the renewal walk holds no seed
 that derives its names (FSM1/cipher-box#2124). A stalled interior move strands its nodes once the
 parent sweep repairs the index (FSM1/cipher-box#2134). The scope-exit debt (owner-local kind
-`0x06`) already solves this shape for the grantee read cut. The owner decided on 2026-09-30:
+`0x06`) already solves this shape for the grantee read cut. Amended by ADR 0082 D1 on 2026-10-28: that debt is owed
+for an owner scope exit, not a grantee read cut. The owner decided on 2026-09-30:
 one durable local owed-work record, which the engine retries from the sync pass and at cold start.
 
 ## Decision
