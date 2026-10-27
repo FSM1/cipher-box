@@ -373,7 +373,8 @@ scenario fails the meta-test):
   store clear at session start, a nested re-seal after a restart signs above
   the re-seal of the session before it (`tests/owner_actions.rs`); a publish
   signature and a renewal signature go above the mark, a mark that does not
-  read refuses both, and both read the sequence floor after the mark
+  read refuses both, both read the sequence floor after the mark, and a
+  bounded read signs above its own mark and is not overtaken by it
   (`net::publish`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
