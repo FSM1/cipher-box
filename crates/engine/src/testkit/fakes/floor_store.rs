@@ -335,6 +335,16 @@ impl InMemoryFloorStore {
         })
     }
 
+    /// Drop the epoch floor at `key`, whole or with its owner tag stripped, as
+    /// on a device that never adopted that scope.
+    pub fn forget_epoch_floor(&self, key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .epoch
+            .retain(|stored, _| stored != key && stored.get(OWNER_TAG_LEN..) != Some(key));
+    }
+
     /// Every epoch-namespace key this store holds, exactly as it was written —
     /// what a test asserts a durable key does not disclose.
     #[must_use]

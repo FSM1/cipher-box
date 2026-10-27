@@ -12449,6 +12449,59 @@ fn an_unindexed_scope_probe_does_not_read_a_refused_pointer_as_no_scope() {
     );
 }
 
+/// ADR 0078 D1: on a device with no floor for an unindexed scope root, the
+/// derived-name probe reads a record whose head block no block source holds
+/// as unavailable, not as "no scope here". The share waits, mints nothing over
+/// the inner folder, and sends no trust event.
+#[test]
+fn an_unindexed_scope_probe_does_not_read_an_absent_head_block_as_no_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Ok(CommandOutcome::Done),
+        "the parent index update fails, so the scope goes live unnamed and its move is owed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let folder = fx.folder;
+    fx.owner_device.floor_store.forget_epoch_floor(&folder.0);
+    let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+        format!("/ipfs/{absent}").as_bytes(),
+        sequence_at(&fx.world, &write_name(folder)) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    serve_everywhere(&fx.world, folder, &record);
+    let _ = events_so_far(&mut fx._events);
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+
+    let granted = block_on(fx.engine.command(Command::Grant {
+        node: inner,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Read,
+        grantee_name: None,
+    }));
+
+    assert!(
+        matches!(&granted, Err(EngineError::Seam { message }) if message.contains("unindexed-scope")),
+        "{granted:?}"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(inner)),
+        inner_before,
+        "no scope root was minted over the inner folder"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0);
+}
+
 /// The gate reports a record below this device's own read-epoch floor as a
 /// plain rejection, which the derived-name probe would otherwise read as "no
 /// scope here". Only a scope root ever raises a floor at its own scope id, so

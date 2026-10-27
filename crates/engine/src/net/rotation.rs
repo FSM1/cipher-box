@@ -2719,7 +2719,7 @@ where
         self.resealable_root(scope.scope_id, &name, anchor)
             .await
             .map(|_| ())
-            .map_err(ResolveFailure::from)
+            .map_err(|verdict| ResolveFailure::from(verdict.absent_head_as_unavailable()))
     }
 
     /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
@@ -3402,7 +3402,7 @@ where
         let gated = self
             .gated_root(granted)
             .await
-            .map_err(|verdict| ResolveFailure::from(verdict.off_owner_rotation()))?;
+            .map_err(|verdict| ResolveFailure::from(verdict.absent_head_as_unavailable()))?;
         let observed = root_observed(&gated, None).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             write_epoch: _,
@@ -5589,7 +5589,9 @@ where
             RootRead::new(&adopter, self.snapshot_cache, Some(child.scope_id))
                 .read(self.transport, &name)
                 .await
-                .map_err(|refusal| ResolveFailure::from(refusal.verdict.off_owner_rotation()))?;
+                .map_err(|refusal| {
+                    ResolveFailure::from(refusal.verdict.absent_head_as_unavailable())
+                })?;
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
