@@ -1214,8 +1214,9 @@ fn serve_the_current_record_after_each_put(world: &FakeWorld, name: &IpnsName) {
     store.serve_after_put(name.as_str(), 0, current);
 }
 
-/// A re-seal of a nested root that lands but does not confirm spends its
-/// sequence for the session, so a re-seal of a later command signs above it.
+/// A re-seal of a nested root that lands but does not confirm raises the
+/// rotation mark of its name. The mark holds the sequence, not the session,
+/// so a re-seal of a later command after a restart signs above it.
 #[test]
 fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
     let mut fx = GrantScenario::new();
@@ -1225,7 +1226,10 @@ fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
     serve_the_current_record_after_each_put(&fx.world, &folder_name);
 
     let mut landed = Vec::new();
-    for _ in 0..2 {
+    for restart in [false, true] {
+        if restart {
+            restart_owner(&mut fx);
+        }
         assert_eq!(
             block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
             Ok(CommandOutcome::Done)

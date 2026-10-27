@@ -11433,24 +11433,7 @@ mod tests {
     #[test]
     fn a_retry_at_the_window_edge_signs_above_an_unacknowledged_cut() {
         let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
-        let parent_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
-        let attempt = || {
-            let net = harness.net_rooted(RotationAncestry::rooted_at(
-                SCOPE,
-                &OWNER_ROOT_SCOPE_SEED,
-                core::slice::from_ref(&scope_ref),
-            ));
-            block_on(crate::rotation::flat_root_cut(
-                &net,
-                None,
-                crate::rotation::FlatCut {
-                    scope: &scope_ref,
-                    ascent: Some(&parent_seed),
-                    make_sweep: || Box::pin(async {}),
-                },
-            ))
-            .map(drop)
-        };
+        let attempt = || cut_at_the_window_edge(&harness, &scope_ref).map(drop);
 
         harness.store.fail_put_for(scope.name.as_str());
         assert_eq!(
@@ -11780,7 +11763,10 @@ mod tests {
 
         let mut landed = Vec::new();
         for _ in 0..2 {
-            assert!(cut_at_the_window_edge(&harness, &scope_ref).is_err());
+            assert_eq!(
+                cut_at_the_window_edge(&harness, &scope_ref).err(),
+                Some(RotateError::Publish(RotationPublishError::NotPublished)),
+            );
             landed.push(sequence_at(&harness, &scope.name).expect("the PUT landed"));
         }
         assert!(landed[1] > landed[0], "{landed:?}");
@@ -12610,7 +12596,10 @@ mod tests {
 
         let mut landed = Vec::new();
         for _ in 0..2 {
-            assert!(world.cut().is_err());
+            assert_eq!(
+                world.cut().err(),
+                Some(RotateError::Publish(RotationPublishError::NotPublished)),
+            );
             landed.push(sequence_at(&world.harness, &name).expect("the PUT landed"));
         }
         assert!(landed[1] > landed[0], "{landed:?}");
@@ -18510,9 +18499,11 @@ mod tests {
         assert!(landed[1] > landed[0], "{landed:?}");
     }
 
-    /// A floor store that does not take a raise of a rotation mark.
+    /// A floor store that does not take a raise of a rotation mark: it
+    /// answers a lower value, or an error when `fails`.
     struct UntakenRotationMark {
         inner: InMemoryFloorStore,
+        fails: bool,
     }
 
     impl FloorStore for UntakenRotationMark {
@@ -18530,6 +18521,9 @@ mod tests {
 
         async fn raise_sequence_floor(&self, key: &[u8], sequence: u64) -> SeamResult<u64> {
             if key.starts_with(b"rotation-signed/") {
+                if self.fails {
+                    return Err(SeamError::new("the mark is not written"));
+                }
                 return Ok(0);
             }
             self.inner.raise_sequence_floor(key, sequence).await
@@ -18540,14 +18534,22 @@ mod tests {
         }
     }
 
-    /// A rotation publish whose mark the floor store does not take sends no
-    /// PUT, at a scope root and at an interior node.
+    /// A rotation publish whose mark the floor store does not take, by a
+    /// lower value or by an error, sends no PUT, at a scope root and at an
+    /// interior node.
     #[test]
     fn a_rotation_mark_the_store_does_not_take_sends_no_put() {
+        for fails in [false, true] {
+            a_rotation_mark_the_store_does_not_take_sends_no_put_when(fails);
+        }
+    }
+
+    fn a_rotation_mark_the_store_does_not_take_sends_no_put_when(fails: bool) {
         let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
         let name = interior_name(node_id);
         let floors = UntakenRotationMark {
             inner: harness.floors.clone(),
+            fails,
         };
         let net = net_over(&harness, &floors);
         let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");

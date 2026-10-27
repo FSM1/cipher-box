@@ -1034,8 +1034,9 @@ mod tests {
     /// The read during which a concurrent adopt raises the floor of `name`.
     #[derive(PartialEq)]
     enum AdoptOn {
-        EpochRead,
-        RelinkMarkRead,
+        Epoch,
+        RelinkMark,
+        RotationMark,
     }
 
     struct ConcurrentAdopt {
@@ -1055,14 +1056,19 @@ mod tests {
 
     impl FloorStore for ConcurrentAdopt {
         async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            if self.on == AdoptOn::EpochRead {
+            if self.on == AdoptOn::Epoch {
                 self.adopt().await?;
             }
             self.inner.epoch_floor(key).await
         }
         async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            if self.on == AdoptOn::RelinkMarkRead
+            if self.on == AdoptOn::RelinkMark
                 && key == floor::relink_parent_mark_key(self.name.as_str().as_bytes())
+            {
+                self.adopt().await?;
+            }
+            if self.on == AdoptOn::RotationMark
+                && key == floor::rotation_mark_key(self.name.as_str().as_bytes())
             {
                 self.adopt().await?;
             }
@@ -1086,7 +1092,7 @@ mod tests {
         let floors = ConcurrentAdopt {
             inner: InMemoryFloorStore::default(),
             name: name.clone(),
-            on: AdoptOn::EpochRead,
+            on: AdoptOn::Epoch,
         };
         block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
@@ -1116,7 +1122,7 @@ mod tests {
         let floors = ConcurrentAdopt {
             inner: InMemoryFloorStore::default(),
             name: name.clone(),
-            on: AdoptOn::RelinkMarkRead,
+            on: AdoptOn::RelinkMark,
         };
         block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
         let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
@@ -1128,6 +1134,24 @@ mod tests {
             Some(8),
             "renewal skips the observation at 7"
         );
+    }
+
+    #[test]
+    fn a_signature_sees_a_sequence_advanced_during_its_rotation_mark_read() {
+        let signer = Ed25519Signer::from_seed([0x58; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let floors = ConcurrentAdopt {
+            inner: InMemoryFloorStore::default(),
+            name: name.clone(),
+            on: AdoptOn::RotationMark,
+        };
+        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
+        let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
+
+        let gate = block_on(SignatureGate::read(&floors, &observed, None)).unwrap();
+        assert_eq!(gate.sequence_floor(), Some(8));
+        let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, None)).unwrap();
+        assert_eq!(gate.sequence_floor(), Some(8));
     }
 
     /// A name with a rotation mark at 9 over an observation at 4.
