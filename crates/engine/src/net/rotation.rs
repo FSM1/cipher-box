@@ -2719,7 +2719,7 @@ where
         self.resealable_root(scope.scope_id, &name, anchor)
             .await
             .map(|_| ())
-            .map_err(|verdict| ResolveFailure::from(verdict.absent_head_as_unavailable()))
+            .map_err(RootGateVerdict::into_reader_failure)
     }
 
     /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
@@ -3402,7 +3402,7 @@ where
         let gated = self
             .gated_root(granted)
             .await
-            .map_err(|verdict| ResolveFailure::from(verdict.absent_head_as_unavailable()))?;
+            .map_err(RootGateVerdict::into_reader_failure)?;
         let observed = root_observed(&gated, None).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             write_epoch: _,
@@ -5589,9 +5589,7 @@ where
             RootRead::new(&adopter, self.snapshot_cache, Some(child.scope_id))
                 .read(self.transport, &name)
                 .await
-                .map_err(|refusal| {
-                    ResolveFailure::from(refusal.verdict.absent_head_as_unavailable())
-                })?;
+                .map_err(|refusal| refusal.verdict.into_reader_failure())?;
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
@@ -19915,7 +19913,6 @@ mod tests {
             );
         }
 
-        /// The owner rotation's own root read keeps ADR 0068 D1.
         #[test]
         fn the_write_cut_gated_root_at_stays_a_rejection() {
             let mut harness = Harness::plain();

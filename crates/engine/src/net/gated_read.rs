@@ -226,7 +226,7 @@ pub(super) enum RootGateVerdict {
     /// the record names. An owner cut's fallback tells this and
     /// [`Self::HeadBlockRefused`] apart from a rejection (ADR 0068 D1). Every
     /// other read reads this one as unavailable, through
-    /// [`Self::absent_head_as_unavailable`] or its own match (ADR 0078 D1).
+    /// [`Self::into_reader_failure`] or its own match (ADR 0078 D1).
     HeadBlockAbsent,
     /// The head block does not match the CID the record names, which one bad
     /// source serves and the record bytes do not cause.
@@ -259,12 +259,13 @@ impl RootGateVerdict {
         }
     }
 
-    /// [`Self::HeadBlockAbsent`] as [`Self::Unavailable`]; every other verdict
-    /// as it is.
-    pub(super) fn absent_head_as_unavailable(self) -> Self {
+    /// The [`ResolveFailure`] of a read off the owner rotation:
+    /// [`Self::HeadBlockAbsent`] is unavailable, every other verdict folds as
+    /// `From` folds it.
+    pub(super) fn into_reader_failure(self) -> ResolveFailure {
         match self {
-            Self::HeadBlockAbsent => Self::Unavailable,
-            verdict => verdict,
+            Self::HeadBlockAbsent => ResolveFailure::Unavailable,
+            verdict => verdict.into(),
         }
     }
 }

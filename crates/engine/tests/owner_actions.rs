@@ -9868,15 +9868,7 @@ fn a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk() {
     let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     let folder = fx.folder;
     let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
-        format!("/ipfs/{absent}").as_bytes(),
-        sequence_at(&fx.world, &write_name(folder)) + 1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    serve_everywhere(&fx.world, folder, &record);
+    publish_value_at(&fx.world, folder, format!("/ipfs/{absent}").as_bytes());
     let _ = events_so_far(&mut events);
     tick(&fx.world, &engine, &mut tasks);
 
@@ -12471,15 +12463,7 @@ fn an_unindexed_scope_probe_does_not_read_an_absent_head_block_as_no_scope() {
     let folder = fx.folder;
     fx.owner_device.floor_store.forget_epoch_floor(&folder.0);
     let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
-        format!("/ipfs/{absent}").as_bytes(),
-        sequence_at(&fx.world, &write_name(folder)) + 1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    serve_everywhere(&fx.world, folder, &record);
+    publish_value_at(&fx.world, folder, format!("/ipfs/{absent}").as_bytes());
     let _ = events_so_far(&mut fx._events);
     let inner_before = sequence_at(&fx.world, &write_name(inner));
 

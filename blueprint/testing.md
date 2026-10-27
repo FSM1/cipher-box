@@ -444,22 +444,20 @@ scenario fails the meta-test):
   An absent head block (ADR 0078 D1): every block source answers 404 while
   every record endpoint answers. The boundary walk is unavailable, sends no
   trust event and refuses no move, and a forged second scope root of the same
-  walk stays a rejection (`net::rotation`
+  walk stays a rejection; the grantee root read and the write cut boundary
+  read are unavailable (`net::rotation`
   `head_block_absent_off_the_owner_rotation`, `tests/owner_actions.rs`
   `a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk`);
   the renewal walk reports the scope root as a failed renewal and sends no
   trust event (`tests/renewal_walk.rs`
   `a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal`); the
-  grantee root read and the write cut boundary read are unavailable
-  (`net::rotation` `head_block_absent_off_the_owner_rotation`); the
   derived-name probe of an unindexed scope root, on a device with no floor
   for it, refuses a share retryably and sends no trust event
   (`tests/owner_actions.rs`
   `an_unindexed_scope_probe_does_not_read_an_absent_head_block_as_no_scope`).
-  These fix tests fail on the code before ADR 0078. A guard test, which also
-  passes on that code, holds the owner rotation to ADR 0068 D1: the write cut
-  `gated_root_at` read stays a rejection (`net::rotation`
-  `the_write_cut_gated_root_at_stays_a_rejection`).
+  These fix tests fail on the code before ADR 0078. A guard test holds the
+  owner rotation to ADR 0068 D1: the write cut `gated_root_at` read stays a
+  rejection (`net::rotation` `the_write_cut_gated_root_at_stays_a_rejection`).
   The withheld-update escalation bounds that hold on a shared scope: a
   received share held withheld past the escalation window, while the vault
   root resolves, sends one escalation and no trust event, and a full outage
