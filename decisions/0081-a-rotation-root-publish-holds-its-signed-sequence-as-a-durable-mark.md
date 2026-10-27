@@ -1,6 +1,6 @@
 # ADR 0081: A rotation root publish holds its signed sequence as a durable mark
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-27
 - **Date:** 2026-10-27
 - **Relates to:** [#2499](https://github.com/FSM1/cipher-box/issues/2499),
   [ADR 0076](./0076-a-put-that-no-endpoint-acknowledged-holds-its-signed-sequence-as-a-second-mark.md)
