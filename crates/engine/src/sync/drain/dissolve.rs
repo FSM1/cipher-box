@@ -242,8 +242,9 @@ pub(super) enum MapStep {
     Restart,
     /// A gate refused a record, or the endpoints served a fork.
     Refused,
-    /// A new scope root, or a concurrent row or cut on a cut scope: the
-    /// dissolve stops before the copy. After it, the entry stays.
+    /// A new scope root, or a row or another cut on a cut scope: the
+    /// dissolve stops before the copy. After it, a new scope root or a cut
+    /// scope read below its held cut epoch keeps the entry.
     Stop,
     /// Each scope that a gated index names and the dissolve does not cut
     /// joins the dissolve, which returns to its cut step (ADR 0077 D4).
