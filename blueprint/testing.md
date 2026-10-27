@@ -159,6 +159,15 @@ scenario fails the meta-test):
   `facade` unit tests);
 - all five rebase races from the FSM1/cipher-box-next#33 D5 table (conditional delete,
   rename/rename, add/add auto-suffix, dest-first move, dual-link repair);
+- the dissolve against a concurrent grant or cut (ADR 0077): after the copy
+  started, a grant on a cut scope at the map, the seal and the cut step, and a
+  cut that leaves no row, each cut the scope again, send one `dissolve-recut`
+  event and reach the relink
+  (`a_grant_on_a_cut_scope_at_the_map_after_the_copy_started_is_cut_again`,
+  `a_grant_on_a_cut_scope_at_the_seal_after_the_copy_started_is_cut_again`,
+  `a_grant_on_a_cut_scope_at_the_cut_step_after_the_copy_started_is_cut_again`,
+  `a_cut_with_no_row_after_the_copy_started_raises_the_held_cut_epoch` in
+  `crates/engine/tests/owner_actions.rs`);
 - the rotation trigger table and the eager-set law — owner cascade vs
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
   via the history link; a write revoke over a nested subtree, a downgrade just

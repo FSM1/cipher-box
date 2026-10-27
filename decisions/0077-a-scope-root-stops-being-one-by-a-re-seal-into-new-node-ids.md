@@ -92,7 +92,8 @@ carry a rise.
   write grant and invite link in one cut. Each cut, name wave and re-point lands before the first
   re-seal publish, and the walk reads only names that the post-cut write scope seed derives.
 - Per-op rebase rules: a concurrent grant refuses the dissolve before its first re-seal publish.
-  After it, the D3 entry cuts and re-seals the new root as well (D1), and the host reports it.
+  After it and before the relink, the D3 entry cuts and re-seals a new root as well (D1), cuts again
+  a scope that it cut when a new grant or cut lands there, and the host reports each.
 - "Rotation primitives": the order is cut, re-seal, relink, index removal, retirement. The
   `owed-rotation` entry carries the cut alone (ADR 0063 D1). The dissolve files no sweep of the
   scopes it cuts: the name wave and the re-point land in the cut, and the walk opens a lagging

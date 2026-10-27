@@ -42,7 +42,7 @@ use crate::seams::{
 use crate::sync::dissolve_journal::{
     DissolveBinding, DissolveHeader, DissolveHold, DissolveJournal, DissolveStep,
     DissolveWriteError, HeaderSlot, LoggedName, MAX_PRIOR_BINDINGS, MapRow, NameLogPage,
-    PriorBinding, RelinkRebind,
+    PriorBinding, RelinkRebind, overtakes,
 };
 use crate::sync::drain::walker::ReadFault;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
@@ -105,6 +105,27 @@ pub(super) enum SealFault {
     /// A source node moved out of the subtree, or a folder of it was shared
     /// after the copy started: the entry returns to its map step.
     Remap,
+    /// A row or a cut overtook a cut scope after the copy started: the entry
+    /// returns to its cut step, which cuts the scope again.
+    Recut,
+}
+
+impl SealFault {
+    /// The fault for the cut scope root `scope` of `header` that holds `rows`
+    /// at `cut_epoch`, `None` when it holds the cut of `header`. A read below
+    /// the held cut epoch waits for a later tick.
+    pub(super) fn of_cut(
+        header: &DissolveHeader,
+        scope: NodeId,
+        rows: bool,
+        cut_epoch: u64,
+    ) -> Option<Self> {
+        let held = cut_epoch_of(header, scope);
+        if held.is_some_and(|held| overtakes(rows, cut_epoch, held)) {
+            return Some(Self::Recut);
+        }
+        cut_overtaken(rows, cut_epoch, held).then_some(Self::Unanswered)
+    }
 }
 
 impl From<DissolveWriteError> for SealFault {
@@ -130,6 +151,18 @@ pub(super) struct Destination<'t, 'e> {
     /// each scope up to `write`.
     pub(super) chain: Vec<&'t ScopeEnd<'e>>,
     pub(super) write: &'t ScopeEnd<'e>,
+}
+
+/// Commit `header` back at `step`, a step before the seal.
+async fn step_back<St: StagingStore>(
+    journal: &DissolveJournal<'_, St>,
+    hold: &DissolveHold<'_>,
+    header: &DissolveHeader,
+    step: DissolveStep,
+) -> Result<(), SealFault> {
+    let mut back = header.clone();
+    back.step = step;
+    Ok(journal.commit(hold, Some(header), &back).await?)
 }
 
 /// The header that the gated destination root at `epoch` and `cut_epoch`,
@@ -649,10 +682,10 @@ where
         match fault {
             Some(SealFault::Refused) => return Err(SealFault::Refused),
             Some(SealFault::Remap) => {
-                let mut remap = header.clone();
-                remap.step = DissolveStep::Map;
-                journal.commit(hold, Some(&header), &remap).await?;
-                return Ok(());
+                return step_back(journal, hold, &header, DissolveStep::Map).await;
+            }
+            Some(SealFault::Recut) => {
+                return step_back(journal, hold, &header, DissolveStep::Cut).await;
             }
             _ => {}
         }
@@ -691,8 +724,15 @@ where
         }
         if run.confirmed.len() == rows.len() {
             run.confirmed.clear();
-            self.close_seal(owner, ends, journal, hold, &header, left)
-                .await?;
+            match self
+                .close_seal(owner, ends, journal, hold, &header, left)
+                .await
+            {
+                Err(SealFault::Recut) => {
+                    return step_back(journal, hold, &header, DissolveStep::Cut).await;
+                }
+                closed => closed?,
+            }
         }
         Ok(())
     }
@@ -748,19 +788,18 @@ where
                     return Ok(None);
                 }
                 let (root, envelope) = self.dissolve_root::<()>(owner, end).await?;
-                // A row or another cut at a cut scope is work that the dissolve
-                // did not do, and the seal waits.
                 let commitment = root
                     .state
                     .commitment
                     .as_ref()
                     .ok_or(SealFault::Unanswered)?;
-                if cut_overtaken(
+                if let Some(fault) = SealFault::of_cut(
+                    header,
+                    end.root,
                     !commitment.entries.is_empty(),
                     commitment.cut_epoch,
-                    cut_epoch_of(header, end.root),
                 ) {
-                    return Err(SealFault::Unanswered);
+                    return Err(fault);
                 }
                 if confirming
                     && self

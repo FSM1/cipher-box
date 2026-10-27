@@ -42,7 +42,7 @@ use crate::seams::{
 };
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError,
-    DissolvedScope, HeaderSlot, MAX_DISSOLVED_SCOPES, MAX_PAGE_ENTRIES, MapPage, MapRow,
+    DissolvedScope, HeaderSlot, MAX_DISSOLVED_SCOPES, MAX_PAGE_ENTRIES, MapPage, MapRow, overtakes,
 };
 use crate::sync::kept_op::retain_pending;
 use crate::sync::model::Snapshot;
@@ -224,6 +224,8 @@ enum MapHalt {
     /// A gated index names these scopes, which the dissolve does not cut,
     /// after the copy started.
     Joined(BTreeSet<NodeId>),
+    /// A row or a cut overtook a cut scope after the copy started.
+    Recut,
 }
 
 /// Where one tick left a dissolve walk.
@@ -240,8 +242,8 @@ pub(super) enum MapStep {
     Restart,
     /// A gate refused a record, or the endpoints served a fork.
     Refused,
-    /// A new scope root, or a concurrent cut on a cut scope: the dissolve
-    /// stops before the copy, and keeps the entry after it.
+    /// A new scope root, or a concurrent row or cut on a cut scope: the
+    /// dissolve stops before the copy. After it, the entry stays.
     Stop,
     /// Each scope that a gated index names and the dissolve does not cut
     /// joins the dissolve, which returns to its cut step (ADR 0077 D4).
@@ -252,6 +254,9 @@ pub(super) enum MapStep {
     /// The walk passed its node bound: the dissolve stops before the copy,
     /// and parks after it.
     TooLarge,
+    /// A row or a cut overtook a cut scope after the copy started: the entry
+    /// returns to its cut step, which cuts the scope again.
+    Recut,
 }
 
 /// What the drive does with an entry whose map step stopped.
@@ -268,8 +273,8 @@ enum MapStopAction {
 
 /// The action for `step`, a stop of the map. After the copy started, a walk
 /// past its restart bound or its node bound parks. The other stops are a new
-/// scope root, which joins the dissolve once its index lands, and a
-/// concurrent cut on a cut scope, which waits for the re-cut rule.
+/// scope root, which joins the dissolve once its index lands, and a cut scope
+/// read below its held cut epoch, which the next tick reads again.
 fn map_stop_action(step: &MapStep, copy_started: bool) -> MapStopAction {
     match step {
         _ if !copy_started => MapStopAction::Drop,
@@ -442,6 +447,7 @@ impl DissolveWalk {
                 Some(MapHalt::Restart | MapHalt::EndAbsent) => MapStep::Restart,
                 Some(MapHalt::Joined(scopes)) => MapStep::Join(scopes.into_iter().collect()),
                 Some(MapHalt::Concurrent) => MapStep::Stop,
+                Some(MapHalt::Recut) => MapStep::Recut,
                 Some(MapHalt::TooLarge) | None => MapStep::TooLarge,
             },
         };
@@ -521,7 +527,11 @@ impl SweepPolicy<WalkKey> for DissolvePolicy<'_> {
     ) -> Result<(), Overflow> {
         let at = u32::try_from(sweep.read.len() - 1).map_err(|_| Overflow)?;
         if let Some(root) = read.root {
-            if cut_overtaken(root.rows, root.cut_epoch, self.cuts(key.node)) {
+            let held = self.cuts(key.node);
+            if self.joining && held.is_some_and(|held| overtakes(root.rows, root.cut_epoch, held)) {
+                return self.stop(MapHalt::Recut);
+            }
+            if cut_overtaken(root.rows, root.cut_epoch, held) {
                 return self.stop(MapHalt::Concurrent);
             }
             let uncut: BTreeSet<NodeId> = root
@@ -710,6 +720,11 @@ where
                         Ok(())
                     }
                 }
+            }
+            MapStep::Recut => {
+                let mut recut = header.clone();
+                recut.step = DissolveStep::Cut;
+                Ok(journal.commit(&hold, Some(&header), &recut).await?)
             }
             MapStep::Join(scopes) => {
                 let mut joined = header.clone();

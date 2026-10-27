@@ -20,10 +20,15 @@ use crate::rotation::{
 use crate::sync::dissolve_journal::{DissolveBinding, DissolvedScope, MAX_DISSOLVED_SCOPES};
 use crate::sync::dissolve_journal::{
     DissolveHeader, DissolveHold, DissolveJournal, DissolveStep, DissolveWriteError, HeaderSlot,
+    overtakes,
 };
 
 /// The detail of the one host event for a dissolve header that does not open.
 pub(crate) const DISSOLVE_HEADER_UNREADABLE: &str = "dissolve-journal-header-unreadable";
+
+/// The detail of the one host event for each cut of a scope that a grant or
+/// a cut overtook after the copy started.
+const DISSOLVE_RECUT: &str = "dissolve-recut";
 
 /// What one scope's cut reached in one drive.
 enum ScopeCut {
@@ -368,12 +373,13 @@ where
                 return Ok(ScopeCut::Concurrent);
             }
         }
-        // After the baseline, a row at or above it, or a cut above it, is
-        // work the dissolve did not do: a concurrent grant wins.
-        if base.cut_time != 0 && (epoch > base.cut_epoch || rows && epoch >= base.cut_epoch) {
+        // Before the copy started a concurrent grant wins; after it the
+        // dissolve cuts the scope again.
+        let recut = base.cut_time != 0 && overtakes(rows, epoch, base.cut_epoch);
+        if recut && !header.copy_started {
             return Ok(ScopeCut::Concurrent);
         }
-        if base.final_landed {
+        if base.final_landed && !recut {
             return Ok(ScopeCut::Done);
         }
         let name = parsed_scope_name(&target.scope.ipns_name)?;
@@ -418,6 +424,11 @@ where
             })
             .await?;
         }
+        // A cut that left no row moves the baseline up to it.
+        if recut && cut.is_none() {
+            self.raise_cut(journal, hold, header, at, cut_epoch, true)
+                .await?;
+        }
         let target = match cut {
             Some(cut) => {
                 let owed = self
@@ -438,10 +449,8 @@ where
                 if owed != OwedCut::Unproved {
                     let forgot = self.forget_link_grants(scope).await;
                     if cut_epoch > header.scopes[at].cut_epoch {
-                        self.commit_dissolve(journal, hold, header, |header| {
-                            header.scopes[at].cut_epoch = cut_epoch;
-                        })
-                        .await?;
+                        self.raise_cut(journal, hold, header, at, cut_epoch, recut)
+                            .await?;
                     }
                     forgot?;
                 }
@@ -497,6 +506,33 @@ where
         })
         .await?;
         Ok(ScopeCut::Done)
+    }
+
+    /// Raise the held cut epoch of `header.scopes[at]` to `cut_epoch`, so its
+    /// final records publish again. The host gets one event for a `recut`.
+    async fn raise_cut(
+        &self,
+        journal: &DissolveJournal<'_, St>,
+        hold: &DissolveHold<'_>,
+        header: &mut DissolveHeader,
+        at: usize,
+        cut_epoch: u64,
+        recut: bool,
+    ) -> Result<(), EngineError> {
+        self.commit_dissolve(journal, hold, header, |header| {
+            header.scopes[at].cut_epoch = cut_epoch;
+            header.scopes[at].final_landed = false;
+        })
+        .await?;
+        if recut {
+            let _ = self.events.unbounded_send(Event::RotationWorkOwed {
+                scope_root: header.scopes[0].scope_id,
+                detail: DISSOLVE_RECUT.to_owned(),
+                retryable: true,
+                class: OwedWorkClass::Availability,
+            });
+        }
+        Ok(())
     }
 
     /// Before a stop drops the entry, forget the link grants of each scope
