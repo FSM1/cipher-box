@@ -647,6 +647,7 @@ where
                             None
                         }
                         Err(ScopeRootAdmission::HeadBlockAbsent) => {
+                            pass.kept_back = true;
                             pass.report
                                 .failed
                                 .push((scope.name.as_str().to_owned(), NO_HEAD_BLOCK));

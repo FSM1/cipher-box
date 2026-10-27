@@ -448,9 +448,10 @@ scenario fails the meta-test):
   read are unavailable (`net::rotation`
   `head_block_absent_off_the_owner_rotation`, `tests/owner_actions.rs`
   `a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk`);
-  the renewal walk reports the scope root as a failed renewal and sends no
-  trust event (`tests/renewal_walk.rs`
-  `a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal`); the
+  the renewal walk reports the scope root as a failed renewal, sends no
+  trust event, and keeps the cursor back for one window (`tests/renewal_walk.rs`
+  `a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal`,
+  `a_scope_root_whose_head_block_no_source_holds_keeps_the_cursor_back_for_one_window`); the
   derived-name probe of an unindexed scope root, on a device with no floor
   for it, refuses a share retryably and sends no trust event
   (`tests/owner_actions.rs`

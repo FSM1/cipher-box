@@ -1106,18 +1106,11 @@ fn a_scope_root_with_no_record_moves_the_cursor_at_once_and_is_reported() {
     assert!(reported, "the root is reported");
 }
 
-/// ADR 0078 D1: every endpoint serves a vault root record whose head block no
-/// block source holds. The walk reports a failed renewal and sends no trust
-/// event.
-#[test]
-fn a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    a_file_left_for_65_days(&world, &blocks);
-    let device = world.device(b"a later session");
-    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+/// Serve at every endpoint a vault root record one sequence above the current
+/// one, whose head block no block source holds.
+fn serve_a_root_with_no_head_block(world: &FakeWorld) {
     let root = write_name(ROOT);
-    let current = record_at(&world, &root);
+    let current = record_at(world, &root);
     let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
     let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
     let record = IpnsRecord::create_v2(
@@ -1133,6 +1126,20 @@ fn a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal() {
             .record_store
             .seed_record(&endpoint, root.as_str(), record.clone());
     }
+}
+
+/// ADR 0078 D1: every endpoint serves a vault root record whose head block no
+/// block source holds. The walk reports a failed renewal and sends no trust
+/// event.
+#[test]
+fn a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let root = write_name(ROOT);
+    serve_a_root_with_no_head_block(&world);
     while events.try_next().is_some() {}
     tick(&world, &engine, &mut tasks);
 
@@ -1149,6 +1156,35 @@ fn a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal() {
             .any(|event| matches!(event, Event::AttributableAbuse { .. })),
         "no trust event: {seen:#?}"
     );
+}
+
+/// An absent head block is unavailable (ADR 0078 D1), so a scope root whose
+/// head block no source holds keeps the cursor back for one window, as any
+/// unavailable scope root does; then the pass stores where it stopped.
+#[test]
+fn a_scope_root_whose_head_block_no_source_holds_keeps_the_cursor_back_for_one_window() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    serve_a_root_with_no_head_block(&world);
+    tick(&world, &engine, &mut tasks);
+    let since = stored_cursor(&device)
+        .expect("a kept-back cursor")
+        .kept_back_since;
+    assert!(since.is_some(), "the first pass keeps the cursor back");
+    for hour in 1..24 {
+        world.scheduler.advance(HOUR);
+        tick(&world, &engine, &mut tasks);
+        let cursor = stored_cursor(&device).expect("a kept-back cursor");
+        assert_eq!(cursor.kept_back_since, since, "hour {hour}");
+        assert!(cursor.root.is_some(), "hour {hour}: the range is kept");
+    }
+    world.scheduler.advance(HOUR * 2);
+    tick(&world, &engine, &mut tasks);
+    let cursor = stored_cursor(&device).expect("the stored cursor");
+    assert_eq!(cursor.root, None, "the pass stores where it stopped");
 }
 
 /// A transient failure keeps the cursor back across sessions: each session
