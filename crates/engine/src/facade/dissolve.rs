@@ -424,10 +424,6 @@ where
             })
             .await?;
         }
-        // A cut that left no row moves the baseline up to it.
-        if recut && cut.is_none() {
-            Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, recut)).await?;
-        }
         let target = match cut {
             Some(cut) => {
                 let owed = self
@@ -484,6 +480,10 @@ where
                 }
             }
             None => {
+                // A cut that left no row moves the baseline up to it.
+                if recut {
+                    Box::pin(self.raise_cut(journal, hold, header, at, cut_epoch, true)).await?;
+                }
                 self.republish_root(sites, &target, &name).await?;
                 self.forget_link_grants(scope).await?;
                 target

@@ -322,7 +322,7 @@ enum CutRead {
 fn cut_read(rows: bool, cut_epoch: u64, held: Option<u64>) -> CutRead {
     match held {
         Some(held) if overtakes(rows, cut_epoch, held) => CutRead::Overtaken,
-        Some(held) if !rows && cut_epoch == held => CutRead::Held,
+        Some(held) if cut_epoch == held => CutRead::Held,
         _ => CutRead::Lags,
     }
 }

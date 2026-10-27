@@ -180,14 +180,7 @@ where
             .commitment
             .as_ref()
             .ok_or(SealFault::Unanswered)?;
-        if let Some(fault) = SealFault::of_cut(
-            header,
-            end.root,
-            !commitment.entries.is_empty(),
-            commitment.cut_epoch,
-        ) {
-            return Err(fault);
-        }
+        SealFault::of_cut(header, end.root, commitment)?;
         let (record, mut hold_until) =
             signed_eol(end.root_name, &root.state.record).ok_or(SealFault::Unanswered)?;
         let head_cid = head_cid_from_value(&record.value).ok_or(SealFault::Unanswered)?;

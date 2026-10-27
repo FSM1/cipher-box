@@ -31987,10 +31987,11 @@ fn section_of(fx: &GrantScenario, scope: NodeId) -> GrantSection {
     .expect("the scope root answers")
 }
 
-/// The re-cut events among `events`, each as its scope root, its retry flag
-/// and its class. The ticks sent no abuse event.
-fn recut_events(events: &[Event]) -> Vec<(NodeId, bool, OwedWorkClass)> {
-    assert_eq!(abuse_events_in(events), 0);
+/// The re-cut events that `events` holds so far, each as its scope root, its
+/// retry flag and its class. The ticks sent no abuse event.
+fn recut_events(events: &mut EventStream) -> Vec<(NodeId, bool, OwedWorkClass)> {
+    let events = events_so_far(events);
+    assert_eq!(abuse_events_in(&events), 0);
     events
         .iter()
         .filter_map(|event| match event {
@@ -32033,10 +32034,7 @@ fn recut_to_the_relink(
         .expect("the scope stays listed");
     assert_eq!(held.cut_epoch, section.commitment.cut_epoch);
     assert!(held.final_landed);
-    (
-        section.commitment.cut_epoch,
-        recut_events(&events_so_far(&mut fx._events)),
-    )
+    (section.commitment.cut_epoch, recut_events(&mut fx._events))
 }
 
 /// One re-cut event, at the dissolve root of the folder: the engine goes on
@@ -32151,7 +32149,7 @@ fn a_restart_after_the_recut_raise_publishes_the_final_records_once_more() {
     assert_eq!(header.step, DissolveStep::Cut);
     assert_eq!(header.scopes[0].cut_epoch, revoked, "the raise landed");
     assert!(!header.scopes[0].final_landed, "and the pointer did not");
-    let mut events = recut_events(&events_so_far(&mut fx._events));
+    let mut events = recut_events(&mut fx._events);
 
     settle_filed_sweeps(&fx);
     restart_owner(&mut fx);
@@ -32188,7 +32186,7 @@ fn a_listed_scope_outside_the_subtree_after_the_copy_started_holds_the_cut_step(
         "the outside scope keeps its row"
     );
     assert!(book_holds(&fx, &identity), "no forget runs");
-    assert!(recut_events(&events_so_far(&mut fx._events)).is_empty());
+    assert!(recut_events(&mut fx._events).is_empty());
 }
 
 /// A joined scope cannot leave the subtree: a move of a scope root into

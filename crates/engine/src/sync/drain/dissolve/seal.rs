@@ -20,7 +20,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ChildRef, PreservedFields, ReadBody};
+use cipherbox_core::seal::{ChildRef, GrantSetCommitment, PreservedFields, ReadBody};
 use cipherbox_core::suite::secret::ct_eq;
 
 use super::super::{
@@ -111,19 +111,28 @@ pub(super) enum SealFault {
 }
 
 impl SealFault {
-    /// The fault for the cut scope root `scope` of `header` that holds `rows`
-    /// at `cut_epoch`, `None` when it holds the cut of `header`. A read below
-    /// the held cut epoch waits for a later tick.
+    /// The fault for the cut scope root `scope` of `header` at `commitment`,
+    /// `Ok` when it holds the cut of `header`. A read below the held cut epoch
+    /// waits for a later tick.
     pub(super) fn of_cut(
         header: &DissolveHeader,
         scope: NodeId,
-        rows: bool,
-        cut_epoch: u64,
-    ) -> Option<Self> {
-        match cut_read(rows, cut_epoch, cut_epoch_of(header, scope)) {
-            CutRead::Held => None,
-            CutRead::Overtaken => Some(Self::Recut),
-            CutRead::Lags => Some(Self::Unanswered),
+        commitment: &GrantSetCommitment,
+    ) -> Result<(), Self> {
+        let rows = !commitment.entries.is_empty();
+        match cut_read(rows, commitment.cut_epoch, cut_epoch_of(header, scope)) {
+            CutRead::Held => Ok(()),
+            CutRead::Overtaken => Err(Self::Recut),
+            CutRead::Lags => Err(Self::Unanswered),
+        }
+    }
+
+    /// The step that the entry returns to for this fault, if any.
+    fn back_to(&self) -> Option<DissolveStep> {
+        match self {
+            Self::Remap => Some(DissolveStep::Map),
+            Self::Recut => Some(DissolveStep::Cut),
+            Self::Unanswered | Self::Refused => None,
         }
     }
 }
@@ -667,15 +676,11 @@ where
         }
         left.set(left.get() + row_reads.get());
         // A refusal holds the whole batch, so no later fault hides it.
-        match fault {
-            Some(SealFault::Refused) => return Err(SealFault::Refused),
-            Some(SealFault::Remap) => {
-                return Ok(Box::pin(step_back(journal, hold, &header, DissolveStep::Map)).await?);
-            }
-            Some(SealFault::Recut) => {
-                return Ok(Box::pin(step_back(journal, hold, &header, DissolveStep::Cut)).await?);
-            }
-            _ => {}
+        if let Some(SealFault::Refused) = fault {
+            return Err(SealFault::Refused);
+        }
+        if let Some(step) = fault.as_ref().and_then(SealFault::back_to) {
+            return Ok(Box::pin(step_back(journal, hold, &header, step)).await?);
         }
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
@@ -712,16 +717,12 @@ where
         }
         if run.confirmed.len() == rows.len() {
             run.confirmed.clear();
-            match self
+            if let Err(fault) = self
                 .close_seal(owner, ends, journal, hold, &header, left)
                 .await
             {
-                Err(SealFault::Recut) => {
-                    return Ok(
-                        Box::pin(step_back(journal, hold, &header, DissolveStep::Cut)).await?,
-                    );
-                }
-                closed => closed?,
+                let step = fault.back_to().ok_or(fault)?;
+                Box::pin(step_back(journal, hold, &header, step)).await?;
             }
         }
         Ok(())
@@ -783,14 +784,7 @@ where
                     .commitment
                     .as_ref()
                     .ok_or(SealFault::Unanswered)?;
-                if let Some(fault) = SealFault::of_cut(
-                    header,
-                    end.root,
-                    !commitment.entries.is_empty(),
-                    commitment.cut_epoch,
-                ) {
-                    return Err(fault);
-                }
+                SealFault::of_cut(header, end.root, commitment)?;
                 if confirming
                     && self
                         .gated_index(end, &envelope)
