@@ -137,8 +137,7 @@ pub struct Observed {
     name: IpnsName,
     sequence: u64,
     bytes: Vec<u8>,
-    /// Whether the signature refuses a durable sequence floor above
-    /// `sequence` ([`Self::bounded`]).
+    /// Set by [`Self::bounded`].
     bounded: bool,
 }
 
@@ -1197,13 +1196,13 @@ mod tests {
         };
 
         let read = Observed::gated(&name, 1, ENVELOPE_V, &[]).unwrap();
+        let bounded = read.clone().bounded();
         assert_eq!(
-            sign(&read.clone().bounded()),
+            sign(&bounded),
             Err(PublishError::Overtaken { floor: 2, bound: 1 }),
         );
         assert_eq!(sign(&read.clone().clearing(2).bounded()), Ok(3));
         assert_eq!(sign(&read), Ok(3));
-        let bounded = read.clone().bounded();
         assert_eq!(
             block_on(SignatureGate::read(&floors, &bounded, None))
                 .unwrap()

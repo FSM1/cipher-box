@@ -2872,8 +2872,7 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     signed: Option<&'a Cell<Option<u64>>>,
     /// The scope root whose read ran on the last copy. A publish over a last
     /// copy has no bound, because its read can sit below the floor (ADR 0068
-    /// D1). Every other publish refuses a floor above its read
-    /// ([`Observed::bounded`]).
+    /// D1).
     last_copy_root: Option<[u8; 16]>,
 }
 
@@ -11424,12 +11423,9 @@ mod tests {
         });
         let reported = RootReports::default();
         let mut net = harness.net(&[]);
-        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
-        net.root_fallback
-            .as_ref()
-            .expect("the fallback")
-            .fell_back
-            .set(true);
+        let fallback = RootFallback::new(SCOPE, RootWait::Command, &reported);
+        fallback.fell_back.set(true);
+        net.root_fallback = Some(fallback);
         let publish = |root: &OwnerRootFixture, scope_id: [u8; 16]| {
             let scope = ChildScopeRef::new(scope_id, root.name.as_str().as_bytes().to_vec());
             block_on(net.resolve_anchored(&scope)).expect("the cut reads the root");
