@@ -75,8 +75,9 @@ pub struct InMemoryRecordStore {
     /// GETs served per routing key, so a test can count what a pass spends on
     /// one name rather than inferring it from what the pass published.
     gets: Arc<Mutex<HashMap<String, usize>>>,
-    /// PUTs asked for per routing key, whatever fault is injected.
-    puts: Arc<Mutex<HashMap<String, usize>>>,
+    /// The record bytes of each PUT asked for, per routing key, whatever
+    /// fault is injected.
+    puts: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>>,
     /// Records held back until a PUT lands
     /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
     deferred: Arc<Mutex<DeferredRecords>>,
@@ -431,12 +432,18 @@ impl InMemoryRecordStore {
     /// How many PUTs this store has been asked for at `routing_key`, across
     /// every endpoint and whatever fault is injected.
     pub fn put_count(&self, routing_key: &str) -> usize {
+        self.puts_for(routing_key).len()
+    }
+
+    /// The record bytes of each PUT asked for at `routing_key`, in order,
+    /// across every endpoint and whatever fault is injected.
+    pub fn puts_for(&self, routing_key: &str) -> Vec<Vec<u8>> {
         self.puts
             .lock()
             .expect("lock")
             .get(routing_key)
-            .copied()
-            .unwrap_or(0)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Ack every PUT and retain nothing, so a confirm re-resolve reads no
@@ -621,12 +628,12 @@ impl RecordTransport for InMemoryRecordStore {
         routing_key: &str,
         record: &[u8],
     ) -> SeamResult<()> {
-        *self
-            .puts
+        self.puts
             .lock()
             .expect("lock")
             .entry(routing_key.to_owned())
-            .or_default() += 1;
+            .or_default()
+            .push(record.to_vec());
         if self.put_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",

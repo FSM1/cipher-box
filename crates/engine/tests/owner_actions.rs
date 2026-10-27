@@ -1248,7 +1248,7 @@ fn a_cut_retry_signs_above_an_unconfirmed_root_put_of_the_attempt_before() {
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let folder_name = write_name(fx.folder);
-    let before = sequence_at(&fx.world, &folder_name);
+    let earlier = fx.world.record_store.put_count(folder_name.as_str());
     serve_the_current_record_after_each_put(&fx.world, &folder_name);
     let _clock = fx.world.scheduler.clone().with_auto_advance();
 
@@ -1257,8 +1257,37 @@ fn a_cut_retry_signs_above_an_unconfirmed_root_put_of_the_attempt_before() {
         recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
     }));
     assert!(revoked.is_err(), "{revoked:?}");
-    let after = sequence_at(&fx.world, &folder_name);
-    assert!(after > before + 1, "{before} then {after}");
+
+    // Each attempt signs one record and PUTs it to every endpoint.
+    let mut signed: Vec<Vec<u8>> = Vec::new();
+    for record in fx
+        .world
+        .record_store
+        .puts_for(folder_name.as_str())
+        .split_off(earlier)
+    {
+        if !signed.contains(&record) {
+            signed.push(record);
+        }
+    }
+    let sequences: Vec<u64> = signed
+        .iter()
+        .map(|record| {
+            IpnsRecord::unmarshal(record)
+                .and_then(|record| record.verify(&folder_name))
+                .expect("each PUT verifies under the folder name")
+                .sequence
+        })
+        .collect();
+    assert_eq!(
+        sequences.len(),
+        MAX_ROTATION_ATTEMPTS as usize,
+        "{sequences:?}"
+    );
+    assert!(
+        sequences.windows(2).all(|pair| pair[1] > pair[0]),
+        "{sequences:?}"
+    );
 }
 
 /// The sweep a cut enqueues signs above a re-seal of that cut that landed
