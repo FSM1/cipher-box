@@ -1325,7 +1325,7 @@ write-plane history link. Every rotation publish re-reads, after its own gated
 read and immediately before it signs, each durable floor the gate holds the
 record to — the read-epoch, the write-epoch and, for a scope root, the cut-epoch
 floor — and refuses below any of them (ADR 0041). Before its PUT, each rotation publish, of a
-scope root or of an interior re-seal, raises a durable mark at its name to its
+scope root or of an interior re-seal, raises the rotation mark of its name to its
 signed sequence, and nothing clears the mark (ADR 0081 D1).
 
 ### rotateScope

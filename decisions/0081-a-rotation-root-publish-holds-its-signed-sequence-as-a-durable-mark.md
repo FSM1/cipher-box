@@ -30,7 +30,7 @@ nothing. The second mark of ADR 0076 covers drain nodes only.
 ## Decision
 
 **D1 — Each rotation publish raises a durable mark at its name to its signed sequence, before the
-PUT.** The key is `rotation-signed/ | name`, in the sequence namespace of the floor store, in the
+PUT.** This is the rotation mark of the name. The key is `rotation-signed/ | name`, in the sequence namespace of the floor store, in the
 style of the relink mark key `dissolve-relink-parent/ | name` (`floor::relink_parent_mark_key`).
 The raise is `PutMark::SignedDurable`. When the floor store does not take the raise, the publish
 refuses before the PUT (`PublishError::MarkUnrecorded`). Two arms raise the mark: the scope-root
@@ -45,8 +45,8 @@ harmless. The mark is not a floor: no gate, no resolve and no settle reads it.
 
 **D2 — Every signature at the name reads the mark and signs strictly above it.**
 `SignatureGate::read` and `SignatureGate::read_for_renewal` read the mark as they read the relink
-mark. `sign_above` signs above the highest of the sequence floor, the relink mark, this mark, the
-observed sequence and the held sequence. Thus the drain, the renewal walk and each later rotation
+mark. `sign_above` signs above the highest of the sequence floor, the relink mark, the rotation mark,
+the observed sequence and the held sequence. Thus the drain, the renewal walk and each later rotation
 sign above the mark, in this session and in each later one. This is not the rule of ADR 0076 D2,
 where the drain does not read the unacknowledged mark, so that a retry signs at the same sequence.
 A scope root name is also a drain and a renewal target, and a drain signature at the sequence of a
