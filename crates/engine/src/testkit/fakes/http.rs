@@ -49,6 +49,19 @@ impl ScriptedHttp {
         }
     }
 
+    /// This scripted HTTP, with its queue and its request record shared, that
+    /// first offers every request to `route`. It replaces the route that
+    /// `self` held, and does not chain it.
+    pub fn routed(
+        &self,
+        route: impl Fn(&HttpRequest) -> Option<SeamResult<HttpResponse>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            route: Some(Arc::new(route)),
+        }
+    }
+
     /// Queues a successful response.
     pub fn enqueue_response(&self, response: HttpResponse) {
         self.enqueue(Reply::Fixed(Ok(response)));

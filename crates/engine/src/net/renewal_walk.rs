@@ -81,6 +81,10 @@ const JOURNAL_UNREADABLE: &str = "the doomed-name journal does not list or open,
 const CURSOR_UNREAD: &str = "the renewal cursor does not read, so the renewal walk renews nothing";
 /// Why the walk does not renew a name the endpoints agree holds no record.
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
+/// Why the walk does not renew a scope root whose head block no block source
+/// holds (ADR 0078 D1).
+const NO_HEAD_BLOCK: &str =
+    "no block source holds the head block of the record, so the renewal walk cannot renew it";
 /// Why the walk does not yet renew a name the endpoints serve forked.
 const FORK_HELD: &str =
     "the endpoints serve a same-sequence fork of the name, so the renewal waits for it to heal";
@@ -625,13 +629,8 @@ where
                                 admitted,
                             })
                         }
-                        Err(
-                            rejection @ (ScopeRootAdmission::Rejected
-                            | ScopeRootAdmission::HeadBlockAbsent),
-                        ) => {
-                            if matches!(rejection, ScopeRootAdmission::Rejected) {
-                                pass.rejected_roots.insert(scope_id);
-                            }
+                        Err(ScopeRootAdmission::Rejected) => {
+                            pass.rejected_roots.insert(scope_id);
                             pass.report.rejected.push(scope.name.as_str().to_owned());
                             None
                         }
@@ -645,6 +644,13 @@ where
                             pass.report
                                 .failed
                                 .push((scope.name.as_str().to_owned(), NO_RECORD));
+                            None
+                        }
+                        Err(ScopeRootAdmission::HeadBlockAbsent) => {
+                            pass.kept_back = true;
+                            pass.report
+                                .failed
+                                .push((scope.name.as_str().to_owned(), NO_HEAD_BLOCK));
                             None
                         }
                     }

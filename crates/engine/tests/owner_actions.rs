@@ -9856,6 +9856,36 @@ fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
     );
 }
 
+/// ADR 0078 D1: every endpoint serves a descendant scope root record whose head
+/// block no block source holds. The boundary walk is unavailable, not rejected:
+/// the pass sends no trust event, and a move is not refused.
+#[test]
+fn a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let [moved, target] = ["moved", "target"]
+        .map(|name| create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, name));
+    let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let folder = fx.folder;
+    let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
+    publish_value_at(&fx.world, folder, format!("/ipfs/{absent}").as_bytes());
+    let _ = events_so_far(&mut events);
+    tick(&fx.world, &engine, &mut tasks);
+
+    let abuse = abuse_descriptions(&mut events);
+    assert!(abuse.is_empty(), "{abuse:#?}");
+    assert!(
+        block_on(engine.command(Command::Move {
+            node: moved,
+            new_parent: target,
+            new_name: "moved".into(),
+            replacing: None,
+        }))
+        .is_ok(),
+        "the move is not refused"
+    );
+}
+
 /// A descendant whose live owner blob the gate refuses, read on from the
 /// cached owner copy, sends one abuse event on that pass, also when the link
 /// sweep reads the same record again.
@@ -12409,6 +12439,58 @@ fn an_unindexed_scope_probe_does_not_read_a_refused_pointer_as_no_scope() {
         inner_before,
         "no scope root was minted over the inner folder"
     );
+}
+
+/// ADR 0078 D1: on a device with no floor for an unindexed scope root, the
+/// derived-name probe reads a record whose head block no block source holds
+/// as unavailable, not as "no scope here". The share waits, mints nothing over
+/// the inner folder, and sends no trust event.
+#[test]
+fn an_unindexed_scope_probe_does_not_read_an_absent_head_block_as_no_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Ok(CommandOutcome::Done),
+        "the parent index update fails, so the scope goes live unnamed and its move is owed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let folder = fx.folder;
+    assert_eq!(
+        block_on(floor::read_epoch_floor(
+            &fx.owner_device.floors(&SECRET),
+            &folder.0
+        )),
+        Ok(None),
+        "the device holds no read-epoch floor for the scope"
+    );
+    let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
+    publish_value_at(&fx.world, folder, format!("/ipfs/{absent}").as_bytes());
+    let _ = events_so_far(&mut fx._events);
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+
+    let granted = block_on(fx.engine.command(Command::Grant {
+        node: inner,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Read,
+        grantee_name: None,
+    }));
+
+    assert!(
+        matches!(&granted, Err(EngineError::Seam { message }) if message.contains("unindexed-scope")),
+        "{granted:?}"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(inner)),
+        inner_before,
+        "no scope root was minted over the inner folder"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0);
 }
 
 /// The gate reports a record below this device's own read-epoch floor as a
