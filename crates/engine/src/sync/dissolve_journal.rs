@@ -161,6 +161,13 @@ impl DissolvedScope {
     }
 }
 
+/// Whether a cut scope root that holds `rows` at `cut_epoch` shows work that
+/// the dissolve did not do against its held cut epoch `held`: a row at or
+/// above it, or a cut above it.
+pub(crate) fn overtakes(rows: bool, cut_epoch: u64, held: u64) -> bool {
+    cut_epoch > held || rows && cut_epoch >= held
+}
+
 /// The header of a dissolve entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DissolveHeader {

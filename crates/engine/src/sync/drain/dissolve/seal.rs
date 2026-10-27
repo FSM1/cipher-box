@@ -20,7 +20,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ChildRef, PreservedFields, ReadBody};
+use cipherbox_core::seal::{ChildRef, GrantSetCommitment, PreservedFields, ReadBody};
 use cipherbox_core::suite::secret::ct_eq;
 
 use super::super::{
@@ -28,8 +28,8 @@ use super::super::{
     encode_content_cid_str, refuse_record, seal_open_failed, take_tick_read,
 };
 use super::{
-    CLOSE_READS_PER_SCOPE, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS, cut_epoch_of,
-    cut_overtaken,
+    CLOSE_READS_PER_SCOPE, CutRead, EndMark, ReadShare, SEAL_HEADER_READS, SEAL_ROW_READS,
+    cut_epoch_of, cut_read, step_back,
 };
 use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
@@ -105,6 +105,36 @@ pub(super) enum SealFault {
     /// A source node moved out of the subtree, or a folder of it was shared
     /// after the copy started: the entry returns to its map step.
     Remap,
+    /// A row or a cut overtook a cut scope after the copy started: the entry
+    /// returns to its cut step, which cuts the scope again.
+    Recut,
+}
+
+impl SealFault {
+    /// The fault for the cut scope root `scope` of `header` at `commitment`,
+    /// `Ok` when it holds the cut of `header`. A read below the held cut epoch
+    /// waits for a later tick.
+    pub(super) fn of_cut(
+        header: &DissolveHeader,
+        scope: NodeId,
+        commitment: &GrantSetCommitment,
+    ) -> Result<(), Self> {
+        let rows = !commitment.entries.is_empty();
+        match cut_read(rows, commitment.cut_epoch, cut_epoch_of(header, scope)) {
+            CutRead::Held => Ok(()),
+            CutRead::Overtaken => Err(Self::Recut),
+            CutRead::Lags => Err(Self::Unanswered),
+        }
+    }
+
+    /// The step that the entry returns to for this fault, if any.
+    fn back_to(&self) -> Option<DissolveStep> {
+        match self {
+            Self::Remap => Some(DissolveStep::Map),
+            Self::Recut => Some(DissolveStep::Cut),
+            Self::Unanswered | Self::Refused => None,
+        }
+    }
 }
 
 impl From<DissolveWriteError> for SealFault {
@@ -646,15 +676,11 @@ where
         }
         left.set(left.get() + row_reads.get());
         // A refusal holds the whole batch, so no later fault hides it.
-        match fault {
-            Some(SealFault::Refused) => return Err(SealFault::Refused),
-            Some(SealFault::Remap) => {
-                let mut remap = header.clone();
-                remap.step = DissolveStep::Map;
-                journal.commit(hold, Some(&header), &remap).await?;
-                return Ok(());
-            }
-            _ => {}
+        if let Some(SealFault::Refused) = fault {
+            return Err(SealFault::Refused);
+        }
+        if let Some(step) = fault.as_ref().and_then(SealFault::back_to) {
+            return Ok(Box::pin(step_back(journal, hold, &header, step)).await?);
         }
         self.log_names(journal, hold, root, &jobs).await?;
         for job in jobs {
@@ -691,8 +717,13 @@ where
         }
         if run.confirmed.len() == rows.len() {
             run.confirmed.clear();
-            self.close_seal(owner, ends, journal, hold, &header, left)
-                .await?;
+            if let Err(fault) = self
+                .close_seal(owner, ends, journal, hold, &header, left)
+                .await
+            {
+                let step = fault.back_to().ok_or(fault)?;
+                Box::pin(step_back(journal, hold, &header, step)).await?;
+            }
         }
         Ok(())
     }
@@ -748,20 +779,12 @@ where
                     return Ok(None);
                 }
                 let (root, envelope) = self.dissolve_root::<()>(owner, end).await?;
-                // A row or another cut at a cut scope is work that the dissolve
-                // did not do, and the seal waits.
                 let commitment = root
                     .state
                     .commitment
                     .as_ref()
                     .ok_or(SealFault::Unanswered)?;
-                if cut_overtaken(
-                    !commitment.entries.is_empty(),
-                    commitment.cut_epoch,
-                    cut_epoch_of(header, end.root),
-                ) {
-                    return Err(SealFault::Unanswered);
-                }
+                SealFault::of_cut(header, end.root, commitment)?;
                 if confirming
                     && self
                         .gated_index(end, &envelope)

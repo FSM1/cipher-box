@@ -25,7 +25,7 @@ use cipherbox_core::seal::{ChildRef, PreservedFields};
 
 use super::super::{Drain, DrainScope, Pass, ScopeEnd, folder_state, take_tick_read};
 use super::seal::{Destination, SealFault, restarted};
-use super::{CLOSE_READS_PER_SCOPE, NotDriven, ReadShare, cut_epoch_of, cut_overtaken};
+use super::{CLOSE_READS_PER_SCOPE, NotDriven, ReadShare};
 use crate::facade::{Event, NodeId, OwedWorkClass, emit_trust_violation};
 use crate::gate::floor;
 use crate::net::eol::{EOL_WINDOW, remaining_millis};
@@ -180,13 +180,7 @@ where
             .commitment
             .as_ref()
             .ok_or(SealFault::Unanswered)?;
-        if cut_overtaken(
-            !commitment.entries.is_empty(),
-            commitment.cut_epoch,
-            cut_epoch_of(header, end.root),
-        ) {
-            return Err(SealFault::Unanswered);
-        }
+        SealFault::of_cut(header, end.root, commitment)?;
         let (record, mut hold_until) =
             signed_eol(end.root_name, &root.state.record).ok_or(SealFault::Unanswered)?;
         let head_cid = head_cid_from_value(&record.value).ok_or(SealFault::Unanswered)?;
