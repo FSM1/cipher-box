@@ -223,9 +223,9 @@ pub(super) enum RootGateVerdict {
     /// other reader folds it back into one.
     NotResealable,
     /// Every block source answered that it holds no head block for the CID
-    /// the record names. Only an owner cut's fallback tells this and
+    /// the record names. An owner cut's fallback tells this and
     /// [`Self::HeadBlockRefused`] apart from a rejection (ADR 0068 D1); every
-    /// other reader folds both back into one.
+    /// other reader reads this one as unavailable ([`Self::off_owner_rotation`]).
     HeadBlockAbsent,
     /// The head block does not match the CID the record names, which one bad
     /// source serves and the record bytes do not cause.
@@ -254,6 +254,15 @@ impl RootGateVerdict {
                 BelowFloor::Rollback => Self::BelowFloor,
             },
             Self::HeadBlockAbsent if endpoint_failed => Self::Unavailable,
+            verdict => verdict,
+        }
+    }
+
+    /// The verdict a reader that is not an owner rotation acts on: an absent
+    /// head block is unavailable (ADR 0078 D1).
+    pub(super) fn off_owner_rotation(self) -> Self {
+        match self {
+            Self::HeadBlockAbsent => Self::Unavailable,
             verdict => verdict,
         }
     }

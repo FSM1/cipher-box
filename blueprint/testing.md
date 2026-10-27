@@ -441,6 +441,19 @@ scenario fails the meta-test):
   failed body cancellation keeps the known answer (`net::fanout`, the desktop
   record transport, the web `recordTransport`). The fix tests fail on the code
   before ADR 0071.
+  An absent head block (ADR 0078 D1): every block source answers 404 while
+  every record endpoint answers. The boundary walk is unavailable, sends no
+  trust event and refuses no move, and a forged second scope root of the same
+  walk stays a rejection (`net::rotation`
+  `head_block_absent_off_the_owner_rotation`, `tests/owner_actions.rs`
+  `a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk`);
+  the renewal walk reports the scope root as a failed renewal and sends no
+  trust event (`tests/renewal_walk.rs`
+  `a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal`); the
+  grantee root read and the write cut boundary read are unavailable, and the
+  write cut `gated_root_at` read of the owner rotation stays a rejection
+  (`net::rotation` `head_block_absent_off_the_owner_rotation`). The fix tests
+  fail on the code before ADR 0078.
   The withheld-update escalation bounds that hold on a shared scope: a
   received share held withheld past the escalation window, while the vault
   root resolves, sends one escalation and no trust event, and a full outage

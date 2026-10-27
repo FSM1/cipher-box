@@ -1106,6 +1106,51 @@ fn a_scope_root_with_no_record_moves_the_cursor_at_once_and_is_reported() {
     assert!(reported, "the root is reported");
 }
 
+/// ADR 0078 D1: every endpoint serves a vault root record whose head block no
+/// block source holds. The walk reports a failed renewal and sends no trust
+/// event.
+#[test]
+fn a_scope_root_whose_head_block_no_source_holds_is_a_failed_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let root = write_name(ROOT);
+    let current = record_at(&world, &root);
+    let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{absent}").as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root.as_str(), record.clone());
+    }
+    while events.try_next().is_some() {}
+    tick(&world, &engine, &mut tasks);
+
+    let seen: Vec<Event> = core::iter::from_fn(|| events.try_next()).collect();
+    assert!(
+        seen.iter().any(|event| matches!(event,
+            Event::RenewalFailed { routing_key, detail }
+                if routing_key == root.as_str() && detail.contains("head block"))),
+        "the root is reported as a failed renewal: {seen:#?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "no trust event: {seen:#?}"
+    );
+}
+
 /// A transient failure keeps the cursor back across sessions: each session
 /// keeps the time of the first keep-back, and the first pass past one window
 /// stores where it stopped, however short each session is.

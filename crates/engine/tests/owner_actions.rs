@@ -9856,6 +9856,44 @@ fn a_descendant_the_walk_refused_sends_one_abuse_event_when_the_sweep_is_due() {
     );
 }
 
+/// ADR 0078 D1: every endpoint serves a descendant scope root record whose head
+/// block no block source holds. The boundary walk is unavailable, not rejected:
+/// the pass sends no trust event, and a move is not refused.
+#[test]
+fn a_descendant_whose_head_block_no_source_holds_is_unavailable_on_the_walk() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let [moved, target] = ["moved", "target"]
+        .map(|name| create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, name));
+    let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let folder = fx.folder;
+    let absent = Blocks::default().put(b"a head block that no source holds".to_vec());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+        format!("/ipfs/{absent}").as_bytes(),
+        sequence_at(&fx.world, &write_name(folder)) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    serve_everywhere(&fx.world, folder, &record);
+    let _ = events_so_far(&mut events);
+    tick(&fx.world, &engine, &mut tasks);
+
+    let abuse = abuse_descriptions(&mut events);
+    assert!(abuse.is_empty(), "{abuse:#?}");
+    assert!(
+        block_on(engine.command(Command::Move {
+            node: moved,
+            new_parent: target,
+            new_name: "moved".into(),
+            replacing: None,
+        }))
+        .is_ok(),
+        "the move is not refused"
+    );
+}
+
 /// A descendant whose live owner blob the gate refuses, read on from the
 /// cached owner copy, sends one abuse event on that pass, also when the link
 /// sweep reads the same record again.

@@ -1212,18 +1212,19 @@ pub(crate) struct WalkedBoundaries {
 
 /// A boundary walk's reading of a root gate verdict. A superseded name is this
 /// pass's copy trailing a floor a rotation raised, and it converges, so only a
-/// rejection is a trust verdict here (ADR 0003 D2).
+/// rejection is a trust verdict here (ADR 0003 D2). An absent head block is
+/// unavailable (ADR 0078 D1).
 fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
         RootGateVerdict::Rejected
         | RootGateVerdict::OwnerSeedRefused
         | RootGateVerdict::NotResealable
-        | RootGateVerdict::HeadBlockAbsent
         | RootGateVerdict::HeadBlockRefused
         | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
         RootGateVerdict::Unavailable
         | RootGateVerdict::Superseded
         | RootGateVerdict::Absent
+        | RootGateVerdict::HeadBlockAbsent
         | RootGateVerdict::AscentMismatch => WalkFailure::Unavailable,
     }
 }
@@ -2222,8 +2223,8 @@ pub(crate) enum ScopeRootAdmission {
     /// The endpoints agree the name holds no record.
     Gone,
     /// Every block source answered that it holds no head block for the
-    /// record. The renewal walk reads it as [`Self::Rejected`]; a revival
-    /// reads it as a body that is not available (ADR 0062 D1).
+    /// record. The renewal walk reports a failed renewal; a revival reads it
+    /// as a body that is not available (ADR 0062 D1, ADR 0078 D1).
     HeadBlockAbsent,
 }
 
@@ -3401,7 +3402,7 @@ where
         let gated = self
             .gated_root(granted)
             .await
-            .map_err(ResolveFailure::from)?;
+            .map_err(|verdict| ResolveFailure::from(verdict.off_owner_rotation()))?;
         let observed = root_observed(&gated, None).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             write_epoch: _,
@@ -5588,7 +5589,7 @@ where
             RootRead::new(&adopter, self.snapshot_cache, Some(child.scope_id))
                 .read(self.transport, &name)
                 .await
-                .map_err(|refusal| ResolveFailure::from(refusal.verdict))?;
+                .map_err(|refusal| ResolveFailure::from(refusal.verdict.off_owner_rotation()))?;
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
@@ -19807,6 +19808,129 @@ mod tests {
                     name.as_str()
                 );
             }
+        }
+    }
+
+    /// ADR 0078 D1: every reader that is not an owner rotation reads a head
+    /// block that no block source holds as unavailable, also when every
+    /// endpoint answered. The owner rotation keeps ADR 0068 D1.
+    mod head_block_absent_off_the_owner_rotation {
+        use super::*;
+
+        /// Every block source answers 404 for `cid`.
+        fn lose_block<T>(harness: &mut Harness<T>, cid: &str) {
+            let cid = cid.to_owned();
+            harness.http = harness.http.routed(move |request| {
+                (requested_cid(&request.url) == cid).then(|| {
+                    Ok(HttpResponse {
+                        status: 404,
+                        headers: Vec::new(),
+                        body: Vec::new().into(),
+                    })
+                })
+            });
+        }
+
+        #[test]
+        fn the_boundary_walk_reads_it_as_unavailable() {
+            let (child, child_ref, _) = one_level();
+            let root = vault_root(SCOPE, vec![child_ref]);
+            let mut harness = Harness::plain();
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+            lose_block(&mut harness, &child.head_cid_str);
+
+            let walked = harness
+                .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                .expect("the vault root gates");
+
+            assert_eq!(walked.failure, Some(WalkFailure::Unavailable));
+            assert!(walked.refused.is_empty(), "no scope root is refused");
+            assert!(walked.refused_records.is_empty());
+        }
+
+        /// The walk descends in `scope_id` order, so the two ids order the two
+        /// scope roots.
+        #[test]
+        fn the_boundary_walk_keeps_a_rejection_of_another_scope_root() {
+            for (dark, rejected) in [([0x01; 16], [0xc1; 16]), ([0xc1; 16], [0x01; 16])] {
+                let absent = interior(dark, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+                let planted = vault_root(rejected, Vec::new());
+                let root = vault_root(
+                    SCOPE,
+                    vec![child_ref(dark, &absent), child_ref(rejected, &planted)],
+                );
+                let mut harness = Harness::plain();
+                harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+                harness.stage(dark, &absent, Some(OWNER_ROOT_EPOCH));
+                harness.stage(rejected, &planted, Some(OWNER_ROOT_EPOCH));
+                lose_block(&mut harness, &absent.head_cid_str);
+
+                let walked = harness
+                    .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                    .expect("the vault root gates");
+
+                assert_eq!(
+                    walked.failure,
+                    Some(WalkFailure::Rejected { scope_id: rejected })
+                );
+                assert_eq!(walked.refused, BTreeSet::from([NodeId(rejected)]));
+            }
+        }
+
+        #[test]
+        fn the_grantee_root_read() {
+            let mut world = plain_world(Permission::Write);
+            let cid = world.root.head_cid_str.clone();
+            lose_block(&mut world.harness, &cid);
+
+            assert_eq!(
+                world.gate_served(false),
+                Err(RootGateVerdict::HeadBlockAbsent)
+            );
+            assert_eq!(
+                block_on(world.net().resolve_plan(&world.granted[0])).map(|_| ()),
+                Err(ResolveFailure::Unavailable)
+            );
+        }
+
+        #[test]
+        fn the_write_cut_boundary_read() {
+            let mut harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            lose_block(&mut harness, &staged.descendant.head_cid_str);
+            let owner = owner_identity();
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+
+            assert_eq!(
+                block_on(net.resolve_node(&SCOPE, None)).map(|_| ()),
+                Err(NodeStop::Stop(ResolveFailure::Unavailable))
+            );
+        }
+
+        /// The owner rotation's own root read keeps ADR 0068 D1.
+        #[test]
+        fn the_write_cut_gated_root_at_stays_a_rejection() {
+            let mut harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            lose_block(&mut harness, &staged.root.head_cid_str);
+            let owner = owner_identity();
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+
+            assert_eq!(
+                block_on(net.gated_root_at(&staged.root.name)).map(|_| ()),
+                Err(ResolveFailure::Rejected)
+            );
         }
     }
 }
