@@ -163,15 +163,19 @@ scenario fails the meta-test):
   started, a grant on a cut scope at the map, the seal and the cut step each
   cut the scope again, and a cut that leaves no row raises the held cut epoch
   and publishes the final records again; each sends one `dissolve-recut` event
-  and reaches the relink, also across a restart after the raise
+  and reaches the relink. The raise is durable before the final root publishes
+  again, and a restart after a failed root or pointer PUT publishes the final
+  records once more with no second raise
   (`a_grant_on_a_cut_scope_at_the_map_after_the_copy_started_is_cut_again`,
   `a_grant_on_a_cut_scope_at_the_seal_after_the_copy_started_is_cut_again`,
   `a_grant_on_a_cut_scope_at_the_cut_step_after_the_copy_started_is_cut_again`,
   `a_cut_with_no_row_after_the_copy_started_raises_the_held_cut_epoch`,
-  `a_restart_after_the_recut_raise_publishes_the_final_records_once_more` in
+  `a_restart_after_the_recut_raise_publishes_the_final_records_once_more`,
+  `a_recut_raise_is_durable_before_the_final_root_publishes` in
   `crates/engine/tests/owner_actions.rs`); a read below the held cut epoch
-  waits (`sync::drain::dissolve` unit tests), and a listed scope outside the
-  subtree holds the cut step
+  waits with no re-cut, at the map and at the seal (`sync::drain::dissolve`
+  unit tests, `a_seal_read_below_the_held_cut_epoch_waits`), and a listed
+  scope outside the subtree holds the cut step
   (`a_listed_scope_outside_the_subtree_after_the_copy_started_holds_the_cut_step`);
 - the rotation trigger table and the eager-set law — owner cascade vs
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
