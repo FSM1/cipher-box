@@ -48,7 +48,7 @@ use crate::net::HeldRecords;
 use crate::net::renewal_walk::LapsedFolder;
 use crate::net::retire::{OrphanHeads, ReclaimStall};
 use crate::net::revival::RecoveryPace;
-use crate::net::rotation::{OnAccessMisses, SpentSequences};
+use crate::net::rotation::OnAccessMisses;
 use crate::rotation::{PublishedRoot, SweepKeys, SweepTaskFactory, WalkedReadEpochs};
 use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
@@ -431,8 +431,6 @@ pub(crate) struct SessionState {
     pub(crate) pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// The owner accesses' scope-pointer consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: OnAccessMisses,
-    /// The sequences each rotation of the session signed ([`SpentSequences`]).
-    pub(crate) spent_sequences: SpentSequences,
     /// The verdict the tick's last pass reached for each bookmarked shared
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
@@ -796,7 +794,6 @@ impl SessionState {
             focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
             pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
             on_access_misses: OnAccessMisses::default(),
-            spent_sequences: SpentSequences::default(),
             received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
             withheld_pins: Rc::new(RefCell::new(BTreeMap::new())),
             pointer_pins: Rc::new(RefCell::new(BTreeMap::new())),

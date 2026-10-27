@@ -1214,8 +1214,9 @@ fn serve_the_current_record_after_each_put(world: &FakeWorld, name: &IpnsName) {
     store.serve_after_put(name.as_str(), 0, current);
 }
 
-/// A re-seal of a nested root that lands but does not confirm spends its
-/// sequence for the session, so a re-seal of a later command signs above it.
+/// A re-seal of a nested root that lands but does not confirm raises the
+/// rotation mark of its name. The mark holds the sequence, not the session,
+/// so a re-seal of a later command after a restart signs above it.
 #[test]
 fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
     let mut fx = GrantScenario::new();
@@ -1225,7 +1226,10 @@ fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
     serve_the_current_record_after_each_put(&fx.world, &folder_name);
 
     let mut landed = Vec::new();
-    for _ in 0..2 {
+    for restart in [false, true] {
+        if restart {
+            restart_owner(&mut fx);
+        }
         assert_eq!(
             block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
             Ok(CommandOutcome::Done)
@@ -1233,6 +1237,57 @@ fn a_later_rotation_signs_above_an_unconfirmed_nested_reseal() {
         landed.push(sequence_at(&fx.world, &folder_name));
     }
     assert!(landed[1] > landed[0], "{landed:?}");
+}
+
+/// Each attempt of the cut of a revoke runs in a new net. An attempt signs
+/// above the rotation mark of an attempt before it whose root PUT landed but
+/// did not confirm.
+#[test]
+fn a_cut_retry_signs_above_an_unconfirmed_root_put_of_the_attempt_before() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let folder_name = write_name(fx.folder);
+    let earlier = fx.world.record_store.put_count(folder_name.as_str());
+    serve_the_current_record_after_each_put(&fx.world, &folder_name);
+    let _clock = fx.world.scheduler.clone().with_auto_advance();
+
+    let revoked = block_on(fx.engine.command(Command::Revoke {
+        node: fx.folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+    }));
+    assert!(revoked.is_err(), "{revoked:?}");
+
+    // Each attempt signs one record and PUTs it to every endpoint.
+    let mut signed: Vec<Vec<u8>> = Vec::new();
+    for record in fx
+        .world
+        .record_store
+        .puts_for(folder_name.as_str())
+        .split_off(earlier)
+    {
+        if !signed.contains(&record) {
+            signed.push(record);
+        }
+    }
+    let sequences: Vec<u64> = signed
+        .iter()
+        .map(|record| {
+            IpnsRecord::unmarshal(record)
+                .and_then(|record| record.verify(&folder_name))
+                .expect("each PUT verifies under the folder name")
+                .sequence
+        })
+        .collect();
+    assert_eq!(
+        sequences.len(),
+        MAX_ROTATION_ATTEMPTS as usize,
+        "{sequences:?}"
+    );
+    assert!(
+        sequences.windows(2).all(|pair| pair[1] > pair[0]),
+        "{sequences:?}"
+    );
 }
 
 /// The sweep a cut enqueues signs above a re-seal of that cut that landed

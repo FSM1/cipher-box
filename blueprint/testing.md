@@ -380,6 +380,20 @@ scenario fails the meta-test):
   invisible to the acknowledged read (`net::retire`) and orphan GC spares it
   (`sync::staging`) (ADR 0020); the hold refuses a sequence of zero or a name
   that is not an IPNS name (`tests/encode_refusals.rs`);
+- the rotation mark (ADR 0081) — a rotation PUT that lands and does not
+  confirm, then a publish in a new net over the same floor store, signs above
+  the mark: a flat cut root, a child ascent re-seal, a promotion, a sweep
+  re-seal, a grant move re-seal and a grantee cut; a retry after a cut PUT
+  that no endpoint acknowledged signs above it; a raise that the floor store
+  does not take, or refuses with an error, sends no PUT, and a raise that it
+  takes is followed by the PUT (`net::rotation`); each attempt of the cut of a
+  revoke signs above the attempt before it, and, as a guard against a floor
+  store clear at session start, a nested re-seal after a restart signs above
+  the re-seal of the session before it (`tests/owner_actions.rs`); a publish
+  signature and a renewal signature go above the mark, a mark that does not
+  read refuses both, both read the sequence floor after the mark, and a
+  bounded read signs above its own mark and is not overtaken by it
+  (`net::publish`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2

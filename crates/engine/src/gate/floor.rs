@@ -266,6 +266,13 @@ pub(crate) fn relink_parent_mark_key(name: &[u8]) -> Vec<u8> {
     [b"dissolve-relink-parent/".as_slice(), name].concat()
 }
 
+/// The floor-store key of the rotation mark of `name`: the highest sequence
+/// that a rotation publish signed there (ADR 0081). It only rises, and each
+/// signature at `name` goes above it.
+pub(crate) fn rotation_mark_key(name: &[u8]) -> Vec<u8> {
+    [b"rotation-signed/".as_slice(), name].concat()
+}
+
 /// The durable per-name sequence floor, if ever raised.
 pub async fn sequence_floor<F: FloorStore>(
     floors: &F,

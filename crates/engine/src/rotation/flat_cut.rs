@@ -20,7 +20,7 @@ use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::{Event, NodeId};
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, OnAccessMisses, RefusedRoot, RootReports, RotationAncestry,
-    SpentSequences, SweptScopeState,
+    SweptScopeState,
 };
 use crate::net::{
     OwnerRotationKeys, OwnerRotationNet, PointerConsultArm, VaultPointerVoucher, VouchedRoot,
@@ -64,8 +64,6 @@ pub(crate) struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S>
     pub(crate) walked_epochs: &'a RefCell<WalkedReadEpochs>,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: &'a OnAccessMisses,
-    /// The sequences each rotation of the session signed ([`SpentSequences`]).
-    pub(crate) spent: &'a SpentSequences,
     /// The child records whose rejection this session already reported.
     pub(crate) ascent_reports: &'a RootReports,
 }
@@ -126,7 +124,7 @@ where
         pointer_consult: PointerConsultArm::Refused,
         on_access_misses: arm.on_access_misses,
         payload_version: POINTER_PAYLOAD_VERSION,
-        gated: GatedRoots::sharing(arm.spent),
+        gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
         ascent_reports: arm.ascent_reports,

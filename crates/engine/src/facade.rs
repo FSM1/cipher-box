@@ -6378,9 +6378,6 @@ impl<T: SeamTypes> Engine<T> {
             consulted.clear();
         }
         self.state.on_access_misses.clear_all();
-        if let Ok(mut spent) = self.state.spent_sequences.try_borrow_mut() {
-            spent.clear();
-        }
         if let Ok(mut verdicts) = self.state.received_verdicts.try_borrow_mut() {
             verdicts.clear();
         }
@@ -7232,7 +7229,6 @@ where {
         let alive = self.alive.clone();
         let profile = self.profile;
         let on_access_misses = self.state.on_access_misses.clone();
-        let spent = self.state.spent_sequences.clone();
         let owed_rotation = self.state.owed_rotation.clone();
 
         Some(Rc::new(
@@ -7252,7 +7248,6 @@ where {
                 let staging = staging.clone();
                 let alive = alive.clone();
                 let on_access_misses = on_access_misses.clone();
-                let spent = spent.clone();
                 let owed_rotation = owed_rotation.clone();
                 Box::pin(async move {
                     // The pass owns a copy for exactly its own duration; the
@@ -7285,7 +7280,7 @@ where {
                         pointer_consult: PointerConsultArm::Permitted,
                         on_access_misses: &on_access_misses,
                         payload_version: POINTER_PAYLOAD_VERSION,
-                        gated: GatedRoots::sharing(&spent),
+                        gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
                         ascent_reports: owed_rotation.root_reports(),
@@ -8596,13 +8591,12 @@ where {
         };
 
         self.bounded_rotation(async || {
-            let mut net = self.owner_rotation_net(
+            let net = self.owner_rotation_net(
                 api,
                 owner_keys(),
                 target.ancestry(),
                 PointerConsultArm::Refused,
             );
-            net.gated = GatedRoots::sharing(&self.state.spent_sequences);
             let outcome = flat_root_cut(
                 &net,
                 anchor.as_ref(),
