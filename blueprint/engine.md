@@ -1318,9 +1318,9 @@ hold comes back if the version refusal does.
 ## Rotation primitives
 
 Three primitives, no recovery machinery (FSM1/cipher-box-next#26 D8): no job records, no
-checkpoints — published records are the sole source of truth. A pre-publish
-crash changed nothing durable; a post-publish crash recovers the override seed
-from the published root itself; a resumed name wave enumerates old names via the
+checkpoints — published records are the sole source of truth. A crash before
+the PUT can leave a durable rotation mark without a published record; a
+post-publish crash recovers the override seed from the published root itself; a resumed name wave enumerates old names via the
 write-plane history link. Every rotation publish re-reads, after its own gated
 read and immediately before it signs, each durable floor the gate holds the
 record to — the read-epoch, the write-epoch and, for a scope root, the cut-epoch
