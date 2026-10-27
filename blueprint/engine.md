@@ -540,7 +540,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
 owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
 own vault → scope/vault pointer (first act) → floors seeded → current root
 name → envelope grant blob → seeds → render. Residual, honestly scoped
-(FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most grantee-triggered
+(FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most flat-cut
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
@@ -1342,12 +1342,14 @@ by FSM1/cipher-box-next#38 D5):
   cheap for grant-less scopes), owner blob, history link, ascent link under
   the parent's new derivation. Cached descendant seeds are why ascent-re-seal
   alone is insufficient. Cost: O(descendant scope count), never tree size.
-- **Grantee scope-exit rotations**: flat, self-contained, offline — every
+- **Flat cuts** (`RotateNow`, an owned scope exit; a grantee cuts no scope,
+  [ADR 0082](../decisions/0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md)):
+  flat, self-contained, offline — every
   old-seed holder is a live grantee who receives the new seed, so no cascade;
   the single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
-  FSM1/cipher-box-next#38 D5). An owner flat cut (`RotateNow`, an owned scope exit) also
+  FSM1/cipher-box-next#38 D5). A flat cut also
   re-seals the ascent link of each indexed child scope root under the new seed; the child keeps
   its seed and its read epoch
   ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
@@ -1555,7 +1557,7 @@ Per FSM1/cipher-box-next#26 D7:
 
 | Trigger                                                                                                                                                    | Action                                                                                                                                                                   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                                                                  |
+| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (owner-triggered, flat); a grantee move across the edge of a received share is refused (ADR 0082)                                                          |
 | Read revoke                                                                                                                                                | Immediate revoking rekey: every blob, ledger row and commitment entry of the revoke's one cut set removed, `rotateScope` with the full cascade — one atomic owner action |
 | Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                                                                    |
 | Expired link                                                                                                                                               | The owner's expired-link sweep (below) cuts it — a read revoke of the link row                                                                                           |

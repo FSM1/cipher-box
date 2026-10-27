@@ -397,8 +397,9 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   signatures across them, buying ~1000x reader-CPU amplification for ~1284
   signatures. That sum is the reason for the section bounds above.
   The pinned signer may be **any** committed write-capable pseudonym, not the
-  owner's specifically: the commitment carries no read epoch so that
-  grantee-triggered rotation needs no owner signature (`CONTEXT.md`).
+  owner's specifically. The commitment carries no read epoch; its first
+  reason, a grantee-triggered rotation, is retired by ADR 0082, and the format
+  stays (`CONTEXT.md`).
   Per-structure signers would need a per-structure signer index on the wire,
   since the gate cannot otherwise avoid the product — a format change, not a
   relaxation of this rule. The produce side runs the same predicate

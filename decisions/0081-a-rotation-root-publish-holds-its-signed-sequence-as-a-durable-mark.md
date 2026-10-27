@@ -44,6 +44,8 @@ sweep (`publish_node`) and of a grant move (`reseal_interior_node`). The mark on
 nothing clears it. A PUT that fails, or a crash before the PUT, can leave a durable mark without a
 published record. The next signature goes above it, and the gap in the sequences of the name is
 harmless. The mark is not a floor: no adoption gate, no resolve and no settle reads it.
+Amended by ADR 0082 D1 on 2026-10-28: the grantee scope-root publish goes with the deleted
+grantee arm, and the other publishes stand.
 
 **D2 — Every signature at the name reads the rotation mark and signs strictly above the value
 that the read returns.** Both signature gates read the rotation mark before the sequence floor.
