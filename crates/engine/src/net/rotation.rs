@@ -2870,10 +2870,11 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     put_sent: Option<([u8; 16], &'a Cell<bool>)>,
     /// Takes the sequence of each signed record, landed or not.
     signed: Option<&'a Cell<Option<u64>>>,
-    /// Whether the signature refuses a floor above the read the publish
-    /// builds on ([`Observed::bounded`]). A last copy keeps the bound of its
-    /// own read (ADR 0068 D1).
-    bounded: bool,
+    /// The scope root whose read ran on the last copy. A publish over a last
+    /// copy has no bound, because its read can sit below the floor (ADR 0068
+    /// D1). Every other publish refuses a floor above its read
+    /// ([`Observed::bounded`]).
+    unbounded: Option<[u8; 16]>,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
@@ -2954,10 +2955,10 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
 
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
-        let observed = if self.bounded {
-            current.observed.clone().bounded()
-        } else {
+        let observed = if self.unbounded == Some(record.scope_id) {
             current.observed.clone()
+        } else {
+            current.observed.clone().bounded()
         };
         let mark = self
             .put_sent
@@ -3034,10 +3035,11 @@ where
                 .as_ref()
                 .and_then(|fallback| fallback.put_sent.map(|sent| (fallback.scope_id, sent))),
             signed: None,
-            bounded: !self
+            unbounded: self
                 .root_fallback
                 .as_ref()
-                .is_some_and(RootFallback::fell_back),
+                .filter(|fallback| fallback.fell_back())
+                .map(|fallback| fallback.scope_id),
         }
     }
 }
@@ -3521,7 +3523,7 @@ where
             owner_identity: self.keys.owner_identity,
             put_sent: None,
             signed: None,
-            bounded: true,
+            unbounded: None,
         }
     }
 }

@@ -1348,7 +1348,9 @@ by FSM1/cipher-box-next#38 D5):
   From read epoch 64, a flat cut refuses as retryable, with the check
   `rot-read-nested-root-owed`, when it would drop a history link that an owed child re-seal
   needs or when a child probe does not finish; a pre-cut re-read of the scope that does not
-  finish stops the cut with the class of its failure (ADR 0080 D4).
+  finish stops the cut with the class of its failure (ADR 0080 D4). A scope-root publish whose
+  sequence floor stands above its own read at the signature signs nothing and gives the
+  retryable `LostRace`; a publish over an ADR 0068 last copy is exempt.
 
 Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
