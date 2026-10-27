@@ -45,7 +45,10 @@ With no mark, the walk signs at `S + 1`. With a mark above `S`, it signs one abo
 mark, for example at `S + 2` when the mark is at `S + 1`. A mark that does not read is signed
 above the sequence floor plus the attempt budget plus one, and the walk reports it with
 `renewalFailed`. The floor check of ADR 0061 D3 step 5 stays on the admitted `S`. A write that
-another device signs at `S + 1` at the same time then loses to the renewal and rebases.
+another device signs at `S + 1` at the same time then loses to the renewal and rebases. Amended by
+ADR 0081 D2 on 2026-10-27: the walk also signs above the rotation mark of the name, for example at
+10 when `S` is 4, no mark is held and the rotation mark is 9, and a rotation mark that does not read
+refuses the signature.
 
 **D4 — Only a confirmed publish above the unacknowledged mark clears it.** A publish that
 confirms at exactly the mark's sequence ties the bytes that the mark stands for, so the mark
