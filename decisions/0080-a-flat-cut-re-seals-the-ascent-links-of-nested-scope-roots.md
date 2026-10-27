@@ -88,7 +88,8 @@ adds no link and does not run the check.
   in a session.
 - ADR 0003 D1 carries an "Amended by" sentence for D2.
 - ADR 0063 does not change: the re-seal keeps no durable state, and after a crash the idle sweep
-  repeats D2.
+  repeats D2. Amended by ADR 0081 D1 on 2026-10-27: the re-seal keeps a durable rotation mark at
+  each name it signs, and it still keeps no durable work journal.
 
 ## Residuals
 

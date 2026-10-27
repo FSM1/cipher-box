@@ -142,7 +142,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   unknown outcome; the engine classifies the status the transport reports
   (ADR 0060 D1). A publish that every endpoint refused fails as refused, and
   any other publish that no endpoint acked fails as not acked (ADR 0060 D2);
-  both keep the head block charged (see "Retirement").
+  both keep the head block charged (see "Retirement"). Each signature signs
+  strictly above the sequence floor, the relink mark and the rotation mark of
+  its name, and a mark that does not read refuses the publish (ADR 0081 D2).
 - **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
   (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
   client-signed EOL; TTL and EOL are independent (FSM1/cipher-box-next#33 D3, FSM1/cipher-box-next#24 D1).
@@ -1316,13 +1318,16 @@ hold comes back if the version refusal does.
 ## Rotation primitives
 
 Three primitives, no recovery machinery (FSM1/cipher-box-next#26 D8): no job records, no
-checkpoints — published records are the sole source of truth. A pre-publish
-crash changed nothing durable; a post-publish crash recovers the override seed
-from the published root itself; a resumed name wave enumerates old names via the
+checkpoints — published records are the sole source of truth. A crash before
+the PUT can leave a durable rotation mark without a published record; a
+post-publish crash recovers the override seed from the published root itself; a resumed name wave enumerates old names via the
 write-plane history link. Every rotation publish re-reads, after its own gated
 read and immediately before it signs, each durable floor the gate holds the
 record to — the read-epoch, the write-epoch and, for a scope root, the cut-epoch
-floor — and refuses below any of them (ADR 0041).
+floor — and refuses below any of them (ADR 0041). Before its PUT, each rotation publish, of a
+scope root or of an interior re-seal, raises the rotation mark of its name to its
+signed sequence, and nothing clears the mark (ADR 0081 D1). The name wave (`publish_moved`),
+which also moves a write-cut root to its new name, does not raise the mark.
 
 ### rotateScope
 
