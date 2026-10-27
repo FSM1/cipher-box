@@ -488,12 +488,10 @@ pub(crate) enum PutMark<'a> {
         /// The cell that takes the signed sequence.
         signed: &'a core::cell::Cell<Option<u64>>,
     },
-    /// A monotonic-max raise of the rotation mark of the name to the signed
-    /// sequence (ADR 0081 D1), then `sent`, a note for the caller's own call
-    /// which nothing keeps.
+    /// A monotonic-max raise of the rotation mark of the observed name
+    /// ([`floor::rotation_mark_key`]) to the signed sequence (ADR 0081 D1),
+    /// then `sent`, a note for the caller's own call which nothing keeps.
     Rotation {
-        /// The floor-store key of the mark ([`floor::rotation_mark_key`]).
-        key: &'a [u8],
         /// Raised before the PUT.
         sent: Option<&'a core::cell::Cell<bool>>,
     },
@@ -807,8 +805,9 @@ where
                 raise_mark(floors, key, sequence).await?;
             }
         }
-        Some(PutMark::Rotation { key, sent }) => {
-            raise_mark(floors, key, sequence).await?;
+        Some(PutMark::Rotation { sent }) => {
+            let key = floor::rotation_mark_key(request.observed.name.as_str().as_bytes());
+            raise_mark(floors, &key, sequence).await?;
             if let Some(sent) = sent {
                 sent.set(true);
             }
@@ -1062,14 +1061,13 @@ mod tests {
             self.inner.epoch_floor(key).await
         }
         async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            if self.on == AdoptOn::RelinkMark
-                && key == floor::relink_parent_mark_key(self.name.as_str().as_bytes())
-            {
-                self.adopt().await?;
-            }
-            if self.on == AdoptOn::RotationMark
-                && key == floor::rotation_mark_key(self.name.as_str().as_bytes())
-            {
+            let name = self.name.as_str().as_bytes();
+            let adopt_at = match self.on {
+                AdoptOn::Epoch => None,
+                AdoptOn::RelinkMark => Some(floor::relink_parent_mark_key(name)),
+                AdoptOn::RotationMark => Some(floor::rotation_mark_key(name)),
+            };
+            if adopt_at.as_deref() == Some(key) {
                 self.adopt().await?;
             }
             self.inner.sequence_floor(key).await
@@ -1154,9 +1152,9 @@ mod tests {
         assert_eq!(gate.sequence_floor(), Some(8));
     }
 
-    /// A name with a rotation mark at 9 over an observation at 4.
-    fn marked_at_nine(seed: u8) -> (Ed25519Signer, Observed, InMemoryFloorStore) {
-        let signer = Ed25519Signer::from_seed([seed; 32]);
+    #[test]
+    fn a_signature_and_a_renewal_signature_go_above_the_rotation_mark() {
+        let signer = Ed25519Signer::from_seed([0x55; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let floors = InMemoryFloorStore::default();
         block_on(
@@ -1164,60 +1162,21 @@ mod tests {
         )
         .unwrap();
         let observed = Observed::gated(&name, 4, ENVELOPE_V, &[]).unwrap();
-        (signer, observed, floors)
-    }
 
-    #[test]
-    fn a_signature_goes_above_the_rotation_mark() {
-        let (signer, observed, floors) = marked_at_nine(0x55);
         let gate = block_on(SignatureGate::read(&floors, &observed, None)).unwrap();
         let (_, sequence) = gate.sign(&signer, b"/ipfs/x", 1, "eol").unwrap();
         assert_eq!(sequence, 10);
-    }
-
-    #[test]
-    fn a_renewal_signature_goes_above_the_rotation_mark() {
-        let (signer, observed, floors) = marked_at_nine(0x56);
         let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, None)).unwrap();
         let (_, sequence) = gate.sign(&signer, b"/ipfs/x", 1, "eol").unwrap();
         assert_eq!(sequence, 10);
-    }
-
-    /// A floor store whose rotation mark of `name` does not read.
-    struct UnreadableRotationMark {
-        inner: InMemoryFloorStore,
-        name: IpnsName,
-    }
-
-    impl FloorStore for UnreadableRotationMark {
-        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner.epoch_floor(key).await
-        }
-        async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            if key == floor::rotation_mark_key(self.name.as_str().as_bytes()) {
-                return Err(SeamError::new("the mark does not read"));
-            }
-            self.inner.sequence_floor(key).await
-        }
-        async fn raise_epoch_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
-            self.inner.raise_epoch_floor(key, value).await
-        }
-        async fn raise_sequence_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
-            self.inner.raise_sequence_floor(key, value).await
-        }
-        async fn clear(&self) -> SeamResult<()> {
-            self.inner.clear().await
-        }
     }
 
     #[test]
     fn a_rotation_mark_that_does_not_read_refuses_the_signature() {
         let signer = Ed25519Signer::from_seed([0x57; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        let floors = UnreadableRotationMark {
-            inner: InMemoryFloorStore::default(),
-            name: name.clone(),
-        };
+        let floors = InMemoryFloorStore::default();
+        floors.fail_sequence_floor_reads_for(&floor::rotation_mark_key(name.as_str().as_bytes()));
         let observed = Observed::gated(&name, 4, ENVELOPE_V, &[]).unwrap();
         assert!(matches!(
             block_on(SignatureGate::read(&floors, &observed, None)),

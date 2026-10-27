@@ -2922,9 +2922,7 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
 
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
-        let mark_key = floor::rotation_mark_key(name.as_str().as_bytes());
         let mark = PutMark::Rotation {
-            key: &mark_key,
             sent: self
                 .put_sent
                 .filter(|(scope_id, _)| *scope_id == record.scope_id)
@@ -4055,7 +4053,6 @@ where
             return Err(RotationPublishError::Rejected);
         }
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &node.node_id);
-        let mark_key = floor::rotation_mark_key(name.as_str().as_bytes());
         let receipt = publish_record(
             self.transport,
             self.api,
@@ -4068,10 +4065,7 @@ where
                 head: &preflighted,
                 content_cids: Vec::new(),
             },
-            Some(PutMark::Rotation {
-                key: &mark_key,
-                sent: None,
-            }),
+            Some(PutMark::Rotation { sent: None }),
         )
         .await
         .map_err(record_publish_verdict)?;
@@ -11742,15 +11736,24 @@ mod tests {
         assert_eq!(sequence_at(&harness, &child.name), Some(3));
     }
 
-    /// Serve the record now at `name` to every GET after the next PUT under
-    /// it: a publish there lands but does not confirm.
-    fn serve_the_staged_record_after_each_put<T: RecordTransport + Clone>(
+    /// Serve the record now at `name` to every GET after each PUT under it,
+    /// so a publish there lands but does not confirm, then run `attempt`
+    /// twice: the second PUT signs above the first.
+    fn each_attempt_signs_above_the_last<T: RecordTransport + Clone>(
         harness: &Harness<T>,
         name: &IpnsName,
+        mut attempt: impl FnMut(),
     ) {
         let first = harness.store.endpoints()[0].clone();
         let staged = harness.store.record_at(&first, name.as_str());
         harness.store.serve_after_put(name.as_str(), 0, staged);
+
+        let mut landed = Vec::new();
+        for _ in 0..2 {
+            attempt();
+            landed.push(sequence_at(harness, name).expect("the PUT landed"));
+        }
+        assert!(landed[1] > landed[0], "{landed:?}");
     }
 
     /// A flat cut whose root PUT lands but does not confirm. A cut in a new
@@ -11759,17 +11762,12 @@ mod tests {
     #[test]
     fn a_later_cut_signs_above_an_unconfirmed_cut_root() {
         let (harness, scope, scope_ref) = p_at_the_window_edge(&[]);
-        serve_the_staged_record_after_each_put(&harness, &scope.name);
-
-        let mut landed = Vec::new();
-        for _ in 0..2 {
+        each_attempt_signs_above_the_last(&harness, &scope.name, || {
             assert_eq!(
                 cut_at_the_window_edge(&harness, &scope_ref).err(),
                 Some(RotateError::Publish(RotationPublishError::NotPublished)),
             );
-            landed.push(sequence_at(&harness, &scope.name).expect("the PUT landed"));
-        }
-        assert!(landed[1] > landed[0], "{landed:?}");
+        });
     }
 
     /// The index repair of P publishes over the base its own resolve parked.
@@ -12591,18 +12589,12 @@ mod tests {
     #[test]
     fn a_later_grantee_cut_signs_above_an_unconfirmed_one() {
         let world = plain_world(Permission::Write);
-        let name = world.root.name.clone();
-        serve_the_staged_record_after_each_put(&world.harness, &name);
-
-        let mut landed = Vec::new();
-        for _ in 0..2 {
+        each_attempt_signs_above_the_last(&world.harness, &world.root.name, || {
             assert_eq!(
                 world.cut().err(),
                 Some(RotateError::Publish(RotationPublishError::NotPublished)),
             );
-            landed.push(sequence_at(&world.harness, &name).expect("the PUT landed"));
-        }
-        assert!(landed[1] > landed[0], "{landed:?}");
+        });
     }
 
     #[test]
@@ -18420,11 +18412,7 @@ mod tests {
     #[test]
     fn a_later_promotion_signs_above_an_unconfirmed_promotion() {
         let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        let name = interior_name(node_id);
-        serve_the_staged_record_after_each_put(&harness, &name);
-
-        let mut landed = Vec::new();
-        for _ in 0..2 {
+        each_attempt_signs_above_the_last(&harness, &interior_name(node_id), || {
             let net = harness.net(&[]);
             let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");
             let node = swept.children[0].clone();
@@ -18432,9 +18420,7 @@ mod tests {
                 block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[])).err(),
                 Some(RotationPublishError::NotPublished),
             );
-            landed.push(sequence_at(&harness, &name).expect("the PUT landed"));
-        }
-        assert!(landed[1] > landed[0], "{landed:?}");
+        });
     }
 
     /// A sweep re-seal of an interior node whose PUT lands but does not
@@ -18443,13 +18429,11 @@ mod tests {
     fn a_later_sweep_signs_above_an_unconfirmed_interior_reseal() {
         let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
         let name = interior_name(node_id);
-        serve_the_staged_record_after_each_put(&harness, &name);
         let observed = gated_at(&name);
         let body = interior_body();
         let empty = PreservedFields::new();
 
-        let mut landed = Vec::new();
-        for _ in 0..2 {
+        each_attempt_signs_above_the_last(&harness, &name, || {
             let net = harness.net(&[]);
             let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
             let node = LaggingNode {
@@ -18465,9 +18449,7 @@ mod tests {
                 block_on(net.publish_node(&scope, &node)),
                 Err(RotationPublishError::NotPublished),
             );
-            landed.push(sequence_at(&harness, &name).expect("the PUT landed"));
-        }
-        assert!(landed[1] > landed[0], "{landed:?}");
+        });
     }
 
     /// A grant move re-seal of an interior node whose PUT lands but does not
@@ -18476,14 +18458,12 @@ mod tests {
     fn a_later_move_signs_above_an_unconfirmed_interior_reseal() {
         let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
         let name = interior_name(node_id);
-        serve_the_staged_record_after_each_put(&harness, &name);
         let observed = gated_at(&name);
         let body = interior_body();
         let empty = PreservedFields::new();
         let root = promoted_folder_root();
 
-        let mut landed = Vec::new();
-        for _ in 0..2 {
+        each_attempt_signs_above_the_last(&harness, &name, || {
             let net = harness.net(&[]);
             block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");
             assert_eq!(
@@ -18494,44 +18474,7 @@ mod tests {
                 )),
                 Err(RotationPublishError::NotPublished),
             );
-            landed.push(sequence_at(&harness, &name).expect("the PUT landed"));
-        }
-        assert!(landed[1] > landed[0], "{landed:?}");
-    }
-
-    /// A floor store that does not take a raise of a rotation mark: it
-    /// answers a lower value, or an error when `fails`.
-    struct UntakenRotationMark {
-        inner: InMemoryFloorStore,
-        fails: bool,
-    }
-
-    impl FloorStore for UntakenRotationMark {
-        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner.epoch_floor(key).await
-        }
-
-        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
-            self.inner.raise_epoch_floor(key, epoch).await
-        }
-
-        async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
-            self.inner.sequence_floor(key).await
-        }
-
-        async fn raise_sequence_floor(&self, key: &[u8], sequence: u64) -> SeamResult<u64> {
-            if key.starts_with(b"rotation-signed/") {
-                if self.fails {
-                    return Err(SeamError::new("the mark is not written"));
-                }
-                return Ok(0);
-            }
-            self.inner.raise_sequence_floor(key, sequence).await
-        }
-
-        async fn clear(&self) -> SeamResult<()> {
-            self.inner.clear().await
-        }
+        });
     }
 
     /// A rotation publish whose mark the floor store does not take, by a
@@ -18540,44 +18483,42 @@ mod tests {
     #[test]
     fn a_rotation_mark_the_store_does_not_take_sends_no_put() {
         for fails in [false, true] {
-            a_rotation_mark_the_store_does_not_take_sends_no_put_when(fails);
+            let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+            let name = interior_name(node_id);
+            let mark_key = floor::rotation_mark_key(name.as_str().as_bytes());
+            if fails {
+                harness.floors.fail_floor_raises_for(&mark_key);
+            } else {
+                harness.floors.under_report_sequence_raises_for(&mark_key);
+            }
+            let net = harness.net(&[]);
+            let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");
+            let node = swept.children[0].clone();
+            let body = interior_body();
+            let empty = PreservedFields::new();
+            let observed = gated_at(&name);
+
+            assert_eq!(
+                block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[])).err(),
+                Some(RotationPublishError::NotPublished),
+            );
+            assert_eq!(
+                block_on(net.publish_node(
+                    &scope,
+                    &LaggingNode {
+                        node_id,
+                        ipns_name: name.as_str().as_bytes(),
+                        read_epoch: swept.current_read_epoch,
+                        observed: &observed,
+                        read_body: &body,
+                        carried_unknown: &empty,
+                        carried_epoch_tag_unknown: &empty,
+                    },
+                )),
+                Err(RotationPublishError::NotPublished),
+            );
+            assert_eq!(harness.store.put_count(name.as_str()), 0);
         }
-    }
-
-    fn a_rotation_mark_the_store_does_not_take_sends_no_put_when(fails: bool) {
-        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        let name = interior_name(node_id);
-        let floors = UntakenRotationMark {
-            inner: harness.floors.clone(),
-            fails,
-        };
-        let net = net_over(&harness, &floors);
-        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the scope");
-        let node = swept.children[0].clone();
-        let body = interior_body();
-        let empty = PreservedFields::new();
-        let observed = gated_at(&name);
-
-        assert_eq!(
-            block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[])).err(),
-            Some(RotationPublishError::NotPublished),
-        );
-        assert_eq!(
-            block_on(net.publish_node(
-                &scope,
-                &LaggingNode {
-                    node_id,
-                    ipns_name: name.as_str().as_bytes(),
-                    read_epoch: swept.current_read_epoch,
-                    observed: &observed,
-                    read_body: &body,
-                    carried_unknown: &empty,
-                    carried_epoch_tag_unknown: &empty,
-                },
-            )),
-            Err(RotationPublishError::NotPublished),
-        );
-        assert_eq!(harness.store.put_count(name.as_str()), 0);
     }
 
     /// The sequence of the record currently published at `name`.
