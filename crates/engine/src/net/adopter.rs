@@ -2073,6 +2073,20 @@ mod tests {
         assert!(outcome.write_scope_seed.is_none());
     }
 
+    #[test]
+    fn a_read_grantee_adopts_from_a_blob_without_a_write_seed() {
+        let fx = granted(|row| {
+            row.ledger_entry.permission = Permission::Read;
+            row.commitment_entry.permission = Permission::Read;
+        });
+
+        let outcome = grantee_adopt(&fx, &grantee_enc()).expect("the grantee adopts");
+
+        let read = outcome.read_scope_seed.expect("a read seed");
+        assert!(ct_eq(&read, &OWNER_ROOT_SCOPE_SEED), "the blob's read seed");
+        assert!(outcome.write_scope_seed.is_none());
+    }
+
     /// Any committed writer can plant a blob at a revoked grantee's tag; only
     /// the owner-signed commitment says who holds a grant (CONTEXT.md "Grant
     /// blob").
