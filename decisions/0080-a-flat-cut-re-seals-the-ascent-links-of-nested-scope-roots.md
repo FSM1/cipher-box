@@ -94,7 +94,8 @@ adds no link and does not run the check.
 ## Residuals
 
 - The grantee scope-exit arm (`GranteeRotationNet`) calls `rotate_scope` directly and has the same
-  gap. Does a grantee re-seal the ascent links of the nested roots too?
+  gap. Does a grantee re-seal the ascent links of the nested roots too? Amended by ADR 0082 D1 on
+  2026-10-28: the engine refuses grantee scope exits, so this residual is closed.
 - A nested scope root that the index of P omits has no repair path under this ADR. Do we accept
   this gap?
 - The refusal of D4 does not protect a superseded child, because the cut net refuses the pointer

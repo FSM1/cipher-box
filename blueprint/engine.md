@@ -540,7 +540,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
 owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
 own vault → scope/vault pointer (first act) → floors seeded → current root
 name → envelope grant blob → seeds → render. Residual, honestly scoped
-(FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most grantee-triggered
+(FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most flat-cut
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
@@ -1342,12 +1342,13 @@ by FSM1/cipher-box-next#38 D5):
   cheap for grant-less scopes), owner blob, history link, ascent link under
   the parent's new derivation. Cached descendant seeds are why ascent-re-seal
   alone is insufficient. Cost: O(descendant scope count), never tree size.
-- **Grantee scope-exit rotations**: flat, self-contained, offline — every
-  old-seed holder is a live grantee who receives the new seed, so no cascade;
-  the single root still republishes the full per-scope-root list — blobs
+- **Flat cuts** (`RotateNow`, an owned scope exit; the engine starts no cut of a received scope on the grantee device,
+  [ADR 0082](../decisions/0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md)):
+  The cut preserves the grant set and does not run a revoke cascade. Every
+  old-seed holder is a live grantee who receives the new seed. The single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
   public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
-  FSM1/cipher-box-next#38 D5). An owner flat cut (`RotateNow`, an owned scope exit) also
+  FSM1/cipher-box-next#38 D5). A flat cut also
   re-seals the ascent link of each indexed child scope root under the new seed; the child keeps
   its seed and its read epoch
   ([ADR 0080](../decisions/0080-a-flat-cut-re-seals-the-ascent-links-of-nested-scope-roots.md)).
@@ -1362,8 +1363,8 @@ Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box
 maintained by the ops that change scope parentage (grant, scope dissolution,
 cross-scope moves of a scope root) under the same dest-first + observed-repair
 semantics as any move. The rotator detached-signs every seed-bearing structure
-it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a grantee re-wraps blobs for
-the committed tag set verbatim and can neither extend nor shrink it (FSM1/cipher-box-next#26 D5).
+it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a flat cut preserves the
+committed tag set (FSM1/cipher-box-next#26 D5).
 
 A dissolve removes the source root from the index only after a gated link proof
 finds it unlinked (ADR 0077 D1). When the relink parent names neither root or
@@ -1555,7 +1556,7 @@ Per FSM1/cipher-box-next#26 D7:
 
 | Trigger                                                                                                                                                    | Action                                                                                                                                                                   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                                                                  |
+| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (owner-triggered, flat); a grantee move across the edge of a received share is refused (ADR 0082)                                                          |
 | Read revoke                                                                                                                                                | Immediate revoking rekey: every blob, ledger row and commitment entry of the revoke's one cut set removed, `rotateScope` with the full cascade — one atomic owner action |
 | Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                                                                    |
 | Expired link                                                                                                                                               | The owner's expired-link sweep (below) cuts it — a read revoke of the link row                                                                                           |
@@ -1749,8 +1750,7 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   is non-circular and public observers cannot link old↔new roots; revokee
   readability is accepted (FSM1/cipher-box-next#38 D3, FSM1/cipher-box-next#39 D4). `writeEpoch` moves on owner-only
   write rotation; `minReadEpoch` bumps only on owner-triggered read rotations,
-  so grantee rotations need no owner signature and each plane's clock is
-  authored by the authority that owns it.
+  so each plane's clock follows the authority that owns it (ADR 0082).
 - **Consult discipline: polled, not fallback** (FSM1/cipher-box-next#38 D4). A revokee's forged
   old-epoch records pass every other gate stage — valid old-key signature,
   fresh sequence, floor-level epoch, old-seed unseal — so staleness never

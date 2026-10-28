@@ -44,6 +44,7 @@ sweep (`publish_node`) and of a grant move (`reseal_interior_node`). The mark on
 nothing clears it. A PUT that fails, or a crash before the PUT, can leave a durable mark without a
 published record. The next signature goes above it, and the gap in the sequences of the name is
 harmless. The mark is not a floor: no adoption gate, no resolve and no settle reads it.
+Amended by ADR 0082 D1 on 2026-10-28: the code PR removes the grantee scope-root publish from D1.
 
 **D2 — Every signature at the name reads the rotation mark and signs strictly above the value
 that the read returns.** Both signature gates read the rotation mark before the sequence floor.
@@ -95,7 +96,8 @@ signature does not go above a bound as in ADR 0076 D2.
 - `blueprint/testing.md` names the tests in the code PR: a rotation PUT that does not confirm,
   then a new session, a cut retry, a promote, an interior re-seal and a grantee cut, each above the
   mark; a publish signature and a renewal signature above the mark; a mark that does not read
-  refuses; a raise that the store does not take sends no PUT.
+  refuses; a raise that the store does not take sends no PUT. Amended by ADR 0082 D1 on 2026-10-28: the code PR removes
+  the grantee-cut test requirement.
 - `CONTEXT.md` defines "rotation mark", in this PR or the next one.
 - ADR 0080 Consequences carries an "Amended by" sentence for D1.
 - ADR 0076 D3 carries an "Amended by" sentence for D2.

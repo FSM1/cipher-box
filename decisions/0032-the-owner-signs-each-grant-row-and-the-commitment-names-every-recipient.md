@@ -162,6 +162,8 @@ commitment below the newest cut epoch that this scope already adopted, as a whol
 violation (`commitment-invalid`, `core::seal::refuse_stale_cut_epoch`). The commitment still
 carries no read epoch, so a grantee-triggered rotation still needs no owner signature. The raise
 of the cut-epoch floor is ADR 0014. The rule landed with FSM1/cipher-box#1604; this ADR records it.
+Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, and the
+commitment format does not change.
 
 **D7 — The engine keeps a device-local revocation floor per scope and recipient.** When the
 owner cuts a recipient at a scope, the engine records that cut, durably, at that scope and nowhere
@@ -286,7 +288,8 @@ recipients, but it needs a new commitment format. The owner accepted the leak on
 
 **(k) An owner signature at each read rotation, so a revoked grantee loses the unmask key.** The
 commitment carries no read epoch so that a grantee-triggered rotation needs no owner signature.
-This alternative gives that property up.
+This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, so
+this reason no longer applies.
 
 ## Consequences
 
@@ -451,7 +454,8 @@ gate-passed record (`blueprint/core.md` "Write-body").
   `a_committed_recipient_is_masked_per_scope_and_recovers_under_the_pointer_key` (the key is
   nowhere in the published bytes, and one recipient masks differently at two scope roots) and
   `a_commitment_entry_without_a_masked_recipient_rejects`; engine `net/rotation.rs`
-  `a_grantee_cut_refuses_an_entry_masked_under_another_scope_key`; the core KAT
+  `a_grantee_cut_refuses_an_entry_masked_under_another_scope_key` (Amended by ADR 0082 D1 on 2026-10-28: the code
+  PR deletes this test with the grantee arm); the core KAT
   `grant_set_accept_vectors_decode_and_verify`, whose vectors record the pointer read key and the
   recipients it recovers. The observer-indistinguishability test that FSM1/cipher-box#1603 asked
   for exists only as the byte-absence assertion above.
