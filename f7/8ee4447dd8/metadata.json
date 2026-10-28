@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f78ee4447dd8",
+  "strategy": "manual-commit",
+  "branch": "fix/soak-login-api-timeout-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/web-e2e/staging/loginRetry.test.ts",
+    "tests/web-e2e/staging/loginRetry.ts",
+    "tests/web-e2e/tests/settings.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/8ee4447dd8/0/metadata.json",
+      "transcript": "/f7/8ee4447dd8/0/full.jsonl",
+      "compact_transcript": "/f7/8ee4447dd8/0/transcript.jsonl",
+      "content_hash": "/f7/8ee4447dd8/0/content_hash.txt",
+      "prompt": "/f7/8ee4447dd8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 161585,
+    "cache_read_tokens": 6917355,
+    "output_tokens": 33527,
+    "api_call_count": 58
+  }
+}
