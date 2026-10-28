@@ -6,8 +6,8 @@ use cipherbox_core::seal::{
     ChildScopeRef, GrantSetEntry, GranteeName, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_SECTION_BYTES,
     MAX_GRANTEE_NAME_BYTES, MAX_WRITE_BODY_BYTES, NameSource, decode_grant_section,
     encode_grant_section, open_ascent_link, open_grant_blob, open_history_link, open_owner_blob,
-    open_owner_history_link, open_owner_write_blob, seal_ascent_link_to, sign_grant_set,
-    sign_recipient_binding, verify_recipient_binding, verify_structure,
+    open_owner_history_link, open_owner_write_blob, sign_grant_set, sign_recipient_binding,
+    verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -488,8 +488,8 @@ fn an_ascent_link_the_gate_would_reject_is_never_signed() {
     .expect("a minted link is the one an ancestor reader opens");
 
     let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64, c: &AadContext| {
-        seal_ascent_link_to(
-            &kdf::ascent_keypair(seed).public(),
+        seal_ascent_link(
+            seed,
             &[0x07; 32],
             c,
             &OverrideSeedPayload::new(carried, epoch),

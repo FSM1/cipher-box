@@ -1,6 +1,6 @@
-//! The production rotation seams: the owner arm of the impure edges the
-//! read-plane rotation primitives run on (blueprint/engine.md "Rotation
-//! primitives", "Pointer planes").
+//! The production rotation seams: the impure edges the read-plane rotation
+//! primitives run on (blueprint/engine.md "Rotation primitives", "Pointer
+//! planes").
 //!
 //! [`crate::rotation`] is pure apart from a gated read of a descendant scope
 //! root's own write-body index ([`ChildIndexResolver`]), the same read widened

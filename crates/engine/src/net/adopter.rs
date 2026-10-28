@@ -1086,6 +1086,7 @@ mod tests {
         Envelope, GrantSection, GrantSetEntry, MAX_GRANT_BLOBS, encode_envelope,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::secret::ct_eq;
 
     use crate::content::root_block_cid;
 
@@ -1941,45 +1942,14 @@ mod tests {
         use cipherbox_core::seal::{
             OverrideSeedPayload, encode_grant_section, seal_owner_blob, set_grant_section,
         };
-        let mut fx = Fixture::new();
-        let writer = X25519Secret::from_scalar([0x91; 32]);
-        let row = crate::grants::mint_grant_row(
-            &owner_identity(),
-            &fx.owner_enc,
-            &OWNER_ROOT_POINTER_READ_KEY,
-            EcdsaSigner::from_scalar(&[0x92; 32])
-                .unwrap()
-                .verifying_key()
-                .to_sec1(),
-            &writer.public(),
-            &fx.scope_id,
-            fx.name.as_str().as_bytes(),
-            cipherbox_core::seal::Permission::Write,
-        )
-        .unwrap();
+        let mut fx = granted(|_| {});
         let (shared, _) = crate::grants::recipient_self_location(
-            &writer,
+            &grantee_enc(),
             &fx.owner_enc.public(),
             fx.name.as_str().as_bytes(),
         )
         .unwrap();
         let signer = kdf::pseudonym_sign(shared.as_bytes(), &fx.scope_id);
-        let granted = owner_root_fixture(OwnerRootSpec {
-            writer_pseudonym: &owner_root_pseudonym(),
-            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-            owner_identity: &owner_identity(),
-            owner_enc: &fx.owner_enc.public(),
-            scope_id: fx.scope_id,
-            root_id: fx.root_id,
-            children: Vec::new(),
-            child_scope_index: Vec::new(),
-            parent_node_seed: None,
-            owner_write_blob_epoch: None,
-            write_history_link: Vec::new(),
-            grants: vec![row],
-        });
-        fx.grant_section = granted.grant_section;
-        fx.envelope = granted.envelope;
         let blob = seal_owner_blob(
             &fx.owner_enc.public(),
             &[0x93; 32],
@@ -2007,10 +1977,7 @@ mod tests {
         let floors = InMemoryFloorStore::default();
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
-        let Err(GateError::Rejected(rejection)) = block_on(adopter.adopt(&fx.name, &fx.record(1)))
-        else {
-            panic!("the signed blob must not open the unchanged read body");
-        };
+        let rejection = refusal(block_on(adopter.adopt(&fx.name, &fx.record(1))));
         assert_eq!(rejection.stage, GateStage::Unseal, "{}", rejection.check());
         assert_eq!(rejection.check(), "seal-open-failed");
     }
@@ -2081,23 +2048,29 @@ mod tests {
         block_on(adopter.adopt(&fx.name, &fx.record(1)))
     }
 
-    fn refused_check(adopted: Result<AdoptOutcome, GateError>) -> &'static str {
-        match adopted {
-            Err(GateError::Rejected(rejection)) => rejection.check(),
-            Err(GateError::Seam(e)) => panic!("expected a gate rejection, got seam {e}"),
-            Ok(_) => panic!("expected a gate rejection, got an adoption"),
-        }
-    }
-
     #[test]
     fn a_committed_write_grantee_adopts_and_recovers_both_seeds() {
         let outcome = grantee_adopt(&granted(|_| {}), &grantee_enc()).expect("the grantee adopts");
 
-        assert!(outcome.read_scope_seed.is_some());
+        let read = outcome.read_scope_seed.expect("a read seed");
+        assert!(ct_eq(&read, &OWNER_ROOT_SCOPE_SEED), "the blob's read seed");
+        let write = outcome.write_scope_seed.expect("a write seed");
         assert!(
-            outcome.write_scope_seed.is_some(),
+            ct_eq(&write, &OWNER_ROOT_WRITE_SCOPE_SEED),
             "the commitment grants write, so the blob's write seed is surfaced",
         );
+    }
+
+    /// The commitment, not the blob, sets the permission: a blob that carries
+    /// a write seed under a Read entry surfaces no write seed.
+    #[test]
+    fn a_read_commitment_surfaces_no_write_seed_from_the_blob() {
+        let fx = granted(|row| row.commitment_entry.permission = Permission::Read);
+
+        let outcome = grantee_adopt(&fx, &grantee_enc()).expect("the grantee adopts");
+
+        assert!(outcome.read_scope_seed.is_some());
+        assert!(outcome.write_scope_seed.is_none());
     }
 
     /// Any committed writer can plant a blob at a revoked grantee's tag; only
@@ -2115,20 +2088,18 @@ mod tests {
             );
         });
 
-        assert_eq!(
-            refused_check(grantee_adopt(&fx, &grantee_enc())),
-            "commitment-invalid"
-        );
+        let rejection = refusal(grantee_adopt(&fx, &grantee_enc()));
+        assert_eq!(rejection.stage, GateStage::Unseal);
+        assert_eq!(rejection.check(), "commitment-invalid");
     }
 
     #[test]
     fn a_key_whose_tag_the_commitment_does_not_name_is_rejected() {
         let outsider = X25519Secret::from_scalar([0xa3; 32]);
 
-        assert_eq!(
-            refused_check(grantee_adopt(&granted(|_| {}), &outsider)),
-            "commitment-invalid"
-        );
+        let rejection = refusal(grantee_adopt(&granted(|_| {}), &outsider));
+        assert_eq!(rejection.stage, GateStage::Unseal);
+        assert_eq!(rejection.check(), "commitment-invalid");
     }
 
     #[test]
@@ -2315,7 +2286,7 @@ mod tests {
         let record = fx.record(1);
         assert!(block_on(adopter.adopt(&fx.name, &record)).is_err());
         assert_eq!(
-            refused_stage(block_on(adopter.recover_own_scope_root(&fx.name, &record))),
+            refusal(block_on(adopter.recover_own_scope_root(&fx.name, &record))).stage,
             GateStage::Sequence,
             "a replay below the floor is not our own current record",
         );
@@ -2368,7 +2339,7 @@ mod tests {
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
 
         assert_eq!(
-            refused_stage(block_on(recover_at_floor(&adopter, &floors, &fx))),
+            refusal(block_on(recover_at_floor(&adopter, &floors, &fx))).stage,
             GateStage::Epoch,
             "a record below the read-epoch floor recovers no seed"
         );
@@ -2631,11 +2602,11 @@ mod tests {
     }
 
     /// The stage a recovery the gate refused names.
-    fn refused_stage<T>(recovered: Result<T, GateError>) -> GateStage {
-        match recovered {
-            Err(GateError::Rejected(rejection)) => rejection.stage,
+    fn refusal<T>(result: Result<T, GateError>) -> GateRejection {
+        match result {
+            Err(GateError::Rejected(rejection)) => rejection,
             Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
-            Ok(_) => panic!("expected a rejection, got a recovery"),
+            Ok(_) => panic!("expected a rejection, got a success"),
         }
     }
 
