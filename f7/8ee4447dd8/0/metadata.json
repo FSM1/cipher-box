@@ -54,6 +54,99 @@
         "label": "Skill: ci-incident-investigation",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01MbG6AAmbX2JWC2TWhEuoHc",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "pr"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6ed0a1e0c0b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 601,
+        "end": 602,
+        "entry_ids": [
+          "2914b797-a12f-4d36-abec-0c7ac81a7179"
+        ],
+        "tool_use_id": "toolu_01MbG6AAmbX2JWC2TWhEuoHc"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MbG6AAmbX2JWC2TWhEuoHc"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: pr",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01G9rzg3Dkv8zg5jELihapwq",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6ed0a1e0c0b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 646,
+        "end": 647,
+        "entry_ids": [
+          "406fdcb7-49fa-4faf-b406-8430b78ebd6a"
+        ],
+        "tool_use_id": "toolu_01G9rzg3Dkv8zg5jELihapwq"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01G9rzg3Dkv8zg5jELihapwq"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01329MrwoSurDENgUWwd4HVE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6ed0a1e0c0b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 698,
+        "end": 699,
+        "entry_ids": [
+          "a544553a-7582-427c-8045-a0b00abfc9db"
+        ],
+        "tool_use_id": "toolu_01329MrwoSurDENgUWwd4HVE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01329MrwoSurDENgUWwd4HVE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
     }
   ],
   "summary": {
