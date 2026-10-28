@@ -1,6 +1,6 @@
 # ADR 0082: A grantee cannot move a node across the edge of a received share
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-28
 - **Date:** 2026-10-28
 - **Relates to:** [FSM1/cipher-box#1910](https://github.com/FSM1/cipher-box/pull/1910) (the
   refusal shipped), [FSM1/cipher-box#2494](https://github.com/FSM1/cipher-box/issues/2494) (the
@@ -9,7 +9,7 @@
   [ADR 0074](./0074-a-personal-grantee-takes-the-scope-pointer-name-from-the-owner-signed-share-pointer.md)
   (a grantee follows a cut of the owner)
 - **Implemented by:** the refusal in FSM1/cipher-box#1910; the deletion of the grantee
-  scope-exit arm (PR to follow)
+  scope-exit arm in [FSM1/cipher-box#2535](https://github.com/FSM1/cipher-box/pull/2535)
 - **Amends:** FSM1/cipher-box-next#26 D1 for grantees (frozen corpus, cited only),
   [ADR 0032](./0032-the-owner-signs-each-grant-row-and-the-commitment-names-every-recipient.md)
   D3, D6 and Alternative (k),
