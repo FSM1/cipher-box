@@ -42,6 +42,7 @@ describe('devnetFault', () => {
     ],
     ["Cannot read properties of undefined (reading 'ciphertext')", 'rss-envelope'],
     ['the login provider did not assign your key in time — please try again', 'key-timeout'],
+    ['auth error: api transport error: seam error: signal timed out', 'api-timeout'],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });

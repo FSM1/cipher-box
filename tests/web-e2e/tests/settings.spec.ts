@@ -28,6 +28,9 @@ async function sibling(page: Page, accountId: string): Promise<VaultPage> {
 test('@full a saved settings record reads back off the vault, without its credential', async ({
   page,
 }) => {
+  // The dual save waits on a pin to this provider, so the runner's DNS must not
+  // decide how long the save takes.
+  await page.context().route('https://ipfs.example/**', (route) => route.abort('namenotresolved'));
   await coldStart(page);
   const settings = new SettingsPage(page);
   await settings.open();

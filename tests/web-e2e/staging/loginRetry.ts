@@ -2,9 +2,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Refusals that the Web3Auth sapphire devnet nodes raise under their own load.
- * A fault window outlasts one attempt, so a match waits and tries again; any
- * other refusal is a real failure and ends the sign-in at once.
+ * Refusals from a transient fault: the Web3Auth sapphire devnet nodes under
+ * their own load, or a CipherBox API call that times out. A fault window
+ * outlasts one attempt, so a match waits and tries again; any other refusal is
+ * a real failure and ends the sign-in at once.
  */
 export type DevnetFault =
   | 'nonce'
@@ -17,7 +18,8 @@ export type DevnetFault =
   | 'key-broadcast'
   | 'rss-envelope'
   | 'key-timeout'
-  | 'node-fetch';
+  | 'node-fetch'
+  | 'api-timeout';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -33,6 +35,8 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['rss-envelope', /reading 'ciphertext'/i],
   // The app's own bound on a key assignment that the nodes never answer.
   ['key-timeout', /did not assign your key in time/i],
+  // The engine's control-call deadline on a CipherBox API request.
+  ['api-timeout', /api transport error: seam error: signal timed out/i],
 ];
 
 // A refused request reads `<host>/<path> <status or network error>`.
