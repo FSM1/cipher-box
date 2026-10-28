@@ -43,9 +43,8 @@ use cipherbox_core::seal::{
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
     SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_grant_section,
     encode_write_body, is_committed_write_pseudonym, is_write_body_over_bound, open_ascent_link,
-    open_history_link, open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob,
-    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
-    sign_structure,
+    open_history_link, open_owner_blob, seal, seal_ascent_link, seal_grant_blob, seal_history_link,
+    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -70,30 +69,13 @@ pub(crate) const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 const _: () = assert!(MAX_RETAINED_HISTORY_LINKS >= 1);
 const _: () = assert!(MAX_RETAINED_HISTORY_LINKS <= MAX_HISTORY_LINKS);
 
-/// The key a re-seal mints a descendant scope root's ascent link under.
-///
-/// The two arms are the two ways a rotator can be entitled to the root: an
-/// ancestor holds the seed the keypair derives from, and a grantee holds only
-/// the public half the record it is replacing already carries (blueprint/
-/// engine.md "rotateScope": a grantee scope-exit rotation re-seals the ascent
-/// link to its public half).
+/// The key a re-seal mints a descendant scope root's ascent link under: an
+/// ancestor holds the seed the keypair derives from.
 #[derive(Clone, Copy)]
 pub enum AscentAuthority<'a> {
     /// The parent node seed: derive the keypair, seal to it, and reopen the
     /// result as an ancestor reader would ([`verify_ascent_link`]).
     ParentSeed(&'a [u8; SECRET_LEN]),
-    /// The public half the record being replaced already publishes — all a
-    /// holder with no ancestor seed has to seal to.
-    ///
-    /// The carried half is inside the ascent link's own structure signature
-    /// (blueprint/core.md "Structure signatures"), so a bare `writeScopeSeed`
-    /// holder cannot plant one — the gate refuses a swap it cannot sign for.
-    /// The residual is a **committed** writer planting and signing its own key,
-    /// which an ancestor reports unreachable rather than attributable (the
-    /// ascent-link arm of [`crate::gate::adopt_deferred`]) and which an owner
-    /// cut overwrites: that arm derives the public from the parent seed rather
-    /// than carrying it.
-    CarriedPublic(&'a [u8; 32]),
 }
 
 /// The identity, recipients, and signing capability of one scope root — the
@@ -230,7 +212,7 @@ impl ResealSeeds<'_> {
 /// The owner-committed grant set plus the write-body content a re-seal carries.
 #[derive(Clone, Copy)]
 pub struct CommittedSet<'a> {
-    /// The owner-signed commitment (reused verbatim on a grantee rotation;
+    /// The owner-signed commitment (reused verbatim on a flat cut;
     /// owner-re-signed by the read-revoke trigger before it reaches here). One
     /// grant blob is re-wrapped per entry.
     pub commitment: &'a GrantSetCommitment,
@@ -299,10 +281,6 @@ pub enum ResealError {
     /// so the last good record cannot be re-adopted. Release-active (AGENTS.md
     /// rule 8).
     AscentLinkNotOwed,
-    /// The carried ascent public half is not a usable X25519 point, so an
-    /// ascent link sealed to it could never be opened by the descent it exists
-    /// to serve.
-    UnusableAscentPublic,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
     /// More carried history links than the codec's frozen bound admits — a set
@@ -418,9 +396,6 @@ impl core::fmt::Display for ResealError {
             ResealError::AscentLinkNotOwed => {
                 f.write_str("scope root owing no ascent link was handed a parent seed to mint one")
             }
-            ResealError::UnusableAscentPublic => {
-                f.write_str("carried ascent public half is not a usable X25519 key")
-            }
             ResealError::EmptyWriteHistoryAboveFirstEpoch => {
                 f.write_str("write history minted empty at a write epoch above 1")
             }
@@ -462,7 +437,6 @@ impl ResealError {
         "rot-reseal-ascent-link-mismatch",
         "rot-reseal-ascent-link-dropped",
         "rot-reseal-ascent-link-not-owed",
-        "rot-reseal-unusable-ascent-public",
         "rot-reseal-entropy-error",
         "rot-reseal-too-many-history-links",
         "rot-reseal-too-many-committed-grants",
@@ -489,7 +463,6 @@ impl ResealError {
             ResealError::AscentLinkMismatch => "rot-reseal-ascent-link-mismatch",
             ResealError::AscentLinkDropped => "rot-reseal-ascent-link-dropped",
             ResealError::AscentLinkNotOwed => "rot-reseal-ascent-link-not-owed",
-            ResealError::UnusableAscentPublic => "rot-reseal-unusable-ascent-public",
             ResealError::Entropy(_) => "rot-reseal-entropy-error",
             ResealError::TooManyHistoryLinks => "rot-reseal-too-many-history-links",
             ResealError::TooManyCommittedGrants => "rot-reseal-too-many-committed-grants",
@@ -522,7 +495,6 @@ impl ResealError {
             | ResealError::AscentLinkMismatch
             | ResealError::AscentLinkDropped
             | ResealError::AscentLinkNotOwed
-            | ResealError::UnusableAscentPublic
             | ResealError::HistoryLinkNotDescending
             | ResealError::HistoryLinkNotContiguous
             | ResealError::EmptyWriteHistoryAboveFirstEpoch => "trust",
@@ -791,19 +763,6 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::AscentLinkNotOwed);
     }
 
-    // Fail-closed BEFORE any seal: a public half no key can open could never
-    // serve the descent the ascent link exists for
-    // ([`ResealError::UnusableAscentPublic`]).
-    let ascent_recipient = match identity.ascent {
-        Some(AscentAuthority::ParentSeed(parent_node_seed)) => {
-            Some(kdf::ascent_keypair(parent_node_seed).public())
-        }
-        Some(AscentAuthority::CarriedPublic(public)) => {
-            Some(X25519Public::from_bytes(*public).ok_or(ResealError::UnusableAscentPublic)?)
-        }
-        None => None,
-    };
-
     // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
     // bounds (AGENTS.md rule 8). The ledger is bounded alongside the commitment
     // because the write body carries it into the same record.
@@ -945,17 +904,15 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Ascent link: the override seed sealed to the parent-derived keypair
     // (interior scope roots only). ---
-    let ascent_link = match (identity.ascent, &ascent_recipient) {
-        (Some(authority), Some(recipient)) => {
+    let ascent_link = match identity.ascent {
+        Some(AscentAuthority::ParentSeed(parent_node_seed)) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
             let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
-            let link = seal_ascent_link_to(recipient, &ephemeral, &ctx, &payload);
+            let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
-            if let AscentAuthority::ParentSeed(parent_node_seed) = authority {
-                verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
-            }
+            verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.sig_body());
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
@@ -965,7 +922,7 @@ pub fn reseal_scope_root<E: Entropy>(
                 unknown: PreservedFields::new(),
             })
         }
-        _ => None,
+        None => None,
     };
 
     // --- History links: a rotation keeps the retained window's walkable suffix

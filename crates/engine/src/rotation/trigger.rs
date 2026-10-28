@@ -1,8 +1,8 @@
 //! Rotation triggers (blueprint/engine.md "Rotation primitives: Triggers",
 //! #26 D7).
 //!
-//! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
-//! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
+//! Scope-exit and manual rotations re-seal the **unchanged** committed set: the
+//! cut re-wraps blobs verbatim and neither extends nor shrinks the tag set
 //! (#26 D5). The other three cut the set through an owner-only edit over the
 //! shared [`GrantCutPlan`]. The cut party is thereby absent from the re-wrapped
 //! grant blobs: that absence **is** the revocation ("they keep what they saw;
@@ -33,8 +33,9 @@ use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
 /// material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationTrigger {
-    /// A grantee left a granted scope (a cross-scope move out of a granted
-    /// source, full-depth detected). Flat, self-contained, no committed change.
+    /// A moved node left an owned scope that carries grants (a cross-scope
+    /// move out of a granted source, full-depth detected). The owner cuts it
+    /// flat, with no committed change (ADR 0082).
     ScopeExit,
     /// The owner revoked a read grant — the immediate revoking rekey.
     ReadRevoke,
@@ -61,18 +62,18 @@ impl RotationTrigger {
     }
 }
 
-/// The scope-exit rotation edge: cut one scope root that a grantee just left.
+/// The scope-exit rotation edge: the owner cut of one owned scope root that a
+/// moved node left.
 ///
 /// The pure driver ([`consume_scope_exit_triggers`]) owns the ordering and the
 /// retention law; this seam owns assembling the root's
 /// [`RotateScopePlan`](super::rotate::RotateScopePlan) from its resolved record
 /// and running [`rotate_scope`](super::rotate::rotate_scope) over the live
-/// plane — [`GranteeRotationNet`](crate::net::GranteeRotationNet) over the real
-/// transport.
+/// plane — the owner's `cut_exited_scope` over the real transport (ADR 0082).
 pub trait ScopeExitRotator {
-    /// Run the flat, grantee-triggered [`RotationTrigger::ScopeExit`] cut at
-    /// `scope_root`. `Err` means nothing was cut, with the single documented
-    /// exception of [`RotateError::Floor`].
+    /// Run the flat [`RotationTrigger::ScopeExit`] cut at `scope_root`. `Err`
+    /// means nothing was cut, with the single documented exception of
+    /// [`RotateError::Floor`].
     async fn rotate_on_scope_exit(
         &self,
         scope_root: NodeId,

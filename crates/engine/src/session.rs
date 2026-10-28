@@ -272,20 +272,6 @@ impl SessionIdentity {
     pub(crate) fn owner_writer_pseudonym_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
         kdf::pseudonym_sign(self.owner_pseudonym_seed.as_bytes(), scope_id)
     }
-
-    /// A **grantee's** writer-pseudonym signer (`pseudonym-sign` edge): the
-    /// per-(scope, writer) signing keypair a re-sealed structure is
-    /// detach-signed under, from the grant's pairwise ECDH secret and the scope
-    /// id. That secret already fully encodes the writer's identity, so — unlike
-    /// every sibling factory — this one consults no stored session field, and is
-    /// therefore an associated function. The owner arm is
-    /// [`Self::owner_writer_pseudonym_signer`].
-    pub(crate) fn grantee_writer_pseudonym_signer(
-        grant_ecdh: &[u8; 32],
-        scope_id: &[u8; 16],
-    ) -> Ed25519Signer {
-        kdf::pseudonym_sign(grant_ecdh, scope_id)
-    }
 }
 
 impl fmt::Debug for SessionIdentity {
@@ -1014,36 +1000,6 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
             "a different node id is a different name",
-        );
-    }
-
-    #[test]
-    fn grantee_writer_pseudonym_signer_binds_pairwise_material_and_scope() {
-        let pairwise = [2u8; 32];
-        let scope = [3u8; 16];
-        let base = SessionIdentity::grantee_writer_pseudonym_signer(&pairwise, &scope)
-            .verifying_key()
-            .to_bytes();
-        assert_eq!(
-            base,
-            SessionIdentity::grantee_writer_pseudonym_signer(&pairwise, &scope)
-                .verifying_key()
-                .to_bytes(),
-            "same pairwise material and scope must yield the same pseudonym signer",
-        );
-        assert_ne!(
-            base,
-            SessionIdentity::grantee_writer_pseudonym_signer(&[9u8; 32], &scope)
-                .verifying_key()
-                .to_bytes(),
-            "different pairwise material is a different pseudonym",
-        );
-        assert_ne!(
-            base,
-            SessionIdentity::grantee_writer_pseudonym_signer(&pairwise, &[4u8; 16])
-                .verifying_key()
-                .to_bytes(),
-            "a different scope is a different pseudonym",
         );
     }
 

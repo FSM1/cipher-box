@@ -228,8 +228,8 @@ impl PublishedRoot {
 pub struct RotateScopePlan<'a> {
     /// The scope root's stable identity and the rotator's pseudonym signer.
     pub identity: ScopeRootIdentity<'a>,
-    /// The owner-committed grant set to re-wrap for (unchanged for a grantee/
-    /// manual rotation; already-pruned by `revoke_read_grant` for a read revoke).
+    /// The owner-committed grant set to re-wrap for (unchanged for a flat cut;
+    /// already-pruned by `revoke_read_grant` for a read revoke).
     pub committed: CommittedSet<'a>,
     /// The scope's current override (read scope) seed — becomes the new record's
     /// history-link prior. Caller-owned; never zeroized here.

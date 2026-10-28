@@ -1,6 +1,5 @@
 //! The durable record of the scope-exit cuts this device still owes
-//! (CONTEXT.md "Cross-scope move"; blueprint/engine.md "Grantee scope-exit
-//! rotations").
+//! (CONTEXT.md "Cross-scope move"; blueprint/engine.md "Flat cuts").
 //!
 //! A move out of a granted scope owes that scope a cut. The op that owed it
 //! leaves the queue the moment it publishes, so from the ack onwards nothing

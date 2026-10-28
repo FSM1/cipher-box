@@ -164,8 +164,8 @@ pub struct ReceivedShare {
     pub scope_root_name: Vec<u8>,
     /// The accepted scope's id, as the gate-adopted record's envelope bound it
     /// ([`AcceptOutcome::scope_id`]). Persisted because a grantee cannot derive
-    /// it from the name, and the grantee rotation arm addresses a scope by id
-    /// ([`GrantedScopeRoots`](crate::rotation::GrantedScopeRoots)).
+    /// it from the name, and a browse addresses a scope by id
+    /// ([`ReceivedSharesList::granted_scope_roots`]).
     pub scope_id: [u8; 16],
     /// The sharer's identity key.
     pub sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
@@ -571,18 +571,15 @@ impl ReceivedSharesList {
         }
     }
 
-    /// The scope roots this device can address by scope id — the caller-held
-    /// pairing the grantee rotation arm borrows
-    /// ([`GranteeRotationNet`](crate::net::GranteeRotationNet)), derived from the
+    /// The scope roots this device can address by scope id, derived from the
     /// bookmark rather than cached beside it.
     ///
     /// Two exclusions, both fail-closed. A stored name that is not a well-formed
-    /// IPNS name resolves nothing, so it names no rotation destination. And a
-    /// scope id carried by more than one bookmark is **ambiguous**: the list is
-    /// keyed by [`ReceivedShare::key`], so two sharers may each hold a bookmark
-    /// for one id legitimately — but the rotation arm addresses a scope by id
-    /// alone, so neither may answer, or a rotation would be aimed at whichever
-    /// sorted first while the revokee on the other scope keeps a live seed.
+    /// IPNS name resolves nothing, so it names no destination. And a scope id
+    /// carried by more than one bookmark is **ambiguous**: the list is keyed by
+    /// [`ReceivedShare::key`], so two sharers may each hold a bookmark for one
+    /// id legitimately — but a browse addresses a scope by id alone, so neither
+    /// may answer, or it would reach whichever sorted first.
     pub fn granted_scope_roots(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|_| true)
     }
@@ -1784,7 +1781,7 @@ pub(crate) mod tests {
     /// A `rotateScopeWrite` re-point moves the scope root to a freshly derived
     /// name. The bookmark is keyed by the scope id under its sharer, so the new
     /// pointer heals the entry rather than adding a second one that would make
-    /// the id ambiguous and stall the rotation arm.
+    /// the id ambiguous and hide the share from `granted_scope_roots`.
     #[test]
     fn a_repointed_scope_root_heals_its_bookmark_in_place() {
         let mut list = ReceivedSharesList::new();
@@ -1799,7 +1796,7 @@ pub(crate) mod tests {
         assert_eq!(
             granted[0].ipns_name,
             a_name(0x32),
-            "the rotation arm is aimed at the live name, never the superseded one"
+            "the bookmark names the live name, never the superseded one"
         );
     }
 
@@ -1827,13 +1824,14 @@ pub(crate) mod tests {
         assert_eq!(granted.len(), 1);
         assert_eq!(granted[0].scope_id, [0x5c; 16]);
         assert_eq!(granted[0].ipns_name, a_name(0x31));
-        // The rotation arm keys this scope's epoch floors on the granting
-        // identity, so a paired root that dropped it could not name them.
+        // A granted scope files its floors under the granting identity
+        // (`SharerScopedFloorStore::granted_by`), so a paired root that dropped
+        // it could not name them.
         assert_eq!(granted[0].sharer_identity_pk, [0x02; IDENTITY_PUBLIC_LEN]);
         assert_eq!(
             list.writable_scope_refs(),
             granted,
-            "the write half carries the same identity the rotation arm files under"
+            "the write half carries the same identity as the read half"
         );
     }
 

@@ -554,22 +554,9 @@ pub fn seal_ascent_link(
     payload: &OverrideSeedPayload,
 ) -> Result<AscentLink, CodecError> {
     let ascent_public = kdf::ascent_keypair(parent_node_seed).public();
-    seal_ascent_link_to(&ascent_public, ephemeral_scalar, ctx, payload)
-}
-
-/// Seal an ascent link to an ascent public half the caller already holds — the
-/// re-seal a holder with no ancestor seed performs (blueprint/engine.md
-/// "rotateScope"). Otherwise identical to [`seal_ascent_link`], whose
-/// derivation this is the second half of.
-pub fn seal_ascent_link_to(
-    ascent_public: &X25519Public,
-    ephemeral_scalar: &[u8; 32],
-    ctx: &AadContext,
-    payload: &OverrideSeedPayload,
-) -> Result<AscentLink, CodecError> {
     let mut plaintext = encode_override_seed_payload(payload)?;
     let sealed = hpke::hpke_seal(
-        ascent_public,
+        &ascent_public,
         ephemeral_scalar,
         GRANT_HPKE_INFO,
         &build_aad(ctx),
@@ -1059,10 +1046,11 @@ fn xor_mask(
 /// committed `(tag, maskedRecipientEncPk, permission, pseudonymPk)` entries. A
 /// recipient verifies their tag is committed before trusting a grant.
 ///
-/// It carries no **read** epoch, so a grantee-triggered rotation needs no fresh
-/// owner signature. The trade is that an old set the owner really did sign
-/// verifies for ever, which [`cut_epoch`](Self::cut_epoch) is what separates a
-/// replay of from real staleness.
+/// It carries no **read** epoch, so a flat cut that keeps the committed set
+/// needs no fresh owner signature. The engine runs that cut on the owner
+/// device only (ADR 0082). The trade is that an old set the owner really did
+/// sign verifies for ever, which [`cut_epoch`](Self::cut_epoch) is what
+/// separates a replay of from real staleness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetCommitment {
     /// The scope root's opaque `ipnsName` bytes.
@@ -1519,32 +1507,6 @@ mod tests {
         assert_eq!(
             encode_ascent_link(&decode_ascent_link(&bytes).unwrap()).unwrap(),
             bytes
-        );
-    }
-
-    #[test]
-    fn an_ascent_link_sealed_to_the_carried_public_half_still_opens_by_descent() {
-        // A holder with no ancestor seed re-seals to the public half the record
-        // already carries; the ancestor's descent must still recover the fresh
-        // seed (blueprint/engine.md "rotateScope", grantee scope-exit).
-        let parent_seed = [0x12; 32];
-        let ctx = grant_ctx(super::super::STRUCT_TAG_ASCENT_LINK);
-        let carried = seal_ascent_link(
-            &parent_seed,
-            &[0x57; 32],
-            &ctx,
-            &OverrideSeedPayload::new([0x77; 32], 4),
-        )
-        .unwrap();
-
-        let rotated = OverrideSeedPayload::new([0x99; 32], 5);
-        let public = X25519Public::from_bytes(carried.ascent_public).unwrap();
-        let link = seal_ascent_link_to(&public, &[0x58; 32], &ctx, &rotated).unwrap();
-
-        assert_eq!(link.ascent_public, carried.ascent_public);
-        assert_eq!(
-            open_ascent_link(&parent_seed, &ctx, &link).unwrap(),
-            rotated
         );
     }
 

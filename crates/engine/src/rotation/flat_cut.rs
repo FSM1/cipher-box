@@ -35,10 +35,9 @@ use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 
 /// What the tick's scope-exit arm needs to cut one interior scope of this vault.
 ///
-/// The grantee arm ([`GranteeRotationNet`](crate::net::rotation::GranteeRotationNet))
-/// cuts a scope a device holds a grant *for*. A relocation out of a folder this
-/// vault granted leaves a scope the vault **owns**, so its plan is the owner's —
-/// the same flat root cut `Engine::rotate_now` assembles.
+/// A relocation out of a folder this vault granted leaves a scope the vault
+/// **owns**, so its plan is the owner's — the same flat root cut
+/// `Engine::rotate_now` assembles (ADR 0082).
 pub(crate) struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     pub(crate) transport: &'a T,
