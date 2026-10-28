@@ -28,15 +28,15 @@ async function sibling(page: Page, accountId: string): Promise<VaultPage> {
 test('@full a saved settings record reads back off the vault, without its credential', async ({
   page,
 }) => {
-  // The dual save waits on a pin to this provider, so the runner's DNS must not
-  // decide how long the save takes.
-  await page.context().route('https://ipfs.example/**', (route) => route.abort('namenotresolved'));
+  // A dual save waits on this provider's pin; keep the runner's DNS out of it.
+  const provider = 'https://ipfs.example';
+  await page.context().route(`${provider}/**`, (route) => route.abort('namenotresolved'));
   await coldStart(page);
   const settings = new SettingsPage(page);
   await settings.open();
 
   await settings.pinMode.selectOption('dual');
-  await settings.provider.fill('https://ipfs.example');
+  await settings.provider.fill(provider);
   await settings.providerKind.selectOption('psa');
   await settings.accessToken.fill('not-a-real-bearer');
   await settings.retention.fill('3');
@@ -51,7 +51,7 @@ test('@full a saved settings record reads back off the vault, without its creden
   await settings.open();
 
   await expect(settings.pinMode).toHaveValue('dual');
-  await expect(settings.provider).toHaveValue('https://ipfs.example');
+  await expect(settings.provider).toHaveValue(provider);
   await expect(settings.providerKind).toHaveValue('psa');
   await expect(settings.retention).toHaveValue('3');
   // The one field no read carries back: the engine keeps the bearer write-only,
