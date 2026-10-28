@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.16.0](https://github.com/FSM1/cipher-box/compare/v2.15.0...v2.16.0) (2026-10-28)
+
+
+### Features
+
+* **engine:** re-cut a scope that a grant or cut overtook after the dissolve copy started ([#2529](https://github.com/FSM1/cipher-box/issues/2529)) ([d990e38](https://github.com/FSM1/cipher-box/commit/d990e38aafffb159c3c1b61590e21ece21066054))
+
+
+### Bug Fixes
+
+* **engine:** hold the signed sequence of a rotation publish as a durable mark ([#2530](https://github.com/FSM1/cipher-box/issues/2530)) ([3f50f5a](https://github.com/FSM1/cipher-box/commit/3f50f5af50029d4f4f3afe9051186f82625f28e9))
+* **engine:** read an absent head block as unavailable on every reader route ([#2527](https://github.com/FSM1/cipher-box/issues/2527)) ([2041f3c](https://github.com/FSM1/cipher-box/commit/2041f3c2b9dfb42eb015b5bc2a2c4dd5a120305a))
+* **engine:** refuse a flat cut that signs above a concurrent cut ([#2528](https://github.com/FSM1/cipher-box/issues/2528)) ([cf0f4a1](https://github.com/FSM1/cipher-box/commit/cf0f4a1fe532fff075afbaac107507aed70672a1))
+
 ## [2.15.0](https://github.com/FSM1/cipher-box/compare/v2.14.0...v2.15.0) (2026-10-22)
 
 
