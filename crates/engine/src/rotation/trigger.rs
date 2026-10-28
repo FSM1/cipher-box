@@ -71,8 +71,9 @@ impl RotationTrigger {
 /// and running [`rotate_scope`](super::rotate::rotate_scope) over the live
 /// plane — the owner's `cut_exited_scope` over the real transport (ADR 0082).
 pub trait ScopeExitRotator {
-    /// Run the flat [`RotationTrigger::ScopeExit`] cut at `scope_root`. `Err` means nothing was cut, with the single documented
-    /// exception of [`RotateError::Floor`].
+    /// Run the flat [`RotationTrigger::ScopeExit`] cut at `scope_root`. `Err`
+    /// means nothing was cut, with the single documented exception of
+    /// [`RotateError::Floor`].
     async fn rotate_on_scope_exit(
         &self,
         scope_root: NodeId,

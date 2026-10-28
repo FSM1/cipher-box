@@ -1061,9 +1061,9 @@ fn xor_mask(
 ///
 /// It carries no **read** epoch, so a flat cut that keeps the committed set
 /// needs no fresh owner signature. The engine runs that cut on the owner
-/// device only (ADR 0082). The trade is that an old set the owner really did sign
-/// verifies for ever, which [`cut_epoch`](Self::cut_epoch) is what separates a
-/// replay of from real staleness.
+/// device only (ADR 0082). The trade is that an old set the owner really did
+/// sign verifies for ever, which [`cut_epoch`](Self::cut_epoch) is what
+/// separates a replay of from real staleness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetCommitment {
     /// The scope root's opaque `ipnsName` bytes.

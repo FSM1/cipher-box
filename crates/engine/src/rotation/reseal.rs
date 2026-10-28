@@ -43,9 +43,8 @@ use cipherbox_core::seal::{
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
     SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_grant_section,
     encode_write_body, is_committed_write_pseudonym, is_write_body_over_bound, open_ascent_link,
-    open_history_link, open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob,
-    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
-    sign_structure,
+    open_history_link, open_owner_blob, seal, seal_ascent_link, seal_grant_blob, seal_history_link,
+    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -764,12 +763,6 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::AscentLinkNotOwed);
     }
 
-    let ascent_recipient = identity
-        .ascent
-        .map(|AscentAuthority::ParentSeed(parent_node_seed)| {
-            kdf::ascent_keypair(parent_node_seed).public()
-        });
-
     // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
     // bounds (AGENTS.md rule 8). The ledger is bounded alongside the commitment
     // because the write body carries it into the same record.
@@ -911,15 +904,14 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Ascent link: the override seed sealed to the parent-derived keypair
     // (interior scope roots only). ---
-    let ascent_link = match (identity.ascent, &ascent_recipient) {
-        (Some(authority), Some(recipient)) => {
+    let ascent_link = match identity.ascent {
+        Some(AscentAuthority::ParentSeed(parent_node_seed)) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
             let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
-            let link = seal_ascent_link_to(recipient, &ephemeral, &ctx, &payload);
+            let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
-            let AscentAuthority::ParentSeed(parent_node_seed) = authority;
             verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.sig_body());
             Some(SignedAscentLink {
@@ -930,7 +922,7 @@ pub fn reseal_scope_root<E: Entropy>(
                 unknown: PreservedFields::new(),
             })
         }
-        _ => None,
+        None => None,
     };
 
     // --- History links: a rotation keeps the retained window's walkable suffix

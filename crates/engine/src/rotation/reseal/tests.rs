@@ -6,8 +6,8 @@ use cipherbox_core::seal::{
     ChildScopeRef, GrantSetEntry, GranteeName, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_SECTION_BYTES,
     MAX_GRANTEE_NAME_BYTES, MAX_WRITE_BODY_BYTES, NameSource, decode_grant_section,
     encode_grant_section, open_ascent_link, open_grant_blob, open_history_link, open_owner_blob,
-    open_owner_history_link, open_owner_write_blob, sign_grant_set, sign_recipient_binding,
-    verify_recipient_binding, verify_structure,
+    open_owner_history_link, open_owner_write_blob, seal_ascent_link_to, sign_grant_set,
+    sign_recipient_binding, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};

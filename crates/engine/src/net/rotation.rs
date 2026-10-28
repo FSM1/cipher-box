@@ -11592,9 +11592,7 @@ mod tests {
     }
 
     /// Republish `root`'s record carrying `section` instead of its own, at the
-    /// next sequence — what anyone holding the scope's write seed can put on the
-    /// wire, since no structure signature covers the ascent link's public half
-    /// or its presence.
+    /// next sequence.
     fn republish_section<T: RecordTransport + Clone>(
         harness: &Harness<T>,
         root: &OwnerRootFixture,
