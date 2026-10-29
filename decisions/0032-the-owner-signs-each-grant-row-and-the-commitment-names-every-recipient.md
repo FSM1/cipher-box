@@ -163,7 +163,8 @@ violation (`commitment-invalid`, `core::seal::refuse_stale_cut_epoch`). The comm
 carries no read epoch, so a grantee-triggered rotation still needs no owner signature. The raise
 of the cut-epoch floor is ADR 0014. The rule landed with FSM1/cipher-box#1604; this ADR records it.
 Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, and the
-commitment format does not change.
+commitment format does not change. ADR 0083 D1 on 2026-10-29: stage 3 refuses a section that a
+grantee signs, so a grantee cannot sign a rotation.
 
 **D7 — The engine keeps a device-local revocation floor per scope and recipient.** When the
 owner cuts a recipient at a scope, the engine records that cut, durably, at that scope and nowhere
@@ -187,7 +188,9 @@ release-active in `crates/engine/src/net/author.rs::check_scope_root`, so this b
 section its own gate refuses. A future shape that needs per-structure signers needs a
 per-structure signer index on the wire: a format change, not a relaxation of this rule. The rule
 landed with FSM1/cipher-box#1120; this ADR records it. Amended by ADR 0052 D1 on 2026-09-26: the
-predicate lives in `crates/core`, and `check_scope_root` calls the core function.
+predicate lives in `crates/core`, and `check_scope_root` calls the core function. Amended by ADR
+0083 D1 on 2026-10-29: the pinned signer must be the owner pseudonym; a section that a committed
+write grantee signs is a trust violation.
 
 **D9 — The ascent link's structure signature covers its public half.** For every seed-bearing
 structure except the ascent link, the signed bytes are the structure's ciphertext. The ascent link
@@ -217,7 +220,8 @@ second consumer. The rule landed with FSM1/cipher-box#1604; this ADR records it.
   it drops (D2). The row that the grantee authors plays no part in the harvest.
 - **A write grantee cannot veto its own revocation.** No re-seal refuses because of a row. The
   owner-held leg fails closed only where the owner's own authorities disagree: the owner-signed
-  entry against the tag the owner subkey re-derives. A write grantee can change neither.
+  entry against the tag the owner subkey re-derives. A write grantee can change neither. It also
+  cannot sign a scope-root rotation that raises the read epoch out of reach (ADR 0083 D1).
 - **A write grantee cannot launder a label into an owner signature.** A re-mint carries
   `recipientIdentityPk` only from a row the owner attested (D1).
 - **An observer learns no membership.** The masked field is a one-time pad over the recipient key
@@ -289,7 +293,8 @@ recipients, but it needs a new commitment format. The owner accepted the leak on
 **(k) An owner signature at each read rotation, so a revoked grantee loses the unmask key.** The
 commitment carries no read epoch so that a grantee-triggered rotation needs no owner signature.
 This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, so
-this reason no longer applies.
+this reason no longer applies. ADR 0083 rejects this alternative again, for its wire and migration
+cost.
 
 ## Consequences
 

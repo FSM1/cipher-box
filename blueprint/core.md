@@ -378,11 +378,11 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   gate is core's predicate `authenticate_section_structures`. A section is a
   single rotator's work: it re-seals and detached-signs every structure with its
   own writer pseudonym, re-signing at the record's read epoch even the history
-  links it carries forward verbatim. The predicate therefore **pins** the
-  committed write-capable pseudonym that authenticated the section's first
-  structure and requires every later structure to verify under that key alone;
-  a section signed by two committed pseudonyms fails with
-  `structure-signature-invalid`, a trust violation. The committed write-capable
+  links it carries forward verbatim. The predicate therefore **pins** the owner
+  pseudonym that the verified commitment names (`ownerPseudonymPk`, ADR 0083
+  D1) and requires every structure to verify under that key alone; a section
+  that any other pseudonym signs, a committed write grantee's included, fails
+  with `structure-signature-invalid`, a trust violation. The committed write-capable
   set is a core definition: the owner pseudonym plus the pseudonym of every
   `write` entry, repeats removed (`committed_write_pseudonyms`). Every reader of
   the set uses it, including the write-body signer lookup and a re-seal's own
@@ -396,16 +396,18 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   contact commits 1024 write pseudonyms of their own and spreads a section's
   signatures across them, buying ~1000x reader-CPU amplification for ~1284
   signatures. That sum is the reason for the section bounds above.
-  The pinned signer may be **any** committed write-capable pseudonym, not the
-  owner's specifically. The commitment carries no read epoch (ADR 0082,
-  `CONTEXT.md`).
+  The pinned signer is the owner pseudonym only, so a write grantee cannot sign
+  a scope-root rotation (ADR 0083). The commitment carries no read epoch (ADR
+  0082, `CONTEXT.md`).
   Per-structure signers would need a per-structure signer index on the wire,
   since the gate cannot otherwise avoid the product — a format change, not a
   relaxation of this rule. The produce side runs the same predicate
   release-active (the engine's `net/author.rs::check_scope_root`), so a build
   never signs a section its own gate rejects. The KAT `grant` family freezes the
   rule over whole scope-root head blocks (`sectionSignerAccept`,
-  `sectionSignerReject`, the splice included).
+  `sectionSignerReject`, the splice included). ADR 0083 moves the vector
+  `single-signer-committed-grantee` from `sectionSignerAccept` to
+  `sectionSignerReject`, which makes the frozen acceptance domain smaller.
 - **History-link retention** (ADR 0033): a link minted at epoch `e` is sealed
   under **its own** epoch's structure key and carries the _preceding_ epoch's
   seed, so the ratchet is a **contiguous chain** walkable only backward, one
@@ -443,8 +445,8 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   authenticates it uniformly at `envelope.epoch`. The seed is never folded into
   the ascent link's shared override-seed payload (that would leak write
   capability to ancestor read-only readers).
-- **Structure signatures** (FSM1/cipher-box-next#39 D2/D3): the rotator's pseudonym Ed25519
-  signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
+- **Structure signatures** (FSM1/cipher-box-next#39 D2/D3): the owner pseudonym's Ed25519
+  signature (ADR 0083 D1) over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
 H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   link, history links, and the write-body. The signed bytes are the structure's
   `ciphertext`, with one exception: an **ascent link** signs over the det-CBOR
@@ -453,11 +455,10 @@ H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   possession of `writeScopeSeed` alone — a holder could republish the root with
   `ascentPublic` swapped for a key it holds, leaving every ciphertext, signature
   and commitment byte-identical, and the next honest scope-exit rotation would
-  seal a freshly minted override seed to the planted key. The binding does not
-  make the field unforgeable — a **committed** writer can plant its own key and
-  sign the swapped body — but it makes the swap attributable to a pseudonym the
-  owner committed, and an owner cut overwrites it by deriving the public half
-  from the parent seed instead of carrying it. Verification is per-structure and
+  seal a freshly minted override seed to the planted key. The binding makes the
+  swap need an owner pseudonym signature, because stage 3 refuses a section that
+  a committed write grantee signs (ADR 0083 D1), and an owner cut overwrites it
+  by deriving the public half from the parent seed instead of carrying it. Verification is per-structure and
   pure. The stage-3 predicate takes a `VerifiedGrantSet`, a witness that only
   `verify_grant_set` and `verify_grant_set_bound` return, and reads the
   committed pseudonyms from it; a caller cannot authenticate structures against
