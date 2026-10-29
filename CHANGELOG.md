@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.1](https://github.com/FSM1/cipher-box/compare/v2.16.0...v2.16.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **desktop:** log the dirty handles at each quit and trace mount writes ([#2540](https://github.com/FSM1/cipher-box/issues/2540)) ([fd180b0](https://github.com/FSM1/cipher-box/commit/fd180b014dcbcfeb1e136e00474d22d99b7b27e3))
+
 ## [2.16.0](https://github.com/FSM1/cipher-box/compare/v2.15.0...v2.16.0) (2026-10-28)
 
 
