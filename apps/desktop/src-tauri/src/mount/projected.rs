@@ -219,7 +219,7 @@ impl Projection {
         else {
             return 0;
         };
-        let owed = journal_acked_writes(core).await;
+        let owed = journal_acked_writes(core, "unmount").await;
         core.unmount();
         owed
     }
@@ -266,12 +266,9 @@ impl Projection {
                 if let Some(mount) = mount.as_mut() {
                     mount.quiesce();
                 }
-                let owed = journal_acked_writes(&mut core).await;
-                if owed > 0 {
-                    // The window is already going; stderr is the only surface a
-                    // quit still has.
-                    eprintln!("{owed} file changes did not reach the queue before the quit");
-                }
+                // The window is already going; stderr is the only surface a
+                // quit still has.
+                journal_acked_writes(&mut core, "quit").await;
                 drop(mount);
                 core.unmount();
             }
@@ -290,7 +287,12 @@ impl Projection {
 /// fetch must not hold the session. What the bound or a refusal leaves behind is
 /// reported rather than retained — the spill key is per handle and memory-only,
 /// so it does not survive to be retried.
-async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) -> usize {
+///
+/// Writes one stderr line at every `ending`, also a clean one: counts only.
+async fn journal_acked_writes(
+    core: &mut OperationCore<DesktopSeamTypes, Invalidator>,
+    ending: &str,
+) -> usize {
     let mut tally = Quiesced::default();
     let cut_short = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes(&mut tally))
         .await
@@ -299,8 +301,6 @@ async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalid
     // cannot abort its own write handle on.
     core.release_stranded_write().await;
     let owed = core.dirty_writes();
-    // Every unmount writes it, also a clean one: no dirty handle at a quit is
-    // the evidence that a late close never reached the mount.
     let Quiesced {
         found,
         journaled,
@@ -311,8 +311,13 @@ async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalid
     } else {
         ""
     };
+    let warning = if owed > 0 {
+        format!(": {owed} file changes did not reach the queue before the {ending}")
+    } else {
+        String::new()
+    };
     eprintln!(
-        "mount quiesce: {found} dirty handles, {journaled} journaled, {refused} refused, {owed} still owed{budget}"
+        "mount quiesce at {ending}: {found} dirty handles, {journaled} journaled, {refused} refused, {owed} still owed{budget}{warning}"
     );
     owed
 }

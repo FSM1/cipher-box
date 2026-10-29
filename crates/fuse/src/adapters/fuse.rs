@@ -417,25 +417,55 @@ enum FuseOp {
 }
 
 impl FuseOp {
+    /// Trace a refused request by kind, inode and handle only — never a name.
+    fn trace_refusal(&self, errno: i32) {
+        let line = |what: std::fmt::Arguments<'_>| {
+            trace::line(format_args!(
+                "{what} refused errno {errno}, the op channel is closed"
+            ));
+        };
+        match self {
+            FuseOp::Write {
+                handle,
+                offset,
+                data,
+                ..
+            } => line(format_args!(
+                "write handle {} offset {offset} bytes {}",
+                handle.0,
+                data.len()
+            )),
+            FuseOp::Read { handle, .. } => line(format_args!("read handle {}", handle.0)),
+            FuseOp::Flush { handle, .. } => line(format_args!("flush handle {}", handle.0)),
+            FuseOp::FSync { handle, .. } => line(format_args!("fsync handle {}", handle.0)),
+            FuseOp::Release { handle, .. } => line(format_args!("release handle {}", handle.0)),
+            FuseOp::GetAttr { ino, .. } => line(format_args!("getattr ino {ino}")),
+            FuseOp::SetSize { ino, handle, .. } => line(format_args!(
+                "setsize ino {ino} handle {}",
+                handle.map_or(0, |handle| handle.0)
+            )),
+            FuseOp::Open { ino, .. } => line(format_args!("open ino {ino}")),
+            FuseOp::OpenDir { ino, .. } => line(format_args!("opendir ino {ino}")),
+            FuseOp::ReadDir { ino, .. } => line(format_args!("readdir ino {ino}")),
+            FuseOp::ReleaseDir { .. } => line(format_args!("releasedir")),
+            FuseOp::Lookup { parent, .. } => line(format_args!("lookup parent {parent}")),
+            FuseOp::Create { parent, .. } => line(format_args!("create parent {parent}")),
+            FuseOp::MkDir { parent, .. } => line(format_args!("mkdir parent {parent}")),
+            FuseOp::Unlink { parent, .. } => line(format_args!("unlink parent {parent}")),
+            FuseOp::RmDir { parent, .. } => line(format_args!("rmdir parent {parent}")),
+            FuseOp::Rename { parent, .. } => line(format_args!("rename parent {parent}")),
+            FuseOp::StatFs { .. } => line(format_args!("statfs")),
+            FuseOp::Forget { .. } => {}
+        }
+    }
+
     /// Answer with `errno` instead of running — the only thing to do with a
     /// request the engine task will never see. A FUSE request nobody answers
     /// hangs its caller for the life of the mount.
     fn refuse(self, errno: i32) {
-        // A close the kernel sends after the quiesce lands here, and nothing
-        // journals what that handle owes.
-        let late = match &self {
-            FuseOp::Write { handle, .. } => Some(("write", handle)),
-            FuseOp::Flush { handle, .. } => Some(("flush", handle)),
-            FuseOp::FSync { handle, .. } => Some(("fsync", handle)),
-            FuseOp::Release { handle, .. } => Some(("release", handle)),
-            _ => None,
-        };
-        if let Some((op, handle)) = late {
-            trace::line(format_args!(
-                "{op} handle {} refused errno {errno}, the op channel is closed",
-                handle.0
-            ));
-        }
+        // Queued at the quiesce or sent after it: a close refused here leaves
+        // the bytes its handle owes unjournaled.
+        self.trace_refusal(errno);
         match self {
             FuseOp::Lookup { reply, .. } | FuseOp::MkDir { reply, .. } => reply.error(errno),
             FuseOp::GetAttr { reply, .. } | FuseOp::SetSize { reply, .. } => reply.error(errno),
@@ -716,9 +746,7 @@ impl<'a> WatchLog<'a> {
     }
 
     fn line(&self, what: std::fmt::Arguments<'_>) {
-        let wall = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_millis());
+        let wall = trace::unix_millis();
         eprintln!(
             "publication watch {}: {what} (unix {wall} ms, +{} ms)",
             self.at.display(),

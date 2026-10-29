@@ -2155,8 +2155,17 @@ fn what_the_quiesce_could_not_journal_is_countable_before_the_unmount() {
         "every acked write the kernel never flushed is owed"
     );
 
-    block_on(core.quiesce_writes(&mut Quiesced::default()));
+    let mut tally = Quiesced::default();
+    block_on(core.quiesce_writes(&mut tally));
 
+    assert_eq!(
+        tally,
+        Quiesced {
+            found: 2,
+            journaled: 2,
+            refused: 0,
+        }
+    );
     assert_eq!(
         core.dirty_writes(),
         0,
@@ -2166,8 +2175,6 @@ fn what_the_quiesce_could_not_journal_is_countable_before_the_unmount() {
 
 #[test]
 fn a_quiesce_with_no_dirty_handle_counts_nothing() {
-    // The host logs these counts at every unmount; zero found is what tells a
-    // late close apart from a journal the next instance did not publish.
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, _staging) = mount_spilling_into(dir.path());
     let handle = writing_handle(&mut core);
@@ -2204,6 +2211,38 @@ fn a_quiesce_counts_the_dirty_handle_it_journals() {
         "the journaled op is in the queue"
     );
     assert_eq!(core.dirty_writes(), 0);
+}
+
+#[test]
+fn a_quiesce_counts_a_refused_handle_and_journals_the_rest() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let (_attrs, oversized) =
+        block_on(core.create(ROOT_INO, "big.bin", Access::ReadWrite)).expect("the create");
+    let (_attrs, small) =
+        block_on(core.create(ROOT_INO, "small.txt", Access::ReadWrite)).expect("the create");
+    block_on(core.write(oversized, 0, &past_the_staging_cap())).expect("the spill takes it");
+    block_on(core.write(small, 0, b"SECRET-1")).expect("the write lands");
+    let before = queued(&staging);
+
+    let mut tally = Quiesced::default();
+    block_on(core.quiesce_writes(&mut tally));
+
+    assert_eq!(
+        tally,
+        Quiesced {
+            found: 2,
+            journaled: 1,
+            refused: 1,
+        },
+        "a refusal does not stop the pass"
+    );
+    assert_eq!(core.dirty_writes(), 1, "the refused handle is still owed");
+    assert_eq!(
+        queued(&staging),
+        before + 1,
+        "only the small handle reaches the queue"
+    );
 }
 
 #[test]

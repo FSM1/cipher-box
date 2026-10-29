@@ -591,6 +591,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if access.writable() {
             self.pending.insert(handle, Pending::over(0));
         }
+        trace::line(format_args!("create ino {} handle {}", attrs.ino, handle.0));
         Ok((attrs, handle))
     }
 
@@ -704,6 +705,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             return Err(VfsError::IsADirectory);
         }
         let handle = self.handles.open(node, access);
+        trace::line(format_args!(
+            "open ino {ino} handle {} truncate {truncate}",
+            handle.0
+        ));
         if truncate && let Err(refusal) = self.truncate_handle(handle, 0).await {
             let _ = self.release(handle).await;
             return Err(refusal);
@@ -915,7 +920,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// whole file, and the durable op queue is the mount's only durability
     /// layer.
     pub async fn fsync(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        self.commit(handle).await.map(drop)
+        let (ino, dirty) = self.trace_state(handle);
+        let committed = self.commit(handle).await;
+        trace_commit("fsync", ino, handle, dirty, &committed);
+        committed.map(drop)
     }
 
     /// Close a file handle: journal anything it still owes, then release the
@@ -1113,6 +1121,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// The inode and dirty state a trace line reports for `handle`; inode 0,
     /// which FUSE never assigns, stands for a handle this session does not know.
     fn trace_state(&self, handle: HandleId) -> (u64, bool) {
+        if !trace::ENABLED {
+            return (0, false);
+        }
         let ino = self
             .handles
             .get(handle)
