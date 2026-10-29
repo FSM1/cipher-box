@@ -78,7 +78,8 @@ carry a rise.
 - **No journal, a retry re-seals from the start (D3).** Rejected: a dissolve retry mints new ids
   again, so each stopped pass leaves a full copy that no folder names.
 - **Any epoch rise re-seals every node again (D4).** Rejected: a write grantee of the destination
-  can rotate at will, and so restart an O(subtree) pass again and again.
+  can rotate at will, and so restart an O(subtree) pass again and again. ADR 0083 D1 closes this:
+  the gate refuses a scope-root section that a grantee signs.
 
 ## Consequences
 

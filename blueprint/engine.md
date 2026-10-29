@@ -454,8 +454,10 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    and therefore never reaches the raise below — learns the cut too.
 3. **Grant-section authentication** (scope roots) — core's
    `authenticate_section_structures` over the `VerifiedGrantSet` that stage 2
-   returned, at the authenticated envelope's scope and epoch; any failure
-   rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3).
+   returned, at the authenticated envelope's scope and epoch, under the owner
+   pseudonym that the commitment names (ADR 0083 D1); any failure, a section
+   that a committed write grantee signs included, rejects the **whole record**
+   as a trust violation (FSM1/cipher-box-next#39 D3).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
    interior record below the floor is opened only by the five readers that the
@@ -470,7 +472,7 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    D1). This read runs at the named scope's floors, so it is not a reader below
    the read-epoch floor.
 
-**One section, one signer** (stage 3, ADR 0032 D8): the rule, its work bound
+**One section, one signer** (stage 3, ADR 0032 D8, ADR 0083): the rule, its work bound
 and the splice it closes are core's (core.md "One section, one signer",
 ADR 0052).
 
