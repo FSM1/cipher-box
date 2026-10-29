@@ -260,8 +260,8 @@ tag}` and each optional field only when it is present, so a row minted
   identity signature, like the history link; only the owner pseudonym signs the
   write body (ADR 0083 D1). It is bounded fail-closed at
   decode and encode at 1024 entries, each entry's opaque `ipnsName` at the name
-  codec's own ceiling (`too-many-structures`) — unbounded, a committed writer
-  grows it until the head block the revoking rotation re-seals it into no longer
+  codec's own ceiling (`too-many-structures`) — unbounded, a malformed or buggy
+  owner-signed body (defence in depth) grows it until the head block the revoking rotation re-seals it into no longer
   fits the block ceiling every read enforces. The ledger's row count is bounded
   the same way, at `MAX_GRANT_BLOBS` (1024), the ceiling its own commitment
   already carries. Interior nodes publish no write-body at all.
@@ -281,10 +281,10 @@ tag}` and each optional field only when it is present, so a row minted
   The measured length **charges `writeHistoryLink` at its own 512-byte ceiling**
   whatever the body actually carries. That field is the one thing a re-seal
   replaces, so charging it flat is what makes "this body decodes" imply "this
-  body still encodes after a cut swaps its link" — otherwise a committed writer
-  pads to exactly the bound with an empty link, and the freshly minted link of
-  the rotation that revokes them pushes the re-encode over, a permanent refusal
-  at a size the attacker chose. A re-seal that still cannot author its body
+  body still encodes after a cut swaps its link" — otherwise a malformed or buggy
+  owner-signed body (defence in depth) pads to exactly the bound with an empty
+  link, and the freshly minted link of the next rotation pushes the re-encode
+  over, a permanent refusal. A re-seal that still cannot author its body
   refuses under its own name (`write-body-too-large`) rather than the generic
   encode fold.
   None of this weakens the strict-preserve rule: that law governs field
@@ -302,11 +302,12 @@ tag}` and each optional field only when it is present, so a row minted
   because every write grantee holds the write key of that body, which it carries
   but cannot re-sign (ADR 0083 D1), and the owner's enc subkey is public: base mode would let a writer hand the
   resumed wave a seed of their choosing to derive signing keys from. Only a
-  re-sealer holding the owner encryption subkey can mint one, so a write-grantee
-  re-seal carries the existing link and never cuts. The field is bounded
+  re-sealer holding the owner encryption subkey can mint one, and a write grantee
+  carries the write body and its link verbatim. The field is bounded
   fail-closed at decode and encode at 512 bytes (`too-many-structures`);
   over-length bytes make the record undecodable, so — like a duplicate ledger
-  tag — a committed writer can stall the scope's rotations until the owner
+  tag — a malformed or buggy owner-signed body (defence in depth) can stall the
+  scope's rotations until the owner
   republishes the root from a gate-passed earlier record. A re-seal handed an
   over-length carried link refuses before any seal, because an empty link in its
   place would publish the state the genesis arm refuses; the bound is the
