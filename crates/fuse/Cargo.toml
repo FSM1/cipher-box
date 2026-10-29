@@ -29,7 +29,8 @@ winfsp = { version = "0.12", default-features = false, features = [
 # dev-dependency (below), exactly like the engine's `test-kit`.
 test-kit = []
 # The macOS mount under FUSE-T's shared default name, for the comparison leg of
-# the mount-cadence probe. Enabled only by the desktop's `e2e-hook` build.
+# the mount-cadence probe, and the per-handle mount trace. Enabled only by the
+# desktop's `e2e-hook` build.
 e2e-hook = []
 
 [dependencies]

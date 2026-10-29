@@ -28,6 +28,7 @@ use crate::handle::{Access, FIRST_HANDLE, HandleId, HandleTable, OpenFile};
 use crate::inode::{InodeTable, ROOT_INO};
 use crate::name::{is_emittable, is_platform_junk, validate_name};
 use crate::spill::{SpillArea, SpillFile};
+use crate::trace;
 
 /// A node as the kernel sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +109,57 @@ impl Pending {
             dirty: false,
         }
     }
+}
+
+/// What one [`quiesce_writes`](OperationCore::quiesce_writes) pass did with the
+/// dirty handles it found.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Quiesced {
+    /// The handles that owed the queue acked bytes when the pass began.
+    pub found: usize,
+    /// The handles the pass turned into an `updateContent` op.
+    pub journaled: usize,
+    /// The handles the engine refused to journal.
+    pub refused: usize,
+}
+
+/// The class of a refusal, for the trace. Never its message: an engine message
+/// may carry text the trace must not log.
+fn refusal_class(error: &VfsError) -> &'static str {
+    match error {
+        VfsError::NotFound => "not-found",
+        VfsError::NotADirectory => "not-a-directory",
+        VfsError::IsADirectory => "is-a-directory",
+        VfsError::NotEmpty => "not-empty",
+        VfsError::AlreadyExists => "already-exists",
+        VfsError::Invalid => "invalid",
+        VfsError::InvalidName(_) => "invalid-name",
+        VfsError::BadHandle => "bad-handle",
+        VfsError::OverBudget(_) => "over-budget",
+        VfsError::Refused { .. } => "refused",
+        VfsError::TrustViolation { .. } => "trust-violation",
+        VfsError::Unavailable { .. } => "unavailable",
+        VfsError::Internal { .. } => "internal",
+    }
+}
+
+/// Trace what a `flush`, `fsync`, `release` or quiesce did with one handle.
+fn trace_commit(
+    op: &str,
+    ino: u64,
+    handle: HandleId,
+    dirty: bool,
+    committed: &Result<bool, VfsError>,
+) {
+    let (journaled, class) = match committed {
+        Ok(true) => ("yes", ""),
+        Ok(false) => ("no", ""),
+        Err(error) => ("refused ", refusal_class(error)),
+    };
+    trace::line(format_args!(
+        "{op} ino {ino} handle {} dirty {dirty} journaled {journaled}{class}",
+        handle.0
+    ));
 }
 
 /// The attributes this mount last handed the kernel for one node — the state
@@ -559,6 +611,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if access.writable() {
             self.pending.insert(handle, Pending::over(0));
         }
+        trace::line(format_args!("create ino {} handle {}", attrs.ino, handle.0));
         Ok((attrs, handle))
     }
 
@@ -672,6 +725,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             return Err(VfsError::IsADirectory);
         }
         let handle = self.handles.open(node, access);
+        trace::line(format_args!(
+            "open ino {ino} handle {} truncate {truncate}",
+            handle.0
+        ));
         if truncate && let Err(refusal) = self.truncate_handle(handle, 0).await {
             let _ = self.release(handle).await;
             return Err(refusal);
@@ -753,6 +810,29 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// [`release`](Self::release) turns them into one `updateContent` op
     /// (blueprint/desktop.md "Reads, writes, and the never-block law").
     pub async fn write(
+        &mut self,
+        handle: HandleId,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, VfsError> {
+        let taken = self.write_spill(handle, offset, data).await;
+        let (ino, dirty) = self.trace_state(handle);
+        let bytes = data.len();
+        match &taken {
+            Ok(_) => trace::line(format_args!(
+                "write ino {ino} handle {} offset {offset} bytes {bytes} dirty {dirty}",
+                handle.0
+            )),
+            Err(error) => trace::line(format_args!(
+                "write ino {ino} handle {} offset {offset} bytes {bytes} refused {}",
+                handle.0,
+                refusal_class(error)
+            )),
+        }
+        taken
+    }
+
+    async fn write_spill(
         &mut self,
         handle: HandleId,
         offset: u64,
@@ -851,20 +931,20 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// no-false-ack discipline (blueprint/desktop.md "release"). `close(2)`
     /// returns what this returns.
     pub async fn flush(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        self.commit(handle).await
+        self.commit(handle, "flush").await
     }
 
     /// `fsync` means what [`flush`](Self::flush) means here: one op carries the
     /// whole file, and the durable op queue is the mount's only durability
     /// layer.
     pub async fn fsync(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        self.commit(handle).await
+        self.commit(handle, "fsync").await
     }
 
     /// Close a file handle: journal anything it still owes, then release the
     /// stream it pinned, the plaintext that stream cached, and its spill.
     pub async fn release(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        let committed = self.commit(handle).await;
+        let committed = self.commit(handle, "release").await;
         let open = self.handles.close(handle).ok_or(VfsError::BadHandle)?;
         self.pending.remove(&handle);
         self.release_stream(open.stream);
@@ -879,7 +959,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// long past the `close(2)` its caller made — the SMB client behind FUSE-T
     /// defers it by tens of seconds — so this is what turns an acked write into
     /// an op rather than losing it with no error on any path.
-    pub async fn quiesce_writes(&mut self) {
+    ///
+    /// Counts into `tally` as it goes rather than returning it, so a pass the
+    /// host's budget drops still reports what it reached.
+    pub async fn quiesce_writes(&mut self, tally: &mut Quiesced) {
         let mut dirty: Vec<HandleId> = self
             .pending
             .iter()
@@ -890,13 +973,24 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         // pass cuts at the same place on every run, and the handle that has
         // owed the longest is the one journalled first.
         dirty.sort_unstable();
+        *tally = Quiesced {
+            found: dirty.len(),
+            ..Quiesced::default()
+        };
         for handle in dirty {
             // Journalled without the invalidation `commit` pairs with: the
             // kernel session is going down, and a notify pushed after the
             // quiesce holds the unmount open.
             //
             // Per handle: one file the engine refuses must not strand the rest.
-            let _ = self.journal(handle).await;
+            let (ino, _) = self.trace_state(handle);
+            let journaled = self.journal(handle).await;
+            trace_commit("quiesce", ino, handle, true, &journaled);
+            match journaled {
+                Ok(true) => tally.journaled += 1,
+                Ok(false) => {}
+                Err(_) => tally.refused += 1,
+            }
         }
     }
 
@@ -1026,17 +1120,39 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// Turn what a handle holds into exactly one `updateContent` op, and
-    /// correct the kernel for the pages that version replaced.
-    async fn commit(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
-        if !self.journal(handle).await? {
+    /// correct the kernel for the pages that version replaced. `op` names the
+    /// caller in the trace.
+    async fn commit(&mut self, handle: HandleId, op: &str) -> Result<(), VfsError> {
+        let (ino, dirty) = self.trace_state(handle);
+        let journaled = self.journal(handle).await;
+        trace_commit(op, ino, handle, dirty, &journaled);
+        if !journaled? {
             return Ok(());
         }
+        let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
         let ino = self.inodes.ino_for(node);
         // Nothing re-binds this inode, so the pages this commit replaced would
         // stay live.
         self.content_changed(ino);
         Ok(())
+    }
+
+    /// The inode and dirty state a trace line reports for `handle`; inode 0,
+    /// which FUSE never assigns, stands for a handle this session does not know.
+    fn trace_state(&self, handle: HandleId) -> (u64, bool) {
+        if !trace::ENABLED {
+            return (0, false);
+        }
+        let ino = self
+            .handles
+            .get(handle)
+            .and_then(|open| self.inodes.ino_of(open.node))
+            .unwrap_or(0);
+        let dirty = self
+            .pending
+            .get(&handle)
+            .is_some_and(|pending| pending.dirty);
+        (ino, dirty)
     }
 
     /// Journal what a handle holds, and tell the kernel nothing. A handle that
