@@ -256,8 +256,9 @@ tag}` and each optional field only when it is present, so a row minted
   ([ADR 0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D2 and consequence 1, ADR 0027 D3). The
   child-scope index enumerates directly-descendant scope roots for the F-4
-  rotation cascade (FSM1/cipher-box-next#38 D6). That index is writer-authored
-  and owner-signature-free like the history link, so it is bounded fail-closed at
+  rotation cascade (FSM1/cipher-box-next#38 D6). That index carries no owner
+  identity signature, like the history link; only the owner pseudonym signs the
+  write body (ADR 0083 D1). It is bounded fail-closed at
   decode and encode at 1024 entries, each entry's opaque `ipnsName` at the name
   codec's own ceiling (`too-many-structures`) — unbounded, a committed writer
   grows it until the head block the revoking rotation re-seals it into no longer
@@ -298,8 +299,8 @@ tag}` and each optional field only when it is present, so a row minted
   grantee's grant blob, while the retiring seed the link carries derives the
   IPNS signing key of every pre-rotation name in the scope, and the link's only
   consumer — the resumed name wave — is owner-only. Auth mode rather than base
-  because the field lives inside a body every committed writer can author and
-  the owner's enc subkey is public: base mode would let a writer hand the
+  because every write grantee holds the write key of that body, which it carries
+  but cannot re-sign (ADR 0083 D1), and the owner's enc subkey is public: base mode would let a writer hand the
   resumed wave a seed of their choosing to derive signing keys from. Only a
   re-sealer holding the owner encryption subkey can mint one, so a write-grantee
   re-seal carries the existing link and never cuts. The field is bounded
