@@ -3008,11 +3008,20 @@ mod tests {
 
         let out = owner_adopt_at(&republished, &floors, 2)
             .expect("the owner device adopts the grantee write");
-        committed(out.pass, &floors);
+        let adopted = committed(out.pass, &floors);
+        assert_eq!(
+            adopted.read_body, body,
+            "the owner device reads the new body"
+        );
         assert_eq!(sequence_floor(&floors, &base.name), 2);
         assert_eq!(read_epoch_floor(&floors, &base.scope_id), Some(1));
 
-        grantee_adopt(&republished, &grantee_enc())
+        let grantee = grantee_adopt(&republished, &grantee_enc())
             .expect("another grantee device adopts the grantee write");
+        let adopted = committed(grantee.pass, &InMemoryFloorStore::default());
+        assert_eq!(
+            adopted.read_body, body,
+            "the grantee device reads the new body"
+        );
     }
 }
