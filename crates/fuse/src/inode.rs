@@ -103,7 +103,7 @@ impl InodeTable {
     }
 
     /// The inode number bound to `node`, if the session has seen it.
-    pub fn ino_of(&self, node: NodeId) -> Option<u64> {
+    pub(crate) fn ino_of(&self, node: NodeId) -> Option<u64> {
         self.by_node.get(&node).copied()
     }
 

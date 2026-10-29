@@ -910,32 +910,24 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// no-false-ack discipline (blueprint/desktop.md "release"). `close(2)`
     /// returns what this returns.
     pub async fn flush(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        let (ino, dirty) = self.trace_state(handle);
-        let committed = self.commit(handle).await;
-        trace_commit("flush", ino, handle, dirty, &committed);
-        committed.map(drop)
+        self.commit(handle, "flush").await
     }
 
     /// `fsync` means what [`flush`](Self::flush) means here: one op carries the
     /// whole file, and the durable op queue is the mount's only durability
     /// layer.
     pub async fn fsync(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        let (ino, dirty) = self.trace_state(handle);
-        let committed = self.commit(handle).await;
-        trace_commit("fsync", ino, handle, dirty, &committed);
-        committed.map(drop)
+        self.commit(handle, "fsync").await
     }
 
     /// Close a file handle: journal anything it still owes, then release the
     /// stream it pinned, the plaintext that stream cached, and its spill.
     pub async fn release(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        let (ino, dirty) = self.trace_state(handle);
-        let committed = self.commit(handle).await;
-        trace_commit("release", ino, handle, dirty, &committed);
+        let committed = self.commit(handle, "release").await;
         let open = self.handles.close(handle).ok_or(VfsError::BadHandle)?;
         self.pending.remove(&handle);
         self.release_stream(open.stream);
-        committed.map(drop)
+        committed
     }
 
     /// Journal what every dirty handle owes, ahead of the unmount
@@ -967,9 +959,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             // quiesce holds the unmount open.
             //
             // Per handle: one file the engine refuses must not strand the rest.
-            let (ino, dirty) = self.trace_state(handle);
+            let (ino, _) = self.trace_state(handle);
             let journaled = self.journal(handle).await;
-            trace_commit("quiesce", ino, handle, dirty, &journaled);
+            trace_commit("quiesce", ino, handle, true, &journaled);
             match journaled {
                 Ok(true) => tally.journaled += 1,
                 Ok(false) => {}
@@ -1104,18 +1096,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// Turn what a handle holds into exactly one `updateContent` op, and
-    /// correct the kernel for the pages that version replaced.
-    /// Reports whether an op was committed.
-    async fn commit(&mut self, handle: HandleId) -> Result<bool, VfsError> {
-        let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
-        if !self.journal(handle).await? {
-            return Ok(false);
+    /// correct the kernel for the pages that version replaced. `op` names the
+    /// caller in the trace.
+    async fn commit(&mut self, handle: HandleId, op: &str) -> Result<(), VfsError> {
+        let (ino, dirty) = self.trace_state(handle);
+        let journaled = self.journal(handle).await;
+        trace_commit(op, ino, handle, dirty, &journaled);
+        if !journaled? {
+            return Ok(());
         }
+        let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
         let ino = self.inodes.ino_for(node);
         // Nothing re-binds this inode, so the pages this commit replaced would
         // stay live.
         self.content_changed(ino);
-        Ok(true)
+        Ok(())
     }
 
     /// The inode and dirty state a trace line reports for `handle`; inode 0,
