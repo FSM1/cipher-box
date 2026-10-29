@@ -2181,7 +2181,12 @@ fn a_quiesce_with_no_dirty_handle_counts_nothing() {
     block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
     block_on(core.flush(handle)).expect("the flush journals the write");
 
-    let mut tally = Quiesced::default();
+    // A tally an earlier pass filled: each pass reports itself alone.
+    let mut tally = Quiesced {
+        found: 9,
+        journaled: 9,
+        refused: 9,
+    };
     block_on(core.quiesce_writes(&mut tally));
 
     assert_eq!(tally, Quiesced::default(), "a flushed handle owes nothing");

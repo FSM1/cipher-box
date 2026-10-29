@@ -123,6 +123,26 @@ pub struct Quiesced {
     pub refused: usize,
 }
 
+/// The class of a refusal, for the trace. Never its message: an engine message
+/// may carry text the trace must not log.
+fn refusal_class(error: &VfsError) -> &'static str {
+    match error {
+        VfsError::NotFound => "not-found",
+        VfsError::NotADirectory => "not-a-directory",
+        VfsError::IsADirectory => "is-a-directory",
+        VfsError::NotEmpty => "not-empty",
+        VfsError::AlreadyExists => "already-exists",
+        VfsError::Invalid => "invalid",
+        VfsError::InvalidName(_) => "invalid-name",
+        VfsError::BadHandle => "bad-handle",
+        VfsError::OverBudget(_) => "over-budget",
+        VfsError::Refused { .. } => "refused",
+        VfsError::TrustViolation { .. } => "trust-violation",
+        VfsError::Unavailable { .. } => "unavailable",
+        VfsError::Internal { .. } => "internal",
+    }
+}
+
 /// Trace what a `flush`, `fsync`, `release` or quiesce did with one handle.
 fn trace_commit(
     op: &str,
@@ -131,13 +151,13 @@ fn trace_commit(
     dirty: bool,
     committed: &Result<bool, VfsError>,
 ) {
-    let journaled = match committed {
-        Ok(true) => "yes",
-        Ok(false) => "no",
-        Err(_) => "refused",
+    let (journaled, class) = match committed {
+        Ok(true) => ("yes", ""),
+        Ok(false) => ("no", ""),
+        Err(error) => ("refused ", refusal_class(error)),
     };
     trace::line(format_args!(
-        "{op} ino {ino} handle {} dirty {dirty} journaled {journaled}",
+        "{op} ino {ino} handle {} dirty {dirty} journaled {journaled}{class}",
         handle.0
     ));
 }
@@ -798,14 +818,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let taken = self.write_spill(handle, offset, data).await;
         let (ino, dirty) = self.trace_state(handle);
         let bytes = data.len();
-        match taken {
+        match &taken {
             Ok(_) => trace::line(format_args!(
                 "write ino {ino} handle {} offset {offset} bytes {bytes} dirty {dirty}",
                 handle.0
             )),
-            Err(_) => trace::line(format_args!(
-                "write ino {ino} handle {} offset {offset} bytes {bytes} refused",
-                handle.0
+            Err(error) => trace::line(format_args!(
+                "write ino {ino} handle {} offset {offset} bytes {bytes} refused {}",
+                handle.0,
+                refusal_class(error)
             )),
         }
         taken
@@ -952,7 +973,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         // pass cuts at the same place on every run, and the handle that has
         // owed the longest is the one journalled first.
         dirty.sort_unstable();
-        tally.found = dirty.len();
+        *tally = Quiesced {
+            found: dirty.len(),
+            ..Quiesced::default()
+        };
         for handle in dirty {
             // Journalled without the invalidation `commit` pairs with: the
             // kernel session is going down, and a notify pushed after the
