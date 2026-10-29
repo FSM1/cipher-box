@@ -19,6 +19,7 @@ struct Inner {
     fail_remove_op: bool,
     remove_op_budget: Option<usize>,
     enqueue_budget: Option<u64>,
+    suspend_enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
     destructive_write_budget: Option<Arm>,
     partial_write_budget: Option<Arm>,
@@ -45,6 +46,7 @@ impl Default for Inner {
             fail_remove_op: false,
             remove_op_budget: None,
             enqueue_budget: None,
+            suspend_enqueue_budget: None,
             staged_write_budget: None,
             destructive_write_budget: None,
             partial_write_budget: None,
@@ -157,6 +159,27 @@ impl InMemoryStagingStore {
     /// A multi-entry enqueue the budget cannot cover fails whole.
     pub fn fail_enqueue_after(&self, budget: u64) {
         self.inner.lock().expect("lock").enqueue_budget = Some(budget);
+    }
+
+    /// Lets the next `budget` enqueue calls through and suspends every one
+    /// after, for good, before it appends — so a test can drop its caller at
+    /// that exact await.
+    pub fn suspend_enqueue_after(&self, budget: u64) {
+        self.inner.lock().expect("lock").suspend_enqueue_budget = Some(budget);
+    }
+
+    /// Whether the armed [`suspend_enqueue_after`](Self::suspend_enqueue_after)
+    /// budget is spent, so this call suspends; spends one call otherwise.
+    fn suspends_enqueue(&self) -> bool {
+        let mut inner = self.inner.lock().expect("lock");
+        match inner.suspend_enqueue_budget.as_mut() {
+            Some(0) => true,
+            Some(budget) => {
+                *budget -= 1;
+                false
+            }
+            None => false,
+        }
     }
 
     /// Lets `budget` writes at `staging_key` through, fails the next one, then
@@ -300,6 +323,9 @@ fn interrupts(budget: &mut Option<Arm>, staging_key: &[u8]) -> bool {
 
 impl StagingStore for InMemoryStagingStore {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
+        if self.suspends_enqueue() {
+            core::future::pending::<()>().await;
+        }
         let mut inner = self.inner.lock().expect("lock");
         match inner.enqueue_budget {
             Some(0) => return Err(SeamError::new("enqueue_op unavailable")),
@@ -313,6 +339,9 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        if self.suspends_enqueue() {
+            core::future::pending::<()>().await;
+        }
         let mut inner = self.inner.lock().expect("lock");
         // The budget counts entries, and a set it cannot cover writes nothing.
         let count = ops.len() as u64;

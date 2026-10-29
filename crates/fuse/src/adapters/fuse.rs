@@ -463,8 +463,8 @@ impl FuseOp {
     /// request the engine task will never see. A FUSE request nobody answers
     /// hangs its caller for the life of the mount.
     fn refuse(self, errno: i32) {
-        // Queued at the quiesce or sent after it: a close refused here leaves
-        // the bytes its handle owes unjournaled.
+        // Queued at the quiesce or sent after it. A write refused here never
+        // reaches the spill, so its bytes are lost.
         self.trace_refusal(errno);
         match self {
             FuseOp::Lookup { reply, .. } | FuseOp::MkDir { reply, .. } => reply.error(errno),

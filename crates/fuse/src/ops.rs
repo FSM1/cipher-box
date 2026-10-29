@@ -123,7 +123,7 @@ pub struct Quiesced {
     pub refused: usize,
 }
 
-/// Trace what a `flush`, `release` or quiesce did with one handle.
+/// Trace what a `flush`, `fsync`, `release` or quiesce did with one handle.
 fn trace_commit(
     op: &str,
     ino: u64,

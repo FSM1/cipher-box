@@ -2246,6 +2246,50 @@ fn a_quiesce_counts_a_refused_handle_and_journals_the_rest() {
 }
 
 #[test]
+fn a_quiesce_the_budget_drops_keeps_the_counts_it_reached() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let mut handles = Vec::new();
+    for name in ["first.txt", "second.txt"] {
+        let (_attrs, handle) =
+            block_on(core.create(ROOT_INO, name, Access::ReadWrite)).expect("the create");
+        block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+        handles.push(handle);
+    }
+    let before = queued(&staging);
+    staging.inner().suspend_enqueue_after(1);
+
+    let mut tally = Quiesced::default();
+    let pass = poll_once(core.quiesce_writes(&mut tally));
+
+    assert!(pass.is_pending(), "the second journal suspends");
+    assert_eq!(
+        tally,
+        Quiesced {
+            found: 2,
+            journaled: 1,
+            refused: 0,
+        }
+    );
+    assert_eq!(
+        core.dirty_writes(),
+        1,
+        "the interrupted handle is still owed"
+    );
+    assert_eq!(
+        queued(&staging),
+        before + 1,
+        "only the first journal landed"
+    );
+
+    block_on(core.release_stranded_write());
+    staging.inner().suspend_enqueue_after(u64::MAX);
+    block_on(core.flush(handles[1])).expect("the owed handle still journals");
+    assert_eq!(core.dirty_writes(), 0);
+    assert_eq!(queued(&staging), before + 2);
+}
+
+#[test]
 fn a_teardown_journal_tells_the_kernel_nothing() {
     // The kernel session is going down, and a notify pushed after the quiesce
     // holds the unmount open.
