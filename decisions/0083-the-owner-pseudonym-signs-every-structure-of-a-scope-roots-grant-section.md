@@ -5,9 +5,10 @@
 - **Relates to:** [FSM1/cipher-box#2537](https://github.com/FSM1/cipher-box/issues/2537),
   [ADR 0082](./0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md),
   [ADR 0077](./0077-a-scope-root-stops-being-one-by-a-re-seal-into-new-node-ids.md)
-- **Implemented by:** the code PR for FSM1/cipher-box#2537, not landed
+- **Implemented by:** [FSM1/cipher-box#2544](https://github.com/FSM1/cipher-box/pull/2544)
 - **Amends:** [ADR 0032](./0032-the-owner-signs-each-grant-row-and-the-commitment-names-every-recipient.md)
-  D8
+  D8, [ADR 0052](./0052-the-stage-3-section-predicate-lives-in-core-behind-a-verified-commitment-witness.md)
+  D3
 
 ## Context
 
@@ -54,7 +55,10 @@ commitment, but no structure of a scope root verifies under it.
 - `CONTEXT.md` "Structure signature" and "Writer pseudonym" state that the owner pseudonym signs
   the structures of a scope root.
 - ADR 0032 D8 carries an "Amended by" sentence. ADR 0032 "Trust argument" ("A write grantee cannot
-  veto its own revocation") holds again. ADR 0032 D6 and Alternative (k) cite this ADR.
+  veto its own revocation") holds again. ADR 0032 D6, Alternative (k), "An ascent swap is
+  attributable" and E6 carry "Amended by" sentences, and the D8 gate tests take the new names.
+- ADR 0052 D3 carries an "Amended by" sentence: core exposes no membership test of the committed
+  write-capable set.
 - ADR 0077 alternative "Any epoch rise re-seals every node again (D4)" cites this ADR.
 - The engine's `report_unattested_row` signer attribution always names the owner. A later change
   can simplify it.

@@ -163,8 +163,8 @@ violation (`commitment-invalid`, `core::seal::refuse_stale_cut_epoch`). The comm
 carries no read epoch, so a grantee-triggered rotation still needs no owner signature. The raise
 of the cut-epoch floor is ADR 0014. The rule landed with FSM1/cipher-box#1604; this ADR records it.
 Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, and the
-commitment format does not change. ADR 0083 D1 on 2026-10-29: stage 3 refuses a section that a
-grantee signs, so a grantee cannot sign a rotation.
+commitment format does not change. Amended by ADR 0083 D1 on 2026-10-29: stage 3 refuses a
+section that a grantee signs, so a grantee cannot sign a rotation.
 
 **D7 — The engine keeps a device-local revocation floor per scope and recipient.** When the
 owner cuts a recipient at a scope, the engine records that cut, durably, at that scope and nowhere
@@ -239,7 +239,8 @@ second consumer. The rule landed with FSM1/cipher-box#1604; this ADR records it.
   FSM1/cipher-box#1120 the adversarial section above costs 1,026 verifications and 35 ms, and is
   refused.
 - **An ascent swap is attributable** (D9). Only a committed pseudonym can sign a swapped public
-  half, and an owner cut derives the half from the parent seed instead of carrying it.
+  half, and an owner cut derives the half from the parent seed instead of carrying it. Amended by
+  ADR 0083 D1 on 2026-10-29: only the owner pseudonym can sign it.
 - **A contact label names nobody off the account** (D10). The seed is the account's alone.
 
 ## Alternatives rejected
@@ -293,8 +294,8 @@ recipients, but it needs a new commitment format. The owner accepted the leak on
 **(k) An owner signature at each read rotation, so a revoked grantee loses the unmask key.** The
 commitment carries no read epoch so that a grantee-triggered rotation needs no owner signature.
 This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, so
-this reason no longer applies. ADR 0083 rejects this alternative again, for its wire and migration
-cost.
+this reason no longer applies. Amended by ADR 0083 D1 on 2026-10-29: the owner pseudonym signs
+each scope-root rotation, and this alternative stays rejected for its wire and migration cost.
 
 ## Consequences
 
@@ -426,7 +427,9 @@ adopt a replayed root that carries a pre-cut commitment, and its next re-key at 
 the new seed to a removed recipient again.
 
 **E6 — A committed writer can still plant an ascent public half.** D9 makes the swap
-attributable, not impossible. An owner cut repairs it.
+attributable, not impossible. An owner cut repairs it. Amended by ADR 0083 D1 on 2026-10-29: stage
+3 refuses a section that a committed write grantee signs, so only the owner pseudonym can sign a
+swapped public half.
 
 **E7 — A committed writer can still damage its own rows.** It can corrupt a row signature. The
 owner's next re-mint then drops the row's identity label, via-link reference and grantee name,
@@ -485,10 +488,11 @@ gate-passed record (`blueprint/core.md` "Write-body").
   `a_grant_at_the_cuts_own_epoch_lifts_it`, `a_grant_older_than_the_cut_does_not_lift_it`,
   `a_scope_with_no_recorded_cut_reads_one_floor_key` and
   `a_floor_store_that_refuses_re_keys_nothing`.
-- **D8:** core `seal/section_auth.rs` `any_committed_pseudonym_can_pin_the_sections_signer`,
-  `a_section_signed_by_two_committed_pseudonyms_is_unadoptable` and
-  `a_signature_from_no_committed_pseudonym_is_rejected_pinned_or_not`; the core KAT
-  `section_signer_accept_vectors_authenticate_under_one_committed_signer` and
+- **D8:** core `seal/section_auth.rs` `a_section_the_owner_pseudonym_signs_throughout_authenticates`,
+  `a_section_a_committed_write_grantee_signs_throughout_is_refused`,
+  `a_section_signed_by_the_owner_and_a_grantee_is_refused` and
+  `a_section_signed_by_no_committed_pseudonym_is_refused`; the core KAT
+  `section_signer_accept_vectors_authenticate_under_the_owner_pseudonym` and
   `section_signer_reject_vectors_fire_the_named_check` (the splice vector included);
   `net/author.rs` `a_scope_root_envelope_whose_section_has_two_signers_is_refused` (release-active
   produce side).

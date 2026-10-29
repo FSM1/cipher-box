@@ -385,8 +385,8 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   with `structure-signature-invalid`, a trust violation. The committed write-capable
   set is a core definition: the owner pseudonym plus the pseudonym of every
   `write` entry, repeats removed (`committed_write_pseudonyms`). Every reader of
-  the set uses it, including the write-body signer lookup and a re-seal's own
-  signer check.
+  the set uses it, including the write-body signer lookup. A re-seal's own
+  signer check compares its signer with `ownerPseudonymPk` (ADR 0083 D1).
   The pin closes a **structure splice**: a structure lifted verbatim out of a
   different record at the same scope and epoch, authored by a different
   committed writer, recomputes an identical signed input — `scope`, `epoch`,
