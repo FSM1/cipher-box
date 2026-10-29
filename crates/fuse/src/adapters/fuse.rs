@@ -50,6 +50,7 @@ use crate::handle::{Access, HandleId};
 use crate::name::{MAX_NAME_BYTES, is_platform_junk};
 use crate::ops::{Attributes, DirEntry, DirHandleId, OperationCore};
 use crate::spill::restrict_dir;
+use crate::trace;
 
 /// Inodes are per mount session and never reused, so there is no generation
 /// axis for the kernel to disambiguate along.
@@ -420,6 +421,21 @@ impl FuseOp {
     /// request the engine task will never see. A FUSE request nobody answers
     /// hangs its caller for the life of the mount.
     fn refuse(self, errno: i32) {
+        // A close the kernel sends after the quiesce lands here, and nothing
+        // journals what that handle owes.
+        let late = match &self {
+            FuseOp::Write { handle, .. } => Some(("write", handle)),
+            FuseOp::Flush { handle, .. } => Some(("flush", handle)),
+            FuseOp::FSync { handle, .. } => Some(("fsync", handle)),
+            FuseOp::Release { handle, .. } => Some(("release", handle)),
+            _ => None,
+        };
+        if let Some((op, handle)) = late {
+            trace::line(format_args!(
+                "{op} handle {} refused errno {errno}, the op channel is closed",
+                handle.0
+            ));
+        }
         match self {
             FuseOp::Lookup { reply, .. } | FuseOp::MkDir { reply, .. } => reply.error(errno),
             FuseOp::GetAttr { reply, .. } | FuseOp::SetSize { reply, .. } => reply.error(errno),

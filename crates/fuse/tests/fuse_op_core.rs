@@ -22,7 +22,8 @@ use cipherbox_engine::{
 };
 use cipherbox_fuse::{
     Access, CacheBudget, DirEntry, HandleId, HostAdapter, HostCapabilities, Invalidation,
-    MAX_NAME_BYTES, NameError, OperationCore, OverBudgetCause, ROOT_INO, SpillArea, VfsError,
+    MAX_NAME_BYTES, NameError, OperationCore, OverBudgetCause, Quiesced, ROOT_INO, SpillArea,
+    VfsError,
 };
 
 /// A spill area in a throwaway directory the mount outlives, so the directory
@@ -2093,7 +2094,7 @@ fn an_orderly_teardown_journals_a_write_the_kernel_never_flushed() {
     let after_create = queued(&staging);
     block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
 
-    block_on(core.quiesce_writes());
+    block_on(core.quiesce_writes(&mut Quiesced::default()));
     core.unmount();
     drop(core);
 
@@ -2121,7 +2122,7 @@ fn a_teardown_journals_every_dirty_handle_and_not_the_first_one_only() {
         block_on(core.write(*handle, 0, b"SECRET-1")).expect("the write lands");
     }
 
-    block_on(core.quiesce_writes());
+    block_on(core.quiesce_writes(&mut Quiesced::default()));
     core.unmount();
 
     assert_eq!(
@@ -2154,13 +2155,55 @@ fn what_the_quiesce_could_not_journal_is_countable_before_the_unmount() {
         "every acked write the kernel never flushed is owed"
     );
 
-    block_on(core.quiesce_writes());
+    block_on(core.quiesce_writes(&mut Quiesced::default()));
 
     assert_eq!(
         core.dirty_writes(),
         0,
         "a pass that journals everything leaves nothing to report"
     );
+}
+
+#[test]
+fn a_quiesce_with_no_dirty_handle_counts_nothing() {
+    // The host logs these counts at every unmount; zero found is what tells a
+    // late close apart from a journal the next instance did not publish.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush journals the write");
+
+    let mut tally = Quiesced::default();
+    block_on(core.quiesce_writes(&mut tally));
+
+    assert_eq!(tally, Quiesced::default(), "a flushed handle owes nothing");
+}
+
+#[test]
+fn a_quiesce_counts_the_dirty_handle_it_journals() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    let before = queued(&staging);
+
+    let mut tally = Quiesced::default();
+    block_on(core.quiesce_writes(&mut tally));
+
+    assert_eq!(
+        tally,
+        Quiesced {
+            found: 1,
+            journaled: 1,
+            refused: 0,
+        }
+    );
+    assert!(
+        queued(&staging) > before,
+        "the journaled op is in the queue"
+    );
+    assert_eq!(core.dirty_writes(), 0);
 }
 
 #[test]
@@ -2173,7 +2216,7 @@ fn a_teardown_journal_tells_the_kernel_nothing() {
     block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
     adapter.drain();
 
-    block_on(core.quiesce_writes());
+    block_on(core.quiesce_writes(&mut Quiesced::default()));
 
     assert_eq!(
         adapter.drain(),
@@ -2227,7 +2270,7 @@ fn a_teardown_with_every_write_flushed_journals_nothing_more() {
     block_on(core.flush(handle)).expect("the flush journals the write");
     let after_flush = queued(&staging);
 
-    block_on(core.quiesce_writes());
+    block_on(core.quiesce_writes(&mut Quiesced::default()));
 
     assert_eq!(
         queued(&staging),

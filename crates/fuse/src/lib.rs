@@ -27,6 +27,7 @@ mod name;
 mod ntstatus;
 mod ops;
 mod spill;
+mod trace;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
 /// The mount this platform's backend makes, what it pushes invalidation
@@ -56,5 +57,5 @@ pub use handle::{Access, HandleId, HandleTable, OpenFile};
 pub use inode::{InodeTable, ROOT_INO};
 pub use name::{MAX_NAME_BYTES, NameError, is_emittable, is_platform_junk, validate_name};
 pub use ntstatus::{NtStatus, ntstatus_of};
-pub use ops::{Attributes, DirEntry, DirHandleId, OperationCore};
+pub use ops::{Attributes, DirEntry, DirHandleId, OperationCore, Quiesced};
 pub use spill::SpillArea;

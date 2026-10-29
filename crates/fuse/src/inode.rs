@@ -102,6 +102,11 @@ impl InodeTable {
         self.by_ino.get(&ino).map(|(node, _)| *node)
     }
 
+    /// The inode number bound to `node`, if the session has seen it.
+    pub fn ino_of(&self, node: NodeId) -> Option<u64> {
+        self.by_node.get(&node).copied()
+    }
+
     /// The inode number for `node`, allocating one on first sight.
     pub fn ino_for(&mut self, node: NodeId) -> u64 {
         if let Some(ino) = self.by_node.get(&node) {

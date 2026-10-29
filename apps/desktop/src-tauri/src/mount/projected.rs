@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
-use cipherbox_fuse::{CacheBudget, Invalidator, Mount, OperationCore, Publication, SpillArea};
+use cipherbox_fuse::{
+    CacheBudget, Invalidator, Mount, OperationCore, Publication, Quiesced, SpillArea,
+};
 use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};
@@ -289,11 +291,30 @@ impl Projection {
 /// reported rather than retained — the spill key is per handle and memory-only,
 /// so it does not survive to be retried.
 async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) -> usize {
-    let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
+    let mut tally = Quiesced::default();
+    let cut_short = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes(&mut tally))
+        .await
+        .is_err();
     // The bound drops the pass mid-journal, which is the one exit the journal
     // cannot abort its own write handle on.
     core.release_stranded_write().await;
-    core.dirty_writes()
+    let owed = core.dirty_writes();
+    // Every unmount writes it, also a clean one: no dirty handle at a quit is
+    // the evidence that a late close never reached the mount.
+    let Quiesced {
+        found,
+        journaled,
+        refused,
+    } = tally;
+    let budget = if cut_short {
+        ", cut short by the budget"
+    } else {
+        ""
+    };
+    eprintln!(
+        "mount quiesce: {found} dirty handles, {journaled} journaled, {refused} refused, {owed} still owed{budget}"
+    );
+    owed
 }
 
 /// Mount at `at`, naming the mount point in whatever refused it — the member's
