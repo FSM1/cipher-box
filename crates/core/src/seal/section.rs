@@ -275,11 +275,10 @@ pub struct GrantSection {
     pub unknown: PreservedFields,
 }
 
-/// The frozen bound on a section's history links: stage 3's work is
-/// `pseudonyms + structures` ([`super::authenticate_section_structures`],
+/// The frozen bound on a section's history links: stage 3's work is one
+/// verification per structure ([`super::authenticate_section_structures`],
 /// blueprint/core.md "One section, one signer"), so an unbounded
-/// collection on either side lets one record dictate another reader's CPU
-/// budget. Producers prune to a far smaller retained window
+/// collection lets one record dictate another reader's CPU budget. Producers prune to a far smaller retained window
 /// (`rotation/reseal.rs`), leaving this a malformed-input guard an honest
 /// rotator never approaches.
 pub const MAX_HISTORY_LINKS: usize = 256;

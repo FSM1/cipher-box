@@ -7042,8 +7042,8 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<Reject
     };
 
     // One commitment for every vector, naming the owner's pseudonym and a write
-    // grantee's, so the committed set is never a one-element set a pin could
-    // satisfy vacuously. Every structure kind is present, so the walk covers each.
+    // grantee's, so each grantee signature is a committed one that stage 3 still
+    // refuses. Every structure kind is present, so the walk covers each.
     let commitment = GrantSetCommitment {
         ipns_name: b"section-signer-scope-root".to_vec(),
         owner_pseudonym_pk: owner.verifying_key().to_bytes(),
@@ -7150,28 +7150,28 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<Reject
         seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
     };
 
-    let accept = [
-        ("single-signer-owner-pseudonym", by_owner),
+    let accept = [("single-signer-owner-pseudonym", by_owner)]
+        .iter()
+        .map(|(name, section)| {
+            let bytes = head_block(section);
+            stage_three(&bytes).unwrap_or_else(|e| panic!("{name}: must authenticate: {e}"));
+            SectionSignerAcceptVector {
+                name: name.to_string(),
+                hex: hexstr(&bytes),
+            }
+        })
+        .collect();
+    let reject = [
+        ("two-committed-signers", two_signers),
+        ("spliced-structure-from-another-committed-signer", spliced),
+        // A committed write grantee signs every structure: stage 3 admits only
+        // the owner pseudonym.
         ("single-signer-committed-grantee", by_grantee),
     ]
     .iter()
     .map(|(name, section)| {
         let bytes = head_block(section);
-        stage_three(&bytes).unwrap_or_else(|e| panic!("{name}: must authenticate: {e}"));
-        SectionSignerAcceptVector {
-            name: name.to_string(),
-            hex: hexstr(&bytes),
-        }
-    })
-    .collect();
-    let reject = [
-        ("two-committed-signers", two_signers),
-        ("spliced-structure-from-another-committed-signer", spliced),
-    ]
-    .iter()
-    .map(|(name, section)| {
-        let bytes = head_block(section);
-        let error = stage_three(&bytes).expect_err("two committed signers must fail closed");
+        let error = stage_three(&bytes).expect_err("a non-owner signer must fail closed");
         RejectVector {
             name: name.to_string(),
             hex: hexstr(&bytes),

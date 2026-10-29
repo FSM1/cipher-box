@@ -1943,13 +1943,7 @@ mod tests {
             OverrideSeedPayload, encode_grant_section, seal_owner_blob, set_grant_section,
         };
         let mut fx = granted(|_| {});
-        let (shared, _) = crate::grants::recipient_self_location(
-            &grantee_enc(),
-            &fx.owner_enc.public(),
-            fx.name.as_str().as_bytes(),
-        )
-        .unwrap();
-        let signer = kdf::pseudonym_sign(shared.as_bytes(), &fx.scope_id);
+        let signer = owner_root_pseudonym();
         let blob = seal_owner_blob(
             &fx.owner_enc.public(),
             &[0x93; 32],
@@ -2861,5 +2855,177 @@ mod tests {
         );
         assert_eq!(cache.peek(&cache_key).as_deref(), Some(&fx.record(1)[..]));
         assert_eq!(sequence_floor(&floors, &fx.name), 1);
+    }
+
+    /// The pseudonym `mint_grant_row` commits for the [`granted`] write grantee:
+    /// `pseudonym_sign` over the pairwise ECDH secret.
+    fn grantee_pseudonym(fx: &Fixture) -> cipherbox_core::suite::ed25519::Ed25519Signer {
+        let shared = grantee_enc()
+            .diffie_hellman(&fx.owner_enc.public())
+            .expect("contributory");
+        kdf::pseudonym_sign(shared.as_bytes(), &fx.scope_id)
+    }
+
+    /// The [`granted`] root authored at `epoch` under override seed `seed`. With
+    /// `grantee_signs` the write grantee re-signs every structure; the
+    /// owner-signed commitment rides verbatim.
+    fn granted_root_at(epoch: u64, seed: [u8; 32], grantee_signs: bool) -> Fixture {
+        let mut fx = granted(|_| {});
+        let row = crate::grants::mint_grant_row(
+            &owner_identity(),
+            &fx.owner_enc,
+            &OWNER_ROOT_POINTER_READ_KEY,
+            EcdsaSigner::from_scalar(&[0xa2; 32])
+                .unwrap()
+                .verifying_key()
+                .to_sec1(),
+            &grantee_enc().public(),
+            &fx.scope_id,
+            fx.name.as_str().as_bytes(),
+            Permission::Write,
+        )
+        .unwrap();
+        let root = crate::testkit::owner_root_fixture_seeded(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &fx.owner_enc.public(),
+                scope_id: fx.scope_id,
+                root_id: fx.root_id,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: None,
+                owner_write_blob_epoch: None,
+                write_history_link: Vec::new(),
+                grants: vec![row],
+            },
+            epoch,
+            1,
+            seed,
+        );
+        fx.grant_section = root.grant_section;
+        fx.envelope = root.envelope;
+        if grantee_signs {
+            let signer = grantee_pseudonym(&fx);
+            crate::testkit::resign_section(&mut fx.grant_section, fx.scope_id, epoch, &signer);
+            cipherbox_core::seal::set_grant_section(
+                &mut fx.envelope,
+                cipherbox_core::seal::encode_grant_section(&fx.grant_section).unwrap(),
+            );
+        }
+        fx.head_block = encode_envelope(&fx.envelope).unwrap();
+        fx.head_cid_str = root_block_cid(&fx.head_block);
+        fx
+    }
+
+    /// The owner device adopts `fx` at `sequence` over `floors`.
+    fn owner_adopt_at(
+        fx: &Fixture,
+        floors: &InMemoryFloorStore,
+        sequence: u64,
+    ) -> Result<AdoptOutcome, GateError> {
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let gw = gateway();
+        let adopter = fx.adopter(&http, floors, &fx.owner_identity_verifier, &gw);
+        block_on(adopter.adopt(&fx.name, &fx.record(sequence)))
+    }
+
+    fn read_epoch_floor(floors: &InMemoryFloorStore, scope_id: &[u8; 16]) -> Option<u64> {
+        block_on(floors.epoch_floor(scope_id)).unwrap()
+    }
+
+    /// An owner device holding the owner-signed root at epoch 1 reads a root at
+    /// `epoch` under a new override seed that a committed write grantee signed.
+    /// Stage 3 refuses it, and neither floor moves.
+    fn assert_owner_device_refuses_a_grantee_signed_root(epoch: u64) {
+        let floors = InMemoryFloorStore::default();
+        let base = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        committed(owner_adopt_at(&base, &floors, 1).unwrap().pass, &floors);
+
+        let rogue = granted_root_at(epoch, [0x99; 32], true);
+        assert_eq!(
+            rogue.grant_section.commitment, base.grant_section.commitment,
+            "the owner-signed commitment rides verbatim"
+        );
+        assert!(
+            rogue
+                .grant_section
+                .commitment
+                .entries
+                .iter()
+                .any(|e| e.permission == Permission::Write
+                    && e.pseudonym_pk == grantee_pseudonym(&rogue).verifying_key().to_bytes()),
+            "the signer is a committed write grantee"
+        );
+        let rejection = refusal(owner_adopt_at(&rogue, &floors, 2));
+        assert_eq!(rejection.stage, GateStage::GrantSection);
+        assert_eq!(rejection.check(), "structure-signature-invalid");
+        assert_eq!(read_epoch_floor(&floors, &base.scope_id), Some(1));
+        assert_eq!(sequence_floor(&floors, &base.name), 1);
+    }
+
+    #[test]
+    fn an_owner_device_refuses_a_grantee_signed_rotation_to_the_next_epoch() {
+        assert_owner_device_refuses_a_grantee_signed_root(2);
+    }
+
+    #[test]
+    fn an_owner_device_refuses_a_grantee_signed_seed_swap_at_the_same_epoch() {
+        assert_owner_device_refuses_a_grantee_signed_root(1);
+    }
+
+    #[test]
+    fn an_owner_device_refuses_a_grantee_signed_jump_to_the_last_epoch() {
+        assert_owner_device_refuses_a_grantee_signed_root(u64::MAX);
+    }
+
+    /// A grantee write at a scope root re-seals the read body and carries the
+    /// owner-signed grant section byte for byte. The owner device and another
+    /// grantee device both adopt it.
+    #[test]
+    fn a_grantee_republish_that_carries_the_owner_signed_section_still_adopts() {
+        use cipherbox_core::seal::{
+            PreservedFields, ReadBody, grant_section_bytes, seal_read_body, set_grant_section,
+        };
+        let floors = InMemoryFloorStore::default();
+        let base = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        committed(owner_adopt_at(&base, &floors, 1).unwrap().pass, &floors);
+
+        let mut republished = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &republished.root_id);
+        let mut envelope = seal_read_body(
+            kdf::read_key(node_seed.as_bytes()).as_bytes(),
+            &[0x77; 24],
+            republished.envelope.v,
+            republished.root_id,
+            republished.scope_id,
+            republished.envelope.epoch,
+            &ReadBody::Folder {
+                created_at: 0,
+                modified_at: 1,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+        )
+        .unwrap();
+        let carried = grant_section_bytes(&base.envelope)
+            .expect("a scope root carries its section")
+            .to_vec();
+        set_grant_section(&mut envelope, carried);
+        republished.envelope = envelope;
+        republished.head_block = encode_envelope(&republished.envelope).unwrap();
+        republished.head_cid_str = root_block_cid(&republished.head_block);
+        assert_ne!(republished.head_cid_str, base.head_cid_str);
+
+        let out = owner_adopt_at(&republished, &floors, 2)
+            .expect("the owner device adopts the grantee write");
+        committed(out.pass, &floors);
+        assert_eq!(sequence_floor(&floors, &base.name), 2);
+        assert_eq!(read_epoch_floor(&floors, &base.scope_id), Some(1));
+
+        grantee_adopt(&republished, &grantee_enc())
+            .expect("another grantee device adopts the grantee write");
     }
 }

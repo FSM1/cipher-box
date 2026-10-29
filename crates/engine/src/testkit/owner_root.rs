@@ -182,6 +182,16 @@ pub fn owner_root_fixture_sealed(
     read_epoch: u64,
     v: u64,
 ) -> OwnerRootFixture {
+    owner_root_fixture_seeded(spec, read_epoch, v, OWNER_ROOT_SCOPE_SEED)
+}
+
+/// [`owner_root_fixture_sealed`] under override seed `scope_seed`.
+pub fn owner_root_fixture_seeded(
+    spec: OwnerRootSpec<'_>,
+    read_epoch: u64,
+    v: u64,
+    scope_seed: [u8; 32],
+) -> OwnerRootFixture {
     let OwnerRootSpec {
         owner_identity,
         owner_enc,
@@ -196,7 +206,7 @@ pub fn owner_root_fixture_sealed(
         grants,
         write_history_link,
     } = spec;
-    let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &root_id);
+    let node_seed = kdf::node_seed(&scope_seed, &root_id);
     let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
     let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &root_id);
     let name = IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key());
@@ -221,7 +231,7 @@ pub fn owner_root_fixture_sealed(
         owner_enc,
         &EPH_OWNER,
         &aad(read_epoch, STRUCT_TAG_OWNER_BLOB),
-        &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, read_epoch),
+        &OverrideSeedPayload::new(scope_seed, read_epoch),
     )
     .unwrap();
     let owner_blob = SignedOwnerBlob {
@@ -273,7 +283,7 @@ pub fn owner_root_fixture_sealed(
             &parent_node_seed,
             &EPH_ASCENT,
             &aad(read_epoch, STRUCT_TAG_ASCENT_LINK),
-            &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, read_epoch),
+            &OverrideSeedPayload::new(scope_seed, read_epoch),
         )
         .unwrap();
         SignedAscentLink {
@@ -305,12 +315,7 @@ pub fn owner_root_fixture_sealed(
                 &recipient,
                 &ephemeral,
                 &aad(read_epoch, STRUCT_TAG_GRANT_BLOB),
-                &GrantBlobPayload::new(
-                    OWNER_ROOT_SCOPE_SEED,
-                    write_scope_seed,
-                    read_epoch,
-                    pointer_read_key,
-                ),
+                &GrantBlobPayload::new(scope_seed, write_scope_seed, read_epoch, pointer_read_key),
             )
             .unwrap();
             SignedGrantBlob {

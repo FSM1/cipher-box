@@ -6442,8 +6442,7 @@ mod tests {
     use crate::content::dag::root_block_cid;
     use crate::entropy::EntropyError;
     use crate::grants::{
-        GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag,
-        recipient_self_location, self_locate,
+        GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag, self_locate,
     };
     use cipherbox_core::codec::Value;
     use cipherbox_core::error::{CodecError, Malformed};
@@ -8806,13 +8805,7 @@ mod tests {
                 .expect("confirmed owner read");
             }
             let mut rogue = granted_root(children.clone());
-            let (shared, _) = recipient_self_location(
-                &write_grantee(),
-                &owner_enc().public(),
-                rogue.name.as_str().as_bytes(),
-            )
-            .unwrap();
-            let signer = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE);
+            let signer = owner_root_pseudonym();
             let sealed = cipherbox_core::seal::seal_owner_blob(
                 &owner_enc().public(),
                 &[0x99; 32],
