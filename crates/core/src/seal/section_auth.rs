@@ -106,30 +106,15 @@ pub fn for_each_structure<E>(
     Ok(())
 }
 
-/// Authenticate one structure under `owner`, recomputing the signed input **from
-/// the record's actual bytes** at the caller's scope and epoch — never a
-/// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
-/// owner pseudonym signed *these* bytes at *this* scope/epoch". Any other
-/// outcome is a `structure-signature-invalid` trust violation.
-fn authenticate_structure(
-    owner: &Ed25519Verifier,
-    scope: [u8; 16],
-    epoch: u64,
-    struct_tag: u8,
-    recipient_tag: Option<[u8; 32]>,
-    ciphertext: &[u8],
-    signature: &[u8; 64],
-) -> Result<(), CodecError> {
-    let input =
-        StructureSigInput::over_ciphertext(scope, epoch, struct_tag, recipient_tag, ciphertext);
-    verify_structure(owner, &input, &Ed25519Signature::from_bytes(*signature))
-}
-
 /// Stage 3's predicate: every structure signature `section` carries verifies,
 /// at `scope` and `epoch`, under the owner pseudonym `attested` names —
 /// whatever epoch a structure's own sealed AAD binds (blueprint/core.md
 /// "Structure signatures"). The engine passes the authenticated envelope's
 /// scope and epoch.
+///
+/// The signed input is recomputed **from the record's actual bytes**, never a
+/// caller-supplied [`StructureSigInput`], so a signature proves "the owner
+/// pseudonym signed *these* bytes at *this* scope/epoch".
 ///
 /// A section whose commitment is not `attested`'s fails `commitment-invalid`.
 ///
@@ -173,7 +158,8 @@ pub fn authenticate_section_structures(
     let owner = Ed25519Verifier::from_bytes(attested.commitment().owner_pseudonym_pk)
         .ok_or(TrustViolation::StructureSignatureInvalid)?;
     for_each_structure(section, |tag, recipient, ct, sig| {
-        authenticate_structure(&owner, scope, epoch, tag, recipient, ct, sig)
+        let input = StructureSigInput::over_ciphertext(scope, epoch, tag, recipient, ct);
+        verify_structure(&owner, &input, &Ed25519Signature::from_bytes(*sig))
     })
 }
 

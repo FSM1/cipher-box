@@ -8276,12 +8276,12 @@ where {
     ///
     /// Each hop reads the next level's `ipnsName` out of the level above's
     /// direct-child-scope index. That index carries no signature of its own; it
-    /// rides the sealed write body. What holds the walk together is the target: the adoption gate
-    /// binds each name to a commitment the owner signed, and proves the ascent
-    /// link under the ancestor seed the level above derives. So a substituted
-    /// name cannot pass — but a **removed** entry would silently move the anchor
-    /// up a level, and hand whoever removed it the seeds a later mint
-    /// below would derive. An ancestor the index does not name is therefore
+    /// rides the sealed write body. What holds the walk together is the target:
+    /// the adoption gate binds each name to a commitment the owner signed, and
+    /// proves the ascent link under the ancestor seed the level above derives. So
+    /// a substituted name cannot pass — but a **removed** entry would silently
+    /// move the anchor up a level, and hand whoever removed it the seeds a later
+    /// mint below would derive. An ancestor the index does not name is therefore
     /// probed the way [`refuse_an_unindexed_scope`](Self::refuse_an_unindexed_scope)
     /// probes the leaf, and a live scope root there fails the walk closed.
     ///

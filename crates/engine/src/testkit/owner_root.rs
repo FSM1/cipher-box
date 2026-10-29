@@ -14,11 +14,11 @@ use cipherbox_core::seal::{
     ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
     SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
-    encode_envelope, encode_grant_section, encode_write_body, seal, seal_ascent_link,
-    seal_grant_blob, seal_owner_blob, seal_owner_write_blob, seal_read_body, set_grant_section,
-    sign_grant_set, sign_structure,
+    authenticate_section_structures, encode_envelope, encode_grant_section, encode_write_body,
+    seal, seal_ascent_link, seal_grant_blob, seal_owner_blob, seal_owner_write_blob,
+    seal_read_body, set_grant_section, sign_grant_set, sign_structure, verify_grant_set,
 };
-use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Public;
 
@@ -414,4 +414,19 @@ pub fn resign_section(
     if let Some(link) = &mut section.ascent_link {
         link.signature = sign(STRUCT_TAG_ASCENT_LINK, None, &link.sig_body());
     }
+}
+
+/// Assert that `section` passes adoption-gate stages 2 and 3 at `scope` and
+/// `epoch`, with `owner_identity` attesting its commitment.
+pub fn assert_section_authenticates(
+    section: &GrantSection,
+    owner_identity: &EcdsaVerifier,
+    scope: [u8; 16],
+    epoch: u64,
+) {
+    let sig = EcdsaSignature::from_compact(&section.commitment_sig).expect("compact signature");
+    let attested = verify_grant_set(owner_identity, &section.commitment, &sig)
+        .expect("the owner-signed commitment verifies");
+    authenticate_section_structures(&attested, section, scope, epoch)
+        .expect("the owner pseudonym signs the section");
 }

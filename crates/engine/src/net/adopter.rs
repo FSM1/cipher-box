@@ -2880,21 +2880,19 @@ mod tests {
         kdf::pseudonym_sign(shared.as_bytes(), &fx.scope_id)
     }
 
-    /// The [`granted`] root authored at `epoch` under override seed `seed`. With
-    /// `grantee_signs` the write grantee re-signs every structure; the
-    /// owner-signed commitment rides verbatim.
-    fn granted_root_at(epoch: u64, seed: [u8; 32], grantee_signs: bool) -> Fixture {
+    /// The [`granted`] root authored at `epoch` under override seed `seed`, with
+    /// every structure re-signed by the write grantee; the owner-signed
+    /// commitment rides verbatim.
+    fn grantee_signed_root(epoch: u64, seed: [u8; 32]) -> Fixture {
         let mut fx = granted_at(|_| {}, epoch, seed);
-        if grantee_signs {
-            let signer = grantee_pseudonym(&fx);
-            crate::testkit::resign_section(&mut fx.grant_section, fx.scope_id, epoch, &signer);
-            cipherbox_core::seal::set_grant_section(
-                &mut fx.envelope,
-                cipherbox_core::seal::encode_grant_section(&fx.grant_section).unwrap(),
-            );
-            fx.head_block = encode_envelope(&fx.envelope).unwrap();
-            fx.head_cid_str = root_block_cid(&fx.head_block);
-        }
+        let signer = grantee_pseudonym(&fx);
+        crate::testkit::resign_section(&mut fx.grant_section, fx.scope_id, epoch, &signer);
+        cipherbox_core::seal::set_grant_section(
+            &mut fx.envelope,
+            cipherbox_core::seal::encode_grant_section(&fx.grant_section).unwrap(),
+        );
+        fx.head_block = encode_envelope(&fx.envelope).unwrap();
+        fx.head_cid_str = root_block_cid(&fx.head_block);
         fx
     }
 
@@ -2912,7 +2910,7 @@ mod tests {
     }
 
     fn read_epoch_floor(floors: &InMemoryFloorStore, scope_id: &[u8; 16]) -> Option<u64> {
-        block_on(floors.epoch_floor(scope_id)).unwrap()
+        block_on(floor::read_epoch_floor(floors, scope_id)).expect("floor read")
     }
 
     /// An owner device holding the owner-signed root at epoch 1 reads a root at
@@ -2920,22 +2918,22 @@ mod tests {
     /// Stage 3 refuses it, and neither floor moves.
     fn assert_owner_device_refuses_a_grantee_signed_root(epoch: u64) {
         let floors = InMemoryFloorStore::default();
-        let base = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        let base = granted(|_| {});
         committed(owner_adopt_at(&base, &floors, 1).unwrap().pass, &floors);
 
-        let rogue = granted_root_at(epoch, [0x99; 32], true);
+        let rogue = grantee_signed_root(epoch, [0x99; 32]);
         assert_eq!(
             rogue.grant_section.commitment, base.grant_section.commitment,
             "the owner-signed commitment rides verbatim"
         );
+        let signer_pk = grantee_pseudonym(&rogue).verifying_key().to_bytes();
         assert!(
             rogue
                 .grant_section
                 .commitment
                 .entries
                 .iter()
-                .any(|e| e.permission == Permission::Write
-                    && e.pseudonym_pk == grantee_pseudonym(&rogue).verifying_key().to_bytes()),
+                .any(|e| e.permission == Permission::Write && e.pseudonym_pk == signer_pk),
             "the signer is a committed write grantee"
         );
         let rejection = refusal(owner_adopt_at(&rogue, &floors, 2));
@@ -2968,7 +2966,7 @@ mod tests {
         use crate::net::author::{EnvelopeAuthoring, author_scope_root_envelope};
         use cipherbox_core::seal::{PreservedFields, ReadBody, grant_section_bytes};
         let floors = InMemoryFloorStore::default();
-        let base = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        let base = granted(|_| {});
         committed(owner_adopt_at(&base, &floors, 1).unwrap().pass, &floors);
 
         // The production grantee carry: a new read body, with the base's
@@ -3002,7 +3000,7 @@ mod tests {
             grant_section_bytes(&base.envelope),
             "the section rides byte for byte"
         );
-        let mut republished = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        let mut republished = granted(|_| {});
         republished.envelope = head.envelope;
         republished.head_block = head.block;
         republished.head_cid_str = head.cid;

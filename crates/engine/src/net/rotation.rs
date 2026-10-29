@@ -5113,8 +5113,8 @@ where
     /// stops at it, and record the proven boundary.
     ///
     /// `directChildScopeIndex` carries no proof of its own, so an entry naming
-    /// an ordinary in-scope node would carve that node out of the wave and leave it live at
-    /// a name the revokee's retired write scope seed still derives.
+    /// an ordinary in-scope node would carve that node out of the wave and leave
+    /// it live at a name the revokee's retired write scope seed still derives.
     /// `gated_read::gate_root_pass` is the proof, over the seed the root's own
     /// owner blob yielded.
     async fn record_scope_boundary(
@@ -8826,20 +8826,12 @@ mod tests {
                 &signer,
             );
             // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
-            let sig = EcdsaSignature::from_compact(&rogue.grant_section.commitment_sig).unwrap();
-            let attested = verify_grant_set(
-                &owner_identity().verifying_key(),
-                &rogue.grant_section.commitment,
-                &sig,
-            )
-            .expect("the owner-signed commitment verifies");
-            cipherbox_core::seal::authenticate_section_structures(
-                &attested,
+            crate::testkit::assert_section_authenticates(
                 &rogue.grant_section,
+                &owner_identity().verifying_key(),
                 SCOPE,
                 rogue.envelope.epoch,
-            )
-            .expect("the owner pseudonym signs the planted section");
+            );
             set_grant_section(
                 &mut rogue.envelope,
                 encode_grant_section(&rogue.grant_section).unwrap(),

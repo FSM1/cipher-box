@@ -228,7 +228,7 @@ pub struct CommittedSet<'a> {
     ///
     /// The encryption key, not the identity key: the commitment binds
     /// `recipientEncPk` under the owner's own signature, while
-    /// `recipientIdentityPk` is a label it does not sign.
+    /// `recipientIdentityPk` is a label the commitment does not bind.
     ///
     /// Per scope, never carried down a cascade: an ancestor's cut says nothing
     /// about a grant the owner issued independently one level below it. The
