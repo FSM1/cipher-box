@@ -3543,9 +3543,8 @@ mod tests {
 
     #[test]
     fn a_reordered_reparented_index_still_resumes() {
-        // The index is read off a write body any committed writer of the
-        // leaving scope authors, so the comparison is over the canonical form
-        // rather than the bytes it happened to land in.
+        // The comparison is over the index's canonical form rather than the
+        // bytes it happened to land in.
         let first = descendant_ref();
         let second =
             ChildScopeRef::new(SECOND_DESCENDANT_SCOPE, b"second-descendant-name".to_vec());

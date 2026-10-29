@@ -1211,8 +1211,7 @@ fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
 /// own — a scope's own records sit at derived names and nowhere else (CONTEXT.md
 /// "name law") — so the boundary stands whether or not this level's
 /// `directChildScopeIndex` still names it. That index rides the sealed write
-/// body, which any committed writer of the scope authors and no owner signature
-/// covers, and an additive set cannot observe an entry a writer removed.
+/// body, and an additive set cannot observe an entry that body dropped.
 ///
 /// Reaches the direct children of a walked scope root, which is where the walk
 /// holds both halves: the body that names them and the seed that derives what
@@ -5113,9 +5112,8 @@ where
     /// Prove each claimed directly-descendant scope root before the enumeration
     /// stops at it, and record the proven boundary.
     ///
-    /// `directChildScopeIndex` is authored by any committed writer — including
-    /// the grantee this rotation is cutting — so an entry naming an ordinary
-    /// in-scope node would carve that node out of the wave and leave it live at
+    /// `directChildScopeIndex` carries no proof of its own, so an entry naming
+    /// an ordinary in-scope node would carve that node out of the wave and leave it live at
     /// a name the revokee's retired write scope seed still derives.
     /// `gated_read::gate_root_pass` is the proof, over the seed the root's own
     /// owner blob yielded.
@@ -8827,6 +8825,21 @@ mod tests {
                 rogue.envelope.epoch,
                 &signer,
             );
+            // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+            let sig = EcdsaSignature::from_compact(&rogue.grant_section.commitment_sig).unwrap();
+            let attested = verify_grant_set(
+                &owner_identity().verifying_key(),
+                &rogue.grant_section.commitment,
+                &sig,
+            )
+            .expect("the owner-signed commitment verifies");
+            cipherbox_core::seal::authenticate_section_structures(
+                &attested,
+                &rogue.grant_section,
+                SCOPE,
+                rogue.envelope.epoch,
+            )
+            .expect("the owner pseudonym signs the planted section");
             set_grant_section(
                 &mut rogue.envelope,
                 encode_grant_section(&rogue.grant_section).unwrap(),

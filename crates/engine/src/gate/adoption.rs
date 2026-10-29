@@ -614,9 +614,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         //
         // A published public half this parent seed does not derive is a link no
         // key this device holds opens, so the failure names no author:
-        // availability, as on the child leg above the read-epoch floor. It costs
-        // the accusation a committed writer escapes by planting its own ascent
-        // public, for an effect withholding the record already buys it.
+        // availability, as on the child leg above the read-epoch floor.
         let payload = open_ascent_link(parent_node_seed, &aad, &link).map_err(|e| {
             if matches!(e, CodecError::Trust(TrustViolation::AscentLinkMismatch)) {
                 GateError::Seam(SeamError::ascent_mismatch(

@@ -22,8 +22,7 @@ use super::section::GrantSection;
 use super::structure::{StructureSigInput, verify_structure};
 
 /// The committed write-capable pseudonym keys of a scope root: the owner
-/// pseudonym plus every write-permission entry's. Read-only entries never
-/// authorize a seed-bearing structure.
+/// pseudonym plus every write-permission entry's.
 ///
 /// Deduplicated: only a tag is unique across committed entries, so one pseudonym
 /// may be named by many. A repeat would cost another trial verification.
@@ -41,8 +40,7 @@ pub fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<[u8; 3
 }
 
 /// The committed pseudonym whose signature authenticates `section`'s write body
-/// at `scope` and `epoch` — the author of the grant ledger that body carries, and
-/// so the party an abuse event over a rewritten row names.
+/// at `scope` and `epoch` — the party an abuse event over a rewritten row names.
 ///
 /// One trial verification over the committed write-capable pseudonyms, over the
 /// input [`authenticate_section_structures`] recomputes. `None` where no committed

@@ -1985,6 +1985,15 @@ mod tests {
     /// [`grantee_enc`], after `edit` changes the row and before the owner signs
     /// the commitment.
     fn granted(edit: impl FnOnce(&mut crate::grants::GrantRow)) -> Fixture {
+        granted_at(edit, OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED)
+    }
+
+    /// [`granted`] authored at read epoch `epoch` under override seed `seed`.
+    fn granted_at(
+        edit: impl FnOnce(&mut crate::grants::GrantRow),
+        epoch: u64,
+        seed: [u8; 32],
+    ) -> Fixture {
         let mut fx = Fixture::new();
         let mut row = crate::grants::mint_grant_row(
             &owner_identity(),
@@ -2001,20 +2010,25 @@ mod tests {
         )
         .unwrap();
         edit(&mut row);
-        let root = owner_root_fixture(OwnerRootSpec {
-            writer_pseudonym: &owner_root_pseudonym(),
-            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-            owner_identity: &owner_identity(),
-            owner_enc: &fx.owner_enc.public(),
-            scope_id: fx.scope_id,
-            root_id: fx.root_id,
-            children: Vec::new(),
-            child_scope_index: Vec::new(),
-            parent_node_seed: None,
-            owner_write_blob_epoch: None,
-            write_history_link: Vec::new(),
-            grants: vec![row],
-        });
+        let root = crate::testkit::owner_root_fixture_seeded(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &fx.owner_enc.public(),
+                scope_id: fx.scope_id,
+                root_id: fx.root_id,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: None,
+                owner_write_blob_epoch: None,
+                write_history_link: Vec::new(),
+                grants: vec![row],
+            },
+            epoch,
+            1,
+            seed,
+        );
         fx.grant_section = root.grant_section;
         fx.envelope = root.envelope;
         fx.head_block = root.head_block;
@@ -2870,42 +2884,7 @@ mod tests {
     /// `grantee_signs` the write grantee re-signs every structure; the
     /// owner-signed commitment rides verbatim.
     fn granted_root_at(epoch: u64, seed: [u8; 32], grantee_signs: bool) -> Fixture {
-        let mut fx = granted(|_| {});
-        let row = crate::grants::mint_grant_row(
-            &owner_identity(),
-            &fx.owner_enc,
-            &OWNER_ROOT_POINTER_READ_KEY,
-            EcdsaSigner::from_scalar(&[0xa2; 32])
-                .unwrap()
-                .verifying_key()
-                .to_sec1(),
-            &grantee_enc().public(),
-            &fx.scope_id,
-            fx.name.as_str().as_bytes(),
-            Permission::Write,
-        )
-        .unwrap();
-        let root = crate::testkit::owner_root_fixture_seeded(
-            OwnerRootSpec {
-                writer_pseudonym: &owner_root_pseudonym(),
-                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-                owner_identity: &owner_identity(),
-                owner_enc: &fx.owner_enc.public(),
-                scope_id: fx.scope_id,
-                root_id: fx.root_id,
-                children: Vec::new(),
-                child_scope_index: Vec::new(),
-                parent_node_seed: None,
-                owner_write_blob_epoch: None,
-                write_history_link: Vec::new(),
-                grants: vec![row],
-            },
-            epoch,
-            1,
-            seed,
-        );
-        fx.grant_section = root.grant_section;
-        fx.envelope = root.envelope;
+        let mut fx = granted_at(|_| {}, epoch, seed);
         if grantee_signs {
             let signer = grantee_pseudonym(&fx);
             crate::testkit::resign_section(&mut fx.grant_section, fx.scope_id, epoch, &signer);
@@ -2913,9 +2892,9 @@ mod tests {
                 &mut fx.envelope,
                 cipherbox_core::seal::encode_grant_section(&fx.grant_section).unwrap(),
             );
+            fx.head_block = encode_envelope(&fx.envelope).unwrap();
+            fx.head_cid_str = root_block_cid(&fx.head_block);
         }
-        fx.head_block = encode_envelope(&fx.envelope).unwrap();
-        fx.head_cid_str = root_block_cid(&fx.head_block);
         fx
     }
 
@@ -2986,37 +2965,47 @@ mod tests {
     /// grantee device both adopt it.
     #[test]
     fn a_grantee_republish_that_carries_the_owner_signed_section_still_adopts() {
-        use cipherbox_core::seal::{
-            PreservedFields, ReadBody, grant_section_bytes, seal_read_body, set_grant_section,
-        };
+        use crate::net::author::{EnvelopeAuthoring, author_scope_root_envelope};
+        use cipherbox_core::seal::{PreservedFields, ReadBody, grant_section_bytes};
         let floors = InMemoryFloorStore::default();
         let base = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
         committed(owner_adopt_at(&base, &floors, 1).unwrap().pass, &floors);
 
-        let mut republished = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
-        let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &republished.root_id);
-        let mut envelope = seal_read_body(
-            kdf::read_key(node_seed.as_bytes()).as_bytes(),
-            &[0x77; 24],
-            republished.envelope.v,
-            republished.root_id,
-            republished.scope_id,
-            republished.envelope.epoch,
-            &ReadBody::Folder {
-                created_at: 0,
-                modified_at: 1,
-                children: Vec::new(),
-                unknown: PreservedFields::new(),
+        // The production grantee carry: a new read body, with the base's
+        // envelope fields, grant section included, carried verbatim.
+        let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &base.root_id);
+        let read_key = kdf::read_key(node_seed.as_bytes());
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 1,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let head = author_scope_root_envelope(
+            EnvelopeAuthoring {
+                node_id: base.root_id,
+                scope_id: base.scope_id,
+                epoch: base.envelope.epoch,
+                read_key: read_key.as_bytes(),
+                nonce: &[0x77; 24],
+                body: &body,
+                carried_unknown: base.envelope.unknown.clone(),
+                carried_epoch_tag_unknown: base.envelope.epoch_tag_unknown.clone(),
             },
+            &base.name,
+            &owner_identity().verifying_key(),
+            false,
         )
-        .unwrap();
-        let carried = grant_section_bytes(&base.envelope)
-            .expect("a scope root carries its section")
-            .to_vec();
-        set_grant_section(&mut envelope, carried);
-        republished.envelope = envelope;
-        republished.head_block = encode_envelope(&republished.envelope).unwrap();
-        republished.head_cid_str = root_block_cid(&republished.head_block);
+        .expect("the grantee authors a carry of the owner-signed section");
+        assert_eq!(
+            grant_section_bytes(&head.envelope),
+            grant_section_bytes(&base.envelope),
+            "the section rides byte for byte"
+        );
+        let mut republished = granted_root_at(1, OWNER_ROOT_SCOPE_SEED, false);
+        republished.envelope = head.envelope;
+        republished.head_block = head.block;
+        republished.head_cid_str = head.cid;
         assert_ne!(republished.head_cid_str, base.head_cid_str);
 
         let out = owner_adopt_at(&republished, &floors, 2)

@@ -5203,8 +5203,7 @@ impl ForkSightings {
 
 /// Report one grant row whose recipient binding the owner never signed.
 ///
-/// Any committed write grantee authors the write body a ledger rides in, so a
-/// rewritten row is an attributable abuse event and never staleness (AGENTS.md
+/// A rewritten row is an attributable abuse event and never staleness (AGENTS.md
 /// rule 6). `writer` is the committed pseudonym that structure-signed that body,
 /// and the tag is what a revoke acts on; both are already public in the scope
 /// root, and no key material crosses to the host.
@@ -8277,12 +8276,11 @@ where {
     ///
     /// Each hop reads the next level's `ipnsName` out of the level above's
     /// direct-child-scope index. That index carries no signature of its own; it
-    /// rides the sealed write body, which any committed writer of that scope may
-    /// author. What holds the walk together is the target: the adoption gate
+    /// rides the sealed write body. What holds the walk together is the target: the adoption gate
     /// binds each name to a commitment the owner signed, and proves the ascent
     /// link under the ancestor seed the level above derives. So a substituted
     /// name cannot pass — but a **removed** entry would silently move the anchor
-    /// up a level, and hand the writer that removed it the seeds a later mint
+    /// up a level, and hand whoever removed it the seeds a later mint
     /// below would derive. An ancestor the index does not name is therefore
     /// probed the way [`refuse_an_unindexed_scope`](Self::refuse_an_unindexed_scope)
     /// probes the leaf, and a live scope root there fails the walk closed.
@@ -12633,8 +12631,7 @@ where {
             .await
             .ok()?;
         // Fail closed on a ledger the owner's commitment does not commit: the
-        // write body it rides in is authored by any committed writer, so the row
-        // set is only as trustworthy as the owner's commitment over it.
+        // row set is only as trustworthy as the owner's commitment over it.
         if enforce_committed_ledger(&current.commitment, &current.grant_ledger).is_err() {
             return None;
         }

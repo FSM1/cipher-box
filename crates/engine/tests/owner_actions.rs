@@ -25867,6 +25867,23 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
             envelope.epoch,
             &writer,
         );
+        // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+        let sig =
+            cipherbox_core::suite::ecdsa::EcdsaSignature::from_compact(&section.commitment_sig)
+                .unwrap();
+        let attested = cipherbox_core::seal::verify_grant_set(
+            &owner_identity().verifying_key(),
+            &section.commitment,
+            &sig,
+        )
+        .expect("the owner-signed commitment verifies");
+        cipherbox_core::seal::authenticate_section_structures(
+            &attested,
+            &section,
+            envelope.scope,
+            envelope.epoch,
+        )
+        .expect("the owner pseudonym signs the planted section");
         set_grant_section(&mut envelope, encode_grant_section(&section).unwrap());
         let cid = fx.blocks.put(encode_envelope(&envelope).unwrap());
         let sequence = sequence_at(&fx.world, &name).saturating_add(sequence_offset);
