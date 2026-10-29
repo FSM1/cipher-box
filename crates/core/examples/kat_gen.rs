@@ -782,7 +782,7 @@ struct SectionAcceptVector {
 }
 
 /// A scope-root head block whose grant section stage 3 accepts: every
-/// structure verifies under one committed pseudonym.
+/// structure verifies under the owner pseudonym.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SectionSignerAcceptVector {
@@ -6998,14 +6998,14 @@ fn section_signer_owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar")
 }
 
-/// Stage 3's **one section, one signer** rule frozen over whole scope-root head
-/// blocks (blueprint/core.md "One section, one signer").
+/// Stage 3's owner-signer rule frozen over whole scope-root head blocks
+/// (blueprint/core.md "One section, one signer").
 ///
 /// Every vector shares one commitment naming two write-capable pseudonyms: the
-/// accept family shows the pin bounds how many signers a section has, not which
-/// pseudonym may sign, and every reject's structure signatures are each valid
-/// under a committed pseudonym, so only the pin refuses them. Stage 3 opens no
-/// structure, so the sealed bytes are fixed fillers.
+/// accept family is signed by the owner pseudonym alone, and every reject's
+/// structure signatures are each valid under a committed pseudonym, so only the
+/// owner-signer rule refuses them. Stage 3 opens no structure, so the sealed
+/// bytes are fixed fillers.
 fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<RejectVector>) {
     let p = seal_probe();
     let owner_identity = section_signer_owner_identity();
@@ -7042,8 +7042,8 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<Reject
     };
 
     // One commitment for every vector, naming the owner's pseudonym and a write
-    // grantee's, so the committed set is never a one-element set a pin could
-    // satisfy vacuously. Every structure kind is present, so the walk covers each.
+    // grantee's, so each grantee signature is a committed one that stage 3 still
+    // refuses. Every structure kind is present, so the walk covers each.
     let commitment = GrantSetCommitment {
         ipns_name: b"section-signer-scope-root".to_vec(),
         owner_pseudonym_pk: owner.verifying_key().to_bytes(),
@@ -7150,28 +7150,28 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<Reject
         seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
     };
 
-    let accept = [
-        ("single-signer-owner-pseudonym", by_owner),
+    let accept = [("single-signer-owner-pseudonym", by_owner)]
+        .iter()
+        .map(|(name, section)| {
+            let bytes = head_block(section);
+            stage_three(&bytes).unwrap_or_else(|e| panic!("{name}: must authenticate: {e}"));
+            SectionSignerAcceptVector {
+                name: name.to_string(),
+                hex: hexstr(&bytes),
+            }
+        })
+        .collect();
+    let reject = [
+        ("two-committed-signers", two_signers),
+        ("spliced-structure-from-another-committed-signer", spliced),
+        // A committed write grantee signs every structure: stage 3 admits only
+        // the owner pseudonym.
         ("single-signer-committed-grantee", by_grantee),
     ]
     .iter()
     .map(|(name, section)| {
         let bytes = head_block(section);
-        stage_three(&bytes).unwrap_or_else(|e| panic!("{name}: must authenticate: {e}"));
-        SectionSignerAcceptVector {
-            name: name.to_string(),
-            hex: hexstr(&bytes),
-        }
-    })
-    .collect();
-    let reject = [
-        ("two-committed-signers", two_signers),
-        ("spliced-structure-from-another-committed-signer", spliced),
-    ]
-    .iter()
-    .map(|(name, section)| {
-        let bytes = head_block(section);
-        let error = stage_three(&bytes).expect_err("two committed signers must fail closed");
+        let error = stage_three(&bytes).expect_err("a non-owner signer must fail closed");
         RejectVector {
             name: name.to_string(),
             hex: hexstr(&bytes),

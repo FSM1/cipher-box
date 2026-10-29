@@ -1174,8 +1174,7 @@ where
     ) -> Result<(), EngineError> {
         // The owner's own grant decision, and the only evidence of one: this
         // owner minted the row, and the set carrying it landed. A row the set
-        // already carried, which a committed write grantee authors, may not
-        // lift a cut.
+        // already carried may not lift a cut.
         if let Some(read_epoch) = pointer.grant_floor {
             record_grant_floor(
                 self.floors,

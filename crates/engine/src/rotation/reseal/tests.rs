@@ -1530,6 +1530,40 @@ fn signer_not_committed_fails_closed_release_active() {
 }
 
 #[test]
+fn a_committed_write_grantee_signer_fails_closed_release_active() {
+    // Stage 3 admits only the owner pseudonym, so a re-seal signed by a write
+    // grantee the commitment names would mint a root no reader adopts. The
+    // refusal is a runtime `Err`, active in a release build, and fires before
+    // any seal draws entropy.
+    let fx = Fixture::new();
+    let owner_pub = fx.owner_enc.public();
+    let (commitment, sig, ledger) = fx.minted();
+    let shared = fx
+        .write_grantee
+        .diffie_hellman(&owner_pub)
+        .expect("contributory");
+    let grantee_signer = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE);
+    assert!(
+        commitment
+            .entries
+            .iter()
+            .any(|e| e.permission == Permission::Write
+                && e.pseudonym_pk == grantee_signer.verifying_key().to_bytes()),
+        "the signer is a committed write grantee"
+    );
+    let id = ScopeRootIdentity {
+        pseudonym_signer: &grantee_signer,
+        ..identity(&fx, &owner_pub, MINTED_NAME, None)
+    };
+    let seed = [0x01; 32];
+    let s = seeds(&seed, 2, None, &fx.write_scope_seed, &fx.pointer_read_key);
+    let cs = committed_set(&commitment, &sig, &ledger);
+    let err =
+        reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[]).expect_err("a grantee signer");
+    assert_eq!(err.check(), "rot-reseal-signer-not-committed");
+}
+
+#[test]
 fn a_descendant_re_sealed_with_no_parent_seed_fails_closed_release_active() {
     // Only `parent_node_seed` mints an ascent link, so a descendant re-sealed
     // without one would publish a record `gate_root_pass` permanently

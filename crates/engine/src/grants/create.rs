@@ -3543,9 +3543,8 @@ mod tests {
 
     #[test]
     fn a_reordered_reparented_index_still_resumes() {
-        // The index is read off a write body any committed writer of the
-        // leaving scope authors, so the comparison is over the canonical form
-        // rather than the bytes it happened to land in.
+        // The comparison is over the index's canonical form rather than the
+        // bytes it happened to land in.
         let first = descendant_ref();
         let second =
             ChildScopeRef::new(SECOND_DESCENDANT_SCOPE, b"second-descendant-name".to_vec());
@@ -4201,9 +4200,9 @@ mod tests {
 
     #[test]
     fn a_relabelled_parent_row_cannot_redirect_the_parent_blob() {
-        // A committed write grantee authors the ledger row, so it can relabel
-        // `recipientEncPk` there and re-file it. The re-seal takes the recipient
-        // off the owner-signed commitment entry instead, so the relabel is inert:
+        // A ledger row's `recipientEncPk` can be relabelled and re-filed. The
+        // re-seal takes the recipient off the owner-signed commitment entry
+        // instead, so the relabel is inert:
         // the blob still opens for the committed party and never for the
         // attacker.
         let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);

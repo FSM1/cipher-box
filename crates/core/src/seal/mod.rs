@@ -82,7 +82,7 @@ pub use section::{
 };
 pub use section_auth::{
     authenticate_section_structures, committed_write_pseudonyms, for_each_structure,
-    is_committed_write_pseudonym, write_body_signer,
+    write_body_signer,
 };
 pub use settings_record::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, SettingsRecordHeader, open_settings_record,

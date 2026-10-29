@@ -458,16 +458,14 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 /// plane's analogue of the read plane's
 /// [`MAX_HISTORY_LINKS`](super::MAX_HISTORY_LINKS).
 ///
-/// Any committed writer authors the field and no owner signature covers it, so
-/// it is bounded rather than trusted (blueprint/core.md "Write-body"). A
+/// It is bounded rather than trusted (blueprint/core.md "Write-body"). A
 /// well-formed link is ~103 bytes; the rest is headroom for preserved unknown
 /// fields.
 pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
 
 /// The frozen bound on [`WriteBody::direct_child_scope_index`]'s entry count.
 ///
-/// Any committed writer authors the index and no owner signature covers it, so
-/// it is bounded rather than trusted (blueprint/core.md "Write-body"). The
+/// It is bounded rather than trusted (blueprint/core.md "Write-body"). The
 /// ceiling is headroom over any plausible share fan-out from one root, sized
 /// like [`MAX_GRANT_BLOBS`](super::MAX_GRANT_BLOBS); a root's direct children
 /// are not counted against that ceiling, so it is not a transitive guarantee.

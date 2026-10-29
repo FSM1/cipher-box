@@ -4893,10 +4893,10 @@ fn section_signer_stage_three(m: &Manifest, bytes: &[u8]) -> Result<(), CodecErr
     seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
 }
 
-/// Stage 3's **pre-pin** view: for each structure, its `structTag` and every
-/// committed write-capable pseudonym whose key verifies it. The pin stops at the
-/// first signer, so only this wider view shows that a reject vector's every
-/// signature is individually valid — that the pin, and nothing else, refuses it.
+/// A wider view than stage 3's: for each structure, its `structTag` and every
+/// committed write-capable pseudonym whose key verifies it. Only this view shows
+/// that a reject vector's every signature is individually valid — that the
+/// owner-signer rule, and nothing else, refuses it.
 fn signers_per_structure(
     envelope: &seal::Envelope,
     section: &seal::GrantSection,
@@ -4930,7 +4930,7 @@ fn signers_per_structure(
 }
 
 #[test]
-fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
+fn section_signer_accept_vectors_authenticate_under_the_owner_pseudonym() {
     let m = manifest();
     let vectors = section_signer_accept_vectors(&m);
     assert_eq!(
@@ -4939,7 +4939,6 @@ fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
         "section-signer accept count drift"
     );
     let mut names = BTreeSet::new();
-    let mut signed_by_a_non_owner = false;
     let mut kinds = BTreeSet::new();
     for v in &vectors {
         assert!(names.insert(v.name.clone()), "duplicate {}", v.name);
@@ -4947,12 +4946,12 @@ fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
         section_signer_stage_three(&m, &bytes)
             .unwrap_or_else(|e| panic!("section-signer accept {}: {e}", v.name));
 
-        // Non-vacuous: more than one committed pseudonym is on offer, and
-        // exactly one of them signed the whole section.
+        // Non-vacuous: a write grantee is committed too, and the owner
+        // pseudonym alone signed the whole section.
         let (envelope, section) = section_signer_head(&bytes);
         assert!(
             seal::committed_write_pseudonyms(&section.commitment).len() > 1,
-            "{}: a one-pseudonym commitment pins vacuously",
+            "{}: the commitment names a write grantee as well",
             v.name
         );
         let mut signers = BTreeSet::new();
@@ -4960,16 +4959,13 @@ fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
             kinds.insert(tag);
             signers.extend(structure_signers);
         }
-        let [signer] = signers.into_iter().collect::<Vec<_>>()[..] else {
-            panic!("{}: one section, one signer", v.name);
-        };
-        signed_by_a_non_owner |= signer != section.commitment.owner_pseudonym_pk;
+        assert_eq!(
+            signers,
+            BTreeSet::from([section.commitment.owner_pseudonym_pk]),
+            "{}: the owner pseudonym signs the whole section",
+            v.name
+        );
     }
-    assert!(
-        signed_by_a_non_owner,
-        "pinning must not narrow *who* may sign: one accept vector is signed \
-         throughout by a committed pseudonym that is not the owner's"
-    );
     assert_eq!(
         kinds,
         BTreeSet::from([
@@ -4994,10 +4990,11 @@ fn section_signer_reject_vectors_fire_the_named_check() {
         &m.grant.section_signer_reject,
         |bytes| section_signer_stage_three(&m, bytes),
     );
-    // The pin, and nothing else, refuses these: every structure signature is
-    // individually valid under exactly one committed pseudonym, and together
-    // they name two.
+    // The owner-signer rule, and nothing else, refuses these: every structure
+    // signature is individually valid under exactly one committed pseudonym, and
+    // together they name a pseudonym that is not the owner's.
     let mut splices_a_grant_blob = false;
+    let mut signed_by_a_grantee_alone = false;
     for v in &vectors {
         let (envelope, section) = section_signer_head(&unhex(&v.name, &v.hex));
         let per_structure = signers_per_structure(&envelope, &section);
@@ -5013,9 +5010,19 @@ fn section_signer_reject_vectors_fire_the_named_check() {
             .into_iter()
             .flat_map(|(_, signers)| signers)
             .collect();
-        assert_eq!(distinct.len(), 2, "{}: two committed signers", v.name);
+        let owner = section.commitment.owner_pseudonym_pk;
+        assert!(
+            distinct.iter().any(|pk| *pk != owner),
+            "{}: a committed signer that is not the owner",
+            v.name
+        );
         splices_a_grant_blob |= !section.grant_blobs.is_empty();
+        signed_by_a_grantee_alone |= !distinct.contains(&owner);
     }
+    assert!(
+        signed_by_a_grantee_alone,
+        "one reject is signed throughout by a committed write grantee"
+    );
     assert!(
         splices_a_grant_blob,
         "one reject exercises the recipientTag arm of the signed input"
