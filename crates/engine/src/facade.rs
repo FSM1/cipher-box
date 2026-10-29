@@ -5204,9 +5204,9 @@ impl ForkSightings {
 /// Report one grant row whose recipient binding the owner never signed.
 ///
 /// A rewritten row is an attributable abuse event and never staleness (AGENTS.md
-/// rule 6). `writer` is the committed pseudonym that structure-signed that body,
-/// and the tag is what a revoke acts on; both are already public in the scope
-/// root, and no key material crosses to the host.
+/// rule 6). `writer` is the committed pseudonym that structure-signed the write
+/// body the row rides in, and the tag is what a revoke acts on; both are already
+/// public in the scope root, and no key material crosses to the host.
 pub(crate) fn report_unattested_row(
     events: &mpsc::UnboundedSender<Event>,
     scope_id: &[u8; 16],
@@ -14301,9 +14301,8 @@ mod tests {
         clear_proved_scope_roots(&roots);
     }
 
-    /// A via-link tag reaches the host only on a row the owner signed: any
-    /// committed writer authors the ledger, so an unsigned tag could credit a
-    /// grantee to a link that never admitted it.
+    /// A via-link tag reaches the host only on a row the owner signed: an
+    /// unsigned tag could credit a grantee to a link that never admitted it.
     #[test]
     fn a_via_link_tag_reaches_the_host_only_on_an_owner_attested_row() {
         use cipherbox_core::seal::{PreservedFields, sign_recipient_binding};

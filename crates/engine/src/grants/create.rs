@@ -4200,9 +4200,9 @@ mod tests {
 
     #[test]
     fn a_relabelled_parent_row_cannot_redirect_the_parent_blob() {
-        // A committed write grantee authors the ledger row, so it can relabel
-        // `recipientEncPk` there and re-file it. The re-seal takes the recipient
-        // off the owner-signed commitment entry instead, so the relabel is inert:
+        // A ledger row's `recipientEncPk` can be relabelled and re-filed. The
+        // re-seal takes the recipient off the owner-signed commitment entry
+        // instead, so the relabel is inert:
         // the blob still opens for the committed party and never for the
         // attacker.
         let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);

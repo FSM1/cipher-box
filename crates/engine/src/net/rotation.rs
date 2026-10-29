@@ -8864,10 +8864,11 @@ mod tests {
                 crate::sync::tick::ResolveMode::CacheFirst,
             ))
             .expect("the read finishes with its trust verdict");
-            assert!(matches!(
-                resolved.outcome,
-                crate::net::ResolveOutcome::TrustViolation(_)
-            ));
+            let crate::net::ResolveOutcome::TrustViolation(rejection) = &resolved.outcome else {
+                panic!("expected a trust violation");
+            };
+            assert_eq!(rejection.stage, crate::gate::GateStage::Unseal);
+            assert_eq!(rejection.check(), "seal-open-failed");
             if store_fault {
                 // A local fault removes the copy, never the verdict on the record.
                 assert!(resolved.recovered_owner.is_none());
