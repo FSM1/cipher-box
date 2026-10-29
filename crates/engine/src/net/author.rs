@@ -818,7 +818,7 @@ mod tests {
     fn a_scope_root_envelope_whose_section_has_two_signers_is_refused() {
         // Release-active (security rule 8). Both signers are committed and the
         // commitment is re-signed, so stages 2 and 3's other checks pass and
-        // only the section-signer pin can reject this.
+        // only the section-signer rule can reject this.
         let fixture = owner_root();
         let second = Ed25519Signer::from_seed([0x55; 32]);
         let mut section = fixture.grant_section.clone();
@@ -849,6 +849,57 @@ mod tests {
                 &fixture.name,
                 &owner(),
                 false,
+            )
+            .unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_whose_section_a_committed_write_grantee_signed_is_refused() {
+        // Release-active (security rule 8): the gate's stage 3 admits only the
+        // owner pseudonym, so neither the carry path nor the re-seal path signs
+        // a root that a committed write grantee re-signed throughout.
+        let fixture = owner_root();
+        let grantee = Ed25519Signer::from_seed([0x55; 32]);
+        let mut section = fixture.grant_section.clone();
+        section.commitment.entries.push(GrantSetEntry::new(
+            &OWNER_ROOT_POINTER_READ_KEY,
+            [0x66; 32],
+            [0x67; 32],
+            Permission::Write,
+            grantee.verifying_key().to_bytes(),
+        ));
+        section.commitment_sig = sign_grant_set(
+            &EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar"),
+            &section.commitment,
+        )
+        .expect("commitment signs")
+        .to_compact();
+        author_scope_root_envelope(
+            authoring(&folder(), carried_section(&section)),
+            &fixture.name,
+            &owner(),
+            false,
+        )
+        .expect("the owner-signed section under this commitment authors");
+        crate::testkit::resign_section(&mut section, [2u8; 16], OWNER_ROOT_EPOCH, &grantee);
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&section)),
+                &fixture.name,
+                &owner(),
+                false,
+            )
+            .unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
+        );
+        assert_eq!(
+            author_scope_root_with_section(
+                authoring(&folder(), PreservedFields::new()),
+                &fixture.name,
+                &section,
+                &owner(),
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
