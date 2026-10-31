@@ -213,7 +213,6 @@ impl GatedScopeRoot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RootGateVerdict {
     Rejected,
-    OwnerSeedRefused,
     Unavailable,
     Superseded,
     /// The record's own body fills the re-seal reservation, so no re-seal of it
@@ -276,7 +275,6 @@ impl From<RootGateVerdict> for ResolveFailure {
             | RootGateVerdict::Absent
             | RootGateVerdict::AscentMismatch => Self::Unavailable,
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
             | RootGateVerdict::NotResealable
             | RootGateVerdict::HeadBlockAbsent
@@ -293,7 +291,6 @@ impl From<RootGateVerdict> for SweepResolveFailure {
             | RootGateVerdict::Absent
             | RootGateVerdict::AscentMismatch => Self::Unavailable,
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
             | RootGateVerdict::HeadBlockAbsent
             | RootGateVerdict::HeadBlockRefused
@@ -336,9 +333,6 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         .recover_own_scope_root(name, record_bytes)
         .await
         .map_err(|e| match e {
-            GateError::Rejected(ref rejection) if super::adopter::owner_seed_refused(rejection) => {
-                RootGateVerdict::OwnerSeedRefused
-            }
             // The same superseded name as on the first read (ADR 0003 D2).
             GateError::Rejected(ref rejection)
                 if matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) =>
@@ -454,9 +448,6 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
             ) =>
         {
             Err(RootGateVerdict::NotResealable)
-        }
-        Err(GateError::Rejected(rejection)) if super::adopter::owner_seed_refused(&rejection) => {
-            Err(RootGateVerdict::OwnerSeedRefused)
         }
         Err(GateError::Rejected(rejection))
             if rejection.reason
@@ -719,7 +710,6 @@ mod tests {
         use RootGateVerdict::*;
         for (verdict, folded) in [
             (Rejected, Rejected),
-            (OwnerSeedRefused, OwnerSeedRefused),
             (Unavailable, Unavailable),
             (Superseded, Superseded),
             (NotResealable, NotResealable),

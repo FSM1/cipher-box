@@ -1330,10 +1330,14 @@ where
             .filter_map(|scope| Some((scope, scope.write.as_ref().ok()?)))
             .collect();
         // A scope this pass merely could not reach is absent from
-        // both lists: the valve waits on it rather than charging.
+        // both lists: the valve waits on it rather than charging. So is a
+        // refused root read from its durable copy.
         let keyless_roots: Vec<NodeId> = descendants
             .iter()
-            .filter(|scope| matches!(scope.write, Err(WritePlaneDark::Keyless)))
+            .filter(|scope| {
+                !scope.recovered_after_rejection
+                    && matches!(scope.write, Err(WritePlaneDark::Keyless))
+            })
             .map(|scope| NodeId(scope.scope_id))
             .chain(read_only_grafts.iter().copied())
             .collect();

@@ -167,8 +167,8 @@ impl core::fmt::Debug for ColdStartOutcome {
 
 /// Run the cold-start live-session data path off the injected seams, emitting
 /// the first [`Event::SnapshotUpdated`]. Fail-closed at every trust boundary
-/// (see [`ColdStartError`]). A refused owner blob reports abuse and can recover
-/// a separately gated owner copy; other trust failures return `Err`.
+/// (see [`ColdStartError`]). A refused owner root reports abuse and can recover
+/// a separately gated owner copy; a refusal with no copy returns `Err`.
 /// Reads no clock and no RNG — the sequence is a pure function of the
 /// injected seams and [`ColdStartParams`], so two engines on independent clocks
 /// produce the identical outcome.

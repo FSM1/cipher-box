@@ -626,7 +626,6 @@ impl<'a> RootFallback<'a> {
         }
         match verdict {
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
             | RootGateVerdict::NotResealable => true,
             // Causes that a lagging or bad endpoint, not the record bytes, can
@@ -654,16 +653,13 @@ impl<'a> RootFallback<'a> {
         verdict: RootGateVerdict,
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
         // A fault in one source means that source has no copy.
-        let durable = match verdict {
-            RootGateVerdict::OwnerSeedRefused => adopter
-                .recover_cached_owner_root(name)
-                .await
-                .ok()
-                .flatten()
-                .map(|root| GatedScopeRoot::recovered(name, root))
-                .filter(|root| root.names_child(expected_child)),
-            _ => None,
-        };
+        let durable = adopter
+            .recover_cached_owner_root(name)
+            .await
+            .ok()
+            .flatten()
+            .map(|root| GatedScopeRoot::recovered(name, root))
+            .filter(|root| root.names_child(expected_child));
         if let Ok(Some(cached)) = snapshot_cache.get(name.as_str().as_bytes()).await {
             let newer = durable.as_ref().is_none_or(|root| {
                 super::fork::verified(name, &cached)
@@ -1194,7 +1190,6 @@ pub(crate) struct WalkedBoundaries {
 fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
         RootGateVerdict::Rejected
-        | RootGateVerdict::OwnerSeedRefused
         | RootGateVerdict::NotResealable
         | RootGateVerdict::HeadBlockRefused
         | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
@@ -1599,32 +1594,13 @@ where
         // an envelope version this build reads but does not author.
         let (gated, record_data, fork, recovered_after_rejection) = match read {
             Ok(pass) => (pass.root, pass.data, pass.fork, false),
-            Err(RootRefusal {
-                verdict: RootGateVerdict::OwnerSeedRefused,
-                served,
-            }) => {
-                *refused_record = served.map(|(_, bytes)| bytes);
-                let (root, record_data) = adopter
-                    .recover_cached_owner_root(&name)
-                    .await
-                    .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
-                    .map(|root| {
-                        let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
-                        (GatedScopeRoot::recovered(&name, root), data)
-                    })
-                    .filter(|(root, _)| root.names_child(Some(child.scope_id)))
-                    .ok_or(WalkFailure::Rejected {
-                        scope_id: child.scope_id,
-                    })?;
-                (root, record_data, None, true)
-            }
             Err(RootRefusal { verdict, served }) => {
                 let met = walk_verdict(verdict, child.scope_id);
-                if let WalkFailure::Rejected { .. } = met {
-                    *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
-                }
-                if let (WalkFailure::Rejected { .. }, Some((left, anchor)), Some((_, record_bytes))) =
-                    (met, owed_from, served)
+                let WalkFailure::Rejected { .. } = met else {
+                    return Err(met);
+                };
+                *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
+                if let (Some((left, anchor)), Some((_, record_bytes))) = (owed_from, served)
                     && self
                         .is_unpromoted_folder(
                             parent_read_scope_seed,
@@ -1637,7 +1613,25 @@ where
                 {
                     return Err(WalkFailure::Unavailable);
                 }
-                return Err(met);
+                // The walk has no bound to wait out an endpoint cause, so only
+                // a refusal the record bytes cause reads the durable copy.
+                if !matches!(
+                    verdict,
+                    RootGateVerdict::Rejected | RootGateVerdict::NotResealable
+                ) {
+                    return Err(met);
+                }
+                let (root, record_data) = adopter
+                    .recover_cached_owner_root(&name)
+                    .await
+                    .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
+                    .map(|root| {
+                        let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
+                        (GatedScopeRoot::recovered(&name, root), data)
+                    })
+                    .filter(|(root, _)| root.names_child(Some(child.scope_id)))
+                    .ok_or(met)?;
+                (root, record_data, None, true)
             }
         };
         let (write, grandchildren) = self
@@ -2039,6 +2033,7 @@ where
                     match descended {
                         Ok((descendant, grandchildren, descendant_anchor)) => {
                             if descendant.recovered_after_rejection {
+                                refused.insert(NodeId(child.scope_id));
                                 note_refused();
                                 // The durable copy proves nothing about the record.
                                 WalkFailure::accumulate(
@@ -2249,7 +2244,6 @@ where
             | RootGateVerdict::AscentMismatch => ScopeRootAdmission::Unavailable,
             RootGateVerdict::HeadBlockAbsent => ScopeRootAdmission::HeadBlockAbsent,
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
             | RootGateVerdict::HeadBlockRefused
             | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
@@ -3857,8 +3851,7 @@ where
                 Err(
                     RootGateVerdict::Rejected
                     | RootGateVerdict::BelowFloor
-                    | RootGateVerdict::HeadBlockRefused
-                    | RootGateVerdict::OwnerSeedRefused,
+                    | RootGateVerdict::HeadBlockRefused,
                 ) => {
                     return Err(self.reject_child(
                         source,
@@ -9083,7 +9076,7 @@ mod tests {
             &harness.cache,
             &root.name,
             None,
-            RootGateVerdict::OwnerSeedRefused,
+            RootGateVerdict::Rejected,
         ))
         .unwrap();
         assert_eq!(copy.envelope.epoch, cut.read_epoch);

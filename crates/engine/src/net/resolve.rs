@@ -106,7 +106,8 @@ pub trait Adopter {
         record_bytes: &[u8],
     ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError>;
 
-    /// Recover a separate confirmed owner copy after a refused owner blob.
+    /// Recover the confirmed owner copy after the record bytes caused the
+    /// gate to refuse the record.
     async fn recover_owner_cache(
         &self,
         _name: &IpnsName,
