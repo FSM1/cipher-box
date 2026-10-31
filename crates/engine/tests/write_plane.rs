@@ -11606,8 +11606,59 @@ fn a_restart_that_reads_a_replayed_root_is_still_a_trust_violation() {
             .record_store
             .seed_record(&endpoint, root_name.as_str(), seeded.clone());
     }
-    serve_http(&alice, &blocks, 400);
-    let (mut restarted, _events) = engine_on(&alice, 43);
+    assert_a_restart_refuses_the_root(&alice, &blocks, &root_name);
+}
+
+/// A head block that does not match the CID its record names is a refusal
+/// that a bad endpoint causes, so a restart does not paint the durable copy
+/// over it.
+#[test]
+fn a_restart_that_reads_a_swapped_head_block_is_still_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let alice = alice_with_published_deep(&world, &blocks);
+    let floor = block_on(
+        alice
+            .floors(&SECRET)
+            .sequence_floor(root_name.as_str().as_bytes()),
+    )
+    .expect("the floor reads")
+    .expect("a confirmed root");
+
+    let next = root_record_with(&blocks, Vec::new(), floor + 1, EOL);
+    let value = IpnsRecord::unmarshal(&next)
+        .and_then(|record| record.verify(&root_name))
+        .expect("the record verifies")
+        .value;
+    let cid = std::str::from_utf8(&value)
+        .unwrap()
+        .strip_prefix("/ipfs/")
+        .unwrap()
+        .to_owned();
+    blocks.replace(&cid, b"swapped head block".to_vec());
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), next.clone());
+    }
+    assert_a_restart_refuses_the_root(&alice, &blocks, &root_name);
+}
+
+/// `alice` restarts, the start fails at the root gate, and the sequence floor
+/// of `root_name` does not move.
+fn assert_a_restart_refuses_the_root(alice: &FakeDevice, blocks: &Blocks, root_name: &IpnsName) {
+    let floor = || {
+        block_on(
+            alice
+                .floors(&SECRET)
+                .sequence_floor(root_name.as_str().as_bytes()),
+        )
+        .expect("the floor reads")
+    };
+    let before = floor();
+    serve_http(alice, blocks, 400);
+    let (mut restarted, _events) = engine_on(alice, 43);
     match block_on(restarted.start(secret(), None)) {
         Err(EngineError::ColdStart { message }) => assert!(
             message.contains("adoption gate rejected"),
@@ -11615,6 +11666,7 @@ fn a_restart_that_reads_a_replayed_root_is_still_a_trust_violation() {
         ),
         other => panic!("expected a root gate refusal, got {other:?}"),
     }
+    assert_eq!(floor(), before, "the refused root moves no floor");
 }
 
 /// A restore ends at the bin index, not at a record publish, so it raises no

@@ -1621,10 +1621,12 @@ where
                 ) {
                     return Err(met);
                 }
+                // A local fault means no copy; the record keeps its verdict.
                 let (root, record_data) = adopter
                     .recover_cached_owner_root(&name)
                     .await
-                    .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
+                    .ok()
+                    .flatten()
                     .map(|root| {
                         let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
                         (GatedScopeRoot::recovered(&name, root), data)
@@ -8887,6 +8889,97 @@ mod tests {
         }
     }
 
+    /// A refusal that a lagging or bad endpoint causes does not open the
+    /// durable copy at the resolve: a head block that does not match its CID,
+    /// and a replay below the sequence floor.
+    #[test]
+    fn an_endpoint_refusal_does_not_open_the_durable_copy_at_the_resolve() {
+        use crate::grants::OwnerSeedCache;
+        use crate::testkit::fakes::InMemoryStagingStore;
+        for shape in ["cid-mismatch", "rollback"] {
+            let harness = Harness::plain();
+            let good = granted_root(Vec::new());
+            harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
+            let staging = InMemoryStagingStore::default();
+            let labels = kdf::contact_label_seed(&[0x72; 32]);
+            let cache = || {
+                Some(OwnerSeedCache::new(
+                    &staging,
+                    &harness.enc_secret,
+                    &harness.entropy,
+                    &labels,
+                ))
+            };
+            let scope_ref = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+            let confirm = || {
+                let mut net = harness.net(&[]);
+                net.owner_seed_cache = cache();
+                block_on(net.resolve_vault_root(&scope_ref)).expect("confirmed owner read");
+            };
+            confirm();
+            serve_at(&harness, SCOPE, &good, 2);
+            confirm();
+            let check = match shape {
+                "cid-mismatch" => {
+                    harness
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .insert(good.head_cid_str.clone(), b"swapped head block".to_vec());
+                    let record = record_for(&SCOPE, &good.head_cid_str, 3);
+                    for endpoint in harness.store.endpoints() {
+                        harness
+                            .store
+                            .seed_record(&endpoint, good.name.as_str(), record.clone());
+                    }
+                    "content-cid-mismatch"
+                }
+                _ => {
+                    serve_at(&harness, SCOPE, &good, 1);
+                    "sequence-not-newer"
+                }
+            };
+            block_on(harness.cache.clear()).expect("the snapshot copy is gone");
+            let mut restarted = harness.net(&[]);
+            restarted.owner_seed_cache = cache();
+            let adopter = restarted.root_adopter(SCOPE);
+            let gated = block_on(crate::net::resolve::resolve_gated(
+                &harness.transport,
+                &harness.cache,
+                &adopter,
+                &good.name,
+                crate::sync::tick::ResolveMode::CacheFirst,
+            ))
+            .expect("the read finishes with its trust verdict");
+            let crate::net::ResolveOutcome::TrustViolation(rejection) = &gated.resolved.outcome
+            else {
+                panic!("{shape}: expected a trust violation");
+            };
+            assert_eq!(rejection.check(), check, "{shape}");
+            // A cold start refuses a root that recovers no copy.
+            assert!(gated.resolved.recovered_owner.is_none(), "{shape}");
+            assert!(gated.read_scope_seed.is_none(), "{shape}");
+            assert!(gated.hold.is_none(), "{shape}");
+            assert_eq!(
+                sequence_floor_of(&harness, good.name.as_str().as_bytes()),
+                Some(2),
+                "{shape}"
+            );
+            assert_eq!(
+                block_on(floor::read_epoch_floor(&harness.floors, &SCOPE)),
+                Ok(Some(OWNER_ROOT_EPOCH)),
+                "{shape}"
+            );
+            // The copy was there to open.
+            assert!(
+                block_on(adopter.recover_cached_owner_root(&good.name))
+                    .expect("the copy reads")
+                    .is_some(),
+                "{shape}"
+            );
+        }
+    }
+
     /// The ways a head can be refused for its own bytes ([`refused_root`]).
     const REFUSED_ROOT_SHAPES: [&str; 5] = [
         "unseal",
@@ -8948,8 +9041,9 @@ mod tests {
                 (GateStage::Unseal, "seal-open-failed")
             }
             "grantee-signed" => {
-                // A seed swap that the committed write grantee signs, under the
-                // owner-signed commitment carried verbatim.
+                // A rotation to the next epoch that the committed write grantee
+                // signs, under the owner-signed commitment carried verbatim. An
+                // adoption would raise the read-epoch floor.
                 let commitment = rogue.grant_section.commitment.clone();
                 rogue = crate::testkit::owner_root_fixture_seeded(
                     OwnerRootSpec {
@@ -8966,7 +9060,7 @@ mod tests {
                         write_history_link: Vec::new(),
                         grants: granted_rows(),
                     },
-                    OWNER_ROOT_EPOCH,
+                    OWNER_ROOT_EPOCH + 1,
                     rogue.envelope.v,
                     [0x99; 32],
                 );
@@ -9024,7 +9118,12 @@ mod tests {
             STRUCT_TAG_OWNER_BLOB, StructureSigInput, encode_grant_section, set_grant_section,
             sign_structure,
         };
-        for shape in ["unseal", "commitment", "malformed-section"] {
+        for (shape, store_fault) in [
+            ("unseal", false),
+            ("commitment", false),
+            ("malformed-section", false),
+            ("commitment", true),
+        ] {
             let (mut child, child_ref, _) = one_level();
             let root = vault_root(SCOPE, vec![child_ref]);
             let harness = Harness::plain();
@@ -9078,7 +9177,9 @@ mod tests {
             ));
 
             harness.blocks.lock().unwrap().remove(&child.head_cid_str);
-            harness.blocks.lock().unwrap().remove(&root.head_cid_str);
+            if !store_fault {
+                harness.blocks.lock().unwrap().remove(&root.head_cid_str);
+            }
             let section_bytes = match shape {
                 "unseal" => {
                     let blob = &mut child.grant_section.owner_blob;
@@ -9107,23 +9208,42 @@ mod tests {
             child.head_cid_str = root_block_cid(&child.head_block);
             serve_at(&harness, CHILD_SCOPE, &child, 2);
             block_on(harness.cache.clear()).unwrap();
-            let restarted =
-                block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, true, &[]))
-                    .unwrap();
+            if store_fault {
+                staging.fail_staged_reads_under(crate::grants::OWNER_SEED_CACHE_PREFIX);
+            }
+            // The fault row reads the vault root from the network.
+            let restarted = block_on(walk().descendant_scope_roots(
+                SCOPE,
+                &root.name,
+                &root_record,
+                !store_fault,
+                &[],
+            ))
+            .unwrap();
             assert_eq!(
                 restarted.failure,
                 Some(WalkFailure::Rejected {
                     scope_id: CHILD_SCOPE
                 }),
-                "{shape}"
+                "{shape}, store fault {store_fault}"
             );
-            assert_eq!(restarted.proved.len(), 2, "{shape}");
-            assert!(restarted.proved[0].recovered_after_rejection, "{shape}");
             assert_eq!(
                 restarted.refused,
                 BTreeSet::from([NodeId(CHILD_SCOPE)]),
-                "{shape}: the copy does not hide the refusal"
+                "{shape}, store fault {store_fault}: the copy does not hide the refusal"
             );
+            if store_fault {
+                // A local fault means no copy; the refused head keeps its verdict.
+                assert!(restarted.proved.is_empty(), "{shape}");
+                assert_eq!(
+                    sequence_floor_of(&harness, child.name.as_str().as_bytes()),
+                    Some(1),
+                    "{shape}"
+                );
+                continue;
+            }
+            assert_eq!(restarted.proved.len(), 2, "{shape}");
+            assert!(restarted.proved[0].recovered_after_rejection, "{shape}");
             // The gate does not adopt the refused head, so no floor moves.
             assert_eq!(
                 sequence_floor_of(&harness, child.name.as_str().as_bytes()),

@@ -2053,10 +2053,10 @@ surviving committed grants uniformly in the republish it already does.
   the next confirmed read can replace it. A local seam failure is never abuse.
   On the read and on the rotation fallback it means that the source has no
   copy, and the network record keeps its trust verdict.
-  Each head refusal that the record bytes cause, at any gate stage, raises
-  attributable abuse and opens the confirmed copy. A replay below the floor or
-  a head block that does not match its CID opens it only through the rotation
-  fallback (ADR 0068 D1).
+  A refused head raises attributable abuse. Each site opens the confirmed copy
+  for its own set of refusals. The owner cut follows `RootFallback::admits`.
+  The resolve opens it on every gate rejection except a sequence rollback and a
+  CID mismatch. The scope walk opens it only on `Rejected` and `NotResealable`.
   The engine gates the confirmed copy against the current floors. A rotation
   uses it through `RootFallback::last_copy` and follows ADR 0068: move the root
   first, publish nothing at the old name, and keep no grant row. The refused

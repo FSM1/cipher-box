@@ -6629,37 +6629,44 @@ fn a_restarted_delete_of_a_refused_root_dead_letters() {
 
 /// A kept create under a root the gate refuses landed before the plant. The
 /// refused root is no flip, so after a restart the op waits uncharged and
-/// leaves at the bound with no dead letter (ADR 0069 D5).
+/// leaves at the bound with no dead letter (ADR 0069 D5). With no snapshot
+/// copy, the walk reads the scope from its durable copy, and the op still
+/// waits.
 #[test]
 fn a_kept_create_under_a_refused_root_shows_no_dead_letter_after_a_restart() {
-    let mut fx = GrantScenario::new();
-    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let root = fx.granted_scope_repoint().current_root;
-    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
-
-    restart_owner(&mut fx);
-    let before = raw_queue(&fx.owner_device);
-    for _ in 0..16 {
+    for lose_snapshot in [false, true] {
+        let mut fx = GrantScenario::new();
+        let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
         tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    assert_eq!(
-        raw_queue(&fx.owner_device),
-        before,
-        "the kept ops wait, uncharged"
-    );
-    fx.world.scheduler.advance(KEPT_OP_BOUND);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let root = fx.granted_scope_repoint().current_root;
+        plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
+        if lose_snapshot {
+            block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
+        }
 
-    assert_eq!(raw_queue(&fx.owner_device), 0, "and leave at the bound");
-    let dead = dead_letter_events(&mut fx._events);
-    assert!(dead.is_empty(), "a landed create is no failure: {dead:?}");
-    assert!(
-        block_on(fx.engine.status())
-            .expect("the session status reads")
-            .dead_letters
-            .is_empty()
-    );
+        restart_owner(&mut fx);
+        let before = raw_queue(&fx.owner_device);
+        for _ in 0..16 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        assert_eq!(
+            raw_queue(&fx.owner_device),
+            before,
+            "the kept ops wait, uncharged, snapshot lost {lose_snapshot}"
+        );
+        fx.world.scheduler.advance(KEPT_OP_BOUND);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+        assert_eq!(raw_queue(&fx.owner_device), 0, "and leave at the bound");
+        let dead = dead_letter_events(&mut fx._events);
+        assert!(dead.is_empty(), "a landed create is no failure: {dead:?}");
+        assert!(
+            block_on(fx.engine.status())
+                .expect("the session status reads")
+                .dead_letters
+                .is_empty()
+        );
+    }
 }
 
 /// The dead-letter notices on `events` since the last read.
