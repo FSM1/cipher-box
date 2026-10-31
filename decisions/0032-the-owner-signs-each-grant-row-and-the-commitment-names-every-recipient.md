@@ -163,7 +163,7 @@ violation (`commitment-invalid`, `core::seal::refuse_stale_cut_epoch`). The comm
 carries no read epoch, so a grantee-triggered rotation still needs no owner signature. The raise
 of the cut-epoch floor is ADR 0014. The rule landed with FSM1/cipher-box#1604; this ADR records it.
 Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, and the
-commitment format does not change. Amended by ADR 0083 D1 on 2026-10-29: stage 3 refuses a
+commitment format does not change. Amended by ADR 0083 D1 on 2026-10-31: stage 3 refuses a
 section that a grantee signs, so a grantee cannot sign a rotation.
 
 **D7 — The engine keeps a device-local revocation floor per scope and recipient.** When the
@@ -189,7 +189,7 @@ section its own gate refuses. A future shape that needs per-structure signers ne
 per-structure signer index on the wire: a format change, not a relaxation of this rule. The rule
 landed with FSM1/cipher-box#1120; this ADR records it. Amended by ADR 0052 D1 on 2026-09-26: the
 predicate lives in `crates/core`, and `check_scope_root` calls the core function. Amended by ADR
-0083 D1 on 2026-10-29: the pinned signer must be the owner pseudonym; a section that a committed
+0083 D1 on 2026-10-31: the pinned signer must be the owner pseudonym; a section that a committed
 write grantee signs is a trust violation.
 
 **D9 — The ascent link's structure signature covers its public half.** For every seed-bearing
@@ -240,7 +240,7 @@ second consumer. The rule landed with FSM1/cipher-box#1604; this ADR records it.
   refused.
 - **An ascent swap is attributable** (D9). Only a committed pseudonym can sign a swapped public
   half, and an owner cut derives the half from the parent seed instead of carrying it. Amended by
-  ADR 0083 D1 on 2026-10-29: only the owner pseudonym can sign it.
+  ADR 0083 D1 on 2026-10-31: only the owner pseudonym can sign it.
 - **A contact label names nobody off the account** (D10). The seed is the account's alone.
 
 ## Alternatives rejected
@@ -294,7 +294,7 @@ recipients, but it needs a new commitment format. The owner accepted the leak on
 **(k) An owner signature at each read rotation, so a revoked grantee loses the unmask key.** The
 commitment carries no read epoch so that a grantee-triggered rotation needs no owner signature.
 This alternative gives that property up. Amended by ADR 0082 D1 on 2026-10-28: the engine starts no cut of a received scope on the grantee device, so
-this reason no longer applies. Amended by ADR 0083 D1 on 2026-10-29: the owner pseudonym signs
+this reason no longer applies. Amended by ADR 0083 D1 on 2026-10-31: the owner pseudonym signs
 each scope-root rotation, and this alternative stays rejected for its wire and migration cost.
 
 ## Consequences
@@ -427,7 +427,7 @@ adopt a replayed root that carries a pre-cut commitment, and its next re-key at 
 the new seed to a removed recipient again.
 
 **E6 — A committed writer can still plant an ascent public half.** D9 makes the swap
-attributable, not impossible. An owner cut repairs it. Amended by ADR 0083 D1 on 2026-10-29: stage
+attributable, not impossible. An owner cut repairs it. Amended by ADR 0083 D1 on 2026-10-31: stage
 3 refuses a section that a committed write grantee signs, so only the owner pseudonym can sign a
 swapped public half.
 
@@ -437,7 +437,7 @@ and a revoke by identity then reaches the row only through the encryption subkey
 device's contact book binds to the identity, matched against the committed entry
 (`grants/cut_set.rs::revoked_rows`). A duplicate tag in the write-body ledger makes the body
 undecodable and stalls the scope's rotations until the owner republishes the root from an earlier
-gate-passed record (`blueprint/core.md` "Write-body"). Amended by ADR 0083 D1 on 2026-10-29: only
+gate-passed record (`blueprint/core.md` "Write-body"). Amended by ADR 0083 D1 on 2026-10-31: only
 the owner pseudonym signs the write body, so a committed write grantee cannot publish a changed
 row.
 

@@ -46,7 +46,7 @@ The set of engine readers of the committed write-capable set grew after the issu
 `write_body_signer` names the party that an abuse event over a rewritten row charges, and the
 cascade plane stores its result. `reseal_scope_root` binds a re-seal's own signer to
 the set on the produce side. Both recompute the same set as stage 3 and must not disagree with it.
-Amended by ADR 0083 D1 on 2026-10-29: stage 3 verifies every structure under `ownerPseudonymPk`,
+Amended by ADR 0083 D1 on 2026-10-31: stage 3 verifies every structure under `ownerPseudonymPk`,
 so its signature work is linear in the number of structures; `reseal_scope_root` compares its
 signer with that key, and only `write_body_signer` searches `committed_write_pseudonyms`.
 
@@ -84,7 +84,7 @@ public constructor outside the two verify functions.
 **D3 — The committed write-capable set is a core definition.** The set is the owner pseudonym
 plus the pseudonym of every entry with `Permission::Write`, with repeats removed. Core exposes the
 set and its membership test. Every reader of the set in the engine uses the core definition.
-Amended by ADR 0083 D1 on 2026-10-29: stage 3 pins the owner pseudonym, not a member of this set.
+Amended by ADR 0083 D1 on 2026-10-31: stage 3 pins the owner pseudonym, not a member of this set.
 Core exposes no membership test, and `reseal_scope_root` compares its signer with
 `ownerPseudonymPk`. The set stays for the write-body signer lookup.
 

@@ -135,7 +135,7 @@ keep what they saw; they lose everything new, now."
 **E3 — A committed write grantee of an enclosing scope can hide a nested scope from the sweep.**
 `directChildScopeIndex` is writer-authored and carries no owner signature. The grantee can remove
 a nested scope from the index, and its expired links then stay uncut. Amended by ADR 0083 D1 on
-2026-10-29: only the owner pseudonym signs the write body, so a grantee cannot edit the index. It
+2026-10-31: only the owner pseudonym signs the write body, so a grantee cannot edit the index. It
 can still republish an older owner-signed write body of the same read and write epoch, which hides
 a nested scope that the owner added later in that epoch.
 

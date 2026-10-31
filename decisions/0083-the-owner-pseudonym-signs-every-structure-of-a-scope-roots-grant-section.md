@@ -1,6 +1,6 @@
 # ADR 0083: The owner pseudonym signs every structure of a scope root's grant section
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-31
 - **Date:** 2026-10-29
 - **Relates to:** [FSM1/cipher-box#2537](https://github.com/FSM1/cipher-box/issues/2537),
   [ADR 0082](./0082-a-grantee-cannot-move-a-node-across-the-edge-of-a-received-share.md),

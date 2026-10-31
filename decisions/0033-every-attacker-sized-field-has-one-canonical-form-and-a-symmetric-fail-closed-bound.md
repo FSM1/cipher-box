@@ -36,7 +36,7 @@ carries opaque blobs and a preserved `unknown` map. So a party other than the ow
 fields, up to the 2 MiB block ceiling. A rotation re-seals what a revoked writer authored and adds
 bytes, so an inflated field made every later owner rotation fail. History links were never
 pruned, so a scope root would pass the ceiling with no attacker. Two implementations that charge
-different measures disagree at one byte. Amended by ADR 0083 D1 on 2026-10-29: only the owner
+different measures disagree at one byte. Amended by ADR 0083 D1 on 2026-10-31: only the owner
 pseudonym signs the write body and the grant section structures; a write grantee carries them
 verbatim and still authors the read body and the interior records.
 
@@ -127,12 +127,12 @@ Items D13, D14 and D15 moved to `blueprint/core.md` "KAT regime", "IPNS records"
 
 **E3 — The bounds narrow the head-size lever; they do not close it.** A committed writer can
 still fill a scope root to the envelope total, and a write at that root dead-letters as
-`HeadTooLarge`. Amended by ADR 0083 D1 on 2026-10-29: a grantee fills it only through the read
+`HeadTooLarge`. Amended by ADR 0083 D1 on 2026-10-31: a grantee fills it only through the read
 body and the unsigned framing.
 
 **E4 — An over-bound value makes the record undecodable.** A committed writer can stall the
 scope's rotations until the owner republishes the root from a gate-passed earlier record (D6).
-Amended by ADR 0083 D1 on 2026-10-29: a grantee cannot do this through the write body or a
+Amended by ADR 0083 D1 on 2026-10-31: a grantee cannot do this through the write body or a
 signed grant-section structure.
 
 **E8 — Encode and decode can report different verdicts at a total-size bound.** The decoder
