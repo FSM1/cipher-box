@@ -1599,15 +1599,16 @@ where
                 let WalkFailure::Rejected { .. } = met else {
                     return Err(met);
                 };
-                *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
-                if let (Some((left, anchor)), Some((_, record_bytes))) = (owed_from, served)
+                *refused_record = served.map(|(_, bytes)| bytes);
+                if let (Some((left, anchor)), Some(record_bytes)) =
+                    (owed_from, refused_record.as_deref())
                     && self
                         .is_unpromoted_folder(
                             parent_read_scope_seed,
                             (left, anchor),
                             child,
                             &name,
-                            &record_bytes,
+                            record_bytes,
                         )
                         .await
                 {
@@ -8921,23 +8922,19 @@ mod tests {
             confirm();
             let check = match shape {
                 "cid-mismatch" => {
+                    serve_at(&harness, SCOPE, &good, 3);
                     harness
                         .blocks
                         .lock()
                         .unwrap()
                         .insert(good.head_cid_str.clone(), b"swapped head block".to_vec());
-                    let record = record_for(&SCOPE, &good.head_cid_str, 3);
-                    for endpoint in harness.store.endpoints() {
-                        harness
-                            .store
-                            .seed_record(&endpoint, good.name.as_str(), record.clone());
-                    }
                     "content-cid-mismatch"
                 }
-                _ => {
+                "rollback" => {
                     serve_at(&harness, SCOPE, &good, 1);
                     "sequence-not-newer"
                 }
+                other => panic!("no endpoint refusal shape {other}"),
             };
             block_on(harness.cache.clear()).expect("the snapshot copy is gone");
             let mut restarted = harness.net(&[]);
@@ -8998,6 +8995,12 @@ mod tests {
         use crate::gate::GateStage;
         use cipherbox_core::seal::{encode_grant_section, set_grant_section};
         let mut rogue = granted_root(children.clone());
+        let encode = |rogue: &mut OwnerRootFixture| {
+            set_grant_section(
+                &mut rogue.envelope,
+                encode_grant_section(&rogue.grant_section).unwrap(),
+            );
+        };
         let resign = |signer: &Ed25519Signer, rogue: &mut OwnerRootFixture| {
             crate::testkit::resign_section(
                 &mut rogue.grant_section,
@@ -9005,10 +9008,7 @@ mod tests {
                 rogue.envelope.epoch,
                 signer,
             );
-            set_grant_section(
-                &mut rogue.envelope,
-                encode_grant_section(&rogue.grant_section).unwrap(),
-            );
+            encode(rogue);
         };
         let (stage, check) = match shape {
             "unseal" => {
@@ -9082,10 +9082,7 @@ mod tests {
             }
             "commitment" => {
                 rogue.grant_section.commitment_sig[0] ^= 1;
-                set_grant_section(
-                    &mut rogue.envelope,
-                    encode_grant_section(&rogue.grant_section).unwrap(),
-                );
+                encode(&mut rogue);
                 (GateStage::CommitmentVerify, "commitment-invalid")
             }
             "malformed-section" => {
@@ -9201,7 +9198,8 @@ mod tests {
                     child.grant_section.commitment_sig[0] ^= 1;
                     encode_grant_section(&child.grant_section).unwrap()
                 }
-                _ => vec![0xff, 0x00],
+                "malformed-section" => vec![0xff, 0x00],
+                other => panic!("no refused root shape {other}"),
             };
             set_grant_section(&mut child.envelope, section_bytes);
             child.head_block = encode_envelope(&child.envelope).unwrap();

@@ -25898,21 +25898,24 @@ fn a_restarted_owner_cuts_a_refused_root_from_its_durable_copy() {
             envelope.epoch,
             signer,
         );
-        if shape == "unseal" {
-            // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
-            cipherbox_engine::testkit::assert_section_authenticates(
-                &section,
-                &owner_identity().verifying_key(),
-                envelope.scope,
-                envelope.epoch,
-            );
-        }
-        if shape == "commitment" {
-            section.commitment_sig[0] ^= 1;
-        }
         let section_bytes = match shape {
+            "unseal" => {
+                // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+                cipherbox_engine::testkit::assert_section_authenticates(
+                    &section,
+                    &owner_identity().verifying_key(),
+                    envelope.scope,
+                    envelope.epoch,
+                );
+                encode_grant_section(&section).unwrap()
+            }
+            "grantee-signed" => encode_grant_section(&section).unwrap(),
+            "commitment" => {
+                section.commitment_sig[0] ^= 1;
+                encode_grant_section(&section).unwrap()
+            }
             "malformed-section" => vec![0xff, 0x00],
-            _ => encode_grant_section(&section).unwrap(),
+            other => panic!("no refused root shape {other}"),
         };
         set_grant_section(&mut envelope, section_bytes);
         let cid = fx.blocks.put(encode_envelope(&envelope).unwrap());

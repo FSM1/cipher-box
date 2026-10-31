@@ -11627,21 +11627,13 @@ fn a_restart_that_reads_a_swapped_head_block_is_still_a_trust_violation() {
     .expect("a confirmed root");
 
     let next = root_record_with(&blocks, Vec::new(), floor + 1, EOL);
-    let value = IpnsRecord::unmarshal(&next)
-        .and_then(|record| record.verify(&root_name))
-        .expect("the record verifies")
-        .value;
-    let cid = std::str::from_utf8(&value)
-        .unwrap()
-        .strip_prefix("/ipfs/")
-        .unwrap()
-        .to_owned();
-    blocks.replace(&cid, b"swapped head block".to_vec());
     for endpoint in world.record_store.endpoints() {
         world
             .record_store
             .seed_record(&endpoint, root_name.as_str(), next.clone());
     }
+    let (_, cid) = published(&world.record_store, ROOT);
+    blocks.replace(&cid, b"swapped head block".to_vec());
     assert_a_restart_refuses_the_root(&alice, &blocks, &root_name);
 }
 
