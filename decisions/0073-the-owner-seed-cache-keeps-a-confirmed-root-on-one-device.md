@@ -42,6 +42,8 @@ It does not adopt or renew the refused record. This protects one device that
 retains its store. The vault record for all owner devices is not landed.
 Amended on 2026-10-06 by FSM1/cipher-box#2344: a cold start whose root resolve
 reads as unavailable also opens the cached copy, at the current floors.
+Amended on 2026-10-31 by FSM1/cipher-box#2546: the durable copy serves every
+head refusal that the record causes, the same set the snapshot source admits.
 
 ## Alternatives considered
 

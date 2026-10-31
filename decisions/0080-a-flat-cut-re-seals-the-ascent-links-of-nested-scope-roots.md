@@ -36,8 +36,8 @@ C, the owner re-seals the ascent link under the current seed of P. The sweep sti
 or sweep a descendant scope root. It only re-seals the ascent link of an indexed one, as the index
 self-heal already republishes metadata. These are trust violations: a child record whose head the
 read refuses, a gate or floor rejection, a refused head block, and a record-byte refusal under the
-seed whose public half matched (`OwnerSeedRefused`: a read body or blob that does not open, or an
-ascent payload that does not cross-check). A re-seal error that no retry clears, for example a
+seed whose public half matched (a read body or blob that does not open, or an ascent payload that
+does not cross-check). A re-seal error that no retry clears, for example a
 write body that does not unseal, is also a trust violation. A superseded child name takes the
 pointer consult of ADR 0003 D2.
 
