@@ -59,7 +59,9 @@ no row and posts nothing; the owner shares again, ADR 0068 D5.
   blob is writer-authored, and the pin of D1 applies. An owner signature over
   the name in the blob stops the pin. But each writer re-seal must then carry
   the signed name without change, and an older writer build drops it. The
-  share pointer already has the owner signature, at no core cost.
+  share pointer already has the owner signature, at no core cost. Amended by
+  ADR 0083 D1 on 2026-10-31: only the owner pseudonym signs a grant blob, so
+  a writer re-seal no longer mints it.
 - **The grantee derives the name.** The KDF catalog derives the pointer
   keypair from `ownerPointerSeed` and the scope id. `pointerReadKey` is a
   sibling edge of the same seed, not its parent. An Ed25519 public key comes

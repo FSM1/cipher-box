@@ -192,7 +192,8 @@ of the scope root's write-body, and the write-body stays sealed under the root's
 mode with the owner as sender and recipient, under structure tag `write-history-link`
 (`0x0e`), with the write epoch in the AAD. A write cut without the owner key is refused before
 any seal (`ResealError::OwnerKeyRequiredForWriteCut`), so a write-grantee re-seal carries the
-existing link and never cuts. The separate tag keeps the two planes' AADs distinct when the
+existing link and never cuts. Amended by ADR 0083 D1 on 2026-10-31: a write grantee does not
+re-seal a scope root; it carries the owner-signed write body and its link verbatim. The separate tag keeps the two planes' AADs distinct when the
 read epoch equals the write epoch. The rule landed with FSM1/cipher-box#1285, which closed
 FSM1/cipher-box#1191; this ADR records it.
 
@@ -249,6 +250,8 @@ The home of the staging rule in the code is the module header of
   link. The link keeps the write-body signature of #39 D2, and auth mode is a second check on
   the field. D1 excludes the owner blob and the owner write blob, which a rotator authors
   (#39 D6 calls the owner blob "grantee-maintained"), so #39 D2 stays the only rule for them.
+  Amended by ADR 0083 D1 on 2026-10-31: only the owner pseudonym signs these structures, and a
+  write grantee carries them verbatim; auth mode stays a second check on the link.
 - **Two members carry auth mode as a second layer.** The settings record is published at a name
   whose Ed25519 key derives from the login secret, so the record signature already proves the
   owner. The content key blob rides inside an op record, which is itself auth-sealed. For both,
@@ -397,7 +400,8 @@ two "only seals" lines are imprecise.
 **E6 — A committed writer can stall the scope's write rotations with an over-length link.** The
 link field is bounded at decode, so a body whose link is over the bound does not decode. This is
 the same lever as a duplicate ledger tag. `blueprint/core.md` "Write-body" states it; the bound
-itself is outside this ADR.
+itself is outside this ADR. Amended by ADR 0083 D1 on 2026-10-31: only the owner pseudonym signs
+the write body, so a committed write grantee cannot publish an over-length link.
 
 **E7 — The settings name has no index dimension.** Unlike the vault pointer chain, the
 `settings-ipns-keypair` edge cannot re-point. FSM1/cipher-box#874 accepts this: a leak that
