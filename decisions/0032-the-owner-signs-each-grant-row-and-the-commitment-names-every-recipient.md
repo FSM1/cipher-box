@@ -437,7 +437,9 @@ and a revoke by identity then reaches the row only through the encryption subkey
 device's contact book binds to the identity, matched against the committed entry
 (`grants/cut_set.rs::revoked_rows`). A duplicate tag in the write-body ledger makes the body
 undecodable and stalls the scope's rotations until the owner republishes the root from an earlier
-gate-passed record (`blueprint/core.md` "Write-body").
+gate-passed record (`blueprint/core.md` "Write-body"). Amended by ADR 0083 D1 on 2026-10-29: only
+the owner pseudonym signs the write body, so a committed write grantee cannot publish a changed
+row.
 
 ## Gate
 

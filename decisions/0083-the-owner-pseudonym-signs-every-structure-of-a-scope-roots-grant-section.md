@@ -7,8 +7,15 @@
   [ADR 0077](./0077-a-scope-root-stops-being-one-by-a-re-seal-into-new-node-ids.md)
 - **Implemented by:** [FSM1/cipher-box#2544](https://github.com/FSM1/cipher-box/pull/2544)
 - **Amends:** [ADR 0032](./0032-the-owner-signs-each-grant-row-and-the-commitment-names-every-recipient.md)
-  D8, [ADR 0052](./0052-the-stage-3-section-predicate-lives-in-core-behind-a-verified-commitment-witness.md)
-  D3
+  D6, D8, Alternative (k), the "Trust argument" items on the veto and the ascent swap, E6 and E7;
+  [ADR 0052](./0052-the-stage-3-section-predicate-lives-in-core-behind-a-verified-commitment-witness.md)
+  Context and D3; [ADR 0025](./0025-revocation-under-the-link-first-model.md) E3;
+  [ADR 0030](./0030-a-record-the-owner-alone-authors-and-that-seals-hpke-to-the-owner-seals-in-auth-mode.md)
+  D10, the "Trust argument" item "#39 D2 does not conflict" and E6;
+  [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md)
+  Context, E3 and E4;
+  [ADR 0074](./0074-a-personal-grantee-takes-the-scope-pointer-name-from-the-owner-signed-share-pointer.md)
+  the alternative "The grant blob carries the name"
 
 ## Context
 
@@ -38,8 +45,9 @@ commitment, but no structure of a scope root verifies under it.
   changes the commitment preimage and its KAT vectors, and it needs a migration of every scope root.
   It also leaves open a seed swap at the same epoch.
 - **An engine rule on the epoch rise by a non-owner signer (Option D).** Rejected. It depends on
-  device state, so it gives false trust violations on a cold device. It also accepts a grantee seed
-  swap at the same epoch.
+  device state and still accepts a grantee seed swap at the same epoch.
+- **A rule that bounds every epoch rise to + 1 (a variant of Option D).** Rejected. It gives false
+  trust violations on a cold device and on a device that missed two owner cuts.
 
 ## Consequences
 
@@ -56,9 +64,14 @@ commitment, but no structure of a scope root verifies under it.
   the structures of a scope root.
 - ADR 0032 D8 carries an "Amended by" sentence. ADR 0032 "Trust argument" ("A write grantee cannot
   veto its own revocation") holds again. ADR 0032 D6, Alternative (k), "An ascent swap is
-  attributable" and E6 carry "Amended by" sentences, and the D8 gate tests take the new names.
-- ADR 0052 D3 carries an "Amended by" sentence: core exposes no membership test of the committed
-  write-capable set.
+  attributable", E6 and E7 carry "Amended by" sentences, and the D8 gate tests take the new names.
+- ADR 0052 Context and D3 carry "Amended by" sentences: stage 3 work is linear in the number of
+  structures, and core exposes no membership test of the committed write-capable set.
+- ADR 0025 E3 and the `blueprint/engine.md` sharing residual: a grantee cannot edit
+  `directChildScopeIndex`, but can replay an older owner-signed write body of the same epoch.
+- ADR 0030 D10, its "#39 D2 does not conflict" item and E6, ADR 0033 Context, E3 and E4, ADR 0074
+  "The grant blob carries the name", `CONTEXT.md` "Grant ledger" and `docs/SHARING.md` "Revoke a
+  person" drop the claim that a write grantee signs a write body or a grant blob.
 - ADR 0077 alternative "Any epoch rise re-seals every node again (D4)" cites this ADR.
 - The engine's `report_unattested_row` signer attribution always names the owner. A later change
   can simplify it.

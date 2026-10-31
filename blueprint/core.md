@@ -336,9 +336,10 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   encode (ADR 0033) — `historyLinks` at 256, `grantBlobs` and the commitment's
   `entries` both at 1024 (`too-many-structures`) — the commitment additionally
   refuses a repeated `tag` (`duplicate-grant-tag`), and two history links may
-  not carry equal sealed bytes (`duplicate-history-link`): stage 3's work is
-  `pseudonyms + structures` ("One section, one signer" below), so an
-  unbounded collection on **either** side of that sum is a reader-CPU amplifier,
+  not carry equal sealed bytes (`duplicate-history-link`): stage 3
+  verifies one signature per structure ("One section, one signer" below), and
+  the write-body signer lookup scans the committed pseudonyms, so an
+  unbounded collection on **either** side is a reader-CPU amplifier,
   and each epoch mints one link under a fresh nonce, so a repeat is an authored
   anomaly. The two 1024 ceilings
   are one number: the ledger must match the committed set exactly and a re-seal
@@ -393,11 +394,11 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   different record at the same scope and epoch, authored by a different
   committed writer, recomputes an identical signed input — `scope`, `epoch`,
   `structTag`, `recipientTag` and `H(ciphertext)` all match — so per-structure
-  trial-verify adopted it. It also bounds stage 3's work at
-  `pseudonyms + structures` rather than their product: without it an accepted
-  contact commits 1024 write pseudonyms of their own and spreads a section's
-  signatures across them, buying ~1000x reader-CPU amplification for ~1284
-  signatures. That sum is the reason for the section bounds above.
+  trial-verify adopted it. Stage 3 verifies every structure under the one owner
+  key, so its signature work is linear in the number of structures (ADR 0083
+  D1); without a pin, an accepted contact commits 1024 write pseudonyms of their
+  own and spreads a section's signatures across them, buying ~1000x reader-CPU
+  amplification for ~1284 signatures.
   The pinned signer is the owner pseudonym only, so a write grantee cannot sign
   a scope-root rotation (ADR 0083). The commitment carries no read epoch (ADR
   0082, `CONTEXT.md`).

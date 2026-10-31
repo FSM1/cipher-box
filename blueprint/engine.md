@@ -2113,9 +2113,10 @@ Accepted by ADRs 0023 to 0028 and ADR 0063:
 - An owner who stays offline past a deadline loses every claim that no owner
   device acked before it, and a hostile link holder reads past the deadline
   until the owner's sweep runs (ADR 0023 E4, ADR 0025 E1).
-- A committed write grantee of an enclosing scope can remove a nested scope
-  from the writer-authored `directChildScopeIndex` and so hide its expired
-  links from the sweep (ADR 0025 E3).
+- A write grantee cannot edit `directChildScopeIndex`, because only the owner
+  pseudonym signs the write body (ADR 0083 D1). It can republish an older
+  owner-signed write body of the same read and write epoch, and so hide from the
+  sweep a nested scope that the owner added later in that epoch (ADR 0025 E3).
 - A URL holder can enrol a third-party identity with no proof that it holds
   that contact code; the admission cap bounds the count, not the consent
   (ADR 0023 E3).

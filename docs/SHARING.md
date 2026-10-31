@@ -186,7 +186,7 @@ Every row one revoke removes leaves in one cut set, with one cut-epoch step, one
 
 ### Revoke a person
 
-`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk`, when one contact on this device binds that key, now or before.
+`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). When the owner signature of a row does not verify, the engine finds that row through the committed `recipientEncPk`, when one contact on this device binds that key, now or before.
 
 The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. When a link admitted the grantee and a pass holds the conversion lock, the revoke waits for the pass, up to a budget, before it refuses with `a-conversion-pass-is-running`. The revoke of a direct grantee does not wait for a conversion.
 
