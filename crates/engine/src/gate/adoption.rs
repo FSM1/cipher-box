@@ -43,7 +43,7 @@ pub enum GateStage {
     RecordVerify,
     /// Stage 2: the owner-signed grant-set commitment.
     CommitmentVerify,
-    /// Stage 3: seed-bearing structure signatures under committed pseudonyms.
+    /// Stage 3: seed-bearing structure signatures under the owner pseudonym.
     GrantSection,
     /// Stage 4: strictly-newer sequence vs the durable per-name floor.
     Sequence,
@@ -578,7 +578,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         && matches!(reader.seed_blob, Some(SeedBlob::Grantee { .. }));
     if let Some(ascent) = section.ascent_link.as_ref().filter(|_| !by_grant_alone) {
         // The ascent link is doubly checked: its structure signature (above)
-        // proves the committed writer authored it, and this derive-and-verify
+        // proves the owner pseudonym authored it, and this derive-and-verify
         // proves the sealed seed is *this* scope root's.
         //
         // Ascent authority is reader-derived: the expected keypair comes from the
@@ -614,9 +614,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         //
         // A published public half this parent seed does not derive is a link no
         // key this device holds opens, so the failure names no author:
-        // availability, as on the child leg above the read-epoch floor. It costs
-        // the accusation a committed writer escapes by planting its own ascent
-        // public, for an effect withholding the record already buys it.
+        // availability, as on the child leg above the read-epoch floor.
         let payload = open_ascent_link(parent_node_seed, &aad, &link).map_err(|e| {
             if matches!(e, CodecError::Trust(TrustViolation::AscentLinkMismatch)) {
                 GateError::Seam(SeamError::ascent_mismatch(

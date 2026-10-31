@@ -708,8 +708,8 @@ pub fn open_history_link(
 /// plaintext is zeroized here.
 ///
 /// Owner-sealed rather than keyed under the plane seed, and auth mode rather
-/// than base: every committed writer holds that seed and authors the field, so
-/// base mode would let one of them mint a link the owner's resumed name wave
+/// than base: every committed writer holds that seed, so base mode would let
+/// one of them mint a link the owner's resumed name wave
 /// accepts (blueprint/core.md "Write-body").
 pub fn seal_owner_history_link(
     owner_enc_secret: &X25519Secret,

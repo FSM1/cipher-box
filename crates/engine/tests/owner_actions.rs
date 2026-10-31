@@ -25857,13 +25857,8 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
             &OverrideSeedPayload::new([0x98; 32], envelope.epoch),
         )
         .unwrap();
-        let (shared, _) = cipherbox_engine::grants::recipient_self_location(
-            &kdf::enc_subkey(&RECIPIENT_SECRET),
-            &kdf::enc_subkey(&SECRET).public(),
-            name.as_str().as_bytes(),
-        )
-        .unwrap();
-        let writer = kdf::pseudonym_sign(shared.as_bytes(), &fx.folder.0);
+        let writer =
+            kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &fx.folder.0);
         section.owner_blob.enc = blob.enc;
         section.owner_blob.ciphertext = blob.ciphertext;
         cipherbox_engine::testkit::resign_section(
@@ -25871,6 +25866,13 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
             fx.folder.0,
             envelope.epoch,
             &writer,
+        );
+        // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+        cipherbox_engine::testkit::assert_section_authenticates(
+            &section,
+            &owner_identity().verifying_key(),
+            envelope.scope,
+            envelope.epoch,
         );
         set_grant_section(&mut envelope, encode_grant_section(&section).unwrap());
         let cid = fx.blocks.put(encode_envelope(&envelope).unwrap());

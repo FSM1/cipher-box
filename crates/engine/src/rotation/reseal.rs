@@ -42,9 +42,9 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY,
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
     SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_grant_section,
-    encode_write_body, is_committed_write_pseudonym, is_write_body_over_bound, open_ascent_link,
-    open_history_link, open_owner_blob, seal, seal_ascent_link, seal_grant_blob, seal_history_link,
-    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
+    encode_write_body, is_write_body_over_bound, open_ascent_link, open_history_link,
+    open_owner_blob, seal, seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob,
+    seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -228,7 +228,7 @@ pub struct CommittedSet<'a> {
     ///
     /// The encryption key, not the identity key: the commitment binds
     /// `recipientEncPk` under the owner's own signature, while
-    /// `recipientIdentityPk` is a label any committed writer can re-author.
+    /// `recipientIdentityPk` is a label the commitment does not bind.
     ///
     /// Per scope, never carried down a cascade: an ancestor's cut says nothing
     /// about a grant the owner issued independently one level below it. The
@@ -743,14 +743,12 @@ pub fn reseal_scope_root<E: Entropy>(
     committed: &CommittedSet<'_>,
     carried_history_links: &[SignedSealed],
 ) -> Result<GrantSection, ResealError> {
-    // Fail-closed BEFORE any seal (see `ResealError::SignerNotCommitted`). The
-    // set is the gate's own stage-3 authority set, so an owner and a committed
-    // write grantee are admitted on exactly the terms a reader will re-check.
-    // Pseudonym pubkeys are public, so a plain byte compare is correct.
-    if !is_committed_write_pseudonym(
-        committed.commitment,
-        &identity.pseudonym_signer.verifying_key().to_bytes(),
-    ) {
+    // Fail-closed BEFORE any seal (see `ResealError::SignerNotCommitted`): stage 3
+    // admits only the owner pseudonym. Pseudonym pubkeys are public, so a plain
+    // byte compare is correct.
+    if identity.pseudonym_signer.verifying_key().to_bytes()
+        != committed.commitment.owner_pseudonym_pk
+    {
         return Err(ResealError::SignerNotCommitted);
     }
 

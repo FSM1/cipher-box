@@ -534,11 +534,11 @@
     "sectionSignerOwnerIdentityPk": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
     "sectionSignerAccept": {
       "file": "vectors/grant/section_signer_accept.json",
-      "count": 2
+      "count": 1
     },
     "sectionSignerReject": {
       "file": "vectors/grant/section_signer_reject.json",
-      "count": 2,
+      "count": 3,
       "checks": [
         "structure-signature-invalid"
       ]

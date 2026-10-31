@@ -1211,8 +1211,7 @@ fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
 /// own — a scope's own records sit at derived names and nowhere else (CONTEXT.md
 /// "name law") — so the boundary stands whether or not this level's
 /// `directChildScopeIndex` still names it. That index rides the sealed write
-/// body, which any committed writer of the scope authors and no owner signature
-/// covers, and an additive set cannot observe an entry a writer removed.
+/// body, and an additive set cannot observe an entry that body dropped.
 ///
 /// Reaches the direct children of a walked scope root, which is where the walk
 /// holds both halves: the body that names them and the seed that derives what
@@ -5113,10 +5112,9 @@ where
     /// Prove each claimed directly-descendant scope root before the enumeration
     /// stops at it, and record the proven boundary.
     ///
-    /// `directChildScopeIndex` is authored by any committed writer — including
-    /// the grantee this rotation is cutting — so an entry naming an ordinary
-    /// in-scope node would carve that node out of the wave and leave it live at
-    /// a name the revokee's retired write scope seed still derives.
+    /// `directChildScopeIndex` carries no proof of its own, so an entry naming
+    /// an ordinary in-scope node would carve that node out of the wave and leave
+    /// it live at a name the revokee's retired write scope seed still derives.
     /// `gated_read::gate_root_pass` is the proof, over the seed the root's own
     /// owner blob yielded.
     async fn record_scope_boundary(
@@ -6442,8 +6440,7 @@ mod tests {
     use crate::content::dag::root_block_cid;
     use crate::entropy::EntropyError;
     use crate::grants::{
-        GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag,
-        recipient_self_location, self_locate,
+        GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag, self_locate,
     };
     use cipherbox_core::codec::Value;
     use cipherbox_core::error::{CodecError, Malformed};
@@ -8806,13 +8803,7 @@ mod tests {
                 .expect("confirmed owner read");
             }
             let mut rogue = granted_root(children.clone());
-            let (shared, _) = recipient_self_location(
-                &write_grantee(),
-                &owner_enc().public(),
-                rogue.name.as_str().as_bytes(),
-            )
-            .unwrap();
-            let signer = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE);
+            let signer = owner_root_pseudonym();
             let sealed = cipherbox_core::seal::seal_owner_blob(
                 &owner_enc().public(),
                 &[0x99; 32],
@@ -8833,6 +8824,13 @@ mod tests {
                 SCOPE,
                 rogue.envelope.epoch,
                 &signer,
+            );
+            // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+            crate::testkit::assert_section_authenticates(
+                &rogue.grant_section,
+                &owner_identity().verifying_key(),
+                SCOPE,
+                rogue.envelope.epoch,
             );
             set_grant_section(
                 &mut rogue.envelope,
@@ -8866,10 +8864,11 @@ mod tests {
                 crate::sync::tick::ResolveMode::CacheFirst,
             ))
             .expect("the read finishes with its trust verdict");
-            assert!(matches!(
-                resolved.outcome,
-                crate::net::ResolveOutcome::TrustViolation(_)
-            ));
+            let crate::net::ResolveOutcome::TrustViolation(rejection) = &resolved.outcome else {
+                panic!("expected a trust violation");
+            };
+            assert_eq!(rejection.stage, crate::gate::GateStage::Unseal);
+            assert_eq!(rejection.check(), "seal-open-failed");
             if store_fault {
                 // A local fault removes the copy, never the verdict on the record.
                 assert!(resolved.recovered_owner.is_none());
