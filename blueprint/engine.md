@@ -2047,8 +2047,9 @@ surviving committed grants uniformly in the republish it already does.
   name's entry unless its owner-signed cut epoch is lower; the gate binds that
   grant set to the name. A keyless entry recovers reads but cannot drive a cut.
   A scope walk that recovers a descendant from its entry gives it no write
-  plane and does not charge its queued ops, so no drain write lands over the
-  refused record.
+  plane, so no drain write lands over the refused record; its queued ops spend
+  only the outage budget and dead-letter after `UNATTRIBUTED_BUDGET` halted
+  passes.
   A corrupt local entry is absent;
   the next confirmed read can replace it. A local seam failure is never abuse.
   On the read and on the rotation fallback it means that the source has no

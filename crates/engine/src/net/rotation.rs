@@ -1120,7 +1120,8 @@ pub(crate) enum WritePlaneDark {
     /// owner-write-blob, or one no epoch this device can reach unseals.
     Keyless,
     /// A seam read or a pointer-plane consult this pass could not make, or a
-    /// refused record that this pass reads from its durable copy (ADR 0068 D3).
+    /// refused record that this pass reads from its durable copy (ADR 0068 D3),
+    /// whose ops spend only the outage budget until a cut moves the root.
     Unavailable,
 }
 

@@ -6662,6 +6662,54 @@ fn a_kept_create_under_a_refused_root_shows_no_dead_letter_after_a_restart() {
     );
 }
 
+/// A create below a scope root that the gate refuses, which the walk reads
+/// from its durable copy after a restart with no snapshot copy, has no write
+/// plane. It spends only the outage budget: it stays queued past the attempt
+/// budget and dead-letters after `UNATTRIBUTED_BUDGET` halted passes.
+#[test]
+fn a_create_below_a_refused_root_read_from_its_durable_copy_spends_only_the_outage_budget() {
+    let budget = cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize;
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
+    block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
+    restart_owner(&mut fx);
+    let folder = fx.folder;
+    block_on(fx.engine.command(Command::Create {
+        parent: folder,
+        name: "below.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("the create queues");
+    serve_http(&fx.owner_device, &fx.blocks, 16 * budget);
+    let dead_letters = |fx: &GrantScenario| {
+        block_on(fx.engine.status())
+            .expect("the session status reads")
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>()
+    };
+
+    for _ in 1..budget {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the create still waits");
+    assert!(dead_letters(&fx).is_empty());
+
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    assert_eq!(
+        dead_letters(&fx),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "the outage budget bounds the wait"
+    );
+}
+
 /// The dead-letter notices on `events` since the last read.
 fn dead_letter_events(events: &mut EventStream) -> Vec<Event> {
     events_so_far(events)
