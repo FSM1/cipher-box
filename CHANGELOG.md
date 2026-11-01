@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.16.1](https://github.com/FSM1/cipher-box/compare/v2.16.0...v2.16.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **desktop:** log the dirty handles at each quit and trace mount writes ([#2540](https://github.com/FSM1/cipher-box/issues/2540)) ([fd180b0](https://github.com/FSM1/cipher-box/commit/fd180b014dcbcfeb1e136e00474d22d99b7b27e3))
+* **engine:** refuse a scope root whose grant section a grantee signed ([#2544](https://github.com/FSM1/cipher-box/issues/2544)) ([6a70ad3](https://github.com/FSM1/cipher-box/commit/6a70ad3b1b4d512fc4d17836bc1df42057790f2d)), closes [#2537](https://github.com/FSM1/cipher-box/issues/2537)
+* **engine:** use the durable owner copy for every head refusal that a record causes ([#2547](https://github.com/FSM1/cipher-box/issues/2547)) ([1e7b94a](https://github.com/FSM1/cipher-box/commit/1e7b94aacc91ec03bc1efd0b39d05ec3cc25d611))
+
 ## [2.16.0](https://github.com/FSM1/cipher-box/compare/v2.15.0...v2.16.0) (2026-10-28)
 
 
