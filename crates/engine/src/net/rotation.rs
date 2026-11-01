@@ -1119,7 +1119,8 @@ pub(crate) enum WritePlaneDark {
     /// The record itself carries no write plane this device opens — no
     /// owner-write-blob, or one no epoch this device can reach unseals.
     Keyless,
-    /// A seam read or a pointer-plane consult this pass could not make.
+    /// A seam read or a pointer-plane consult this pass could not make, or a
+    /// refused record that this pass reads from its durable copy (ADR 0068 D3).
     Unavailable,
 }
 
@@ -1651,7 +1652,7 @@ where
         // A copy recovered after a refusal serves reads only: no write lands
         // over the refused record (ADR 0068 D3).
         let write = if recovered_after_rejection {
-            Err(WritePlaneDark::Keyless)
+            Err(WritePlaneDark::Unavailable)
         } else {
             write
         };
