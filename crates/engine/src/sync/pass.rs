@@ -2085,7 +2085,7 @@ fn vault_source<'a>(
 
 /// Whether this tick holds a pass for every scope the session proved: the walk
 /// proved the whole set, and each proved root is a descendant with a write
-/// plane. A keyless one may be a copy recovered after a refusal or a write cut
+/// plane. A dark one may be a copy recovered after a refusal or a write cut
 /// that did not finish, and the names its write seed derives can still link a
 /// node.
 fn every_proved_scope_held(
@@ -2803,7 +2803,7 @@ mod tests {
             assert!(every_proved_scope_held(true, &roots, &[held()]));
             let recovered = DescendantScopeRoot {
                 recovered_after_rejection: true,
-                ..proved(Err(WritePlaneDark::Keyless))
+                ..proved(Err(WritePlaneDark::Unavailable))
             };
             let cut = DescendantScopeRoot {
                 write_cut_unfinished: true,

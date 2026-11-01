@@ -348,7 +348,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         rejection: &GateRejection,
     ) -> Result<Option<OwnScopeMaterial>, GateError> {
-        if !owner_seed_refused(rejection) {
+        if !record_caused(rejection) {
             return Ok(None);
         }
         Ok(self
@@ -1062,19 +1062,14 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
     }
 }
 
-/// An owner seed can fail at the ascent cross-check or at body unseal.
-pub(crate) fn owner_seed_refused(rejection: &GateRejection) -> bool {
-    matches!(
-        (&rejection.stage, &rejection.reason),
-        (
-            GateStage::Unseal,
-            RejectionReason::Trust(CodecError::Trust(
-                TrustViolation::HpkeOpenFailed | TrustViolation::SealOpenFailed
-            ))
-        ) | (
-            GateStage::GrantSection,
-            RejectionReason::Trust(CodecError::Trust(TrustViolation::AscentLinkMismatch))
-        )
+/// Whether the record bytes cause `rejection`. A replay below the sequence
+/// floor and a head block that does not match its CID are what a lagging or
+/// bad endpoint serves.
+fn record_caused(rejection: &GateRejection) -> bool {
+    !matches!(
+        rejection.reason,
+        RejectionReason::SequenceNotNewer { .. }
+            | RejectionReason::Trust(CodecError::Trust(TrustViolation::ContentCidMismatch))
     )
 }
 
@@ -1809,7 +1804,7 @@ mod tests {
         let Err(GateError::Rejected(rejection)) = read(&moved, 2) else {
             panic!("the broken owner blob is refused");
         };
-        assert!(owner_seed_refused(&rejection));
+        assert_eq!(rejection.stage, GateStage::Unseal);
         let offline = ScriptedHttp::default();
         let cache = OwnerSeedCache::new(&staging, &moved.owner_enc, &entropy, &labels);
         let restarted = moved
@@ -1870,7 +1865,7 @@ mod tests {
         let Err(GateError::Rejected(rejection)) = read(&fx, 3) else {
             panic!("the broken owner blob is refused");
         };
-        assert!(owner_seed_refused(&rejection));
+        assert_eq!(rejection.stage, GateStage::Unseal);
         let offline = ScriptedHttp::default();
         let cache = OwnerSeedCache::new(&staging, &fx.owner_enc, &entropy, &labels);
         let restarted = fx

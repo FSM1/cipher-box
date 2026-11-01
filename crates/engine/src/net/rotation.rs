@@ -626,7 +626,6 @@ impl<'a> RootFallback<'a> {
         }
         match verdict {
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
             | RootGateVerdict::NotResealable => true,
             // Causes that a lagging or bad endpoint, not the record bytes, can
@@ -654,16 +653,13 @@ impl<'a> RootFallback<'a> {
         verdict: RootGateVerdict,
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
         // A fault in one source means that source has no copy.
-        let durable = match verdict {
-            RootGateVerdict::OwnerSeedRefused => adopter
-                .recover_cached_owner_root(name)
-                .await
-                .ok()
-                .flatten()
-                .map(|root| GatedScopeRoot::recovered(name, root))
-                .filter(|root| root.names_child(expected_child)),
-            _ => None,
-        };
+        let durable = adopter
+            .recover_cached_owner_root(name)
+            .await
+            .ok()
+            .flatten()
+            .map(|root| GatedScopeRoot::recovered(name, root))
+            .filter(|root| root.names_child(expected_child));
         if let Ok(Some(cached)) = snapshot_cache.get(name.as_str().as_bytes()).await {
             let newer = durable.as_ref().is_none_or(|root| {
                 super::fork::verified(name, &cached)
@@ -1123,7 +1119,9 @@ pub(crate) enum WritePlaneDark {
     /// The record itself carries no write plane this device opens — no
     /// owner-write-blob, or one no epoch this device can reach unseals.
     Keyless,
-    /// A seam read or a pointer-plane consult this pass could not make.
+    /// A seam read or a pointer-plane consult this pass could not make, or a
+    /// refused record that this pass reads from its durable copy (ADR 0068 D3),
+    /// whose ops spend only the outage budget until a cut moves the root.
     Unavailable,
 }
 
@@ -1194,7 +1192,6 @@ pub(crate) struct WalkedBoundaries {
 fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
         RootGateVerdict::Rejected
-        | RootGateVerdict::OwnerSeedRefused
         | RootGateVerdict::NotResealable
         | RootGateVerdict::HeadBlockRefused
         | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
@@ -1599,45 +1596,47 @@ where
         // an envelope version this build reads but does not author.
         let (gated, record_data, fork, recovered_after_rejection) = match read {
             Ok(pass) => (pass.root, pass.data, pass.fork, false),
-            Err(RootRefusal {
-                verdict: RootGateVerdict::OwnerSeedRefused,
-                served,
-            }) => {
-                *refused_record = served.map(|(_, bytes)| bytes);
-                let (root, record_data) = adopter
-                    .recover_cached_owner_root(&name)
-                    .await
-                    .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
-                    .map(|root| {
-                        let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
-                        (GatedScopeRoot::recovered(&name, root), data)
-                    })
-                    .filter(|(root, _)| root.names_child(Some(child.scope_id)))
-                    .ok_or(WalkFailure::Rejected {
-                        scope_id: child.scope_id,
-                    })?;
-                (root, record_data, None, true)
-            }
             Err(RootRefusal { verdict, served }) => {
                 let met = walk_verdict(verdict, child.scope_id);
-                if let WalkFailure::Rejected { .. } = met {
-                    *refused_record = served.as_ref().map(|(_, bytes)| bytes.clone());
-                }
-                if let (WalkFailure::Rejected { .. }, Some((left, anchor)), Some((_, record_bytes))) =
-                    (met, owed_from, served)
+                let WalkFailure::Rejected { .. } = met else {
+                    return Err(met);
+                };
+                *refused_record = served.map(|(_, bytes)| bytes);
+                if let (Some((left, anchor)), Some(record_bytes)) =
+                    (owed_from, refused_record.as_deref())
                     && self
                         .is_unpromoted_folder(
                             parent_read_scope_seed,
                             (left, anchor),
                             child,
                             &name,
-                            &record_bytes,
+                            record_bytes,
                         )
                         .await
                 {
                     return Err(WalkFailure::Unavailable);
                 }
-                return Err(met);
+                // The walk has no bound to wait out an endpoint cause, so only
+                // a refusal the record bytes cause reads the durable copy.
+                if !matches!(
+                    verdict,
+                    RootGateVerdict::Rejected | RootGateVerdict::NotResealable
+                ) {
+                    return Err(met);
+                }
+                // A local fault means no copy; the record keeps its verdict.
+                let (root, record_data) = adopter
+                    .recover_cached_owner_root(&name)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|root| {
+                        let data = signed_data(&name, &root.record_bytes).unwrap_or_default();
+                        (GatedScopeRoot::recovered(&name, root), data)
+                    })
+                    .filter(|(root, _)| root.names_child(Some(child.scope_id)))
+                    .ok_or(met)?;
+                (root, record_data, None, true)
             }
         };
         let (write, grandchildren) = self
@@ -1654,7 +1653,7 @@ where
         // A copy recovered after a refusal serves reads only: no write lands
         // over the refused record (ADR 0068 D3).
         let write = if recovered_after_rejection {
-            Err(WritePlaneDark::Keyless)
+            Err(WritePlaneDark::Unavailable)
         } else {
             write
         };
@@ -2039,6 +2038,7 @@ where
                     match descended {
                         Ok((descendant, grandchildren, descendant_anchor)) => {
                             if descendant.recovered_after_rejection {
+                                refused.insert(NodeId(child.scope_id));
                                 note_refused();
                                 // The durable copy proves nothing about the record.
                                 WalkFailure::accumulate(
@@ -2249,7 +2249,6 @@ where
             | RootGateVerdict::AscentMismatch => ScopeRootAdmission::Unavailable,
             RootGateVerdict::HeadBlockAbsent => ScopeRootAdmission::HeadBlockAbsent,
             RootGateVerdict::Rejected
-            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
             | RootGateVerdict::HeadBlockRefused
             | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
@@ -3857,8 +3856,7 @@ where
                 Err(
                     RootGateVerdict::Rejected
                     | RootGateVerdict::BelowFloor
-                    | RootGateVerdict::HeadBlockRefused
-                    | RootGateVerdict::OwnerSeedRefused,
+                    | RootGateVerdict::HeadBlockRefused,
                 ) => {
                     return Err(self.reject_child(
                         source,
@@ -8775,8 +8773,10 @@ mod tests {
     fn a_restarted_owner_supplies_the_durable_copy_to_the_rotation_fallback() {
         use crate::grants::OwnerSeedCache;
         use crate::testkit::fakes::InMemoryStagingStore;
-        use cipherbox_core::seal::{encode_grant_section, set_grant_section};
-        for (rogue_sequence, store_fault) in [(1, false), (2, false), (1, true)] {
+        for (shape, (rogue_sequence, store_fault)) in REFUSED_ROOT_SHAPES
+            .into_iter()
+            .flat_map(|shape| [(1, false), (2, false), (1, true)].map(|case| (shape, case)))
+        {
             let harness = Harness::plain();
             let child_id = [0x87; 16];
             let child_name = IpnsName::from_public_key(
@@ -8802,42 +8802,7 @@ mod tests {
                 )))
                 .expect("confirmed owner read");
             }
-            let mut rogue = granted_root(children.clone());
-            let signer = owner_root_pseudonym();
-            let sealed = cipherbox_core::seal::seal_owner_blob(
-                &owner_enc().public(),
-                &[0x99; 32],
-                &AadContext {
-                    v: rogue.envelope.v,
-                    id: SCOPE,
-                    scope: SCOPE,
-                    epoch: rogue.envelope.epoch,
-                    struct_tag: cipherbox_core::seal::STRUCT_TAG_OWNER_BLOB,
-                },
-                &cipherbox_core::seal::OverrideSeedPayload::new([0x98; 32], rogue.envelope.epoch),
-            )
-            .unwrap();
-            rogue.grant_section.owner_blob.enc = sealed.enc;
-            rogue.grant_section.owner_blob.ciphertext = sealed.ciphertext;
-            crate::testkit::resign_section(
-                &mut rogue.grant_section,
-                SCOPE,
-                rogue.envelope.epoch,
-                &signer,
-            );
-            // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
-            crate::testkit::assert_section_authenticates(
-                &rogue.grant_section,
-                &owner_identity().verifying_key(),
-                SCOPE,
-                rogue.envelope.epoch,
-            );
-            set_grant_section(
-                &mut rogue.envelope,
-                encode_grant_section(&rogue.grant_section).unwrap(),
-            );
-            rogue.head_block = encode_envelope(&rogue.envelope).unwrap();
-            rogue.head_cid_str = root_block_cid(&rogue.head_block);
+            let (rogue, stage, check) = refused_root(shape, children.clone());
             serve_at(&harness, SCOPE, &rogue, rogue_sequence);
             if rogue_sequence == 1 {
                 block_on(harness.cache.clear()).expect("the expendable snapshot cache is gone");
@@ -8867,11 +8832,22 @@ mod tests {
             let crate::net::ResolveOutcome::TrustViolation(rejection) = &resolved.outcome else {
                 panic!("expected a trust violation");
             };
-            assert_eq!(rejection.stage, crate::gate::GateStage::Unseal);
-            assert_eq!(rejection.check(), "seal-open-failed");
+            assert_eq!(rejection.stage, stage, "{shape}");
+            assert_eq!(rejection.check(), check, "{shape}");
+            // The gate does not adopt the refused head, so no floor moves.
+            assert_eq!(
+                sequence_floor_of(&harness, good.name.as_str().as_bytes()),
+                Some(1),
+                "{shape}"
+            );
+            assert_eq!(
+                block_on(floor::read_epoch_floor(&harness.floors, &SCOPE)),
+                Ok(Some(OWNER_ROOT_EPOCH)),
+                "{shape}"
+            );
             if store_fault {
                 // A local fault removes the copy, never the verdict on the record.
-                assert!(resolved.recovered_owner.is_none());
+                assert!(resolved.recovered_owner.is_none(), "{shape}");
                 let failure = block_on(restarted.resolve_vault_root(&ChildScopeRef::new(
                     SCOPE,
                     good.name.as_str().as_bytes().to_vec(),
@@ -8880,9 +8856,9 @@ mod tests {
                 assert!(!restarted.fell_back());
                 continue;
             }
-            let recovered = resolved
-                .recovered_owner
-                .expect("the confirmed body survives the restart");
+            let Some(recovered) = resolved.recovered_owner else {
+                panic!("{shape}: the confirmed body survives the restart");
+            };
             assert_eq!(recovered.sequence, 1);
             let ReadBody::Folder {
                 children: recovered_children,
@@ -8900,17 +8876,237 @@ mod tests {
                 SCOPE,
                 good.name.as_str().as_bytes().to_vec(),
             )))
-            .expect("the rotation reads the durable copy");
-            assert!(restarted.fell_back());
+            .unwrap_or_else(|error| {
+                panic!("{shape}: the rotation reads the durable copy: {error:?}")
+            });
+            assert!(restarted.fell_back(), "{shape}");
             let (verified, _) = published_head(&harness, &good.name);
-            assert_eq!(verified.sequence, rogue_sequence);
+            assert_eq!(verified.sequence, rogue_sequence, "{shape}");
             assert!(
                 harness
                     .events()
                     .iter()
-                    .any(|event| matches!(event, Event::AttributableAbuse { .. }))
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+                "{shape}"
             );
         }
+    }
+
+    /// A refusal that a lagging or bad endpoint causes does not open the
+    /// durable copy at the resolve: a head block that does not match its CID,
+    /// and a replay below the sequence floor.
+    #[test]
+    fn an_endpoint_refusal_does_not_open_the_durable_copy_at_the_resolve() {
+        use crate::grants::OwnerSeedCache;
+        use crate::testkit::fakes::InMemoryStagingStore;
+        for shape in ["cid-mismatch", "rollback"] {
+            let harness = Harness::plain();
+            let good = granted_root(Vec::new());
+            harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
+            let staging = InMemoryStagingStore::default();
+            let labels = kdf::contact_label_seed(&[0x72; 32]);
+            let cache = || {
+                Some(OwnerSeedCache::new(
+                    &staging,
+                    &harness.enc_secret,
+                    &harness.entropy,
+                    &labels,
+                ))
+            };
+            let scope_ref = ChildScopeRef::new(SCOPE, good.name.as_str().as_bytes().to_vec());
+            let confirm = || {
+                let mut net = harness.net(&[]);
+                net.owner_seed_cache = cache();
+                block_on(net.resolve_vault_root(&scope_ref)).expect("confirmed owner read");
+            };
+            confirm();
+            serve_at(&harness, SCOPE, &good, 2);
+            confirm();
+            let check = match shape {
+                "cid-mismatch" => {
+                    serve_at(&harness, SCOPE, &good, 3);
+                    harness
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .insert(good.head_cid_str.clone(), b"swapped head block".to_vec());
+                    "content-cid-mismatch"
+                }
+                "rollback" => {
+                    serve_at(&harness, SCOPE, &good, 1);
+                    "sequence-not-newer"
+                }
+                other => panic!("no endpoint refusal shape {other}"),
+            };
+            block_on(harness.cache.clear()).expect("the snapshot copy is gone");
+            let mut restarted = harness.net(&[]);
+            restarted.owner_seed_cache = cache();
+            let adopter = restarted.root_adopter(SCOPE);
+            let gated = block_on(crate::net::resolve::resolve_gated(
+                &harness.transport,
+                &harness.cache,
+                &adopter,
+                &good.name,
+                crate::sync::tick::ResolveMode::CacheFirst,
+            ))
+            .expect("the read finishes with its trust verdict");
+            let crate::net::ResolveOutcome::TrustViolation(rejection) = &gated.resolved.outcome
+            else {
+                panic!("{shape}: expected a trust violation");
+            };
+            assert_eq!(rejection.check(), check, "{shape}");
+            // A cold start refuses a root that recovers no copy.
+            assert!(gated.resolved.recovered_owner.is_none(), "{shape}");
+            assert!(gated.read_scope_seed.is_none(), "{shape}");
+            assert!(gated.hold.is_none(), "{shape}");
+            assert_eq!(
+                sequence_floor_of(&harness, good.name.as_str().as_bytes()),
+                Some(2),
+                "{shape}"
+            );
+            assert_eq!(
+                block_on(floor::read_epoch_floor(&harness.floors, &SCOPE)),
+                Ok(Some(OWNER_ROOT_EPOCH)),
+                "{shape}"
+            );
+            // The copy was there to open.
+            assert!(
+                block_on(adopter.recover_cached_owner_root(&good.name))
+                    .expect("the copy reads")
+                    .is_some(),
+                "{shape}"
+            );
+        }
+    }
+
+    /// The ways a head can be refused for its own bytes ([`refused_root`]).
+    const REFUSED_ROOT_SHAPES: [&str; 5] = [
+        "unseal",
+        "grantee-signed",
+        "commitment",
+        "malformed-section",
+        "missing-section",
+    ];
+
+    /// [`granted_root`] with `children`, changed in `shape` so that the gate
+    /// refuses it, with the stage and the check of that refusal.
+    fn refused_root(
+        shape: &str,
+        children: Vec<ChildRef>,
+    ) -> (OwnerRootFixture, crate::gate::GateStage, &'static str) {
+        use crate::gate::GateStage;
+        use cipherbox_core::seal::{encode_grant_section, set_grant_section};
+        let mut rogue = granted_root(children.clone());
+        let encode = |rogue: &mut OwnerRootFixture| {
+            set_grant_section(
+                &mut rogue.envelope,
+                encode_grant_section(&rogue.grant_section).unwrap(),
+            );
+        };
+        let resign = |signer: &Ed25519Signer, rogue: &mut OwnerRootFixture| {
+            crate::testkit::resign_section(
+                &mut rogue.grant_section,
+                SCOPE,
+                rogue.envelope.epoch,
+                signer,
+            );
+            encode(rogue);
+        };
+        let (stage, check) = match shape {
+            "unseal" => {
+                let sealed = cipherbox_core::seal::seal_owner_blob(
+                    &owner_enc().public(),
+                    &[0x99; 32],
+                    &AadContext {
+                        v: rogue.envelope.v,
+                        id: SCOPE,
+                        scope: SCOPE,
+                        epoch: rogue.envelope.epoch,
+                        struct_tag: cipherbox_core::seal::STRUCT_TAG_OWNER_BLOB,
+                    },
+                    &cipherbox_core::seal::OverrideSeedPayload::new(
+                        [0x98; 32],
+                        rogue.envelope.epoch,
+                    ),
+                )
+                .unwrap();
+                rogue.grant_section.owner_blob.enc = sealed.enc;
+                rogue.grant_section.owner_blob.ciphertext = sealed.ciphertext;
+                resign(&owner_root_pseudonym(), &mut rogue);
+                // Stages 2 and 3 pass, so only the unseal can refuse it.
+                crate::testkit::assert_section_authenticates(
+                    &rogue.grant_section,
+                    &owner_identity().verifying_key(),
+                    SCOPE,
+                    rogue.envelope.epoch,
+                );
+                (GateStage::Unseal, "seal-open-failed")
+            }
+            "grantee-signed" => {
+                // A rotation to the next epoch that the committed write grantee
+                // signs, under the owner-signed commitment carried verbatim. An
+                // adoption would raise the read-epoch floor.
+                let commitment = rogue.grant_section.commitment.clone();
+                rogue = crate::testkit::owner_root_fixture_seeded(
+                    OwnerRootSpec {
+                        writer_pseudonym: &owner_root_pseudonym(),
+                        pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                        owner_identity: &owner_identity(),
+                        owner_enc: &owner_enc().public(),
+                        scope_id: SCOPE,
+                        root_id: SCOPE,
+                        children,
+                        child_scope_index: Vec::new(),
+                        parent_node_seed: None,
+                        owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                        write_history_link: Vec::new(),
+                        grants: granted_rows(),
+                    },
+                    OWNER_ROOT_EPOCH + 1,
+                    rogue.envelope.v,
+                    [0x99; 32],
+                );
+                assert_eq!(rogue.grant_section.commitment, commitment);
+                let shared = write_grantee()
+                    .diffie_hellman(&owner_enc().public())
+                    .expect("contributory");
+                let grantee = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE);
+                let grantee_pk = grantee.verifying_key().to_bytes();
+                assert!(
+                    commitment
+                        .entries
+                        .iter()
+                        .any(|e| e.permission == Permission::Write && e.pseudonym_pk == grantee_pk),
+                    "the signer is a committed write grantee"
+                );
+                resign(&grantee, &mut rogue);
+                (GateStage::GrantSection, "structure-signature-invalid")
+            }
+            "commitment" => {
+                rogue.grant_section.commitment_sig[0] ^= 1;
+                encode(&mut rogue);
+                (GateStage::CommitmentVerify, "commitment-invalid")
+            }
+            "malformed-section" => {
+                set_grant_section(&mut rogue.envelope, vec![0xff, 0x00]);
+                (GateStage::RecordVerify, "unexpected-break")
+            }
+            "missing-section" => {
+                rogue.envelope.unknown = rogue
+                    .envelope
+                    .unknown
+                    .entries()
+                    .iter()
+                    .filter(|(key, _)| key != "grantSection")
+                    .cloned()
+                    .collect();
+                (GateStage::RecordVerify, "missing-field")
+            }
+            other => panic!("no refused root shape {other}"),
+        };
+        rogue.head_block = encode_envelope(&rogue.envelope).unwrap();
+        rogue.head_cid_str = root_block_cid(&rogue.head_block);
+        (rogue, stage, check)
     }
 
     #[test]
@@ -8921,97 +9117,155 @@ mod tests {
             STRUCT_TAG_OWNER_BLOB, StructureSigInput, encode_grant_section, set_grant_section,
             sign_structure,
         };
-        let (mut child, child_ref, _) = one_level();
-        let root = vault_root(SCOPE, vec![child_ref]);
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
-        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
-        let staging = InMemoryStagingStore::default();
-        let labels = kdf::contact_label_seed(&[0x72; 32]);
-        let walk = || ScopeWalk {
-            owner_seed_cache: Some(OwnerSeedCache::new(
-                &staging,
+        for (shape, store_fault) in [
+            ("unseal", false),
+            ("commitment", false),
+            ("malformed-section", false),
+            ("commitment", true),
+        ] {
+            let (mut child, child_ref, _) = one_level();
+            let root = vault_root(SCOPE, vec![child_ref]);
+            let harness = Harness::plain();
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+            harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+            let staging = InMemoryStagingStore::default();
+            let labels = kdf::contact_label_seed(&[0x72; 32]);
+            let walk = || ScopeWalk {
+                owner_seed_cache: Some(OwnerSeedCache::new(
+                    &staging,
+                    &harness.enc_secret,
+                    &harness.entropy,
+                    &labels,
+                )),
+                transport: &harness.transport,
+                snapshot_cache: &harness.cache,
+                gateway: &harness.gateway,
+                http: &harness.http,
+                floors: &harness.floors,
+                enc_secret: &harness.enc_secret,
+                identity: &harness.identity,
+                scope_keys: &OwnerSeeds,
+                payload_version: PAYLOAD_VERSION,
+            };
+            let root_record = record_for(&SCOPE, &root.head_cid_str, 1);
+            let confirmed = block_on(walk().descendant_scope_roots(
+                SCOPE,
+                &root.name,
+                &root_record,
+                false,
+                &[],
+            ))
+            .unwrap();
+            assert_eq!(confirmed.proved.len(), 2);
+            assert!(confirmed.failure.is_none());
+            drop(confirmed);
+            let wrong_parent = RootAdopter::new(
+                &harness.gateway,
+                &harness.http,
+                &harness.floors,
                 &harness.enc_secret,
-                &harness.entropy,
-                &labels,
-            )),
-            transport: &harness.transport,
-            snapshot_cache: &harness.cache,
-            gateway: &harness.gateway,
-            http: &harness.http,
-            floors: &harness.floors,
-            enc_secret: &harness.enc_secret,
-            identity: &harness.identity,
-            scope_keys: &OwnerSeeds,
-            payload_version: PAYLOAD_VERSION,
-        };
-        let root_record = record_for(&SCOPE, &root.head_cid_str, 1);
-        let confirmed =
-            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, false, &[]))
-                .unwrap();
-        assert_eq!(confirmed.proved.len(), 2);
-        assert!(confirmed.failure.is_none());
-        drop(confirmed);
-        let wrong_parent = RootAdopter::new(
-            &harness.gateway,
-            &harness.http,
-            &harness.floors,
-            &harness.enc_secret,
-            &harness.identity,
-            CHILD_SCOPE,
-        )
-        .with_owner_seed_cache(walk().owner_seed_cache)
-        .under_parent_node_seed(Zeroizing::new([0xa9; 32]));
-        assert!(matches!(
-            block_on(wrong_parent.recover_cached_owner_root(&child.name)),
-            Err(GateError::Seam(_))
-        ));
-
-        harness.blocks.lock().unwrap().remove(&child.head_cid_str);
-        harness.blocks.lock().unwrap().remove(&root.head_cid_str);
-        let blob = &mut child.grant_section.owner_blob;
-        blob.ciphertext[0] ^= 1;
-        blob.signature = sign_structure(
-            &owner_root_pseudonym(),
-            &StructureSigInput::over_ciphertext(
+                &harness.identity,
                 CHILD_SCOPE,
-                child.envelope.epoch,
-                STRUCT_TAG_OWNER_BLOB,
-                None,
-                &blob.ciphertext,
-            ),
-        )
-        .to_bytes();
-        set_grant_section(
-            &mut child.envelope,
-            encode_grant_section(&child.grant_section).unwrap(),
-        );
-        child.head_block = encode_envelope(&child.envelope).unwrap();
-        child.head_cid_str = root_block_cid(&child.head_block);
-        serve_at(&harness, CHILD_SCOPE, &child, 2);
-        block_on(harness.cache.clear()).unwrap();
-        let restarted =
-            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, true, &[]))
-                .unwrap();
-        assert_eq!(
-            restarted.failure,
-            Some(WalkFailure::Rejected {
-                scope_id: CHILD_SCOPE
-            })
-        );
-        assert_eq!(restarted.proved.len(), 2);
-        assert!(restarted.proved[0].recovered_after_rejection);
-        // The refused live record, which the walk's event names.
-        assert_eq!(
-            restarted.refused_records.get(&NodeId(CHILD_SCOPE)),
-            Some(&record_for(&CHILD_SCOPE, &child.head_cid_str, 2))
-        );
-        assert!(restarted.proved[0].write.is_err());
-        assert_eq!(restarted.proved[0].adopted.sequence, 1);
-        assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);
-        // A durable copy does not prove the live record.
-        assert!(restarted.unproved.contains(&NodeId(CHILD_SCOPE)));
+            )
+            .with_owner_seed_cache(walk().owner_seed_cache)
+            .under_parent_node_seed(Zeroizing::new([0xa9; 32]));
+            assert!(matches!(
+                block_on(wrong_parent.recover_cached_owner_root(&child.name)),
+                Err(GateError::Seam(_))
+            ));
+
+            harness.blocks.lock().unwrap().remove(&child.head_cid_str);
+            if !store_fault {
+                harness.blocks.lock().unwrap().remove(&root.head_cid_str);
+            }
+            let section_bytes = match shape {
+                "unseal" => {
+                    let blob = &mut child.grant_section.owner_blob;
+                    blob.ciphertext[0] ^= 1;
+                    blob.signature = sign_structure(
+                        &owner_root_pseudonym(),
+                        &StructureSigInput::over_ciphertext(
+                            CHILD_SCOPE,
+                            child.envelope.epoch,
+                            STRUCT_TAG_OWNER_BLOB,
+                            None,
+                            &blob.ciphertext,
+                        ),
+                    )
+                    .to_bytes();
+                    encode_grant_section(&child.grant_section).unwrap()
+                }
+                "commitment" => {
+                    child.grant_section.commitment_sig[0] ^= 1;
+                    encode_grant_section(&child.grant_section).unwrap()
+                }
+                "malformed-section" => vec![0xff, 0x00],
+                other => panic!("no refused root shape {other}"),
+            };
+            set_grant_section(&mut child.envelope, section_bytes);
+            child.head_block = encode_envelope(&child.envelope).unwrap();
+            child.head_cid_str = root_block_cid(&child.head_block);
+            serve_at(&harness, CHILD_SCOPE, &child, 2);
+            block_on(harness.cache.clear()).unwrap();
+            if store_fault {
+                staging.fail_staged_reads_under(crate::grants::OWNER_SEED_CACHE_PREFIX);
+            }
+            // The fault row reads the vault root from the network.
+            let restarted = block_on(walk().descendant_scope_roots(
+                SCOPE,
+                &root.name,
+                &root_record,
+                !store_fault,
+                &[],
+            ))
+            .unwrap();
+            assert_eq!(
+                restarted.failure,
+                Some(WalkFailure::Rejected {
+                    scope_id: CHILD_SCOPE
+                }),
+                "{shape}, store fault {store_fault}"
+            );
+            assert_eq!(
+                restarted.refused,
+                BTreeSet::from([NodeId(CHILD_SCOPE)]),
+                "{shape}, store fault {store_fault}: the copy does not hide the refusal"
+            );
+            if store_fault {
+                // A local fault means no copy; the refused head keeps its verdict.
+                assert!(restarted.proved.is_empty(), "{shape}");
+                assert_eq!(
+                    sequence_floor_of(&harness, child.name.as_str().as_bytes()),
+                    Some(1),
+                    "{shape}"
+                );
+                continue;
+            }
+            assert_eq!(restarted.proved.len(), 2, "{shape}");
+            assert!(restarted.proved[0].recovered_after_rejection, "{shape}");
+            // The gate does not adopt the refused head, so no floor moves.
+            assert_eq!(
+                sequence_floor_of(&harness, child.name.as_str().as_bytes()),
+                Some(1),
+                "{shape}"
+            );
+            assert_eq!(
+                block_on(floor::read_epoch_floor(&harness.floors, &CHILD_SCOPE)),
+                Ok(Some(OWNER_ROOT_EPOCH)),
+                "{shape}"
+            );
+            // The refused live record, which the walk's event names.
+            assert_eq!(
+                restarted.refused_records.get(&NodeId(CHILD_SCOPE)),
+                Some(&record_for(&CHILD_SCOPE, &child.head_cid_str, 2))
+            );
+            assert!(restarted.proved[0].write.is_err());
+            assert_eq!(restarted.proved[0].adopted.sequence, 1);
+            assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);
+            // A durable copy does not prove the live record.
+            assert!(restarted.unproved.contains(&NodeId(CHILD_SCOPE)));
+        }
     }
 
     #[test]
@@ -9083,7 +9337,7 @@ mod tests {
             &harness.cache,
             &root.name,
             None,
-            RootGateVerdict::OwnerSeedRefused,
+            RootGateVerdict::Rejected,
         ))
         .unwrap();
         assert_eq!(copy.envelope.epoch, cut.read_epoch);

@@ -6662,6 +6662,54 @@ fn a_kept_create_under_a_refused_root_shows_no_dead_letter_after_a_restart() {
     );
 }
 
+/// A create below a scope root that the gate refuses, which the walk reads
+/// from its durable copy after a restart with no snapshot copy, has no write
+/// plane. It spends only the outage budget: it stays queued past the attempt
+/// budget and dead-letters after `UNATTRIBUTED_BUDGET` halted passes.
+#[test]
+fn a_create_below_a_refused_root_read_from_its_durable_copy_spends_only_the_outage_budget() {
+    let budget = cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize;
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
+    block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
+    restart_owner(&mut fx);
+    let folder = fx.folder;
+    block_on(fx.engine.command(Command::Create {
+        parent: folder,
+        name: "below.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("the create queues");
+    serve_http(&fx.owner_device, &fx.blocks, 16 * budget);
+    let dead_letters = |fx: &GrantScenario| {
+        block_on(fx.engine.status())
+            .expect("the session status reads")
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>()
+    };
+
+    for _ in 1..budget {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the create still waits");
+    assert!(dead_letters(&fx).is_empty());
+
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    assert_eq!(
+        dead_letters(&fx),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "the outage budget bounds the wait"
+    );
+}
+
 /// The dead-letter notices on `events` since the last read.
 fn dead_letter_events(events: &mut EventStream) -> Vec<Event> {
     events_so_far(events)
@@ -25820,12 +25868,24 @@ fn a_write_revoke_runs_on_the_last_copy_of_a_planted_root() {
     );
 }
 
-/// A signed owner blob with another seed is refused after restart. The cut
-/// moves the root and drops the old copy's whole grant set (ADR 0068 D3, D5).
+/// A planted root that the gate refuses for its own bytes is refused after a
+/// restart that lost the snapshot copy: a seed swap that the owner pseudonym
+/// signs (unseal), the same swap that the write grantee signs (stage 3), a
+/// changed commitment signature (stage 2), and a malformed grant section. The
+/// cut runs on the durable copy, moves the root, and drops the old copy's
+/// whole grant set (ADR 0068 D3, D5).
 #[test]
-fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
+fn a_restarted_owner_cuts_a_refused_root_from_its_durable_copy() {
     use cipherbox_core::seal::{OverrideSeedPayload, STRUCT_TAG_OWNER_BLOB, seal_owner_blob};
-    for sequence_offset in [0, 1, u64::MAX] {
+    for (shape, sequence_offset) in [
+        "unseal",
+        "grantee-signed",
+        "commitment",
+        "malformed-section",
+    ]
+    .into_iter()
+    .flat_map(|shape| [0, 1, u64::MAX].map(|offset| (shape, offset)))
+    {
         let mut fx = GrantScenario::new();
         let (child, _, writer_seed) = write_granted_nested_subtree(&mut fx);
         assert_eq!(
@@ -25857,24 +25917,48 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
             &OverrideSeedPayload::new([0x98; 32], envelope.epoch),
         )
         .unwrap();
-        let writer =
+        let owner_pseudonym =
             kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &fx.folder.0);
+        // The pairwise pseudonym that the owner commits for the write grantee.
+        let grantee_pseudonym = kdf::pseudonym_sign(
+            kdf::enc_subkey(&RECIPIENT_SECRET)
+                .diffie_hellman(&kdf::enc_subkey(&SECRET).public())
+                .expect("contributory")
+                .as_bytes(),
+            &fx.folder.0,
+        );
         section.owner_blob.enc = blob.enc;
         section.owner_blob.ciphertext = blob.ciphertext;
+        let signer = match shape {
+            "grantee-signed" => &grantee_pseudonym,
+            _ => &owner_pseudonym,
+        };
         cipherbox_engine::testkit::resign_section(
             &mut section,
             fx.folder.0,
             envelope.epoch,
-            &writer,
+            signer,
         );
-        // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
-        cipherbox_engine::testkit::assert_section_authenticates(
-            &section,
-            &owner_identity().verifying_key(),
-            envelope.scope,
-            envelope.epoch,
-        );
-        set_grant_section(&mut envelope, encode_grant_section(&section).unwrap());
+        let section_bytes = match shape {
+            "unseal" => {
+                // Stages 2 and 3 pass, so only the unseal can refuse the planted root.
+                cipherbox_engine::testkit::assert_section_authenticates(
+                    &section,
+                    &owner_identity().verifying_key(),
+                    envelope.scope,
+                    envelope.epoch,
+                );
+                encode_grant_section(&section).unwrap()
+            }
+            "grantee-signed" => encode_grant_section(&section).unwrap(),
+            "commitment" => {
+                section.commitment_sig[0] ^= 1;
+                encode_grant_section(&section).unwrap()
+            }
+            "malformed-section" => vec![0xff, 0x00],
+            other => panic!("no refused root shape {other}"),
+        };
+        set_grant_section(&mut envelope, section_bytes);
         let cid = fx.blocks.put(encode_envelope(&envelope).unwrap());
         let sequence = sequence_at(&fx.world, &name).saturating_add(sequence_offset);
         sign_at(
@@ -25890,10 +25974,13 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
         restart_owner(&mut fx);
         assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
         let events = events_so_far(&mut fx._events);
-        assert!(root_refusals(&fx, &events, sequence) > 0);
+        assert!(
+            root_refusals(&fx, &events, sequence) > 0,
+            "{shape} at offset {sequence_offset}"
+        );
         assert_revoke_finished(&mut fx, &writer_seed, child);
         let moved = fx.granted_scope_repoint().current_root;
-        assert_ne!(moved, name);
+        assert_ne!(moved, name, "{shape} at offset {sequence_offset}");
         assert_no_grant_at(&fx, &moved);
         assert_eq!(published_value(&fx.world, &name), planted);
     }
